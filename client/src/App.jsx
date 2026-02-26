@@ -228,7 +228,7 @@ export default function App() {
 
   useEffect(() => {
     doFH();
-    const iv = setInterval(doFH, 15000);
+    const iv = setInterval(doFH, 60000);
     return () => clearInterval(iv);
   }, [doFH]);
 
