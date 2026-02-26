@@ -3,14 +3,17 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
+let shuttingDown = false;
 const _origExit = process.exit;
 (process as any).exit = function(code?: number) {
-  if (code === 1) {
+  if (code === 1 && !shuttingDown) {
     console.error("Vite esbuild service error — keeping server alive");
     return undefined as never;
   }
   return _origExit.call(process, code) as never;
 };
+process.on('SIGTERM', () => { shuttingDown = true; });
+process.on('SIGINT', () => { shuttingDown = true; });
 
 const app = express();
 const httpServer = createServer(app);
