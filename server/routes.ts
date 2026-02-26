@@ -15,49 +15,80 @@ const FOREX_BASE: Record<string, number> = {EURUSD:1.0842,GBPUSD:1.2715,USDJPY:1
 
 const cache: Record<string, { data: any; ts: number }> = {};
 const CRYPTO_TTL = 3000;
-const FINNHUB_TTL = 60000;
+const FINNHUB_TTL = 120000;
 
-let finnhubFetchInProgress: Promise<any> | null = null;
+let finnhubFetchLock: Promise<any> | null = null;
+let stockRefreshRunning = false;
 
-async function fhQuote(symbol: string) {
-  const r = await fetch(
-    `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_KEY}`
-  );
-  if (!r.ok) throw new Error(`Finnhub ${r.status}`);
-  const d: any = await r.json();
-  if (!d || !d.c || d.c === 0) throw new Error("zero price");
-  return {
-    price: d.c,
-    chg: d.dp ?? (d.pc ? ((d.c - d.pc) / d.pc * 100) : 0),
-    live: true
-  };
+function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
+async function fhQuoteSafe(symbol: string): Promise<{price:number,chg:number,live:boolean}> {
+  try {
+    const r = await fetch(
+      `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_KEY}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (r.status === 429 || r.status === 503) {
+      throw new Error(`rate limited ${r.status}`);
+    }
+    if (!r.ok) throw new Error(`Finnhub ${r.status}`);
+    const d: any = await r.json();
+    if (!d || !d.c || d.c === 0) throw new Error("zero price");
+    return {
+      price: d.c,
+      chg: d.dp ?? (d.pc ? ((d.c - d.pc) / d.pc * 100) : 0),
+      live: true
+    };
+  } catch {
+    return { price: EQUITY_BASE[symbol] || 0, chg: 0, live: false };
+  }
 }
 
-async function fetchForexRates(): Promise<Record<string, any>> {
+async function startStockRefreshLoop() {
+  if (stockRefreshRunning) return;
+  stockRefreshRunning = true;
+
+  while (true) {
+    try {
+      const stocks: Record<string, any> = {};
+      for (const sym of EQUITY_SYMS) {
+        stocks[sym] = await fhQuoteSafe(sym);
+        await delay(1500);
+      }
+
+      const [metals, forex] = await Promise.all([fetchMetals(), fetchForex()]);
+      const result = { stocks, metals, forex };
+      cache["finnhub"] = { data: result, ts: Date.now() };
+    } catch (e: any) {
+      console.error("Stock refresh error:", e.message);
+    }
+
+    await delay(120000);
+  }
+}
+
+async function fetchForex(): Promise<Record<string, any>> {
   const forex: Record<string, any> = {};
   try {
-    const r = await fetch("https://api.exchangerate-api.com/v4/latest/USD");
+    const r = await fetch("https://api.exchangerate-api.com/v4/latest/USD",
+      { signal: AbortSignal.timeout(5000) });
     if (!r.ok) throw new Error(`ExchangeRate ${r.status}`);
     const data: any = await r.json();
     const rates = data.rates || {};
-    const pairs: Record<string, { from: string; to: string; invert: boolean }> = {
-      EURUSD: { from: "USD", to: "EUR", invert: true },
-      GBPUSD: { from: "USD", to: "GBP", invert: true },
-      USDJPY: { from: "USD", to: "JPY", invert: false },
-      USDCHF: { from: "USD", to: "CHF", invert: false },
-      AUDUSD: { from: "USD", to: "AUD", invert: true },
-      USDCAD: { from: "USD", to: "CAD", invert: false },
+    const pairs: Record<string, { to: string; invert: boolean }> = {
+      EURUSD: { to: "EUR", invert: true },
+      GBPUSD: { to: "GBP", invert: true },
+      USDJPY: { to: "JPY", invert: false },
+      USDCHF: { to: "CHF", invert: false },
+      AUDUSD: { to: "AUD", invert: true },
+      USDCAD: { to: "CAD", invert: false },
     };
     for (const [sym, cfg] of Object.entries(pairs)) {
       const rate = rates[cfg.to];
       if (rate) {
         const price = cfg.invert ? +(1 / rate).toFixed(4) : +rate.toFixed(4);
         const base = FOREX_BASE[sym];
-        forex[sym] = {
-          price,
-          chg: base ? +((price - base) / base * 100).toFixed(2) : 0,
-          live: true
-        };
+        forex[sym] = { price, chg: base ? +((price - base) / base * 100).toFixed(2) : 0, live: true };
       } else {
         forex[sym] = { price: FOREX_BASE[sym], chg: 0, live: false };
       }
@@ -70,55 +101,41 @@ async function fetchForexRates(): Promise<Record<string, any>> {
   return forex;
 }
 
-async function fetchMetalPrices(): Promise<Record<string, any>> {
+async function fetchMetals(): Promise<Record<string, any>> {
   const metals: Record<string, any> = {};
-  try {
-    const r = await fetch("https://api.metalpriceapi.com/v1/latest?api_key=demo&base=USD&currencies=XAU,XAG");
-    if (r.ok) {
-      const data: any = await r.json();
-      if (data.rates?.XAU) {
-        const goldPrice = +(1 / data.rates.XAU).toFixed(2);
-        metals.XAU = { price: goldPrice, chg: +((goldPrice - METALS_BASE.XAU) / METALS_BASE.XAU * 100).toFixed(2), live: true };
-      }
-      if (data.rates?.XAG) {
-        const silverPrice = +(1 / data.rates.XAG).toFixed(2);
-        metals.XAG = { price: silverPrice, chg: +((silverPrice - METALS_BASE.XAG) / METALS_BASE.XAG * 100).toFixed(2), live: true };
-      }
+  if (FINNHUB_KEY) {
+    for (const [sym, fhSym] of [["XAU","OANDA:XAU_USD"],["XAG","OANDA:XAG_USD"]] as const) {
+      try {
+        const r = await fetch(
+          `https://finnhub.io/api/v1/quote?symbol=${fhSym}&token=${FINNHUB_KEY}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (r.ok) {
+          const d: any = await r.json();
+          if (d?.c && d.c > 0) {
+            const base = METALS_BASE[sym];
+            metals[sym] = { price: d.c, chg: base ? +((d.c - base) / base * 100).toFixed(2) : 0, live: true };
+            await delay(1500);
+            continue;
+          }
+        }
+      } catch {}
+      metals[sym] = { price: METALS_BASE[sym], chg: 0, live: false };
+      await delay(1500);
     }
-  } catch {}
-  if (!metals.XAU) metals.XAU = { price: METALS_BASE.XAU, chg: 0, live: false };
-  if (!metals.XAG) metals.XAG = { price: METALS_BASE.XAG, chg: 0, live: false };
-  return metals;
-}
-
-async function doFinnhubFetch() {
-  const stocks: Record<string, any> = {};
-
-  for (let i = 0; i < EQUITY_SYMS.length; i += 4) {
-    const batch = EQUITY_SYMS.slice(i, i + 4);
-    await Promise.allSettled(
-      batch.map(async sym => {
-        try { stocks[sym] = await fhQuote(sym); }
-        catch { stocks[sym] = { price: EQUITY_BASE[sym], chg: 0, live: false }; }
-      })
-    );
-    if (i + 4 < EQUITY_SYMS.length) {
-      await new Promise(r => setTimeout(r, 500));
-    }
+  } else {
+    metals.XAU = { price: METALS_BASE.XAU, chg: 0, live: false };
+    metals.XAG = { price: METALS_BASE.XAG, chg: 0, live: false };
   }
-
-  const [metals, forex] = await Promise.all([
-    fetchMetalPrices(),
-    fetchForexRates()
-  ]);
-
-  return { stocks, metals, forex };
+  return metals;
 }
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  startStockRefreshLoop();
 
   app.get("/api/crypto", async (_req, res) => {
     const cached = cache["crypto"];
@@ -129,14 +146,16 @@ export async function registerRoutes(
       const r1 = await fetch("https://api.hyperliquid.xyz/info", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "allMids" })
+        body: JSON.stringify({ type: "allMids" }),
+        signal: AbortSignal.timeout(5000)
       });
       const mids: any = await r1.json();
 
       const r2 = await fetch("https://api.hyperliquid.xyz/info", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "metaAndAssetCtxs" })
+        body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+        signal: AbortSignal.timeout(5000)
       });
       const meta: any = await r2.json();
       const universe = meta[0].universe;
@@ -176,31 +195,15 @@ export async function registerRoutes(
 
   app.get("/api/finnhub", async (_req, res) => {
     const cached = cache["finnhub"];
-    if (cached && Date.now() - cached.ts < FINNHUB_TTL) {
+    if (cached) {
       return res.json(cached.data);
     }
-    if (finnhubFetchInProgress) {
-      try {
-        const result = await finnhubFetchInProgress;
-        return res.json(result);
-      } catch {
-        const fallback = cache["finnhub"];
-        if (fallback) return res.json(fallback.data);
-        return res.status(500).json({ error: "Finnhub fetch failed" });
-      }
-    }
-    try {
-      finnhubFetchInProgress = doFinnhubFetch();
-      const result = await finnhubFetchInProgress;
-      finnhubFetchInProgress = null;
-      cache["finnhub"] = { data: result, ts: Date.now() };
-      res.json(result);
-    } catch (e: any) {
-      finnhubFetchInProgress = null;
-      const fallback = cache["finnhub"];
-      if (fallback) return res.json(fallback.data);
-      res.status(500).json({ error: e.message });
-    }
+    const stocks: Record<string, any> = {};
+    EQUITY_SYMS.forEach(sym => { stocks[sym] = { price: EQUITY_BASE[sym], chg: 0, live: false }; });
+    const metals: Record<string, any> = { XAU: { price: METALS_BASE.XAU, chg: 0, live: false }, XAG: { price: METALS_BASE.XAG, chg: 0, live: false } };
+    const forex: Record<string, any> = {};
+    Object.entries(FOREX_BASE).forEach(([sym, price]) => { forex[sym] = { price, chg: 0, live: false }; });
+    res.json({ stocks, metals, forex });
   });
 
   app.post("/api/ai/analyze", async (req, res) => {
