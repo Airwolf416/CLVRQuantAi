@@ -2,7 +2,6 @@
 // ALPHASCAN v10 — Full deployment version
 // Real data: Hyperliquid (crypto) + Finnhub (stocks/metals/forex)
 // ─────────────────────────────────────────────────────────
-const FINNHUB_KEY = "d6fsllhr01qqnmbpsss0d6fsllhr01qqnmbpsssg";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -83,90 +82,19 @@ const FH_FOREX  = {
 };
 
 // ─────────────────────────────────────────────────────────
-// API FETCHERS — work in deployed env (no CORS issues)
+// API FETCHERS — proxied through backend to avoid CORS
 // ─────────────────────────────────────────────────────────
 
-// Hyperliquid — free, no key, works 24/7
 async function fetchHyperliquid() {
-  // Fetch mid prices
-  const r1 = await fetch("https://api.hyperliquid.xyz/info", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({type:"allMids"})
-  });
-  const mids = await r1.json(); // {BTC:"84000", ETH:"1590", ...}
-
-  // Fetch funding rates
-  const r2 = await fetch("https://api.hyperliquid.xyz/info", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({type:"metaAndAssetCtxs"})
-  });
-  const meta = await r2.json();
-  const universe = meta[0].universe;
-  const ctxs = meta[1];
-  const funding = {};
-  universe.forEach((asset, i) => {
-    if (CRYPTO_SYMS.includes(asset.name)) {
-      funding[asset.name] = {
-        funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
-        oi: parseFloat(ctxs[i]?.openInterest || 0) * parseFloat(ctxs[i]?.markPx || 0)
-      };
-    }
-  });
-
-  const result = {};
-  CRYPTO_SYMS.forEach(sym => {
-    if (mids[sym]) {
-      const price = parseFloat(mids[sym]);
-      const base  = CRYPTO_BASE[sym];
-      result[sym] = {
-        price,
-        chg: base ? +((price - base) / base * 100).toFixed(2) : 0,
-        funding: funding[sym]?.funding || 0,
-        oi: funding[sym]?.oi || 0,
-        live: true
-      };
-    }
-  });
-  return result;
-}
-
-// Finnhub — requires key, live during market hours
-async function fhQuote(symbol) {
-  const r = await fetch(
-    `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_KEY}`
-  );
-  if (!r.ok) throw new Error(`Finnhub ${r.status}`);
-  const d = await r.json();
-  if (!d || !d.c || d.c === 0) throw new Error("zero price");
-  return {
-    price: d.c,
-    chg: d.dp ?? (d.pc ? ((d.c - d.pc) / d.pc * 100) : 0),
-    live: true
-  };
+  const r = await fetch("/api/crypto");
+  if (!r.ok) throw new Error(`Crypto API ${r.status}`);
+  return await r.json();
 }
 
 async function fetchFinnhub() {
-  const stocks = {}, metals = {}, forex = {};
-
-  await Promise.allSettled([
-    // Stocks
-    ...EQUITY_SYMS.map(async sym => {
-      try { stocks[sym] = await fhQuote(sym); }
-      catch { stocks[sym] = { price: EQUITY_BASE[sym], chg:0, live:false }; }
-    }),
-    // Metals
-    ...Object.entries(FH_METALS).map(async ([sym, fhSym]) => {
-      try { metals[sym] = await fhQuote(fhSym); }
-      catch { metals[sym] = { price: METALS_BASE[sym], chg:0, live:false }; }
-    }),
-    // Forex
-    ...Object.entries(FH_FOREX).map(async ([sym, fhSym]) => {
-      try { forex[sym] = await fhQuote(fhSym); }
-      catch { forex[sym] = { price: FOREX_BASE[sym], chg:0, live:false }; }
-    }),
-  ]);
-
-  return { stocks, metals, forex };
+  const r = await fetch("/api/finnhub");
+  if (!r.ok) throw new Error(`Finnhub API ${r.status}`);
+  return await r.json();
 }
 
 // ─────────────────────────────────────────────────────────
@@ -278,7 +206,7 @@ export default function App() {
 
   useEffect(() => {
     doHL();
-    const iv = setInterval(doHL, 3000);
+    const iv = setInterval(doHL, 5000);
     return () => clearInterval(iv);
   }, [doHL]);
 

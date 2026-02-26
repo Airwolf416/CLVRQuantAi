@@ -41,3 +41,8 @@ waitForPort = 5000
 
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[userenv]
+
+[userenv.shared]
+FINNHUB_KEY = "d6fsllhr01qqnmbpsss0d6fsllhr01qqnmbpsssg"
