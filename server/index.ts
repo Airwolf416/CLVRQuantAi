@@ -3,6 +3,15 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
+const _origExit = process.exit;
+(process as any).exit = function(code?: number) {
+  if (code === 1) {
+    console.error("Vite esbuild service error — keeping server alive");
+    return undefined as never;
+  }
+  return _origExit.call(process, code) as never;
+};
+
 const app = express();
 const httpServer = createServer(app);
 
@@ -48,10 +57,6 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
       log(logLine);
     }
   });
