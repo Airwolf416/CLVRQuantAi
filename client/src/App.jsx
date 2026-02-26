@@ -1,11 +1,8 @@
 // ─────────────────────────────────────────────────────────
 // ALPHASCAN v10 — Full deployment version
 // Real data: Hyperliquid (crypto) + Finnhub (stocks/metals/forex)
-//
-// 🔑 REPLACE YOUR KEYS BELOW:
 // ─────────────────────────────────────────────────────────
-const FINNHUB_KEY   = "d6fsllhr01qqnmbpsss0d6fsllhr01qqnmbpsssg"; // ← replace after rotating
-const ANTHROPIC_KEY = "YOUR_ANTHROPIC_KEY_HERE";                    // ← paste your Anthropic key
+const FINNHUB_KEY = "d6fsllhr01qqnmbpsss0d6fsllhr01qqnmbpsssg";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -365,23 +362,14 @@ CONVICTION: [x]/100
 REASON: 2 sentences. No disclaimers.`;
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/ai/analyze", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "anthropic-version": "2023-06-01",
-          "x-api-key": ANTHROPIC_KEY,
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 500,
-          system: sys,
-          messages: [{ role:"user", content:aiInput }]
-        })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ system: sys, userMessage: aiInput })
       });
-      if (!res.ok) { const e = await res.text(); setAiOutput(`API Error ${res.status}: ${e}`); setAiLoading(false); return; }
       const data = await res.json();
-      setAiOutput(data.error ? `Error: ${data.error.message}` : (data.content||[]).map(b=>b.text||"").join("") || "No response.");
+      if (!res.ok) { setAiOutput(data.error || `API Error ${res.status}`); setAiLoading(false); return; }
+      setAiOutput(data.text || "No response.");
     } catch (e) { setAiOutput(`Error: ${e.message}`); }
     setAiLoading(false);
   };
@@ -681,12 +669,6 @@ REASON: 2 sentences. No disclaimers.`;
         <div style={panel}>
           <div style={ph}><span style={pt}>🤖 AI Perp Analyst</span><Badge label="Claude · Live Data" color="cyan"/></div>
           <div style={{padding:14}}>
-            {ANTHROPIC_KEY === "YOUR_ANTHROPIC_KEY_HERE" && (
-              <div style={{background:"rgba(255,140,0,.1)",border:`1px solid rgba(255,140,0,.3)`,borderRadius:6,padding:"8px 12px",marginBottom:10,fontSize:9,color:C.orange}}>
-                ⚠️ Add your Anthropic API key in App.js line 10 to enable AI analysis.
-                Get one free at console.anthropic.com
-              </div>
-            )}
             <div style={{background:"rgba(0,0,0,.3)",border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 12px",marginBottom:10,fontSize:9,lineHeight:1.8,color:C.muted2}}>
               <div style={{color:hlLive?C.green:C.orange}}>{hlLive?"✅":"⏳"} Crypto: {hlLive?"Real-time Hyperliquid data":"Connecting..."}</div>
               <div style={{color:fhLive?C.green:C.gold}}>{fhLive?"✅":"⚠️"} Stocks/Metals/Forex: {fhLive?"Live Finnhub data":"Market closed — last prices"}</div>
