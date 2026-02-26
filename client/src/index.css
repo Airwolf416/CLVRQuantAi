@@ -1,1 +1,56 @@
-/* User's app relies on inline styles and index.html styles. Cleared default CSS. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 220 20% 3%;
+  --foreground: 220 20% 90%;
+  --border: 220 30% 12%;
+  --card: 220 25% 6%;
+  --card-foreground: 220 20% 90%;
+  --card-border: 220 30% 12%;
+  --sidebar: 220 25% 6%;
+  --sidebar-foreground: 220 20% 90%;
+  --sidebar-border: 220 30% 12%;
+  --sidebar-primary: 160 100% 45%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 220 25% 10%;
+  --sidebar-accent-foreground: 220 20% 90%;
+  --sidebar-ring: 160 100% 45%;
+  --popover: 220 25% 6%;
+  --popover-foreground: 220 20% 90%;
+  --popover-border: 220 30% 12%;
+  --primary: 160 100% 45%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 25% 10%;
+  --secondary-foreground: 220 20% 90%;
+  --muted: 220 25% 10%;
+  --muted-foreground: 220 15% 50%;
+  --accent: 220 25% 10%;
+  --accent-foreground: 220 20% 90%;
+  --destructive: 350 100% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 220 30% 15%;
+  --ring: 160 100% 45%;
+  --chart-1: 160 100% 45%;
+  --chart-2: 195 100% 50%;
+  --chart-3: 350 100% 60%;
+  --chart-4: 35 100% 50%;
+  --chart-5: 45 100% 50%;
+  --font-sans: 'IBM Plex Mono', monospace;
+  --font-serif: Georgia, serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --radius: 0.5rem;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #04060d;
+  font-family: 'IBM Plex Mono', monospace;
+  color: #d0deff;
+}
