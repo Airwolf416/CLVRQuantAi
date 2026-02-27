@@ -211,14 +211,14 @@ export default function App(){
   },[triggerFlashes]);
   useEffect(()=>{doFH();const iv=setInterval(doFH,15000);return()=>clearInterval(iv);},[doFH]);
 
-  // ── Macro calendar ────────────────────────────────────
-  useEffect(()=>{
-    setMacroLoading(true);
+  // ── Macro calendar (auto-refresh every 5 min) ─────────
+  const fetchMacro=useCallback(()=>{
     fetch("/api/macro").then(r=>r.json()).then(data=>{
       if(Array.isArray(data)) setMacroEvents(data);
       setMacroLoading(false);
     }).catch(()=>setMacroLoading(false));
   },[]);
+  useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,300000);return()=>clearInterval(iv);},[fetchMacro]);
 
   const allPrices={...cryptoPrices,...equityPrices,...metalPrices,...forexPrices};
 
@@ -446,7 +446,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
   const bankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,"NFP":C.red,"PCE":C.orange,CPI:C.orange,GDP:C.blue,PMI:C.teal,USD:C.blue,EUR:C.purple,GBP:C.green,JPY:C.teal,CAD:C.gold,AUD:C.cyan,CHF:C.muted2,NZD:C.green};
   const filteredMacro=macroFilter==="ALL"?macroEvents:macroEvents.filter(e=>e.bank===macroFilter||e.bank.startsWith(macroFilter));
   const sortedMacro=[...filteredMacro].sort((a,b)=>new Date(a.date)-new Date(b.date));
-  const upcomingCount=macroEvents.filter(e=>{const d=new Date(e.date);const diff=Math.floor((d-today)/(1000*60*60*24));return diff>=0&&diff<=7;}).length;
+  const upcomingCount=macroEvents.length;
 
   // ── Bottom Nav ────────────────────────────────────────
   const NAV=[
@@ -562,9 +562,9 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
           {macroLoading&&<div style={{padding:20,textAlign:"center",color:C.muted,fontSize:11}}>Loading calendar...</div>}
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:10}}>
             {[
-              {label:"Events This Week",val:upcomingCount,color:C.red},
-              {label:"Next 30 Days",val:macroEvents.filter(e=>{const d=new Date(e.date);return(d-today)/(1000*60*60*24)<=30&&(d-today)/(1000*60*60*24)>=0;}).length,color:C.gold},
+              {label:"This Week",val:macroEvents.length,color:C.cyan},
               {label:"HIGH Impact",val:macroEvents.filter(e=>e.impact==="HIGH").length,color:C.orange},
+              {label:"Live Feed",val:macroEvents.filter(e=>e.live).length||"—",color:C.green},
             ].map(s=>(
               <div key={s.label} style={{...panel,marginBottom:0,padding:"10px 12px",textAlign:"center"}}>
                 <div style={{fontSize:7,color:C.muted,letterSpacing:"0.12em",marginBottom:4}}>{s.label}</div>
@@ -581,17 +581,17 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
 
           <div style={panel}>
             <div style={ph}>
-              <span style={pt}>🏦 Central Bank Calendar</span>
+              <span style={pt}>🏦 This Week</span>
               <Badge label={`${sortedMacro.length} events`} color="cyan"/>
+              <Badge label="AUTO-REFRESH" color="green" style={{fontSize:7}}/>
             </div>
+            {sortedMacro.length===0&&<div style={{padding:20,textAlign:"center",color:C.muted,fontSize:11}}>No central bank events this week.</div>}
             {sortedMacro.map(evt=>{
               const status=eventStatus(evt.date);
-              const isPast=new Date(evt.date)<today;
               const isToday=status.label==="TODAY";
               return(
                 <div key={evt.id} style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,
-                  background:isToday?darkMode?"rgba(255,45,85,.06)":"rgba(220,0,42,.04)":isPast?darkMode?"rgba(0,0,0,.2)":"rgba(0,0,0,.03)":"transparent",
-                  opacity:isPast?.6:1}}>
+                  background:isToday?darkMode?"rgba(255,45,85,.06)":"rgba(220,0,42,.04)":"transparent"}}>
                   <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:6}}>
                     <div style={{flex:1}}>
                       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:3}}>
@@ -600,7 +600,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
                         <Badge label={evt.impact} color={evt.impact==="HIGH"?"red":evt.impact==="MED"?"orange":"teal"}/>
                         {isToday&&<Badge label="TODAY" color="red" style={{animation:"pulse 1.4s ease infinite"}}/>}
                         {status.label!=="PAST"&&status.label!=="TODAY"&&<Badge label={status.label} color={status.color}/>}
-                        {isPast&&!isToday&&<Badge label="PAST" color="muted"/>}
+                        {evt.live&&<Badge label="LIVE" color="green" style={{fontSize:7}}/>}
                       </div>
                       <div style={{fontWeight:700,fontSize:12,color:C.text,marginBottom:2}}>{evt.name}</div>
                       <div style={{fontSize:9,color:C.muted}}>{evt.date} · {evt.time}</div>
