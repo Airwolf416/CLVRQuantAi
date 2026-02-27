@@ -138,6 +138,14 @@ export default function App(){
 
   const [flashes,setFlashes]=useState({});
   const prevRef=useRef({});
+  const priceHistRef=useRef((()=>{
+    const h={};
+    [...CRYPTO_SYMS,...EQUITY_SYMS,...METALS_SYMS,...FOREX_SYMS].forEach(s=>{
+      const base=CRYPTO_BASE[s]||EQUITY_BASE[s]||METALS_BASE[s]||FOREX_BASE[s];
+      if(base) h[s]=[base];
+    });
+    return h;
+  })());
   const [watchlist,setWatchlist]=useState(["BTC","ETH","SOL","XAU","TSLA"]);
   const [alerts,setAlerts]=useState([
     {id:1,sym:"BTC",field:"funding",condition:"above",threshold:0.05,triggered:false,label:"BTC funding > 0.05%"},
@@ -177,7 +185,13 @@ export default function App(){
     Object.entries(updates).forEach(([sym,d])=>{
       const prev=prevRef.current[sym];
       if(prev&&d.price&&d.price!==prev) newF[sym]=d.price>prev?"green":"red";
-      if(d.price) prevRef.current[sym]=d.price;
+      if(d.price){
+        prevRef.current[sym]=d.price;
+        const h=priceHistRef.current[sym]||[];
+        h.push(d.price);
+        if(h.length>30) h.shift();
+        priceHistRef.current[sym]=h;
+      }
     });
     if(Object.keys(newF).length){
       setFlashes(f=>({...f,...newF}));
@@ -375,10 +389,11 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
   const PriceRow=({sym,d,extra})=>{
     if(!d) return null;
     const flash=flashes[sym];
+    const hist=priceHistRef.current[sym]||[];
     return(
       <div data-testid={`price-row-${sym}`} style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,transition:"background .35s",
         background:flash==="green"?"rgba(0,229,160,.12)":flash==="red"?"rgba(255,45,85,.1)":"transparent",
-        display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:8,alignItems:"center"}}>
+        display:"grid",gridTemplateColumns:"1fr auto auto auto auto",gap:8,alignItems:"center"}}>
         <div>
           <div style={{display:"flex",alignItems:"center",gap:6}}>
             <span style={{fontWeight:700,fontSize:13,color:C.text}}>{sym}</span>
@@ -386,6 +401,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
           </div>
           {extra&&<div style={{fontSize:8,color:C.muted,marginTop:1}}>{extra}</div>}
         </div>
+        <Sparkline data={hist} width={56} height={20}/>
         <div style={{fontSize:13,fontWeight:700,color:flash==="green"?C.green:flash==="red"?C.red:C.text,transition:"color .35s"}}>{fmt(d.price,sym)}</div>
         <div style={{fontSize:11,color:Number(d.chg)>=0?C.green:C.red,minWidth:52,textAlign:"right"}}>{pct(d.chg)}</div>
         {d.live?<Badge label="LIVE" color="green" style={{fontSize:7,padding:"1px 5px"}}/>:<Badge label="SIM" color="orange" style={{fontSize:7,padding:"1px 5px"}}/>}
