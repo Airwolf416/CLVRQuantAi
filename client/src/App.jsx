@@ -108,7 +108,9 @@ function Sparkline({data,color,width=80,height=24}) {
 
 // ─── TOAST ────────────────────────────────────────────────
 function Toast({msg,onDone}) {
-  useEffect(()=>{const t=setTimeout(onDone,3000);return()=>clearTimeout(t);},[onDone]);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+  useEffect(()=>{const t=setTimeout(()=>onDoneRef.current(),2500);return()=>clearTimeout(t);},[]);
   return (
     <div style={{position:"fixed",bottom:88,left:"50%",transform:"translateX(-50%)",
       background:"#00e5a0",color:"#04060d",borderRadius:10,padding:"10px 18px",
@@ -259,10 +261,27 @@ export default function App() {
   const isWatched = sym=>watchlist.includes(sym);
 
   // ── Share signal ──────────────────────────────────────
+  const copyText = useCallback((text) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(()=>setToast("Copied to clipboard!")).catch(()=>{
+        fallbackCopy(text);
+      });
+    } else {
+      fallbackCopy(text);
+    }
+    function fallbackCopy(t) {
+      const ta=document.createElement("textarea");
+      ta.value=t; ta.style.position="fixed"; ta.style.left="-9999px"; ta.style.top="-9999px";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      try { document.execCommand("copy"); setToast("Copied to clipboard!"); }
+      catch { setToast("Copy failed — long press to copy"); }
+      document.body.removeChild(ta);
+    }
+  },[]);
   const shareSignal = sig => {
     const price=fmt(allPrices[sig.token]?.price,sig.token);
-    const text=`⚡ ALPHASCAN SIGNAL\n${sig.icon} ${sig.token} ${sig.dir} | Conf: ${sig.conf}/100 | ${sig.lev}\n💰 Price: ${price}\n📊 ${sig.desc}\n🏷 ${sig.tags.map(t=>t.l).join(" · ")}\n📡 ${sig.src} | alpha-scan.replit.app`;
-    navigator.clipboard.writeText(text).then(()=>setToast("Signal copied! 📋"));
+    const text=`ALPHASCAN SIGNAL\n${sig.icon} ${sig.token} ${sig.dir} | Conf: ${sig.conf}/100 | ${sig.lev}\nPrice: ${price}\n${sig.desc}\n${sig.tags.map(t=>t.l).join(" · ")}\n${sig.src} | alpha-scan.replit.app`;
+    copyText(text);
   };
 
   // ── AI ────────────────────────────────────────────────
@@ -405,8 +424,9 @@ Respond: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / REASON (
             <div style={{fontSize:7,color:C.muted,letterSpacing:"0.18em",marginTop:2}}>CRYPTO · STOCKS · METALS · FOREX</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <button data-testid="button-theme-toggle" onClick={()=>setDarkMode(d=>!d)} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:20,padding:"5px 11px",cursor:"pointer",fontSize:15}}>
-              {darkMode?"☀️":"🌙"}
+            <button data-testid="button-theme-toggle" onClick={()=>setDarkMode(d=>!d)} style={{background:darkMode?"rgba(255,196,0,.12)":"rgba(100,100,200,.15)",border:`1px solid ${darkMode?C.gold+"66":C.blue+"66"}`,borderRadius:20,padding:"6px 14px",cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",gap:4}}>
+              <span>{darkMode?"☀️":"🌙"}</span>
+              <span style={{fontSize:8,fontWeight:700,fontFamily:"monospace",color:darkMode?C.gold:C.blue,letterSpacing:"0.05em"}}>{darkMode?"LIGHT":"DARK"}</span>
             </button>
             <div style={{textAlign:"right"}}>
               <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end",marginBottom:2}}>
