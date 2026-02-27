@@ -103,29 +103,22 @@ async function fetchForex(): Promise<Record<string, any>> {
 
 async function fetchMetals(): Promise<Record<string, any>> {
   const metals: Record<string, any> = {};
-  if (FINNHUB_KEY) {
-    for (const [sym, fhSym] of [["XAU","OANDA:XAU_USD"],["XAG","OANDA:XAG_USD"]] as const) {
-      try {
-        const r = await fetch(
-          `https://finnhub.io/api/v1/quote?symbol=${fhSym}&token=${FINNHUB_KEY}`,
-          { signal: AbortSignal.timeout(5000) }
-        );
-        if (r.ok) {
-          const d: any = await r.json();
-          if (d?.c && d.c > 0) {
-            const base = METALS_BASE[sym];
-            metals[sym] = { price: d.c, chg: base ? +((d.c - base) / base * 100).toFixed(2) : 0, live: true };
-            await delay(1500);
-            continue;
-          }
+  for (const sym of ["XAU", "XAG"] as const) {
+    try {
+      const r = await fetch(
+        `https://api.gold-api.com/price/${sym}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (r.ok) {
+        const d: any = await r.json();
+        if (d?.price && d.price > 0) {
+          const base = METALS_BASE[sym];
+          metals[sym] = { price: d.price, chg: base ? +((d.price - base) / base * 100).toFixed(2) : 0, live: true };
+          continue;
         }
-      } catch {}
-      metals[sym] = { price: METALS_BASE[sym], chg: 0, live: false };
-      await delay(1500);
-    }
-  } else {
-    metals.XAU = { price: METALS_BASE.XAU, chg: 0, live: false };
-    metals.XAG = { price: METALS_BASE.XAG, chg: 0, live: false };
+      }
+    } catch {}
+    metals[sym] = { price: METALS_BASE[sym], chg: 0, live: false };
   }
   return metals;
 }
