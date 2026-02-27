@@ -169,6 +169,8 @@ export default function App(){
     {id:1,sym:"BTC",field:"funding",condition:"above",threshold:0.05,triggered:false,label:"BTC funding > 0.05%"},
     {id:2,sym:"XAU",field:"price",  condition:"above",threshold:3400, triggered:false,label:"XAU price > $3,400"},
   ]);
+  const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
+  const [showAlertForm,setShowAlertForm]=useState(false);
   const [signals,setSignals]=useState(SIGNALS_POOL.slice(0,8).map((s,i)=>({...s,time:`${i*4+2}m ago`,id:i})));
   const [news,setNews]=useState(NEWS_POOL.map((n,i)=>({...n,time:`${i*6+1}m ago`,id:i})));
   const [flashSigId,setFlashSigId]=useState(null);
@@ -467,6 +469,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
     {k:"macro",  icon:"🏦", label:"Macro"},
     {k:"brief",  icon:"📰", label:"Brief"},
     {k:"signals",icon:"⚡", label:"Signals"},
+    {k:"alerts", icon:"🔔", label:"Alerts"},
     {k:"ai",     icon:"🤖", label:"AI"},
   ];
 
@@ -789,6 +792,93 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
                 </div>
               )}
             </div>
+          </div>
+        </>}
+
+        {/* ══ ALERTS ══ */}
+        {tab==="alerts"&&<>
+          <div style={panel}>
+            <div style={ph}>
+              <span style={pt}>🔔 Price Alerts</span>
+              <Badge label={`${alerts.filter(a=>!a.triggered).length} active`} color="green"/>
+            </div>
+            <div style={{padding:14}}>
+              <div style={{fontSize:10,color:C.muted2,lineHeight:1.7,marginBottom:12}}>
+                Set alerts on price or funding. You'll get a browser notification and toast when triggered.
+              </div>
+              {typeof Notification!=="undefined"&&Notification.permission==="default"&&(
+                <button data-testid="button-enable-notifications" onClick={()=>Notification.requestPermission()} style={{width:"100%",marginBottom:10,padding:"8px 12px",background:"rgba(59,130,246,.1)",border:`1px solid rgba(59,130,246,.3)`,borderRadius:6,color:C.blue,fontSize:10,cursor:"pointer",fontFamily:"monospace"}}>
+                  Enable browser notifications
+                </button>
+              )}
+              <button data-testid="button-new-alert" onClick={()=>setShowAlertForm(f=>!f)} style={{width:"100%",height:38,background:showAlertForm?"rgba(255,45,85,.1)":C.green,color:showAlertForm?C.red:"#04060d",border:showAlertForm?`1px solid rgba(255,45,85,.3)`:"none",borderRadius:6,fontWeight:700,fontSize:11,letterSpacing:"0.12em",textTransform:"uppercase",cursor:"pointer",marginBottom:10}}>
+                {showAlertForm?"Cancel":"+ New Alert"}
+              </button>
+              {showAlertForm&&(
+                <div style={{background:darkMode?"rgba(0,0,0,.2)":"rgba(0,0,0,.04)",borderRadius:8,padding:12,marginBottom:12,border:`1px solid ${C.border}`}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div>
+                      <div style={{fontSize:8,color:C.muted,marginBottom:4,letterSpacing:"0.1em"}}>SYMBOL</div>
+                      <select data-testid="select-alert-sym" value={alertForm.sym} onChange={e=>setAlertForm(f=>({...f,sym:e.target.value}))}
+                        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:5,padding:"7px 8px",color:C.text,fontSize:10,fontFamily:"monospace"}}>
+                        {ALL_SYMS.map(s=><option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <div style={{fontSize:8,color:C.muted,marginBottom:4,letterSpacing:"0.1em"}}>FIELD</div>
+                      <select data-testid="select-alert-field" value={alertForm.field} onChange={e=>setAlertForm(f=>({...f,field:e.target.value}))}
+                        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:5,padding:"7px 8px",color:C.text,fontSize:10,fontFamily:"monospace"}}>
+                        <option value="price">Price</option>
+                        <option value="funding">Funding %</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                    <div>
+                      <div style={{fontSize:8,color:C.muted,marginBottom:4,letterSpacing:"0.1em"}}>CONDITION</div>
+                      <select data-testid="select-alert-condition" value={alertForm.condition} onChange={e=>setAlertForm(f=>({...f,condition:e.target.value}))}
+                        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:5,padding:"7px 8px",color:C.text,fontSize:10,fontFamily:"monospace"}}>
+                        <option value="above">Above</option>
+                        <option value="below">Below</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div style={{fontSize:8,color:C.muted,marginBottom:4,letterSpacing:"0.1em"}}>THRESHOLD</div>
+                      <input data-testid="input-alert-threshold" type="number" value={alertForm.threshold} onChange={e=>setAlertForm(f=>({...f,threshold:e.target.value}))} placeholder="e.g. 90000"
+                        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:5,padding:"7px 8px",color:C.text,fontSize:10,fontFamily:"monospace"}}/>
+                    </div>
+                  </div>
+                  <button data-testid="button-create-alert" onClick={()=>{
+                    const t=Number(alertForm.threshold);
+                    if(!t){setToast("Enter a threshold value");return;}
+                    const label=`${alertForm.sym} ${alertForm.field} ${alertForm.condition} ${alertForm.field==="price"?fmt(t,alertForm.sym):t+"%"}`;
+                    setAlerts(prev=>[...prev,{id:idRef.current++,sym:alertForm.sym,field:alertForm.field,condition:alertForm.condition,threshold:t,triggered:false,label}]);
+                    setAlertForm({sym:"BTC",field:"price",condition:"above",threshold:""});
+                    setShowAlertForm(false);
+                    setToast(`Alert created: ${label}`);
+                  }} style={{width:"100%",height:36,background:C.green,color:"#04060d",border:"none",borderRadius:6,fontWeight:700,fontSize:10,letterSpacing:"0.12em",textTransform:"uppercase",cursor:"pointer"}}>
+                    Create Alert
+                  </button>
+                </div>
+              )}
+            </div>
+            {alerts.length===0?<div style={{padding:20,textAlign:"center",color:C.muted,fontSize:11}}>No alerts set.</div>:
+              alerts.map(a=>(
+                <div key={a.id} style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",opacity:a.triggered?.5:1}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:11,color:a.triggered?C.muted:C.text,display:"flex",alignItems:"center",gap:6}}>
+                      <span>{a.sym}</span>
+                      <Badge label={a.field} color={a.field==="funding"?"orange":"blue"}/>
+                      <Badge label={a.condition} color={a.condition==="above"?"green":"red"}/>
+                      {a.triggered&&<Badge label="TRIGGERED" color="red"/>}
+                    </div>
+                    <div style={{fontSize:9,color:C.muted,marginTop:2}}>{a.label}</div>
+                  </div>
+                  <button data-testid={`button-delete-alert-${a.id}`} onClick={()=>setAlerts(prev=>prev.filter(x=>x.id!==a.id))}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.muted2,cursor:"pointer",fontSize:10,padding:"3px 8px"}}>✕</button>
+                </div>
+              ))
+            }
           </div>
         </>}
 
