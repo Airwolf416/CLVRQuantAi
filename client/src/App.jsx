@@ -228,7 +228,7 @@ export default function App() {
       const hit = a.condition==="above" ? val>=a.threshold : val<=a.threshold;
       if(hit) {
         setToast(`🔔 ALERT: ${a.label}`);
-        if(Notification.permission==="granted") new Notification("AlphaScan",{body:a.label});
+        if(typeof Notification!=="undefined"&&Notification.permission==="granted") new Notification("AlphaScan",{body:a.label});
         return {...a,triggered:true};
       }
       return a;
@@ -594,7 +594,7 @@ Respond: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / REASON (
                   setAlerts(prev=>[...prev,{id:Date.now(),...alertForm,threshold:parseFloat(alertForm.threshold),triggered:false,label}]);
                   setAlertForm({sym:"BTC",field:"price",condition:"above",threshold:""});
                   setShowAlertForm(false); setToast("Alert created! 🔔");
-                  if(Notification.permission==="default") Notification.requestPermission();
+                  if(typeof Notification!=="undefined"&&Notification.permission==="default") Notification.requestPermission();
                 }} style={{width:"100%",padding:"8px",background:C.green,color:"#04060d",border:"none",borderRadius:6,fontWeight:700,fontSize:10,cursor:"pointer"}}>
                   CREATE ALERT
                 </button>
