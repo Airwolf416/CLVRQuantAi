@@ -301,6 +301,20 @@ export async function registerRoutes(
     {bank:"RBA",flag:"🇦🇺",name:"RBA Rate Decision",date:"2026-09-01",time:"14:30 AET",impact:"MED",desc:"September RBA rate decision.",currency:"AUD"},
     {bank:"RBA",flag:"🇦🇺",name:"RBA Rate Decision",date:"2026-11-03",time:"14:30 AET",impact:"MED",desc:"November RBA meeting.",currency:"AUD"},
     {bank:"RBA",flag:"🇦🇺",name:"RBA Rate Decision",date:"2026-12-01",time:"14:30 AET",impact:"MED",desc:"Final 2026 RBA meeting.",currency:"AUD"},
+    // Key US economic data releases 2026
+    {bank:"CPI",flag:"🇦🇺",name:"CPI m/m",date:"2026-02-24",time:"08:30 ET",impact:"HIGH",desc:"Australia CPI month-over-month.",currency:"AUD"},
+    {bank:"CPI",flag:"🇦🇺",name:"CPI y/y",date:"2026-02-24",time:"08:30 ET",impact:"HIGH",desc:"Australia CPI year-over-year.",currency:"AUD"},
+    {bank:"USD",flag:"🇺🇸",name:"Unemployment Claims",date:"2026-02-26",time:"08:30 ET",impact:"MED",desc:"Weekly initial jobless claims.",currency:"USD"},
+    {bank:"GDP",flag:"🇺🇸",name:"GDP m/m",date:"2026-02-27",time:"08:30 ET",impact:"HIGH",desc:"US GDP month-over-month.",currency:"USD"},
+    {bank:"USD",flag:"🇺🇸",name:"Core PPI m/m",date:"2026-02-27",time:"08:30 ET",impact:"MED",desc:"US Core Producer Price Index month-over-month.",currency:"USD"},
+    {bank:"USD",flag:"🇺🇸",name:"PPI m/m",date:"2026-02-27",time:"08:30 ET",impact:"MED",desc:"US Producer Price Index month-over-month.",currency:"USD"},
+    {bank:"BOC",flag:"🇨🇦",name:"BOC Rate Decision",date:"2026-03-04",time:"09:45 ET",impact:"HIGH",desc:"Bank of Canada rate decision.",currency:"CAD"},
+    {bank:"ECB",flag:"🇪🇺",name:"ECB Rate Decision",date:"2026-03-05",time:"08:15 ET",impact:"HIGH",desc:"ECB rate decision with press conference.",currency:"EUR"},
+    {bank:"USD",flag:"🇺🇸",name:"Non-Farm Payrolls",date:"2026-03-06",time:"08:30 ET",impact:"HIGH",desc:"US jobs report.",currency:"USD"},
+    {bank:"CPI",flag:"🇺🇸",name:"CPI m/m",date:"2026-03-11",time:"08:30 ET",impact:"HIGH",desc:"US Consumer Price Index month-over-month.",currency:"USD"},
+    {bank:"CPI",flag:"🇺🇸",name:"CPI y/y",date:"2026-03-11",time:"08:30 ET",impact:"HIGH",desc:"US Consumer Price Index year-over-year.",currency:"USD"},
+    {bank:"CPI",flag:"🇺🇸",name:"Core CPI m/m",date:"2026-03-11",time:"08:30 ET",impact:"HIGH",desc:"Core CPI (excl. food & energy).",currency:"USD"},
+    {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-03-18",time:"14:00 ET",impact:"HIGH",desc:"Federal Reserve rate decision with projections.",currency:"USD"},
   ].map((e, i) => ({ ...e, id: i + 1, current: "—", forecast: "—" }));
 
   let macroCache: { data: any[]; ts: number } = { data: [], ts: 0 };
@@ -325,11 +339,16 @@ export async function registerRoutes(
         headers: { "User-Agent": "AlphaScan/1.0" },
       });
       if (!res.ok) return [];
-      const data = await res.json();
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("json")) return [];
+      const text = await res.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { return []; }
       if (!Array.isArray(data)) return [];
       const relevant = data.filter((e: any) =>
-        e.impact === "High" &&
-        ["USD","EUR","GBP","JPY","CAD","AUD","CHF","NZD"].includes(e.country)
+        (e.impact === "High" || e.impact === "Medium") &&
+        ["USD","EUR","GBP","JPY","CAD","AUD","CHF","NZD"].includes(e.country) &&
+        e.title !== "Bank Holiday"
       );
       return relevant.map((e: any, i: number) => ({
         id: 10000 + i,
@@ -340,7 +359,7 @@ export async function registerRoutes(
         time: e.date ? new Date(e.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) + " ET" : "",
         current: e.previous || "—",
         forecast: e.forecast || "—",
-        impact: "HIGH",
+        impact: e.impact === "High" ? "HIGH" : "MED",
         desc: `${e.title}. Previous: ${e.previous || "N/A"}. Forecast: ${e.forecast || "TBD"}.`,
         currency: e.country,
         live: true,
@@ -374,9 +393,18 @@ export async function registerRoutes(
   app.get("/api/macro", async (_req, res) => {
     try {
       let liveEvents: any[] = [];
-      if (Date.now() - macroCache.ts > MACRO_CACHE_MS) {
-        liveEvents = await fetchLiveCalendar();
-        macroCache = { data: liveEvents, ts: Date.now() };
+      const cacheExpired = Date.now() - macroCache.ts > MACRO_CACHE_MS;
+      if (cacheExpired) {
+        const fetched = await fetchLiveCalendar();
+        if (fetched.length > 0) {
+          macroCache = { data: fetched, ts: Date.now() };
+          liveEvents = fetched;
+        } else if (macroCache.data.length > 0) {
+          liveEvents = macroCache.data;
+        } else {
+          macroCache = { data: [], ts: Date.now() - MACRO_CACHE_MS + 60000 };
+          liveEvents = [];
+        }
       } else {
         liveEvents = macroCache.data;
       }
