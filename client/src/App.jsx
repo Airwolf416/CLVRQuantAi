@@ -562,7 +562,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
           {macroLoading&&<div style={{padding:20,textAlign:"center",color:C.muted,fontSize:11}}>Loading calendar...</div>}
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:10}}>
             {[
-              {label:"This Week",val:macroEvents.length,color:C.cyan},
+              {label:"Today+",val:macroEvents.length,color:C.cyan},
               {label:"HIGH Impact",val:macroEvents.filter(e=>e.impact==="HIGH").length,color:C.orange},
               {label:"Live Feed",val:macroEvents.filter(e=>e.live).length||"—",color:C.green},
             ].map(s=>(
@@ -581,7 +581,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
 
           <div style={panel}>
             <div style={ph}>
-              <span style={pt}>🏦 This Week</span>
+              <span style={pt}>🏦 Today & Upcoming</span>
               <Badge label={`${sortedMacro.length} events`} color="cyan"/>
               <Badge label="AUTO-REFRESH" color="green" style={{fontSize:7}}/>
             </div>
