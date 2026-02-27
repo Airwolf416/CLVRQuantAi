@@ -408,7 +408,9 @@ export async function registerRoutes(
       } else {
         liveEvents = macroCache.data;
       }
-      const { monday, sunday } = getWeekBounds();
+      const { sunday } = getWeekBounds();
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
       const existingDates = new Set(liveEvents.map((e: any) => `${e.date}-${e.name}`));
       const combined = [
         ...liveEvents,
@@ -416,15 +418,17 @@ export async function registerRoutes(
       ]
         .filter(e => {
           const d = new Date(e.date);
-          return d >= monday && d <= sunday;
+          return d >= todayStart && d <= sunday;
         })
         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       res.json(combined);
     } catch (e: any) {
-      const { monday, sunday } = getWeekBounds();
+      const { sunday } = getWeekBounds();
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
       res.json(MACRO_2026.filter(e => {
         const d = new Date(e.date);
-        return d >= monday && d <= sunday;
+        return d >= todayStart && d <= sunday;
       }));
     }
   });
