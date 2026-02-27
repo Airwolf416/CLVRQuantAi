@@ -27,7 +27,8 @@ const pct = (v,d=2)=>{ const n=Number(v); if(isNaN(n)) return "—"; return (n>=
 const fmt = (p,sym)=>{
   if(!p&&p!==0) return "—"; p=Number(p); if(isNaN(p)||p===0) return "—";
   if(["EURUSD","GBPUSD","AUDUSD","USDCHF"].includes(sym)) return p.toFixed(4);
-  if(["USDJPY","USDCAD"].includes(sym)) return p.toFixed(2);
+  if(sym==="USDJPY") return p.toFixed(2);
+  if(sym==="USDCAD") return p.toFixed(4);
   if(sym==="XAG") return "$"+p.toFixed(2);
   if(sym==="XAU") return "$"+p.toFixed(0);
   if(p>=1000) return "$"+p.toFixed(0);
