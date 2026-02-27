@@ -243,5 +243,19 @@ export async function registerRoutes(
     }
   });
 
+  const subscribers: { email: string; name: string; timestamp: string }[] = [];
+
+  app.post("/api/subscribe", async (req, res) => {
+    const { email, name } = req.body;
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ error: "Valid email required" });
+    }
+    const exists = subscribers.find(s => s.email === email);
+    if (!exists) {
+      subscribers.push({ email, name: name || "Trader", timestamp: new Date().toISOString() });
+    }
+    res.json({ ok: true, count: subscribers.length });
+  });
+
   return httpServer;
 }
