@@ -48,34 +48,7 @@ const METALS_SYMS=Object.keys(METALS_BASE);
 const FOREX_SYMS =Object.keys(FOREX_BASE);
 const ALL_SYMS   =[...CRYPTO_SYMS,...EQUITY_SYMS,...METALS_SYMS,...FOREX_SYMS];
 
-// ─── MACRO CALENDAR DATA ──────────────────────────────────
-const MACRO_EVENTS = [
-  {id:1, bank:"FED",  flag:"🇺🇸", name:"FOMC Rate Decision",          date:"2025-03-19", time:"14:00 ET", current:"4.25–4.50%", forecast:"Hold",  impact:"HIGH", desc:"Federal Reserve interest rate decision. Markets pricing <5% chance of cut. Watch dot plot & Powell presser.", currency:"USD"},
-  {id:2, bank:"FED",  flag:"🇺🇸", name:"FOMC Rate Decision",          date:"2025-05-07", time:"14:00 ET", current:"4.25–4.50%", forecast:"Hold",  impact:"HIGH", desc:"Second FOMC meeting of 2025. First cut possible if inflation cools further.", currency:"USD"},
-  {id:3, bank:"FED",  flag:"🇺🇸", name:"FOMC Rate Decision",          date:"2025-06-18", time:"14:00 ET", current:"4.25–4.50%", forecast:"–25bp", impact:"HIGH", desc:"June FOMC — first 25bp cut possible depending on CPI path. Major USD mover.", currency:"USD"},
-  {id:4, bank:"FED",  flag:"🇺🇸", name:"FOMC Rate Decision",          date:"2025-07-30", time:"14:00 ET", current:"4.25–4.50%", forecast:"–25bp", impact:"HIGH", desc:"July FOMC. If June cut confirmed, markets expect sequential easing.", currency:"USD"},
-  {id:5, bank:"FED",  flag:"🇺🇸", name:"FOMC Minutes",               date:"2025-04-09", time:"14:00 ET", current:"—",           forecast:"—",     impact:"MED",  desc:"Minutes from March meeting. Reveals internal debate on rate path.", currency:"USD"},
-  {id:6, bank:"ECB",  flag:"🇪🇺", name:"ECB Rate Decision",           date:"2025-03-06", time:"09:15 CET",current:"3.15%",      forecast:"–25bp", impact:"HIGH", desc:"ECB expected to cut 25bp. Lagarde presser key for EUR/USD direction.", currency:"EUR"},
-  {id:7, bank:"ECB",  flag:"🇪🇺", name:"ECB Rate Decision",           date:"2025-04-17", time:"09:15 CET",current:"2.90%",      forecast:"–25bp", impact:"HIGH", desc:"Second ECB cut. Eurozone growth data will determine pace.", currency:"EUR"},
-  {id:8, bank:"ECB",  flag:"🇪🇺", name:"ECB Rate Decision",           date:"2025-06-05", time:"09:15 CET",current:"2.65%",      forecast:"Hold",  impact:"HIGH", desc:"ECB may pause after two consecutive cuts. Watch inflation.", currency:"EUR"},
-  {id:9, bank:"ECB",  flag:"🇪🇺", name:"ECB Account (Minutes)",       date:"2025-03-27", time:"13:30 CET",current:"—",          forecast:"—",     impact:"MED",  desc:"Account of March ECB meeting. Dovish detail could weaken EUR.", currency:"EUR"},
-  {id:10,bank:"BOJ",  flag:"🇯🇵", name:"BOJ Rate Decision",           date:"2025-03-19", time:"~02:00 ET",current:"0.50%",      forecast:"Hold",  impact:"HIGH", desc:"BOJ on hold after Jan hike. Hawkish surprise = major JPY rally of 200–300 pips.", currency:"JPY"},
-  {id:11,bank:"BOJ",  flag:"🇯🇵", name:"BOJ Rate Decision",           date:"2025-05-01", time:"~02:00 ET",current:"0.50%",      forecast:"+25bp", impact:"HIGH", desc:"BOJ may hike again in May. USD/JPY extremely sensitive — watch for intervention.", currency:"JPY"},
-  {id:12,bank:"BOJ",  flag:"🇯🇵", name:"BOJ Rate Decision",           date:"2025-06-17", time:"~02:00 ET",current:"0.75%",      forecast:"Hold",  impact:"HIGH", desc:"BOJ hold expected. JPY direction driven by wage data.", currency:"JPY"},
-  {id:13,bank:"BOJ",  flag:"🇯🇵", name:"BOJ Monetary Policy Summary", date:"2025-03-24", time:"~03:00 ET",current:"—",          forecast:"—",     impact:"MED",  desc:"Detailed summary of March BOJ meeting. Hawkish language = JPY strength.", currency:"JPY"},
-  {id:14,bank:"BOC",  flag:"🇨🇦", name:"BOC Rate Decision",           date:"2025-03-12", time:"09:45 ET", current:"3.00%",      forecast:"Hold",  impact:"HIGH", desc:"BOC on hold after aggressive 2024 cuts. Oil prices key for CAD outlook.", currency:"CAD"},
-  {id:15,bank:"BOC",  flag:"🇨🇦", name:"BOC Rate Decision",           date:"2025-04-16", time:"09:45 ET", current:"3.00%",      forecast:"–25bp", impact:"HIGH", desc:"BOC may resume cutting if CAD economy weakens. USD/CAD reaction immediate.", currency:"CAD"},
-  {id:16,bank:"BOC",  flag:"🇨🇦", name:"BOC MPR & Press Conference",  date:"2025-04-16", time:"10:30 ET", current:"—",          forecast:"—",     impact:"HIGH", desc:"Quarterly Monetary Policy Report — full growth & inflation forecasts. Major CAD mover.", currency:"CAD"},
-  {id:17,bank:"BOC",  flag:"🇨🇦", name:"BOC Rate Decision",           date:"2025-06-04", time:"09:45 ET", current:"2.75%",      forecast:"–25bp", impact:"HIGH", desc:"June BOC cut likely if April data disappoints.", currency:"CAD"},
-  {id:18,bank:"BOE",  flag:"🇬🇧", name:"BOE Rate Decision",           date:"2025-03-20", time:"12:00 GMT",current:"4.50%",      forecast:"Hold",  impact:"HIGH", desc:"BOE holds. UK CPI sticky. GBP/USD driven by BoE tone & UK growth.", currency:"GBP"},
-  {id:19,bank:"BOE",  flag:"🇬🇧", name:"BOE Rate Decision",           date:"2025-05-08", time:"12:00 GMT",current:"4.50%",      forecast:"–25bp", impact:"HIGH", desc:"BOE first cut of 2025 possible in May if inflation falls below 2.5%.", currency:"GBP"},
-  {id:20,bank:"RBA",  flag:"🇦🇺", name:"RBA Rate Decision",           date:"2025-04-01", time:"14:30 AET",current:"4.10%",      forecast:"Hold",  impact:"MED",  desc:"RBA on hold. AUD sensitive to China PMI and commodity prices.", currency:"AUD"},
-  {id:21,bank:"US CPI",flag:"🇺🇸",name:"US CPI Inflation",            date:"2025-03-12", time:"08:30 ET", current:"3.0%",       forecast:"2.9%",  impact:"HIGH", desc:"Most important macro data point. A miss below 2.8% = rate cut catalyst. USD sold.", currency:"USD"},
-  {id:22,bank:"US CPI",flag:"🇺🇸",name:"US CPI Inflation",            date:"2025-04-10", time:"08:30 ET", current:"—",          forecast:"—",     impact:"HIGH", desc:"April CPI. Key for June FOMC decision. Market-moving for BTC, gold, forex.", currency:"USD"},
-  {id:23,bank:"NFP",  flag:"🇺🇸", name:"Non-Farm Payrolls",           date:"2025-03-07", time:"08:30 ET", current:"256K",       forecast:"175K",  impact:"HIGH", desc:"Monthly jobs report. Weak number = dovish Fed = crypto/gold rally.", currency:"USD"},
-  {id:24,bank:"NFP",  flag:"🇺🇸", name:"Non-Farm Payrolls",           date:"2025-04-04", time:"08:30 ET", current:"—",          forecast:"—",     impact:"HIGH", desc:"April NFP. Second consecutive weak reading would cement June cut.", currency:"USD"},
-  {id:25,bank:"PCE",  flag:"🇺🇸", name:"US PCE Inflation (Fed's fav)",date:"2025-02-28", time:"08:30 ET", current:"2.6%",       forecast:"2.5%",  impact:"HIGH", desc:"Fed's preferred inflation gauge. Below 2.5% is strong cut signal.", currency:"USD"},
-];
+// Macro events fetched from backend
 
 // ─── SIGNALS & NEWS ───────────────────────────────────────
 const SIGNALS_POOL=[
@@ -194,6 +167,9 @@ export default function App(){
   const [briefData,setBriefData]=useState(null);
   const [briefDate,setBriefDate]=useState(null);
 
+  const [macroEvents,setMacroEvents]=useState([]);
+  const [macroLoading,setMacroLoading]=useState(true);
+
   // ── flash helper ─────────────────────────────────────
   const triggerFlashes=useCallback((updates)=>{
     const newF={};
@@ -234,6 +210,15 @@ export default function App(){
     }catch{setFhStatus("error");}
   },[triggerFlashes]);
   useEffect(()=>{doFH();const iv=setInterval(doFH,15000);return()=>clearInterval(iv);},[doFH]);
+
+  // ── Macro calendar ────────────────────────────────────
+  useEffect(()=>{
+    setMacroLoading(true);
+    fetch("/api/macro").then(r=>r.json()).then(data=>{
+      if(Array.isArray(data)) setMacroEvents(data);
+      setMacroLoading(false);
+    }).catch(()=>setMacroLoading(false));
+  },[]);
 
   const allPrices={...cryptoPrices,...equityPrices,...metalPrices,...forexPrices};
 
@@ -458,10 +443,10 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
     if(diff<=7)  return{label:`${diff}d`,color:"gold"};
     return{label:`${diff}d`,color:"muted2"};
   };
-  const bankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,"NFP":C.red,"PCE":C.orange};
-  const filteredMacro=macroFilter==="ALL"?MACRO_EVENTS:MACRO_EVENTS.filter(e=>e.bank===macroFilter||e.bank.startsWith(macroFilter));
+  const bankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,"NFP":C.red,"PCE":C.orange,CPI:C.orange,GDP:C.blue,PMI:C.teal,USD:C.blue,EUR:C.purple,GBP:C.green,JPY:C.teal,CAD:C.gold,AUD:C.cyan,CHF:C.muted2,NZD:C.green};
+  const filteredMacro=macroFilter==="ALL"?macroEvents:macroEvents.filter(e=>e.bank===macroFilter||e.bank.startsWith(macroFilter));
   const sortedMacro=[...filteredMacro].sort((a,b)=>new Date(a.date)-new Date(b.date));
-  const upcomingCount=MACRO_EVENTS.filter(e=>{const d=new Date(e.date);const diff=Math.floor((d-today)/(1000*60*60*24));return diff>=0&&diff<=7;}).length;
+  const upcomingCount=macroEvents.filter(e=>{const d=new Date(e.date);const diff=Math.floor((d-today)/(1000*60*60*24));return diff>=0&&diff<=7;}).length;
 
   // ── Bottom Nav ────────────────────────────────────────
   const NAV=[
@@ -574,11 +559,12 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
 
         {/* ══ MACRO CALENDAR ══ */}
         {tab==="macro"&&<>
+          {macroLoading&&<div style={{padding:20,textAlign:"center",color:C.muted,fontSize:11}}>Loading calendar...</div>}
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:10}}>
             {[
               {label:"Events This Week",val:upcomingCount,color:C.red},
-              {label:"Next 30 Days",val:MACRO_EVENTS.filter(e=>{const d=new Date(e.date);return(d-today)/(1000*60*60*24)<=30&&(d-today)/(1000*60*60*24)>=0;}).length,color:C.gold},
-              {label:"HIGH Impact",val:MACRO_EVENTS.filter(e=>e.impact==="HIGH").length,color:C.orange},
+              {label:"Next 30 Days",val:macroEvents.filter(e=>{const d=new Date(e.date);return(d-today)/(1000*60*60*24)<=30&&(d-today)/(1000*60*60*24)>=0;}).length,color:C.gold},
+              {label:"HIGH Impact",val:macroEvents.filter(e=>e.impact==="HIGH").length,color:C.orange},
             ].map(s=>(
               <div key={s.label} style={{...panel,marginBottom:0,padding:"10px 12px",textAlign:"center"}}>
                 <div style={{fontSize:7,color:C.muted,letterSpacing:"0.12em",marginBottom:4}}>{s.label}</div>
@@ -588,8 +574,8 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
           </div>
 
           <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto"}}>
-            {["ALL","FED","ECB","BOJ","BOC","BOE","CPI/DATA"].map(b=>(
-              <SubBtn key={b} k={b==="CPI/DATA"?"US CPI":b} label={b} col={b==="ALL"?"green":b==="FED"?"blue":b==="ECB"?"purple":b==="BOJ"?"teal":b==="BOC"?"gold":b==="BOE"?"green":"orange"} state={macroFilter} setter={setMacroFilter}/>
+            {["ALL","FED","ECB","BOJ","BOC","BOE","RBA","CPI"].map(b=>(
+              <SubBtn key={b} k={b} label={b} col={b==="ALL"?"green":b==="FED"?"blue":b==="ECB"?"purple":b==="BOJ"?"teal":b==="BOC"?"gold":b==="BOE"?"green":b==="RBA"?"cyan":"orange"} state={macroFilter} setter={setMacroFilter}/>
             ))}
           </div>
 
