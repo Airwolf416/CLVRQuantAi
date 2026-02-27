@@ -304,7 +304,20 @@ export async function registerRoutes(
   ].map((e, i) => ({ ...e, id: i + 1, current: "—", forecast: "—" }));
 
   let macroCache: { data: any[]; ts: number } = { data: [], ts: 0 };
-  const MACRO_CACHE_MS = 3600000; // 1 hour
+  const MACRO_CACHE_MS = 600000; // 10 minutes
+
+  function getWeekBounds() {
+    const now = new Date();
+    const day = now.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    return { monday, sunday };
+  }
 
   async function fetchLiveCalendar(): Promise<any[]> {
     try {
@@ -367,14 +380,24 @@ export async function registerRoutes(
       } else {
         liveEvents = macroCache.data;
       }
+      const { monday, sunday } = getWeekBounds();
       const existingDates = new Set(liveEvents.map((e: any) => `${e.date}-${e.name}`));
       const combined = [
         ...liveEvents,
         ...MACRO_2026.filter(e => !existingDates.has(`${e.date}-${e.name}`)),
-      ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      ]
+        .filter(e => {
+          const d = new Date(e.date);
+          return d >= monday && d <= sunday;
+        })
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       res.json(combined);
     } catch (e: any) {
-      res.json(MACRO_2026);
+      const { monday, sunday } = getWeekBounds();
+      res.json(MACRO_2026.filter(e => {
+        const d = new Date(e.date);
+        return d >= monday && d <= sunday;
+      }));
     }
   });
 
