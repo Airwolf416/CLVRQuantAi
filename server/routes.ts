@@ -308,8 +308,6 @@ export async function registerRoutes(
     {bank:"GDP",flag:"🇺🇸",name:"GDP m/m",date:"2026-02-27",time:"08:30 ET",impact:"HIGH",desc:"US GDP month-over-month.",currency:"USD"},
     {bank:"USD",flag:"🇺🇸",name:"Core PPI m/m",date:"2026-02-27",time:"08:30 ET",impact:"MED",desc:"US Core Producer Price Index month-over-month.",currency:"USD"},
     {bank:"USD",flag:"🇺🇸",name:"PPI m/m",date:"2026-02-27",time:"08:30 ET",impact:"MED",desc:"US Producer Price Index month-over-month.",currency:"USD"},
-    {bank:"BOC",flag:"🇨🇦",name:"BOC Rate Decision",date:"2026-03-04",time:"09:45 ET",impact:"HIGH",desc:"Bank of Canada rate decision.",currency:"CAD"},
-    {bank:"ECB",flag:"🇪🇺",name:"ECB Rate Decision",date:"2026-03-05",time:"08:15 ET",impact:"HIGH",desc:"ECB rate decision with press conference.",currency:"EUR"},
     {bank:"USD",flag:"🇺🇸",name:"Non-Farm Payrolls",date:"2026-03-06",time:"08:30 ET",impact:"HIGH",desc:"US jobs report.",currency:"USD"},
     {bank:"CPI",flag:"🇺🇸",name:"CPI m/m",date:"2026-03-11",time:"08:30 ET",impact:"HIGH",desc:"US Consumer Price Index month-over-month.",currency:"USD"},
     {bank:"CPI",flag:"🇺🇸",name:"CPI y/y",date:"2026-03-11",time:"08:30 ET",impact:"HIGH",desc:"US Consumer Price Index year-over-year.",currency:"USD"},
@@ -320,17 +318,14 @@ export async function registerRoutes(
   let macroCache: { data: any[]; ts: number } = { data: [], ts: 0 };
   const MACRO_CACHE_MS = 600000; // 10 minutes
 
-  function getWeekBounds() {
+  function getDateRange() {
     const now = new Date();
-    const day = now.getDay();
-    const mondayOffset = day === 0 ? -6 : 1 - day;
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + mondayOffset);
-    monday.setHours(0, 0, 0, 0);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
-    return { monday, sunday };
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const endDate = new Date(todayStart);
+    endDate.setDate(todayStart.getDate() + 14);
+    endDate.setHours(23, 59, 59, 999);
+    return { todayStart, endDate };
   }
 
   async function fetchLiveCalendar(): Promise<any[]> {
@@ -408,9 +403,7 @@ export async function registerRoutes(
       } else {
         liveEvents = macroCache.data;
       }
-      const { sunday } = getWeekBounds();
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+      const { todayStart, endDate } = getDateRange();
       const existingDates = new Set(liveEvents.map((e: any) => `${e.date}-${e.name}`));
       const combined = [
         ...liveEvents,
@@ -418,17 +411,15 @@ export async function registerRoutes(
       ]
         .filter(e => {
           const d = new Date(e.date);
-          return d >= todayStart && d <= sunday;
+          return d >= todayStart && d <= endDate;
         })
         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       res.json(combined);
     } catch (e: any) {
-      const { sunday } = getWeekBounds();
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+      const { todayStart, endDate } = getDateRange();
       res.json(MACRO_2026.filter(e => {
         const d = new Date(e.date);
-        return d >= todayStart && d <= sunday;
+        return d >= todayStart && d <= endDate;
       }));
     }
   });
