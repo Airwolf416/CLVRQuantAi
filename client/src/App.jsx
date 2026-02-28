@@ -35,6 +35,7 @@ const fmt=(p,sym)=>{
   return"$"+p.toFixed(6);
 };
 const rndInt=(a,b)=>Math.floor(a+Math.random()*(b-a+1));
+const timeAgo=(ts)=>{if(!ts)return"";const s=Math.floor((Date.now()-ts)/1000);if(s<10)return"just now";if(s<60)return`${s}s ago`;const m=Math.floor(s/60);if(m<60)return`${m}m ago`;const h=Math.floor(m/60);if(h<24)return`${h}h ago`;return`${Math.floor(h/24)}d ago`;};
 
 // ─── BASE PRICES ──────────────────────────────────────────
 const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072};
@@ -138,8 +139,8 @@ export default function App(){
   ]);
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
-  const [signals,setSignals]=useState(SIGNALS_POOL.slice(0,8).map((s,i)=>({...s,time:`${i*4+2}m ago`,id:i})));
-  const [news,setNews]=useState(NEWS_POOL.map((n,i)=>({...n,time:`${i*6+1}m ago`,id:i})));
+  const [signals,setSignals]=useState(()=>{const now=Date.now();return SIGNALS_POOL.slice(0,8).map((s,i)=>({...s,ts:now-(i*4+2)*60000,id:i}));});
+  const [news,setNews]=useState(()=>{const now=Date.now();return NEWS_POOL.map((n,i)=>({...n,ts:now-(i*6+1)*60000,id:i}));});
   const [flashSigId,setFlashSigId]=useState(null);
   const [sigCount,setSigCount]=useState(44);
   const [tick,setTick]=useState(0);
@@ -237,8 +238,8 @@ export default function App(){
     const iv=setInterval(()=>{
       tickRef.current++;
       setTick(tickRef.current);setLastUpdate(new Date());
-      if(tickRef.current%22===0){const s=SIGNALS_POOL[rndInt(0,SIGNALS_POOL.length-1)];const ns={...s,time:"just now",id:idRef.current++};setSignals(prev=>[ns,...prev.slice(0,11)]);setSigCount(c=>c+1);setFlashSigId(ns.id);setTimeout(()=>setFlashSigId(null),3000);}
-      if(tickRef.current%45===0){const n=NEWS_POOL[rndInt(0,NEWS_POOL.length-1)];setNews(prev=>[{...n,time:"just now",id:idRef.current++},...prev.slice(0,10)]);}
+      if(tickRef.current%22===0){const s=SIGNALS_POOL[rndInt(0,SIGNALS_POOL.length-1)];const ns={...s,ts:Date.now(),id:idRef.current++};setSignals(prev=>[ns,...prev.slice(0,11)]);setSigCount(c=>c+1);setFlashSigId(ns.id);setTimeout(()=>setFlashSigId(null),3000);}
+      if(tickRef.current%45===0){const n=NEWS_POOL[rndInt(0,NEWS_POOL.length-1)];setNews(prev=>[{...n,ts:Date.now(),id:idRef.current++},...prev.slice(0,10)]);}
     },1000);
     return()=>clearInterval(iv);
   },[]);
@@ -395,7 +396,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
             {sig.token}<Badge label={sig.dir} color={sig.dir==="LONG"?"green":"red"}/>
             {sig.src==="trade.xyz"&&<Badge label="trade.xyz" color="blue"/>}
             {sig.src==="phantom"&&<Badge label="phantom" color="pink"/>}
-            <span style={{fontSize:8,color:C.muted,fontFamily:MONO}}>{sig.time}</span>
+            <span style={{fontSize:8,color:C.muted,fontFamily:MONO}}>{timeAgo(sig.ts)}</span>
           </div>
           <div style={{fontSize:10,color:C.muted2,lineHeight:1.65,marginTop:3}}>{sig.desc}</div>
           <div style={{display:"flex",gap:3,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
@@ -536,7 +537,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
           {macroLoading&&<div style={{padding:20,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>Loading calendar...</div>}
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
             {[
-              {label:"Today+",val:macroEvents.length,col:C.cyan},
+              {label:"Next 14d",val:macroEvents.length,col:C.cyan},
               {label:"HIGH Impact",val:macroEvents.filter(e=>e.impact==="HIGH").length,col:C.orange},
               {label:"Live Feed",val:macroEvents.filter(e=>e.live).length||"—",col:C.green},
             ].map(s=>(
