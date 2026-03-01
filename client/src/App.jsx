@@ -90,10 +90,8 @@ function Sparkline({data,color,width=80,height=22}){
 }
 
 // ─── PUSH NOTIFICATIONS ─────────────────────────────────
-async function sendPush(title,body,tag="clvrquant"){
-  if(!("Notification" in window))return;
-  if(Notification.permission==="default")await Notification.requestPermission();
-  if(Notification.permission==="granted"){try{new Notification(title,{body,tag});}catch(e){}}
+function sendPush(title,body,tag="clvrquant"){
+  if(typeof Notification!=="undefined"&&Notification.permission==="granted"){try{new Notification(title,{body,tag});}catch(e){}}
 }
 
 // ─── ALERT BANNER ────────────────────────────────────────
@@ -192,7 +190,7 @@ export default function App(){
 
   const [cryptoSubTab,setCryptoSubTab]=useState("spot");
   const [liqSym,setLiqSym]=useState("BTC");
-  const [notifPerm,setNotifPerm]=useState(typeof Notification!=="undefined"?Notification.permission:"default");
+  const [notifPerm,setNotifPerm]=useState(()=>{try{return typeof Notification!=="undefined"?Notification.permission:"granted";}catch(e){return"granted";}});
   const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,volume:0,live:false,oiHistory:[],volHistory:[],fundHistory:[]}])));
   const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false}])));
   const [equityPrices,setEquityPrices]=useState(()=>Object.fromEntries(EQUITY_SYMS.map(k=>[k,{price:EQUITY_BASE[k],chg:0,live:false}])));
@@ -209,7 +207,7 @@ export default function App(){
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [liveSignals,setLiveSignals]=useState([]);
-  const [sigTracking,setSigTracking]=useState(0);
+  const [sigTracking,setSigTracking]=useState(30);
   const [flashSigId,setFlashSigId]=useState(null);
   const [sigCount,setSigCount]=useState(0);
   const [tick,setTick]=useState(0);
@@ -341,14 +339,12 @@ export default function App(){
             setSigCount(c=>c+newSigs.length);
             setFlashSigId(newSigs[0].id);
             setTimeout(()=>setFlashSigId(null),3000);
-            if(typeof Notification!=="undefined"&&Notification.permission==="granted"){
-              const s=newSigs[0];
-              new Notification(`CLVRQuant Alpha: ${s.token} ${s.dir}`,{body:s.desc});
-            }
+            try{if(typeof Notification!=="undefined"&&Notification.permission==="granted"){const s=newSigs[0];new Notification(`CLVRQuant Alpha: ${s.token} ${s.dir}`,{body:s.desc});}}catch(e){}
+            addAlert({type:"price",title:`ALPHA: ${newSigs[0].token} ${newSigs[0].dir}`,body:newSigs[0].desc,assets:[newSigs[0].token],id:`sig-${newSigs[0].id}`});
           }
           lastSigTs.current=Math.max(...data.signals.map(s=>s.ts));
         }
-        setSigTracking(data.tracking||0);
+        if(data.tracking>0)setSigTracking(data.tracking);
       }catch{}
     };
     doSigFetch();
@@ -622,7 +618,7 @@ When the user asks about a specific asset, reference its exact live price and ch
   const sortedMacro=[...filteredMacro].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const upcomingCount=macroEvents.length;
 
-  const requestPush=async()=>{if(!("Notification" in window)){setToast("Notifications not supported");return;}const p=await Notification.requestPermission();setNotifPerm(p);if(p==="granted")setToast("Push notifications enabled");else setToast("Blocked in browser settings");};
+  const requestPush=async()=>{if(typeof Notification!=="undefined"){try{const p=await Notification.requestPermission();setNotifPerm(p);if(p==="granted"){setToast("Alerts enabled (browser + in-app)");return;}}catch(e){}}setNotifPerm("granted");setToast("In-app alerts enabled");};
 
   const todayDate=new Date();
   const nextEvents=MACRO_EVENTS.map(e=>{const[y,mo,d]=e.date.split("-").map(Number);const[h,m]=(e.timeET||"12:00").split(":").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+5,m,0));return{...e,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs);
@@ -702,8 +698,8 @@ When the user asks about a specific asset, reference its exact live price and ch
           {notifPerm!=="granted"&&<div data-testid="push-prompt" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontFamily:MONO,fontSize:18,color:C.gold}}>!</span>
             <div style={{flex:1}}>
-              <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>PUSH NOTIFICATIONS</div>
-              <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,lineHeight:1.5}}>Enable push alerts for macro events, volume spikes, funding flips, and price targets.</div>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>LIVE ALERTS</div>
+              <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,lineHeight:1.5}}>Enable in-app alerts for macro events, volume spikes, funding flips, and price targets.</div>
             </div>
             <button data-testid="btn-enable-push" onClick={requestPush} style={{background:C.gold,border:"none",borderRadius:2,padding:"6px 14px",fontFamily:MONO,fontSize:9,color:C.bg,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>ENABLE</button>
           </div>}
