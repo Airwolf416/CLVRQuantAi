@@ -332,8 +332,10 @@ Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
       if(!res.ok){setToast(data.error||"Brief generation failed");setBriefLoading(false);return;}
       const txt=data.text||"";
       const clean=txt.replace(/```json|```/g,"").trim();
-      setBriefData(JSON.parse(clean));setBriefDate(todayStr);
-    }catch{setToast("Brief generation failed. Try again.");}
+      const jsonMatch=clean.match(/\{[\s\S]*\}/);
+      if(!jsonMatch)throw new Error("No JSON found");
+      setBriefData(JSON.parse(jsonMatch[0]));setBriefDate(todayStr);
+    }catch(e){setToast("Brief generation failed: "+(e.message||"Try again."));}
     setBriefLoading(false);
   };
 
