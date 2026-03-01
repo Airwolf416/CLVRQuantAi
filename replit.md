@@ -78,7 +78,8 @@ Preferred communication style: Simple, everyday language.
 ## External Dependencies
 
 ### APIs
-- **Hyperliquid** — Free, no API key, crypto mid prices + funding rates + open interest
+- **Binance US** — Free, no API key, crypto spot last traded prices (primary price source)
+- **Hyperliquid** — Free, no API key, funding rates + open interest (background loop every 10s); fallback prices for tokens not on Binance US
 - **Finnhub** — Free tier API key (env var FINNHUB_KEY), stock quotes only
 - **gold-api.com** — Free, no API key, XAU and XAG spot prices
 - **ExchangeRate API** — Free, no API key, forex rates

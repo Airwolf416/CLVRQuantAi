@@ -6,6 +6,8 @@ const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
 const CRYPTO_SYMS = ["BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","PEPE"];
 const CRYPTO_BASE: Record<string, number> = {BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072};
+const BINANCE_MAP: Record<string, string> = {BTC:"BTCUSDT",ETH:"ETHUSDT",SOL:"SOLUSDT",WIF:"WIFUSDT",DOGE:"DOGEUSDT",AVAX:"AVAXUSDT",LINK:"LINKUSDT",ARB:"ARBUSDT",PEPE:"PEPEUSDT"};
+const BINANCE_SYMS = Object.values(BINANCE_MAP);
 
 const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR"];
 const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310};
@@ -14,13 +16,96 @@ const METALS_BASE: Record<string, number> = {XAU:3285,XAG:32.8};
 const FOREX_BASE: Record<string, number> = {EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654};
 
 const cache: Record<string, { data: any; ts: number }> = {};
-const CRYPTO_TTL = 3000;
 const FINNHUB_TTL = 120000;
 
 let finnhubFetchLock: Promise<any> | null = null;
 let stockRefreshRunning = false;
+let hlRefreshRunning = false;
+const hlData: Record<string, { funding: number; oi: number }> = {};
 
 function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
+async function fetchBinancePrices(): Promise<Record<string, any>> {
+  const symbols = encodeURIComponent(JSON.stringify(BINANCE_SYMS));
+  const r = await fetch(
+    `https://api.binance.us/api/v3/ticker/24hr?symbols=${symbols}`,
+    { signal: AbortSignal.timeout(5000) }
+  );
+  if (!r.ok) throw new Error(`Binance ${r.status}`);
+  const data: any[] = await r.json();
+  const reverseMap: Record<string, string> = {};
+  for (const [k, v] of Object.entries(BINANCE_MAP)) reverseMap[v] = k;
+  const result: Record<string, any> = {};
+  for (const t of data) {
+    const sym = reverseMap[t.symbol];
+    if (sym) {
+      const price = parseFloat(t.lastPrice);
+      if (price > 0) {
+        result[sym] = {
+          price,
+          chg: parseFloat(t.priceChangePercent),
+          funding: hlData[sym]?.funding || 0,
+          oi: hlData[sym]?.oi || 0,
+          live: true,
+        };
+      }
+    }
+  }
+  const missingSym = CRYPTO_SYMS.filter(s => !result[s]);
+  if (missingSym.length > 0) {
+    try {
+      const hlr = await fetch("https://api.hyperliquid.xyz/info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "allMids" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const mids: any = await hlr.json();
+      for (const sym of missingSym) {
+        if (mids[sym]) {
+          const price = parseFloat(mids[sym]);
+          result[sym] = {
+            price,
+            chg: CRYPTO_BASE[sym] ? +((price - CRYPTO_BASE[sym]) / CRYPTO_BASE[sym] * 100).toFixed(2) : 0,
+            funding: hlData[sym]?.funding || 0,
+            oi: hlData[sym]?.oi || 0,
+            live: true,
+          };
+        }
+      }
+    } catch {}
+  }
+  return result;
+}
+
+async function startHyperliquidRefreshLoop() {
+  if (hlRefreshRunning) return;
+  hlRefreshRunning = true;
+  while (true) {
+    try {
+      const r = await fetch("https://api.hyperliquid.xyz/info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const meta: any = await r.json();
+      const universe = meta[0].universe;
+      const ctxs = meta[1];
+      universe.forEach((asset: any, i: number) => {
+        if (CRYPTO_SYMS.includes(asset.name)) {
+          hlData[asset.name] = {
+            funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
+            oi: parseFloat(ctxs[i]?.openInterest || 0) * parseFloat(ctxs[i]?.markPx || 0),
+          };
+        }
+      });
+    } catch (e: any) {
+      console.error("Hyperliquid refresh error:", e.message);
+    }
+    await delay(10000);
+  }
+}
 
 async function fhQuoteSafe(symbol: string): Promise<{price:number,chg:number,live:boolean}> {
   try {
@@ -129,59 +214,19 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   startStockRefreshLoop();
+  startHyperliquidRefreshLoop();
 
   app.get("/api/crypto", async (_req, res) => {
     const cached = cache["crypto"];
-    if (cached && Date.now() - cached.ts < CRYPTO_TTL) {
+    if (cached && Date.now() - cached.ts < 1500) {
       return res.json(cached.data);
     }
     try {
-      const r1 = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "allMids" }),
-        signal: AbortSignal.timeout(5000)
-      });
-      const mids: any = await r1.json();
-
-      const r2 = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "metaAndAssetCtxs" }),
-        signal: AbortSignal.timeout(5000)
-      });
-      const meta: any = await r2.json();
-      const universe = meta[0].universe;
-      const ctxs = meta[1];
-      const funding: Record<string, any> = {};
-      universe.forEach((asset: any, i: number) => {
-        if (CRYPTO_SYMS.includes(asset.name)) {
-          funding[asset.name] = {
-            funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
-            oi: parseFloat(ctxs[i]?.openInterest || 0) * parseFloat(ctxs[i]?.markPx || 0)
-          };
-        }
-      });
-
-      const result: Record<string, any> = {};
-      CRYPTO_SYMS.forEach(sym => {
-        if (mids[sym]) {
-          const price = parseFloat(mids[sym]);
-          const base = CRYPTO_BASE[sym];
-          result[sym] = {
-            price,
-            chg: base ? +((price - base) / base * 100).toFixed(2) : 0,
-            funding: funding[sym]?.funding || 0,
-            oi: funding[sym]?.oi || 0,
-            live: true
-          };
-        }
-      });
+      const result = await fetchBinancePrices();
       cache["crypto"] = { data: result, ts: Date.now() };
       res.json(result);
     } catch (e: any) {
-      const fallback = cache["crypto"];
-      if (fallback) return res.json(fallback.data);
+      if (cached) return res.json(cached.data);
       res.status(500).json({ error: e.message });
     }
   });
