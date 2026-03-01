@@ -88,6 +88,11 @@ async function fetchPerps(){
   if(!r.ok)throw new Error(`Perps API ${r.status}`);
   return await r.json();
 }
+async function fetchLiveSignals(since=0){
+  const r=await fetch(`/api/signals?since=${since}`);
+  if(!r.ok)throw new Error(`Signals API ${r.status}`);
+  return await r.json();
+}
 async function fetchFinnhub(){
   const r=await fetch("/api/finnhub");
   if(!r.ok)throw new Error(`Finnhub API ${r.status}`);
@@ -150,6 +155,8 @@ export default function App(){
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [signals,setSignals]=useState(()=>{const now=Date.now();return SIGNALS_POOL.slice(0,8).map((s,i)=>({...s,ts:now-(i*4+2)*60000,id:i}));});
+  const [liveSignals,setLiveSignals]=useState([]);
+  const [sigTracking,setSigTracking]=useState(0);
   const [news,setNews]=useState(()=>{const now=Date.now();return NEWS_POOL.map((n,i)=>({...n,ts:now-(i*6+1)*60000,id:i}));});
   const [flashSigId,setFlashSigId]=useState(null);
   const [sigCount,setSigCount]=useState(44);
@@ -207,6 +214,36 @@ export default function App(){
     }catch{}
   },[]);
   useEffect(()=>{doPerps();const iv=setInterval(doPerps,5000);return()=>clearInterval(iv);},[doPerps]);
+
+  // ── Live Signal Detection ─────────────────────────
+  const lastSigTs=useRef(0);
+  const seenSigIds=useRef(new Set());
+  useEffect(()=>{
+    const doSigFetch=async()=>{
+      try{
+        const data=await fetchLiveSignals(lastSigTs.current);
+        if(data.signals&&data.signals.length>0){
+          const newSigs=data.signals.filter(s=>!seenSigIds.current.has(s.id));
+          if(newSigs.length>0){
+            newSigs.forEach(s=>seenSigIds.current.add(s.id));
+            setLiveSignals(prev=>[...newSigs,...prev].slice(0,50));
+            setSigCount(c=>c+newSigs.length);
+            setFlashSigId(newSigs[0].id);
+            setTimeout(()=>setFlashSigId(null),3000);
+            if(typeof Notification!=="undefined"&&Notification.permission==="granted"){
+              const s=newSigs[0];
+              new Notification(`CLVRQuant Alpha: ${s.token} ${s.dir}`,{body:s.desc});
+            }
+          }
+          lastSigTs.current=Math.max(...data.signals.map(s=>s.ts));
+        }
+        setSigTracking(data.tracking||0);
+      }catch{}
+    };
+    doSigFetch();
+    const iv=setInterval(doSigFetch,10000);
+    return()=>clearInterval(iv);
+  },[]);
 
   // ── Finnhub ──────────────────────────────────────────
   const doFH=useCallback(async()=>{
@@ -408,14 +445,18 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
     <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,background:flashSigId===sig.id?"rgba(201,168,76,.03)":"transparent",transition:"background .5s"}}>
       <div style={{display:"grid",gridTemplateColumns:"28px 1fr auto",gap:10,alignItems:"start"}}>
         <div onClick={()=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");}}
-          style={{width:26,height:26,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,cursor:"pointer",
+          style={{width:26,height:26,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:sig.real?11:13,cursor:"pointer",
+            fontFamily:sig.real?MONO:undefined,fontWeight:sig.real?800:undefined,color:sig.real?(sig.dir==="LONG"?C.green:C.red):undefined,
             background:sig.dir==="LONG"?"rgba(0,199,135,.08)":"rgba(255,64,96,.08)",
-            border:`1px solid ${sig.dir==="LONG"?"rgba(0,199,135,.2)":"rgba(255,64,96,.2)"}`}}>{sig.icon}</div>
+            border:`1px solid ${sig.dir==="LONG"?"rgba(0,199,135,.2)":"rgba(255,64,96,.2)"}`}}>{sig.real?(sig.dir==="LONG"?"+":"-"):sig.icon}</div>
         <div onClick={()=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");}} style={{cursor:"pointer"}}>
           <div style={{fontFamily:MONO,fontWeight:600,fontSize:11,display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",color:C.text,letterSpacing:"0.05em"}}>
             {sig.token}<Badge label={sig.dir} color={sig.dir==="LONG"?"green":"red"}/>
+            {sig.real&&<Badge label="LIVE" color="green"/>}
             {sig.src==="trade.xyz"&&<Badge label="trade.xyz" color="blue"/>}
             {sig.src==="phantom"&&<Badge label="phantom" color="pink"/>}
+            {sig.src==="alpha-detect"&&<Badge label="alpha-detect" color="gold"/>}
+            {sig.pctMove&&<span style={{fontFamily:MONO,fontSize:9,color:sig.pctMove>0?C.green:C.red,fontWeight:700}}>{sig.pctMove>0?"+":""}{sig.pctMove}%</span>}
             <span style={{fontSize:8,color:C.muted,fontFamily:MONO}}>{timeAgo(sig.ts)}</span>
           </div>
           <div style={{fontSize:10,color:C.muted2,lineHeight:1.65,marginTop:3}}>{sig.desc}</div>
@@ -434,10 +475,11 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
   );
 
   const hlLive=hlStatus==="live",fhLive=fhStatus==="live";
-  const filtSigs=signals.filter(s=>{
+  const allSignals=[...liveSignals,...signals].sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const filtSigs=allSignals.filter(s=>{
     if(sigSubTab==="all")return true;
     if(sigSubTab==="watch")return watchlist.includes(s.token);
-    if(sigSubTab==="crypto")return s.src==="hyperliquid";
+    if(sigSubTab==="crypto")return s.src==="hyperliquid"||s.src==="alpha-detect";
     if(sigSubTab==="equity")return s.src==="trade.xyz";
     if(sigSubTab==="metals")return["XAU","XAG","WTI","BRENT","NATGAS","COPPER","PLATINUM"].includes(s.token);
     if(sigSubTab==="forex")return FOREX_SYMS.includes(s.token);
@@ -734,7 +776,8 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
             ))}
           </div>
           <div style={panel}>
-            <div style={ph}><PTitle>Alpha Signals</PTitle><div style={{display:"flex",gap:6}}><Badge label={`${sigCount} total`} color="gold"/><Badge label="share" color="teal"/></div></div>
+            <div style={ph}><PTitle>Alpha Signals</PTitle><div style={{display:"flex",gap:6}}><Badge label={`${liveSignals.length} live`} color="green"/><Badge label={`${sigCount} total`} color="gold"/></div></div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>tracking {sigTracking} tokens · 1.5% move threshold · 5min window</div>
             {filtSigs.length===0?<div style={{padding:24,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>No signals for this filter.</div>:filtSigs.map(sig=><SignalRow key={sig.id} sig={sig}/>)}
           </div>
         </>}
