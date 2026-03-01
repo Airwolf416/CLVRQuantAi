@@ -1,8 +1,8 @@
-# CLVRQuant v1 | Trade Smarter with AI
+# CLVRQuant v2 | Trade Smarter with AI
 
 ## Overview
 
-CLVRQuant v1 is a luxury-styled mobile-first market intelligence dashboard for cryptocurrency, stocks, metals, and forex. It displays real-time data from Hyperliquid (crypto), Finnhub (stocks), gold-api.com (metals), and exchangerate-api.com (forex), plus an AI analyst powered by Anthropic Claude. Features include a macro central bank calendar, AI-powered daily brief, email subscription, price alerts, and quant signals.
+CLVRQuant v2 is a luxury-styled mobile-first market intelligence dashboard for cryptocurrency, stocks, metals, and forex. It displays real-time data from Binance (crypto spot), Hyperliquid (crypto perps/funding/OI/volume), Finnhub (stocks), gold-api.com (metals), and exchangerate-api.com (forex), plus an AI analyst powered by Anthropic Claude. Features include a macro central bank calendar, AI-powered daily brief, email subscription, price alerts, quant signals, and v2 additions: Radar command center with live alert system, macro countdown timers, volume spike detection, funding rate flip alerts, liquidation heatmap, and push notifications.
 
 ## User Preferences
 
@@ -24,34 +24,57 @@ Preferred communication style: Simple, everyday language.
 
 - **Single-file React app** with inline styles (CLVRQuant theme, not Tailwind for main UI)
 - **Data polling**: Crypto every 3s via `/api/crypto`, Finnhub every 15s via `/api/finnhub`, signals/news rotate via 1s tick
-- **Bottom nav**: 6 tabs — Markets, Macro, Brief, Signals, Alerts, AI
+- **Bottom nav**: 7 tabs — Radar, Markets, Macro, Brief, Signals, Alerts, AI
+- **Radar tab** (v2): Command center with push notification prompt, active alerts panel, next macro event countdown (Countdown component), upcoming events list, volume spike monitor (6 crypto), funding rate monitor with flip detection, liquidation heatmap (BTC/ETH/SOL/XAU)
 - **Markets tab**: Sub-tabs for Crypto, Equities, Metals, Forex
 - **Macro tab**: Central bank calendar (FED/ECB/BOJ/BOC/BOE/RBA) + US data events (CPI/NFP/PCE); bank filter; iCal download; Ask AI button
 - **Brief tab**: AI-generated morning market commentary with CLVRQuant-branded header, price snapshot, per-asset analysis (serif italic), watch items, key risk, Mike Claver attribution; email subscription form
 - **Signals tab**: With watchlist filter (✦ Watch), crypto/equity/metals/forex sub-filters
 - **Alerts tab**: Custom alerts on price/funding with browser notifications (guarded with `typeof Notification`)
 - **AI tab**: Claude-powered analysis with live market context, gold-bordered buttons
+
+#### v2 Components
+- **sendPush**: Push notification helper (Notification API)
+- **AlertBanner**: Dismissible fixed alert banner at top of screen; color-coded by type (macro=orange, volume=cyan, funding=green, liq=red, price=gold)
+- **Countdown**: Live countdown timer with days/hours/min/sec; hot (red <30min), warm (orange <2hr), normal (muted) states; compact mode for inline use
+- **LiqHeatmap**: Liquidation/stop cluster visualization; seeded from price levels; green=long liquidations below, red=short liquidations above
+- **MACRO_EVENTS**: 16 hardcoded 2026 macro events for frontend countdown timers (FED/ECB/BOJ/BOC/BOE/NFP/CPI/PCE)
+
+#### v2 State and Callbacks
+- **notifPerm**: Push notification permission state
+- **liqSym**: Selected symbol for liquidation heatmap (BTC/ETH/SOL/XAU)
+- **activeAlerts**: Array of active alert objects with type, title, body, assets
+- **volRef/fundRef**: Refs tracking volume/funding history for spike/flip detection
+- **firedAlerts/macroFired**: Deduplication refs for alerts
+- **addAlert**: Creates alert, deduplicates, sends push notification, triggers toast
+- **checkVolumeSpike**: Fires alert when volume >5x the 5-period average
+- **checkFundingFlip**: Fires alert on funding sign reversal or extreme levels (>0.08%)
+- **checkMacroCountdowns**: Fires alerts at 60/30/10/2 minute thresholds before macro events
+
+#### Existing Features
 - **Watchlist**: ✦ symbol toggle; persisted in state
 - **OI sparklines**: SVG sparkline charts for crypto open interest history
 - **Share signal**: Copy signal to clipboard with textarea fallback for non-HTTPS
 - **Toast**: Gold background, useRef pattern to stabilize callback, 2500ms auto-dismiss
-- **Tick interval**: Uses tickRef.current (useRef) instead of tick state in dependency array
+- **Tick interval**: Uses tickRef.current (useRef); runs checkMacroCountdowns every second
 - **Fonts**: Playfair Display + IBM Plex Mono + Barlow loaded via @import in App.jsx style tag
 
 ### Backend (server/routes.ts)
 
 - **API Routes**:
-  - `GET /api/crypto` — Proxies Hyperliquid API (allMids + metaAndAssetCtxs), cached 3s
-  - `GET /api/finnhub` — Serves cached Finnhub data from background refresh loop (stocks via Finnhub, metals via gold-api.com, forex via exchangerate-api.com)
-  - `GET /api/macro` — FairEconomy calendar, today+ events only, HIGH+MED impact, excludes Bank Holidays; 10-min cache with 1-min retry on empty; fallback hardcoded events for Feb-Mar 2026
-  - `POST /api/ai/analyze` — Proxies Anthropic Claude API (claude-sonnet-4-20250514)
-  - `POST /api/subscribe` — Email subscription (stored in-memory array)
-- **Finnhub background loop**: Fetches stocks one at a time with 1.5s gaps (60 req/min free tier), refreshes every 120s
+  - `GET /api/crypto` — Binance spot prices + Hyperliquid funding/OI/volume for 30 tokens, cached 1.5s
+  - `GET /api/perps` — Hyperliquid perp prices + funding/OI/volume for 30 tokens
+  - `GET /api/finnhub` — Cached Finnhub stock/metal/forex data from background refresh loop
+  - `GET /api/signals` — Live-detected signals (>1.5% moves in 5-min window)
+  - `GET /api/macro` — FairEconomy calendar, today+ events only, HIGH+MED impact
+  - `POST /api/ai/analyze` — Anthropic Claude API proxy (max_tokens=1024)
+  - `POST /api/subscribe` — Email subscription (in-memory)
+- **Hyperliquid background loop**: Every 5s, fetches allMids + metaAndAssetCtxs; stores funding, OI, perpPrice, volume (dayNtlVlm)
+- **Finnhub background loop**: 16 stocks × 1.5s delay (60 req/min free tier), refreshes every 120s
 - **Forex**: Free exchangerate-api.com (no key)
-- **Metals**: gold-api.com free API — `/price/XAU` and `/price/XAG`
-- **Macro**: Content-type check prevents HTML rate-limit pages from crashing JSON parser; empty results are not cached for full 10 minutes
-- **Caching**: Server-side cache prevents redundant external API calls
-- **Fallback**: Returns cached data on API errors; returns static baseline prices on first-time failures
+- **Metals**: gold-api.com free API — XAU/XAG/XPT
+- **Macro**: FairEconomy calendar with content-type check; empty results not cached full 10 min
+- **Signal detection**: MOVE_THRESHOLD=1.5%, MOVE_WINDOW=5min, SIGNAL_COOLDOWN=10min; windowStart must be >=50% of MOVE_WINDOW old
 
 ### Server Stability (server/index.ts)
 
@@ -66,11 +89,11 @@ Preferred communication style: Simple, everyday language.
 
 ### Key Files
 
-- `client/src/App.jsx` — Main React dashboard (CLVRQuant v1 reskin with all features)
+- `client/src/App.jsx` — Main React dashboard (CLVRQuant v2 with all features)
 - `client/index.html` — HTML shell with SEO meta tags
 - `client/src/main.tsx` — React entry point
 - `client/src/index.css` — Tailwind directives + CSS variables (for build pipeline)
-- `server/routes.ts` — API proxy routes with caching, background refresh, macro calendar, subscribe, live signal detection
+- `server/routes.ts` — API proxy routes with caching, background refresh, macro calendar, subscribe, live signal detection, volume tracking
 - `server/index.ts` — Express server with process.exit intercept
 - `server/vite.ts` — Vite dev middleware (DO NOT EDIT)
 - `vite.config.ts` — Vite config (DO NOT EDIT)
@@ -78,12 +101,12 @@ Preferred communication style: Simple, everyday language.
 ## External Dependencies
 
 ### APIs
-- **Binance US** — Free, no API key, crypto spot last traded prices for 26 tokens (primary price source); MATIC/INJ/TAO/PENDLE fallback to HL
-- **Hyperliquid** — Free, no API key, perp mid-prices + funding rates + open interest for 30 tokens (background loop every 5s); also provides spot fallback for non-Binance tokens
-- **Finnhub** — Free tier API key (env var FINNHUB_KEY), 16 stock quotes + commodity futures (CL=WTI, BZ=Brent, NG=NatGas, HG=Copper)
-- **gold-api.com** — Free, no API key, XAU/XAG/XPT (Platinum) spot prices
-- **ExchangeRate API** — Free, no API key, 14 forex pairs (11 USD-based + 3 cross pairs)
-- **FairEconomy** — Free, no API key, macro economic calendar (rate-limited)
+- **Binance** — Free, no API key, crypto spot prices for 26 tokens (primary); MATIC/INJ/TAO/PENDLE fallback to HL
+- **Hyperliquid** — Free, no API key, perp prices + funding + OI + 24h volume for 30 tokens (background loop every 5s)
+- **Finnhub** — Free tier API key (env var FINNHUB_KEY), 16 stock quotes + commodity futures
+- **gold-api.com** — Free, no API key, XAU/XAG/XPT spot prices
+- **ExchangeRate API** — Free, no API key, 14 forex pairs
+- **FairEconomy** — Free, no API key, macro economic calendar
 - **Anthropic Claude** — Requires `ANTHROPIC_API_KEY` environment variable
 
 ### Environment Variables
@@ -103,3 +126,7 @@ Preferred communication style: Simple, everyday language.
 - Notification API: always guard with `typeof Notification !== "undefined"`
 - Clipboard: check `navigator.clipboard && window.isSecureContext` first, then fallback to `document.execCommand("copy")`
 - CLVRQuant is always dark mode — no dark/light toggle
+- Crypto volume tracked via Hyperliquid `dayNtlVlm` field
+- Signal detection: real only (no simulated), seenSigIds ref for dedup
+- AI system prompt includes ALL 30 crypto/16 stocks/7 commodities/14 forex with live prices
+- Morning brief JSON extracted via regex `{[\s\S]*}` to handle markdown-wrapped responses
