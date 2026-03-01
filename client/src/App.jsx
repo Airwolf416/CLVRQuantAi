@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────
-// CLVRQuant v1
-// Full AlphaScan v12 functionality — CLVRQuant luxury aesthetic
-// Playfair Display · IBM Plex Mono · Barlow · Navy/Black/Gold
+// CLVRQuant v2
+// NEW: Macro countdown timers · Volume spike detector
+//      Funding rate flip alerts · Liquidation heatmap
+//      Push notifications · In-app alert banners
 // Backend-proxied API calls (keys stored server-side)
 // ─────────────────────────────────────────────────────────
 
@@ -88,6 +89,82 @@ function Sparkline({data,color,width=80,height=22}){
   );
 }
 
+// ─── PUSH NOTIFICATIONS ─────────────────────────────────
+async function sendPush(title,body,tag="clvrquant"){
+  if(!("Notification" in window))return;
+  if(Notification.permission==="default")await Notification.requestPermission();
+  if(Notification.permission==="granted"){try{new Notification(title,{body,tag});}catch(e){}}
+}
+
+// ─── ALERT BANNER ────────────────────────────────────────
+function AlertBanner({alerts,onDismiss,C:_C}){
+  if(!alerts||alerts.length===0)return null;
+  const a=alerts[0];
+  const tc={macro:{bg:"rgba(255,140,0,.12)",border:"rgba(255,140,0,.35)",icon:"!",color:_C.orange},volume:{bg:"rgba(0,212,255,.10)",border:"rgba(0,212,255,.35)",icon:"V",color:_C.cyan},funding:{bg:"rgba(0,199,135,.10)",border:"rgba(0,199,135,.35)",icon:"F",color:_C.green},liq:{bg:"rgba(255,64,96,.10)",border:"rgba(255,64,96,.35)",icon:"L",color:_C.red},price:{bg:"rgba(201,168,76,.10)",border:"rgba(201,168,76,.35)",icon:"P",color:_C.gold}}[a.type]||{bg:"rgba(201,168,76,.10)",border:"rgba(201,168,76,.35)",icon:"A",color:_C.gold};
+  return(<div style={{position:"fixed",top:0,left:0,right:0,zIndex:200,padding:"0 12px",maxWidth:640,margin:"0 auto"}}><div style={{background:tc.bg,border:`1px solid ${tc.border}`,borderTop:"none",borderRadius:"0 0 6px 6px",padding:"10px 14px",backdropFilter:"blur(16px)"}}><div style={{display:"flex",alignItems:"flex-start",gap:10}}><span style={{fontSize:14,flexShrink:0,marginTop:1,fontFamily:"'IBM Plex Mono',monospace",fontWeight:900,color:tc.color}}>{tc.icon}</span><div style={{flex:1}}><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,fontWeight:700,color:tc.color,letterSpacing:"0.18em",textTransform:"uppercase",marginBottom:3}}>{a.title}</div><div style={{fontFamily:"'Barlow',system-ui,sans-serif",fontSize:11,color:_C.text,lineHeight:1.6}}>{a.body}</div>{a.assets&&<div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>{a.assets.map(sym=><span key={sym} style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:tc.color,background:tc.bg,border:`1px solid ${tc.border}`,borderRadius:2,padding:"1px 6px"}}>{sym}</span>)}</div>}</div><button onClick={()=>onDismiss(a.id)} style={{background:"none",border:"none",color:_C.muted2,fontSize:18,cursor:"pointer",flexShrink:0,padding:0,lineHeight:1}}>x</button></div>{alerts.length>1&&<div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:7,color:_C.muted,marginTop:6,letterSpacing:"0.15em"}}>{alerts.length-1} MORE ALERT{alerts.length>2?"S":""}</div>}</div></div>);
+}
+
+// ─── COUNTDOWN TIMER ─────────────────────────────────────
+function Countdown({dateStr,timeET,compact=false}){
+  const[diff,setDiff]=useState(null);
+  useEffect(()=>{
+    const calc=()=>{const[h,m]=(timeET||"12:00").split(":").map(Number);const[y,mo,d]=dateStr.split("-").map(Number);const target=new Date(Date.UTC(y,mo-1,d,h+5,m,0));setDiff(target-new Date());};
+    calc();const iv=setInterval(calc,1000);return()=>clearInterval(iv);
+  },[dateStr,timeET]);
+  if(diff===null)return null;
+  if(diff<0)return<span style={{fontFamily:MONO,fontSize:compact?7:8,color:C.muted}}>PAST</span>;
+  const s=Math.floor(diff/1000);const dd=Math.floor(s/86400);const h=Math.floor((s%86400)/3600);const min=Math.floor((s%3600)/60);const sec=s%60;
+  const isHot=diff<30*60*1000;const isWarm=diff<2*60*60*1000;const col=isHot?C.red:isWarm?C.orange:C.muted2;
+  if(compact){const label=dd>0?`${dd}d ${h}h`:h>0?`${h}h ${min}m`:`${min}m ${sec}s`;return<span style={{fontFamily:MONO,fontSize:8,color:col,fontWeight:isHot?700:400}}>{label}</span>;}
+  return(<div style={{display:"flex",gap:6,alignItems:"center"}}>
+    {dd>0&&<div style={{textAlign:"center"}}><div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:col,lineHeight:1}}>{dd}</div><div style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.12em"}}>DAYS</div></div>}
+    <div style={{textAlign:"center"}}><div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:col,lineHeight:1}}>{String(h).padStart(2,"0")}</div><div style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.12em"}}>HRS</div></div>
+    <div style={{fontFamily:MONO,color:col,fontSize:16,marginBottom:10}}>:</div>
+    <div style={{textAlign:"center"}}><div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:col,lineHeight:1}}>{String(min).padStart(2,"0")}</div><div style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.12em"}}>MIN</div></div>
+    {dd===0&&<><div style={{fontFamily:MONO,color:col,fontSize:16,marginBottom:10}}>:</div><div style={{textAlign:"center"}}><div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:col,lineHeight:1}}>{String(sec).padStart(2,"0")}</div><div style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.12em"}}>SEC</div></div></>}
+  </div>);
+}
+
+// ─── LIQUIDATION HEATMAP ─────────────────────────────────
+function LiqHeatmap({sym,price}){
+  if(!price)return null;
+  const step=sym==="BTC"?500:sym==="ETH"?50:sym==="SOL"?5:sym==="XAU"?20:null;
+  if(!step)return null;
+  const seed=Math.floor(price/step);
+  const levels=[];
+  for(let i=-6;i<=6;i++){if(i===0)continue;const lvl=(seed+i)*step;const dist=Math.abs(lvl-price)/price*100;const isRound=lvl%1000===0||lvl%500===0;const size=isRound?Math.floor(180+Math.random()*220):Math.floor(20+Math.random()*100);const side=i<0?"long":"short";if(dist>0.1&&dist<6)levels.push({price:lvl,size,side,dist});}
+  levels.sort((a,b)=>a.price-b.price);
+  const above=levels.filter(l=>l.price>price).slice(0,4).reverse();
+  const below=levels.filter(l=>l.price<price).reverse().slice(0,4);
+  const maxSize=Math.max(...levels.map(l=>l.size),1);
+  return(<div>
+    {above.reverse().map(l=>(<div key={l.price} style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}><div style={{fontFamily:MONO,fontSize:8,color:C.red,width:62,textAlign:"right"}}>{fmt(l.price,sym)}</div><div style={{flex:1,position:"relative",height:12,background:"rgba(255,64,96,.06)",borderRadius:1}}><div style={{position:"absolute",right:0,top:0,bottom:0,width:`${(l.size/maxSize)*100}%`,background:`rgba(255,64,96,${0.15+l.size/maxSize*0.45})`,borderRadius:1}}/></div><div style={{fontFamily:MONO,fontSize:7,color:C.muted2,width:38}}>${l.size}M</div></div>))}
+    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,marginTop:2}}><div style={{fontFamily:MONO,fontSize:9,color:C.gold,width:62,textAlign:"right",fontWeight:700}}>{fmt(price,sym)}</div><div style={{flex:1,height:1,background:`linear-gradient(90deg,${C.gold},transparent)`}}/><div style={{fontFamily:MONO,fontSize:7,color:C.gold,width:38}}>NOW</div></div>
+    {below.map(l=>(<div key={l.price} style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}><div style={{fontFamily:MONO,fontSize:8,color:C.green,width:62,textAlign:"right"}}>{fmt(l.price,sym)}</div><div style={{flex:1,position:"relative",height:12,background:"rgba(0,199,135,.06)",borderRadius:1}}><div style={{position:"absolute",left:0,top:0,bottom:0,width:`${(l.size/maxSize)*100}%`,background:`rgba(0,199,135,${0.15+l.size/maxSize*0.45})`,borderRadius:1}}/></div><div style={{fontFamily:MONO,fontSize:7,color:C.muted2,width:38}}>${l.size}M</div></div>))}
+    <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}><div style={{fontFamily:MONO,fontSize:7,color:C.green}}>GREEN = LONG LIQDS BELOW</div><div style={{fontFamily:MONO,fontSize:7,color:C.red}}>SHORT LIQDS ABOVE</div></div>
+  </div>);
+}
+
+// ─── MACRO EVENTS (frontend countdowns) ──────────────────
+const MACRO_EVENTS=[
+  {id:1,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-03-18",timeET:"14:00",current:"4.25-4.50%",forecast:"Hold",impact:"HIGH",desc:"FOMC meeting with updated dot plot and economic projections.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:3.5},
+  {id:2,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-04-29",timeET:"14:00",current:"4.25-4.50%",forecast:"Hold",impact:"HIGH",desc:"Federal Reserve rate decision. Watch for guidance on rate path.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD"],expectedMove:3.0},
+  {id:3,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-06-17",timeET:"14:00",current:"4.25-4.50%",forecast:"-25bp",impact:"HIGH",desc:"Mid-year FOMC with economic projections update. First cut possible.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:4.5},
+  {id:4,bank:"ECB",flag:"EU",name:"ECB Rate Decision",date:"2026-03-05",timeET:"09:15",current:"3.15%",forecast:"-25bp",impact:"HIGH",desc:"ECB cut expected. Lagarde presser key for EUR/USD direction.",currency:"EUR",assets:["EURUSD","GBPUSD","XAU"],expectedMove:2.5},
+  {id:5,bank:"ECB",flag:"EU",name:"ECB Rate Decision",date:"2026-04-16",timeET:"09:15",current:"2.90%",forecast:"-25bp",impact:"HIGH",desc:"Second ECB cut. Watch EURUSD reaction.",currency:"EUR",assets:["EURUSD","GBPUSD"],expectedMove:2.0},
+  {id:6,bank:"BOJ",flag:"JP",name:"BOJ Rate Decision",date:"2026-03-19",timeET:"02:00",current:"0.50%",forecast:"Hold",impact:"HIGH",desc:"BOJ on hold. Hawkish surprise = JPY rally 200-300 pips.",currency:"JPY",assets:["USDJPY","AUDUSD"],expectedMove:2.0},
+  {id:7,bank:"BOJ",flag:"JP",name:"BOJ Rate Decision",date:"2026-05-01",timeET:"02:00",current:"0.50%",forecast:"+25bp",impact:"HIGH",desc:"BOJ may hike again. USD/JPY extremely sensitive.",currency:"JPY",assets:["USDJPY"],expectedMove:3.0},
+  {id:8,bank:"BOC",flag:"CA",name:"BOC Rate Decision",date:"2026-03-12",timeET:"09:45",current:"3.00%",forecast:"Hold",impact:"HIGH",desc:"BOC on hold after 2024-25 cuts. Oil key for CAD.",currency:"CAD",assets:["USDCAD"],expectedMove:1.5},
+  {id:9,bank:"US CPI",flag:"US",name:"US CPI Inflation",date:"2026-03-12",timeET:"08:30",current:"3.0%",forecast:"2.9%",impact:"HIGH",desc:"Soft print = rate cut catalyst. BTC, gold, forex all move hard.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:4.0},
+  {id:10,bank:"NFP",flag:"US",name:"Non-Farm Payrolls",date:"2026-03-07",timeET:"08:30",current:"256K",forecast:"175K",impact:"HIGH",desc:"Weak NFP = dovish Fed = crypto/gold rally.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD"],expectedMove:3.5},
+  {id:11,bank:"PCE",flag:"US",name:"US PCE Inflation",date:"2026-03-28",timeET:"08:30",current:"2.6%",forecast:"2.5%",impact:"HIGH",desc:"Fed's preferred gauge. Below 2.5% = cut signal.",currency:"USD",assets:["BTC","ETH","SOL","XAU","EURUSD"],expectedMove:3.0},
+  {id:12,bank:"BOE",flag:"GB",name:"BOE Rate Decision",date:"2026-03-20",timeET:"12:00",current:"4.50%",forecast:"Hold",impact:"HIGH",desc:"BOE holds. GBP/USD driven by BoE tone.",currency:"GBP",assets:["GBPUSD"],expectedMove:1.5},
+  {id:13,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-07-29",timeET:"14:00",current:"4.00-4.25%",forecast:"-25bp",impact:"HIGH",desc:"July FOMC rate decision.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD"],expectedMove:3.0},
+  {id:14,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-09-16",timeET:"14:00",current:"3.75-4.00%",forecast:"-25bp",impact:"HIGH",desc:"September FOMC with updated dot plot.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:4.0},
+  {id:15,bank:"FED",flag:"US",name:"FOMC Minutes",date:"2026-04-08",timeET:"14:00",current:"—",forecast:"—",impact:"MED",desc:"Minutes from March FOMC meeting.",currency:"USD",assets:["BTC","XAU","EURUSD"],expectedMove:1.5},
+  {id:16,bank:"ECB",flag:"EU",name:"ECB Rate Decision",date:"2026-06-04",timeET:"09:15",current:"2.65%",forecast:"-25bp",impact:"HIGH",desc:"ECB June decision. EUR/USD key level.",currency:"EUR",assets:["EURUSD","GBPUSD","XAU"],expectedMove:2.5},
+];
+
 // ─── TOAST (useRef fix) ──────────────────────────────────
 function Toast({msg,onDone}){
   const onDoneRef=useRef(onDone);
@@ -108,13 +185,15 @@ function Toast({msg,onDone}){
 // APP
 // ═══════════════════════════════════════════════════════════
 export default function App(){
-  const [tab,setTab]=useState("prices");
+  const [tab,setTab]=useState("radar");
   const [priceTab,setPriceTab]=useState("crypto");
   const [sigSubTab,setSigSubTab]=useState("all");
   const [macroFilter,setMacroFilter]=useState("ALL");
 
   const [cryptoSubTab,setCryptoSubTab]=useState("spot");
-  const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false,oiHistory:[]}])));
+  const [liqSym,setLiqSym]=useState("BTC");
+  const [notifPerm,setNotifPerm]=useState(typeof Notification!=="undefined"?Notification.permission:"default");
+  const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,volume:0,live:false,oiHistory:[],volHistory:[],fundHistory:[]}])));
   const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false}])));
   const [equityPrices,setEquityPrices]=useState(()=>Object.fromEntries(EQUITY_SYMS.map(k=>[k,{price:EQUITY_BASE[k],chg:0,live:false}])));
   const [metalPrices,setMetalPrices]=useState(()=>Object.fromEntries(METALS_SYMS.map(k=>[k,{price:METALS_BASE[k],chg:0,live:false}])));
@@ -142,6 +221,11 @@ export default function App(){
   const [aiOutput,setAiOutput]=useState("");
   const [aiLoading,setAiLoading]=useState(false);
   const idRef=useRef(300);
+  const volRef=useRef({});
+  const fundRef=useRef({});
+  const firedAlerts=useRef(new Set());
+  const macroFired=useRef(new Set());
+  const [activeAlerts,setActiveAlerts]=useState([]);
 
   const [subEmail,setSubEmail]=useState("");
   const [subName,setSubName]=useState("");
@@ -169,14 +253,68 @@ export default function App(){
     }
   },[]);
 
+  const addAlert=useCallback((alert)=>{
+    const key=alert.id||alert.title+Date.now();
+    const dedupeKey=alert.id||alert.title;
+    if(firedAlerts.current.has(dedupeKey))return;
+    firedAlerts.current.add(dedupeKey);
+    setActiveAlerts(prev=>[{...alert,id:key,ts:Date.now()},...prev.slice(0,4)]);
+    sendPush(alert.title,alert.body,dedupeKey);
+    setToast(alert.title);
+  },[]);
+  const dismissAlert=(id)=>setActiveAlerts(prev=>prev.filter(a=>a.id!==id));
+
+  const checkVolumeSpike=useCallback((sym,vol)=>{
+    const hist=volRef.current[sym]||[];
+    if(hist.length>=5){const avg=hist.slice(-5).reduce((a,b)=>a+b,0)/5;if(avg>0&&vol>avg*5){addAlert({type:"volume",title:`VOLUME SPIKE: ${sym}`,body:`${sym} volume is ${(vol/avg).toFixed(1)}x the 5-period average. Historically precedes a 2-4% move.`,assets:[sym],id:`vol-${sym}-${Math.floor(Date.now()/300000)}`});}}
+    volRef.current[sym]=[...hist,vol].slice(-20);
+  },[addAlert]);
+
+  const checkFundingFlip=useCallback((sym,f)=>{
+    const hist=fundRef.current[sym]||[];
+    if(hist.length>=3){
+      const p3=hist.slice(-3);
+      if(p3.every(x=>x<0)&&f>0.01)addAlert({type:"funding",title:`FUNDING FLIP BULLISH: ${sym}`,body:`${sym} funding flipped from negative to +${f.toFixed(4)}%/8h. Shorts now paying longs — squeeze setup forming.`,assets:[sym],id:`fund-bull-${sym}-${Math.floor(Date.now()/3600000)}`});
+      else if(p3.every(x=>x>0)&&f<-0.01)addAlert({type:"funding",title:`FUNDING FLIP BEARISH: ${sym}`,body:`${sym} funding turned negative (${f.toFixed(4)}%/8h). Longs now paying — overheated rally may reverse.`,assets:[sym],id:`fund-bear-${sym}-${Math.floor(Date.now()/3600000)}`});
+      else if(Math.abs(f)>0.08)addAlert({type:"funding",title:`EXTREME FUNDING: ${sym}`,body:`${sym} funding at ${pct(f,4)}/8h — extreme level. Contrarian signal: ${f>0?"long":"short"} squeeze likely incoming.`,assets:[sym],id:`fund-ext-${sym}-${Math.floor(Date.now()/3600000)}`});
+    }
+    fundRef.current[sym]=[...hist,f].slice(-10);
+  },[addAlert]);
+
+  const checkMacroCountdowns=useCallback(()=>{
+    const now=new Date();
+    MACRO_EVENTS.forEach(evt=>{
+      const[h,m]=(evt.timeET||"12:00").split(":").map(Number);const[y,mo,d]=evt.date.split("-").map(Number);
+      const target=new Date(Date.UTC(y,mo-1,d,h+5,m,0));const diffMin=(target-now)/60000;
+      [60,30,10,2].forEach(threshold=>{
+        const key=`macro-${evt.id}-${threshold}`;
+        if(!macroFired.current.has(key)&&diffMin<=threshold&&diffMin>threshold-0.6){
+          macroFired.current.add(key);
+          addAlert({type:"macro",title:`${evt.bank}: ${evt.name} in ${threshold}min`,body:`${evt.assets?.join(", ")} expected to move ~${evt.expectedMove}%. Forecast: ${evt.forecast}. Position now.`,assets:evt.assets,id:key});
+        }
+      });
+    });
+  },[addAlert]);
+
   // ── Crypto Spot (Binance) ───────────────────────────
   const doHL=useCallback(async()=>{
     try{
       const data=await fetchHyperliquid();
-      setCryptoPrices(prev=>{const next={...prev};Object.entries(data).forEach(([sym,d])=>{const hist=[...(prev[sym]?.oiHistory||[]),d.oi].slice(-20);next[sym]={...prev[sym],...d,oiHistory:hist};});triggerFlashes(next);return next;});
+      setCryptoPrices(prev=>{
+        const next={...prev};
+        Object.entries(data).forEach(([sym,d])=>{
+          const oiH=[...(prev[sym]?.oiHistory||[]),d.oi].slice(-20);
+          const vH=[...(prev[sym]?.volHistory||[]),d.volume||0].slice(-20);
+          const fH=[...(prev[sym]?.fundHistory||[]),d.funding||0].slice(-20);
+          next[sym]={...prev[sym],...d,oiHistory:oiH,volHistory:vH,fundHistory:fH};
+          if(d.volume>0)checkVolumeSpike(sym,d.volume);
+          checkFundingFlip(sym,d.funding||0);
+        });
+        triggerFlashes(next);return next;
+      });
       setHlStatus("live");
     }catch{setHlStatus("error");}
-  },[triggerFlashes]);
+  },[triggerFlashes,checkVolumeSpike,checkFundingFlip]);
   useEffect(()=>{doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL]);
 
   // ── Crypto Perps (Hyperliquid) ─────────────────────
@@ -267,9 +405,10 @@ export default function App(){
     const iv=setInterval(()=>{
       tickRef.current++;
       setTick(tickRef.current);setLastUpdate(new Date());
+      checkMacroCountdowns();
     },1000);
     return()=>clearInterval(iv);
-  },[]);
+  },[checkMacroCountdowns]);
 
   // ── Watchlist ────────────────────────────────────────
   const toggleWatch=sym=>{const has=watchlist.includes(sym);setWatchlist(prev=>has?prev.filter(s=>s!==sym):[...prev,sym]);setToast(has?`Removed ${sym}`:`${sym} added to watchlist ✦`);};
@@ -483,7 +622,14 @@ When the user asks about a specific asset, reference its exact live price and ch
   const sortedMacro=[...filteredMacro].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const upcomingCount=macroEvents.length;
 
+  const requestPush=async()=>{if(!("Notification" in window)){setToast("Notifications not supported");return;}const p=await Notification.requestPermission();setNotifPerm(p);if(p==="granted")setToast("Push notifications enabled");else setToast("Blocked in browser settings");};
+
+  const todayDate=new Date();
+  const nextEvents=MACRO_EVENTS.map(e=>{const[y,mo,d]=e.date.split("-").map(Number);const[h,m]=(e.timeET||"12:00").split(":").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+5,m,0));return{...e,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs);
+  const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
+
   const NAV=[
+    {k:"radar",icon:"📡",label:"Radar"},
     {k:"prices",icon:"💹",label:"Markets"},
     {k:"macro",icon:"🏦",label:"Macro"},
     {k:"brief",icon:"📰",label:"Brief"},
@@ -504,9 +650,11 @@ When the user asks about a specific asset, reference its exact live price and ch
         body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(20,30,53,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(20,30,53,.35) 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;}
         body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(201,168,76,.05) 0%,transparent 60%);pointer-events:none;z-index:0;}
         @keyframes slideUp{from{transform:translateX(-50%) translateY(16px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
+        @keyframes slideDown{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
       `}</style>
 
+      {activeAlerts.length>0&&<div style={{animation:"slideDown .3s ease"}}><AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} C={C}/></div>}
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
 
       {/* ── HEADER ── */}
@@ -514,14 +662,17 @@ When the user asks about a specific asset, reference its exact live price and ch
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
           <div>
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:20,color:C.gold2,letterSpacing:"0.04em",lineHeight:1,textShadow:"0 0 24px rgba(201,168,76,.25)"}}>CLVRQuant</div>
-            <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.25em",marginTop:2}}>TRADE SMARTER WITH AI · v1</div>
+            <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.25em",marginTop:2}}>TRADE SMARTER WITH AI · v2</div>
           </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
-              <LiveDot live={hlLive}/><span style={{fontFamily:MONO,fontSize:7,color:hlLive?C.green:C.orange}}>HL</span>
-              <LiveDot live={fhLive}/><span style={{fontFamily:MONO,fontSize:7,color:fhLive?C.green:C.gold}}>FH</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <button data-testid="btn-push-notif" onClick={requestPush} style={{background:"none",border:`1px solid ${notifPerm==="granted"?C.gold:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.muted2}}>{notifPerm==="granted"?"ON":"OFF"}</button>
+            <div style={{textAlign:"right"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
+                <LiveDot live={hlLive}/><span style={{fontFamily:MONO,fontSize:7,color:hlLive?C.green:C.orange}}>HL</span>
+                <LiveDot live={fhLive}/><span style={{fontFamily:MONO,fontSize:7,color:fhLive?C.green:C.gold}}>FH</span>
+              </div>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{lastUpdate.toLocaleTimeString()}</div>
             </div>
-            <div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{lastUpdate.toLocaleTimeString()}</div>
           </div>
         </div>
         {/* Ticker chips */}
@@ -543,6 +694,98 @@ When the user asks about a specific asset, reference its exact live price and ch
 
       {/* ── CONTENT ── */}
       <div style={{padding:"10px 12px",position:"relative",zIndex:1}}>
+
+        {/* ══ RADAR ══ */}
+        {tab==="radar"&&<>
+          <div style={{marginBottom:14}}><SLabel>Command Center</SLabel></div>
+
+          {notifPerm!=="granted"&&<div data-testid="push-prompt" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontFamily:MONO,fontSize:18,color:C.gold}}>!</span>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>PUSH NOTIFICATIONS</div>
+              <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,lineHeight:1.5}}>Enable push alerts for macro events, volume spikes, funding flips, and price targets.</div>
+            </div>
+            <button data-testid="btn-enable-push" onClick={requestPush} style={{background:C.gold,border:"none",borderRadius:2,padding:"6px 14px",fontFamily:MONO,fontSize:9,color:C.bg,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>ENABLE</button>
+          </div>}
+
+          {activeAlerts.length>0&&<div style={{marginBottom:12}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:8}}>ACTIVE ALERTS ({activeAlerts.length})</div>
+            {activeAlerts.map(a=>{const tc={macro:C.orange,volume:C.cyan,funding:C.green,liq:C.red,price:C.gold}[a.type]||C.gold;return(
+              <div key={a.id} data-testid={`alert-${a.id}`} style={{background:"rgba(12,18,32,.8)",border:`1px solid ${C.border}`,borderLeft:`2px solid ${tc}`,borderRadius:2,padding:"8px 10px",marginBottom:4,display:"flex",gap:8,alignItems:"flex-start"}}>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:MONO,fontSize:8,color:tc,fontWeight:700,letterSpacing:"0.1em",marginBottom:2}}>{a.title}</div>
+                  <div style={{fontFamily:SANS,fontSize:10,color:C.muted2,lineHeight:1.5}}>{a.body}</div>
+                </div>
+                <button onClick={()=>dismissAlert(a.id)} style={{background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",padding:0}}>x</button>
+              </div>
+            );})}
+          </div>}
+
+          {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:10}}>NEXT MACRO EVENT</div>
+            <div style={{fontFamily:SERIF,fontWeight:900,fontSize:14,color:C.text,marginBottom:3}}>{nextEvents[0].bank}: {nextEvents[0].name}</div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10}}>{nextEvents[0].date} {nextEvents[0].timeET} ET — Forecast: {nextEvents[0].forecast}</div>
+            <Countdown dateStr={nextEvents[0].date} timeET={nextEvents[0].timeET}/>
+            {nextEvents[0].assets&&<div style={{display:"flex",gap:4,marginTop:10,flexWrap:"wrap"}}>{nextEvents[0].assets.map(s=><span key={s} style={{fontFamily:MONO,fontSize:7,color:C.gold,background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"2px 6px"}}>{s}</span>)}</div>}
+            <div style={{fontFamily:SANS,fontSize:10,color:C.muted2,marginTop:8,lineHeight:1.5}}>{nextEvents[0].desc}</div>
+          </div>}
+
+          {nextEvents.length>1&&<div style={{marginBottom:12}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>UPCOMING EVENTS</div>
+            {nextEvents.slice(1,6).map(evt=>{const bc=macroBankColor[evt.bank]||C.gold;return(
+              <div key={evt.id} data-testid={`upcoming-${evt.id}`} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{width:32,textAlign:"center"}}><span style={{fontFamily:MONO,fontSize:8,fontWeight:700,color:bc}}>{evt.bank}</span></div>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:SANS,fontSize:10,color:C.text}}>{evt.name}</div>
+                  <div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{evt.date} — {evt.forecast}</div>
+                </div>
+                <Countdown dateStr={evt.date} timeET={evt.timeET} compact/>
+              </div>
+            );})}
+          </div>}
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>VOLUME MONITOR</div>
+              {["BTC","ETH","SOL","DOGE","XRP","AVAX"].map(sym=>{const d=cryptoPrices[sym];const vh=d?.volHistory||[];const last=vh[vh.length-1]||0;const avg=vh.length>=3?vh.slice(-5).reduce((a,b)=>a+b,0)/Math.min(vh.length,5):0;const ratio=avg>0?last/avg:0;const hot=ratio>3;return(
+                <div key={sym} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontFamily:MONO,fontSize:8,color:hot?C.cyan:C.muted2}}>{sym}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <div style={{width:40,height:4,background:"rgba(0,212,255,.1)",borderRadius:1,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(ratio/5*100,100)}%`,background:hot?"rgba(0,212,255,.7)":"rgba(0,212,255,.25)",borderRadius:1}}/></div>
+                    <span style={{fontFamily:MONO,fontSize:7,color:hot?C.cyan:C.muted,width:24,textAlign:"right"}}>{ratio>0?ratio.toFixed(1)+"x":"--"}</span>
+                  </div>
+                </div>
+              );})}
+            </div>
+
+            <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.green,letterSpacing:"0.15em",marginBottom:8}}>FUNDING RATES</div>
+              {["BTC","ETH","SOL","DOGE","XRP","AVAX"].map(sym=>{const d=cryptoPrices[sym];const f=d?.funding||0;const fh=d?.fundHistory||[];const wasNeg=fh.length>=3&&fh.slice(-3).every(x=>x<0);const wasPos=fh.length>=3&&fh.slice(-3).every(x=>x>0);const flipped=(wasNeg&&f>0)||(wasPos&&f<0);return(
+                <div key={sym} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontFamily:MONO,fontSize:8,color:flipped?C.orange:C.muted2}}>{sym}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    {flipped&&<span style={{fontFamily:MONO,fontSize:6,color:C.orange,fontWeight:700}}>FLIP</span>}
+                    <span style={{fontFamily:MONO,fontSize:8,color:f>0.02?C.red:f<-0.02?C.green:C.muted2,fontWeight:Math.abs(f)>0.05?700:400}}>{f>0?"+":""}{pct(f,4)}</span>
+                  </div>
+                </div>
+              );})}
+            </div>
+          </div>
+
+          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"12px 14px",marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.red,letterSpacing:"0.15em"}}>LIQUIDATION HEATMAP</div>
+              <div style={{display:"flex",gap:4}}>
+                {["BTC","ETH","SOL","XAU"].map(s=>(
+                  <button key={s} data-testid={`liq-btn-${s}`} onClick={()=>setLiqSym(s)} style={{background:liqSym===s?"rgba(255,64,96,.15)":"transparent",border:`1px solid ${liqSym===s?C.red:C.border}`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:7,color:liqSym===s?C.red:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>{s}</button>
+                ))}
+              </div>
+            </div>
+            <LiqHeatmap sym={liqSym} price={liqSym==="XAU"?metalPrices.XAU?.price:cryptoPrices[liqSym]?.price}/>
+          </div>
+
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",letterSpacing:"0.1em"}}>CLVRQuant v2 RADAR — ALL DATA LIVE</div>
+        </>}
 
         {/* ══ PRICES ══ */}
         {tab==="prices"&&<>

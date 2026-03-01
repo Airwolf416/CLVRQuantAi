@@ -25,7 +25,7 @@ const FINNHUB_TTL = 120000;
 let finnhubFetchLock: Promise<any> | null = null;
 let stockRefreshRunning = false;
 let hlRefreshRunning = false;
-const hlData: Record<string, { funding: number; oi: number; perpPrice: number }> = {};
+const hlData: Record<string, { funding: number; oi: number; perpPrice: number; volume: number }> = {};
 
 const priceHistory: Record<string, { price: number; ts: number }[]> = {};
 const liveSignals: any[] = [];
@@ -132,6 +132,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
           funding: hlData[sym]?.funding || 0,
           oi: hlData[sym]?.oi || 0,
           perpPrice: hlData[sym]?.perpPrice || 0,
+          volume: hlData[sym]?.volume || 0,
           live: true,
         };
       }
@@ -157,6 +158,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
             funding: hlData[sym]?.funding || 0,
             oi: hlData[sym]?.oi || 0,
             perpPrice: price,
+            volume: hlData[sym]?.volume || 0,
             live: true,
           };
         }
@@ -197,6 +199,7 @@ async function startHyperliquidRefreshLoop() {
             funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
             oi: parseFloat(ctxs[i]?.openInterest || 0) * parseFloat(ctxs[i]?.markPx || 0),
             perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) : 0,
+            volume: parseFloat(ctxs[i]?.dayNtlVlm || 0),
           };
         }
       });
@@ -378,10 +381,11 @@ export async function registerRoutes(
           chg: base ? +((hl.perpPrice - base) / base * 100).toFixed(2) : 0,
           funding: hl.funding,
           oi: hl.oi,
+          volume: hl.volume,
           live: true,
         };
       } else {
-        result[sym] = { price: CRYPTO_BASE[sym], chg: 0, funding: 0, oi: 0, live: false };
+        result[sym] = { price: CRYPTO_BASE[sym], chg: 0, funding: 0, oi: 0, volume: 0, live: false };
       }
     }
     res.json(result);
