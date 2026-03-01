@@ -35,7 +35,6 @@ const fmt=(p,sym)=>{
   if(p>=1)return"$"+p.toFixed(2);
   return"$"+p.toFixed(6);
 };
-const rndInt=(a,b)=>Math.floor(a+Math.random()*(b-a+1));
 const timeAgo=(ts)=>{if(!ts)return"";const s=Math.floor((Date.now()-ts)/1000);if(s<10)return"just now";if(s<60)return`${s}s ago`;const m=Math.floor(s/60);if(m<60)return`${m}m ago`;const h=Math.floor(m/60);if(h<24)return`${h}h ago`;return`${Math.floor(h/24)}d ago`;};
 
 // ─── BASE PRICES ──────────────────────────────────────────
@@ -51,31 +50,7 @@ const ALL_SYMS=[...CRYPTO_SYMS,...EQUITY_SYMS,...METALS_SYMS,...FOREX_SYMS];
 const METAL_LABELS={XAU:"Gold",XAG:"Silver",WTI:"Oil WTI",BRENT:"Oil Brent",NATGAS:"Nat Gas",COPPER:"Copper",PLATINUM:"Platinum"};
 const FOREX_LABELS={EURUSD:"EUR/USD",GBPUSD:"GBP/USD",USDJPY:"USD/JPY",USDCHF:"USD/CHF",AUDUSD:"AUD/USD",USDCAD:"USD/CAD",NZDUSD:"NZD/USD",EURGBP:"EUR/GBP",EURJPY:"EUR/JPY",GBPJPY:"GBP/JPY",USDMXN:"USD/MXN",USDZAR:"USD/ZAR",USDTRY:"USD/TRY",USDSGD:"USD/SGD"};
 
-// ─── SIGNALS & NEWS ───────────────────────────────────────
-const SIGNALS_POOL=[
-  {icon:"🚀",dir:"LONG",token:"SOL",conf:94,lev:"10x",src:"hyperliquid",desc:"Smart money wallets +$2.4M in 18min. Shorts clustered above — sweep incoming.",tags:[{l:"ON-CHAIN",c:"green"},{l:"LIQ SWEEP",c:"cyan"}]},
-  {icon:"📉",dir:"SHORT",token:"BTC",conf:81,lev:"5x",src:"hyperliquid",desc:"OI at resistance. Funding extreme positive. Reversal setup forming.",tags:[{l:"FUNDING",c:"orange"},{l:"RESISTANCE",c:"red"}]},
-  {icon:"🔥",dir:"LONG",token:"WIF",conf:88,lev:"3x",src:"hyperliquid",desc:"Whale 0x7f3 opened 8.4M WIF perp. Same wallet +340% on BONK pre-pump.",tags:[{l:"WHALE",c:"orange"},{l:"NEUTRAL FUND",c:"green"}]},
-  {icon:"📈",dir:"LONG",token:"TSLA",conf:86,lev:"5x",src:"trade.xyz",desc:"Earnings beat whisper +18%. Smart money opened $3.1M long.",tags:[{l:"EARNINGS",c:"gold"},{l:"WHALE",c:"orange"}]},
-  {icon:"🚀",dir:"LONG",token:"NVDA",conf:91,lev:"5x",src:"trade.xyz",desc:"H100 supply chain: +40% shipments detected in Taiwan customs.",tags:[{l:"SUPPLY CHAIN",c:"cyan"},{l:"NEG FUND",c:"green"}]},
-  {icon:"🥇",dir:"LONG",token:"XAU",conf:89,lev:"5x",src:"phantom",desc:"Central bank gold buying +42t. DXY weakening. Path to $3,400 open.",tags:[{l:"MACRO",c:"gold"},{l:"CENTRAL BANK",c:"teal"}]},
-  {icon:"🥈",dir:"LONG",token:"XAG",conf:83,lev:"5x",src:"phantom",desc:"Gold/silver ratio 100:1. Solar industrial demand surging.",tags:[{l:"RATIO",c:"teal"},{l:"INDUSTRIAL",c:"cyan"}]},
-  {icon:"💱",dir:"SHORT",token:"USDJPY",conf:84,lev:"10x",src:"phantom",desc:"BOJ hawkish minutes leaked. JPY intervention risk at ¥150.",tags:[{l:"BOJ",c:"teal"},{l:"INTERVENTION",c:"red"}]},
-  {icon:"📊",dir:"LONG",token:"EURUSD",conf:79,lev:"10x",src:"phantom",desc:"ECB holds, Fed cutting. Rate differential narrowing.",tags:[{l:"RATE DIFF",c:"blue"},{l:"LIQ SWEEP",c:"green"}]},
-  {icon:"💎",dir:"LONG",token:"PEPE",conf:76,lev:"5x",src:"hyperliquid",desc:"$18M PEPE exchange outflow. Supply squeeze. Funding negative.",tags:[{l:"OUTFLOW",c:"green"},{l:"NEG FUND",c:"cyan"}]},
-  {icon:"⚠️",dir:"SHORT",token:"META",conf:73,lev:"3x",src:"trade.xyz",desc:"EU antitrust fine €1.2B imminent. Options flow bearish.",tags:[{l:"REGULATORY",c:"red"},{l:"FUNDING",c:"orange"}]},
-  {icon:"🎯",dir:"LONG",token:"AAPL",conf:77,lev:"3x",src:"trade.xyz",desc:"iPhone 17 supply chain: orders up 22% vs prior cycle.",tags:[{l:"SUPPLY CHAIN",c:"cyan"},{l:"SMART MONEY",c:"purple"}]},
-];
-const NEWS_POOL=[
-  {txt:"BOJ minutes leaked — 2 members backed rate hike, ¥150 intervention confirmed",src:"Macro Leak",col:"teal"},
-  {txt:"NVDA H100: +40% shipments detected in Taiwan customs — not yet public",src:"Supply Chain",col:"green"},
-  {txt:"Central bank gold: China +42t March, Russia +18t — XAU breakout fuel",src:"CB Monitor",col:"gold"},
-  {txt:"Fed minutes: 2 members backed 25bps cut at last meeting",src:"Macro Leak",col:"gold"},
-  {txt:"TSLA: CEO social activity spiking 3hrs before earnings — historical pattern",src:"Social Monitor",col:"orange"},
-  {txt:"META EU antitrust fine €1.2B — Brussels court filing detected",src:"Legal Scanner",col:"red"},
-  {txt:"SOL: 3 whale wallets accumulated $6.1M in 1hr on-chain",src:"On-chain",col:"green"},
-  {txt:"Gold/silver ratio 100:1 — historically signals silver outperformance",src:"Metals Watch",col:"teal"},
-];
+// ─── SIGNALS (live only — no simulated data) ─────────────
 
 // ─── API FETCHERS (proxied through backend) ──────────────
 async function fetchHyperliquid(){
@@ -154,12 +129,10 @@ export default function App(){
   ]);
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
-  const [signals,setSignals]=useState(()=>{const now=Date.now();return SIGNALS_POOL.slice(0,8).map((s,i)=>({...s,ts:now-(i*4+2)*60000,id:i}));});
   const [liveSignals,setLiveSignals]=useState([]);
   const [sigTracking,setSigTracking]=useState(0);
-  const [news,setNews]=useState(()=>{const now=Date.now();return NEWS_POOL.map((n,i)=>({...n,ts:now-(i*6+1)*60000,id:i}));});
   const [flashSigId,setFlashSigId]=useState(null);
-  const [sigCount,setSigCount]=useState(44);
+  const [sigCount,setSigCount]=useState(0);
   const [tick,setTick]=useState(0);
   const [lastUpdate,setLastUpdate]=useState(new Date());
   const [hlStatus,setHlStatus]=useState("connecting");
@@ -294,8 +267,6 @@ export default function App(){
     const iv=setInterval(()=>{
       tickRef.current++;
       setTick(tickRef.current);setLastUpdate(new Date());
-      if(tickRef.current%22===0){const s=SIGNALS_POOL[rndInt(0,SIGNALS_POOL.length-1)];const ns={...s,ts:Date.now(),id:idRef.current++};setSignals(prev=>[ns,...prev.slice(0,11)]);setSigCount(c=>c+1);setFlashSigId(ns.id);setTimeout(()=>setFlashSigId(null),3000);}
-      if(tickRef.current%45===0){const n=NEWS_POOL[rndInt(0,NEWS_POOL.length-1)];setNews(prev=>[{...n,ts:Date.now(),id:idRef.current++},...prev.slice(0,10)]);}
     },1000);
     return()=>clearInterval(iv);
   },[]);
@@ -341,16 +312,19 @@ export default function App(){
   // ── Daily Brief via backend AI ─────────────────────
   const generateBrief=async()=>{
     setBriefLoading(true);
-    const btc=cryptoPrices["BTC"],eth=cryptoPrices["ETH"],sol=cryptoPrices["SOL"];
-    const xau=metalPrices["XAU"],xag=metalPrices["XAG"];
-    const eurusd=forexPrices["EURUSD"],usdjpy=forexPrices["USDJPY"],usdcad=forexPrices["USDCAD"];
     const todayStr=new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
-    const prompt=`Generate a concise morning market brief for ${todayStr}. Live data:
-BTC: ${fmt(btc?.price,"BTC")} (${pct(btc?.chg)}) | Fund: ${pct(btc?.funding,4)}/8h
-ETH: ${fmt(eth?.price,"ETH")} (${pct(eth?.chg)}) | SOL: ${fmt(sol?.price,"SOL")} (${pct(sol?.chg)})
-XAU: ${fmt(xau?.price,"XAU")} | XAG: ${fmt(xag?.price,"XAG")}
-EUR/USD: ${fmt(eurusd?.price,"EURUSD")} | USD/JPY: ${fmt(usdjpy?.price,"USDJPY")} | USD/CAD: ${fmt(usdcad?.price,"USDCAD")}
-Write JSON (no markdown):
+    const snapBrief=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})`:"n/a";};
+    const cryptoBrief=CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];const f=d?.funding?` F:${pct(d.funding,4)}/8h`:"";return`${s}: ${snapBrief(s,cryptoPrices)}${f}`;}).join(" | ");
+    const stockBrief=EQUITY_SYMS.map(s=>`${s}: ${snapBrief(s,equityPrices)}`).join(" | ");
+    const metalBrief=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}: ${snapBrief(s,metalPrices)}`).join(" | ");
+    const fxBrief=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}: ${snapBrief(s,forexPrices)}`).join(" | ");
+    const sigBrief=liveSignals.length>0?`\nLIVE SIGNALS DETECTED: ${liveSignals.slice(0,3).map(s=>`${s.token} ${s.dir} ${s.pctMove||""}%`).join(", ")}`:"";
+    const prompt=`Generate a concise morning market brief for ${todayStr}. ALL data below is REAL and LIVE from exchanges:
+CRYPTO: ${cryptoBrief}
+EQUITIES: ${stockBrief}
+COMMODITIES: ${metalBrief}
+FOREX: ${fxBrief}${sigBrief}
+Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
 {"headline":"one-line market sentiment","bias":"RISK ON|RISK OFF|NEUTRAL","btc":"2 sentence BTC analysis with key levels","eth":"1 sentence ETH","sol":"1 sentence SOL","xau":"2 sentence gold analysis","xag":"1 sentence silver","eurusd":"2 sentence EUR/USD analysis","usdjpy":"2 sentence USD/JPY with BOJ context","usdcad":"2 sentence USD/CAD","watchToday":["item1","item2","item3","item4","item5"],"keyRisk":"single sentence on biggest risk today"}`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt})});
@@ -367,13 +341,18 @@ Write JSON (no markdown):
   const runAI=async()=>{
     if(!aiInput.trim()||aiLoading)return;
     setAiLoading(true);setAiOutput("");
-    const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" ✅":" ~"}`:"—";};
-    const sys=`You are CLVRQuant, elite multi-market trading AI.
-CRYPTO: ${CRYPTO_SYMS.slice(0,5).map(s=>`${s}:${snap(s,cryptoPrices)}${cryptoPrices[s]?.funding?` F:${pct(cryptoPrices[s].funding,4)}/8h`:""}`).join(" | ")}
-STOCKS: ${EQUITY_SYMS.slice(0,4).map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ")}
-METALS: XAU:${snap("XAU",metalPrices)} XAG:${snap("XAG",metalPrices)}
-FOREX: ${FOREX_SYMS.slice(0,4).map(s=>`${s}:${snap(s,forexPrices)}`).join(" | ")}
-Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REASON. No disclaimers.`;
+    const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" LIVE":" est"}`:"n/a";};
+    const cryptoSnap=CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];const f=d?.funding?` F:${pct(d.funding,4)}/8h`:"";const oi=d?.oi?` OI:$${(d.oi/1e6).toFixed(0)}M`:"";return`${s}:${snap(s,cryptoPrices)}${f}${oi}`;}).join(" | ");
+    const stockSnap=EQUITY_SYMS.map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ");
+    const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
+    const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
+    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
+    const sys=`You are CLVRQuant, elite multi-market trading AI. All data below is REAL and LIVE from exchanges — use it for analysis. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
+CRYPTO (30 tokens): ${cryptoSnap}
+EQUITIES (16 stocks): ${stockSnap}
+COMMODITIES: ${metalSnap}
+FOREX (14 pairs): ${fxSnap}${sigSnap}
+When the user asks about a specific asset, reference its exact live price and change%. For trade setups: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REASON. Be precise with numbers from the live data above. No disclaimers.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
       const data=await res.json();
@@ -475,7 +454,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
   );
 
   const hlLive=hlStatus==="live",fhLive=fhStatus==="live";
-  const allSignals=[...liveSignals,...signals].sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const allSignals=[...liveSignals].sort((a,b)=>(b.ts||0)-(a.ts||0));
   const filtSigs=allSignals.filter(s=>{
     if(sigSubTab==="all")return true;
     if(sigSubTab==="watch")return watchlist.includes(s.token);
@@ -776,9 +755,17 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
             ))}
           </div>
           <div style={panel}>
-            <div style={ph}><PTitle>Alpha Signals</PTitle><div style={{display:"flex",gap:6}}><Badge label={`${liveSignals.length} live`} color="green"/><Badge label={`${sigCount} total`} color="gold"/></div></div>
+            <div style={ph}><PTitle>Alpha Signals</PTitle><div style={{display:"flex",gap:6}}><Badge label={`${liveSignals.length} detected`} color={liveSignals.length>0?"green":"muted"}/><Badge label={`${sigTracking} tracking`} color="gold"/></div></div>
             <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>tracking {sigTracking} tokens · 1.5% move threshold · 5min window</div>
-            {filtSigs.length===0?<div style={{padding:24,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>No signals for this filter.</div>:filtSigs.map(sig=><SignalRow key={sig.id} sig={sig}/>)}
+            {filtSigs.length===0?<div style={{padding:32,textAlign:"center"}}>
+              <div style={{color:C.muted,fontFamily:MONO,fontSize:10,marginBottom:8}}>
+                {liveSignals.length===0?"Monitoring markets for significant moves...":"No signals for this filter."}
+              </div>
+              {liveSignals.length===0&&<div style={{color:C.muted2,fontFamily:MONO,fontSize:8,lineHeight:"1.6"}}>
+                Signals appear when any tracked token moves &gt;1.5% within a 5-minute window.<br/>
+                Tracking {sigTracking} tokens in real-time. Detector is armed.
+              </div>}
+            </div>:filtSigs.map(sig=><SignalRow key={sig.id} sig={sig}/>)}
           </div>
         </>}
 
