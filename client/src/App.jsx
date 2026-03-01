@@ -39,7 +39,7 @@ const fmt=(p,sym)=>{
 const timeAgo=(ts)=>{if(!ts)return"";const s=Math.floor((Date.now()-ts)/1000);if(s<10)return"just now";if(s<60)return`${s}s ago`;const m=Math.floor(s/60);if(m<60)return`${m}m ago`;const h=Math.floor(m/60);if(h<24)return`${h}h ago`;return`${Math.floor(h/24)}d ago`;};
 
 // ─── BASE PRICES ──────────────────────────────────────────
-const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,MATIC:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18};
+const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,MATIC:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18,TRUMP:3.5,HYPE:31};
 const EQUITY_BASE={TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:72,SHOP:95,CRM:290,NFLX:850,DIS:105};
 const METALS_BASE={XAU:5280,XAG:94,WTI:99,BRENT:16,NATGAS:13,COPPER:31.5,PLATINUM:2370};
 const FOREX_BASE={EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
@@ -1153,7 +1153,7 @@ When the user asks about a specific asset, reference its exact live price and ch
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="Claude · Live" color="gold"/></div>
             <div style={{padding:16}}>
               <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
-                {["BTC","ETH","SOL","XAU","EURUSD","TSLA","NVDA"].map(sym=>{const d=allPrices[sym];return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${fmt(d?.price,sym)} 24h:${pct(d?.chg)}`)}
+                {["BTC","ETH","SOL","TRUMP","HYPE","XAU","EURUSD","TSLA","NVDA"].map(sym=>{const d=allPrices[sym];return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${fmt(d?.price,sym)} 24h:${pct(d?.chg)}`)}
                   style={{padding:"4px 10px",borderRadius:2,border:`1px solid ${d?.live?"rgba(201,168,76,.28)":C.border}`,background:C.panel,color:d?.live?C.gold2:C.muted2,fontFamily:MONO,fontSize:8,letterSpacing:"0.08em",cursor:"pointer"}}>
                   {sym}{d?.live?" ✦":""}
                 </button>;})}
