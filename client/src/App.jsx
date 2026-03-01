@@ -94,6 +94,33 @@ function Sparkline({data,color,width=80,height=22}){
   );
 }
 
+// ─── BLOOMBERG-STYLE SOUND PING ─────────────────────────
+let audioCtx=null;
+function playBloombergPing(){
+  try{
+    if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+    const ctx=audioCtx;
+    const now=ctx.currentTime;
+    const g=ctx.createGain();
+    g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.18,now);
+    g.gain.exponentialRampToValueAtTime(0.001,now+0.6);
+    const o1=ctx.createOscillator();
+    o1.type="sine";o1.frequency.setValueAtTime(880,now);o1.frequency.setValueAtTime(1174.66,now+0.08);
+    o1.connect(g);o1.start(now);o1.stop(now+0.12);
+    const o2=ctx.createOscillator();
+    o2.type="sine";o2.frequency.setValueAtTime(1318.51,now+0.15);
+    const g2=ctx.createGain();g2.connect(ctx.destination);
+    g2.gain.setValueAtTime(0.14,now+0.15);g2.gain.exponentialRampToValueAtTime(0.001,now+0.55);
+    o2.connect(g2);o2.start(now+0.15);o2.stop(now+0.55);
+    const o3=ctx.createOscillator();
+    o3.type="sine";o3.frequency.setValueAtTime(1760,now+0.3);
+    const g3=ctx.createGain();g3.connect(ctx.destination);
+    g3.gain.setValueAtTime(0.1,now+0.3);g3.gain.exponentialRampToValueAtTime(0.001,now+0.7);
+    o3.connect(g3);o3.start(now+0.3);o3.stop(now+0.7);
+  }catch(e){}
+}
+
 // ─── PUSH NOTIFICATIONS ─────────────────────────────────
 function sendPush(title,body,tag="clvrquant"){
   if(typeof Notification!=="undefined"&&Notification.permission==="granted"){try{new Notification(title,{body,tag});}catch(e){}}
@@ -196,6 +223,7 @@ export default function App(){
   const [cryptoSubTab,setCryptoSubTab]=useState("spot");
   const [liqSym,setLiqSym]=useState("BTC");
   const [notifPerm,setNotifPerm]=useState(()=>{try{return typeof Notification!=="undefined"?Notification.permission:"granted";}catch(e){return"granted";}});
+  const [soundEnabled,setSoundEnabled]=useState(()=>{try{return localStorage.getItem("clvr_sound")!=="off";}catch(e){return true;}});
   const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,volume:0,live:false,oiHistory:[],volHistory:[],fundHistory:[]}])));
   const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false}])));
   const [equityPrices,setEquityPrices]=useState(()=>Object.fromEntries(EQUITY_SYMS.map(k=>[k,{price:EQUITY_BASE[k],chg:0,live:false}])));
@@ -230,6 +258,8 @@ export default function App(){
   const fundRef=useRef({});
   const firedAlerts=useRef(new Set());
   const macroFired=useRef(new Set());
+  const soundEnabledRef=useRef(soundEnabled);
+  const toggleSound=useCallback(()=>{setSoundEnabled(v=>{const nv=!v;soundEnabledRef.current=nv;try{localStorage.setItem("clvr_sound",nv?"on":"off");}catch(e){}if(nv)playBloombergPing();return nv;});},[]);
   const [activeAlerts,setActiveAlerts]=useState([]);
 
   const [subEmail,setSubEmail]=useState("");
@@ -265,6 +295,7 @@ export default function App(){
     firedAlerts.current.add(dedupeKey);
     setActiveAlerts(prev=>[{...alert,id:key,ts:Date.now()},...prev.slice(0,4)]);
     sendPush(alert.title,alert.body,dedupeKey);
+    if(soundEnabledRef.current)playBloombergPing();
     setToast(alert.title);
   },[]);
   const dismissAlert=(id)=>setActiveAlerts(prev=>prev.filter(a=>a.id!==id));
@@ -677,7 +708,8 @@ When the user asks about a specific asset, reference its exact live price and ch
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.25em",marginTop:2}}>TRADE SMARTER WITH AI · v2</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <button data-testid="btn-push-notif" onClick={requestPush} style={{background:"none",border:`1px solid ${notifPerm==="granted"?C.gold:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.muted2}}>{notifPerm==="granted"?"ON":"OFF"}</button>
+            <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound alerts ON":"Sound alerts OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
+            <button data-testid="btn-push-notif" onClick={requestPush} style={{background:"none",border:`1px solid ${notifPerm==="granted"?C.gold:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.muted2}}>{notifPerm==="granted"?"🔔":"🔕"}</button>
             <div style={{textAlign:"right"}}>
               <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
                 <LiveDot live={hlLive}/><span style={{fontFamily:MONO,fontSize:7,color:hlLive?C.green:C.orange}}>HL</span>
