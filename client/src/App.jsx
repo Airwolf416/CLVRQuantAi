@@ -214,7 +214,7 @@ export default function App(){
   const [liveSignals,setLiveSignals]=useState([]);
   const [newsFeed,setNewsFeed]=useState([]);
   const [newsFilter,setNewsFilter]=useState("ALL");
-  const [sigTracking,setSigTracking]=useState(30);
+  const [sigTracking,setSigTracking]=useState(32);
   const [flashSigId,setFlashSigId]=useState(null);
   const [sigCount,setSigCount]=useState(0);
   const [tick,setTick]=useState(0);
