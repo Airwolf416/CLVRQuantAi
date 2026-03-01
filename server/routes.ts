@@ -401,6 +401,102 @@ export async function registerRoutes(
     });
   });
 
+  app.get("/api/news", async (_req, res) => {
+    const cached = cache["news"];
+    if (cached && Date.now() - cached.ts < 120000) {
+      return res.json(cached.data);
+    }
+    const results: any[] = [];
+    const TRACKED = [...CRYPTO_SYMS, ...EQUITY_SYMS, "XAU", "XAG", "GOLD", "SILVER", "OIL", "USD", "EUR", "JPY", "GBP"];
+    const matchAssets = (text: string) => {
+      const upper = text.toUpperCase();
+      return TRACKED.filter(s => {
+        if (s.length <= 2) return false;
+        return upper.includes(s) || upper.includes("$" + s);
+      }).slice(0, 5);
+    };
+    try {
+      const r = await fetch("https://min-api.cryptocompare.com/data/v2/news/?lang=EN&sortOrder=popular", {
+        headers: { "Accept": "application/json", "User-Agent": "CLVRQuant/2.0" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) {
+        const data: any = await r.json();
+        const posts = data?.Data || [];
+        for (const p of posts.slice(0, 20)) {
+          const cats = (p.categories || "").split("|").map((c: string) => c.trim()).filter(Boolean);
+          const assets = matchAssets(p.title + " " + (p.tags || "") + " " + cats.join(" "));
+          const upvotes = parseInt(p.upvotes) || 0;
+          const downvotes = parseInt(p.downvotes) || 0;
+          const sentiment = upvotes + downvotes > 0 ? (upvotes - downvotes) / (upvotes + downvotes) : 0;
+          results.push({
+            id: "cc-" + p.id,
+            source: p.source_info?.name || p.source || "CryptoCompare",
+            icon: "N",
+            color: "blue",
+            title: p.title,
+            body: p.body || "",
+            sentiment,
+            score: Math.min(10, Math.max(1, Math.round(upvotes / 2) + 3)),
+            assets,
+            categories: cats,
+            ts: (p.published_on || Math.floor(Date.now() / 1000)) * 1000,
+            url: p.url || "#",
+            imageUrl: p.imageurl || null,
+          });
+        }
+      }
+    } catch (e: any) {
+      console.error("CryptoCompare news error:", e.message);
+    }
+    const CPANIC_KEY = process.env.CRYPTOPANIC_API_KEY || "";
+    if (CPANIC_KEY) {
+      try {
+        const r = await fetch(`https://cryptopanic.com/api/v1/posts/?auth_token=${CPANIC_KEY}&public=true&filter=hot`, {
+          headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; CLVRQuant/2.0)" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (r.ok) {
+          const ct = r.headers.get("content-type") || "";
+          if (ct.includes("json")) {
+            const data: any = await r.json();
+            const posts = data?.results || [];
+            for (const p of posts.slice(0, 10)) {
+              const currencies = (p.currencies || []).map((c: any) => c.code).filter(Boolean);
+              const votes = p.votes || {};
+              const pos = (votes.positive || 0) + (votes.important || 0) + (votes.liked || 0);
+              const neg = (votes.negative || 0) + (votes.disliked || 0) + (votes.toxic || 0);
+              const sentiment = pos + neg > 0 ? (pos - neg) / (pos + neg) : 0;
+              results.push({
+                id: "cp-" + p.id,
+                source: p.source?.title || "CryptoPanic",
+                icon: "CP",
+                color: "cyan",
+                title: p.title,
+                body: "",
+                sentiment,
+                score: Math.min(10, Math.max(1, pos + 3)),
+                assets: currencies.length > 0 ? currencies : matchAssets(p.title),
+                categories: [p.kind || "news"],
+                ts: new Date(p.published_at || Date.now()).getTime(),
+                url: p.url || "#",
+                imageUrl: null,
+              });
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error("CryptoPanic news error:", e.message);
+      }
+    }
+    results.sort((a, b) => b.ts - a.ts);
+    const deduped = results.filter((item, index, self) =>
+      index === self.findIndex(t => t.title === item.title)
+    ).slice(0, 25);
+    cache["news"] = { data: deduped, ts: Date.now() };
+    res.json(deduped);
+  });
+
   app.get("/api/finnhub", async (_req, res) => {
     const cached = cache["finnhub"];
     if (cached) {

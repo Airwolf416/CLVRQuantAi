@@ -74,6 +74,11 @@ async function fetchFinnhub(){
   if(!r.ok)throw new Error(`Finnhub API ${r.status}`);
   return await r.json();
 }
+async function fetchNews(){
+  const r=await fetch("/api/news");
+  if(!r.ok)throw new Error(`News API ${r.status}`);
+  return await r.json();
+}
 
 // ─── SPARKLINE ────────────────────────────────────────────
 function Sparkline({data,color,width=80,height=22}){
@@ -207,6 +212,8 @@ export default function App(){
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [liveSignals,setLiveSignals]=useState([]);
+  const [newsFeed,setNewsFeed]=useState([]);
+  const [newsFilter,setNewsFilter]=useState("ALL");
   const [sigTracking,setSigTracking]=useState(30);
   const [flashSigId,setFlashSigId]=useState(null);
   const [sigCount,setSigCount]=useState(0);
@@ -352,6 +359,14 @@ export default function App(){
     return()=>clearInterval(iv);
   },[]);
 
+  // ── News Feed ───────────────────────────────────────
+  useEffect(()=>{
+    const doNews=async()=>{try{const data=await fetchNews();if(Array.isArray(data)&&data.length>0)setNewsFeed(data);}catch{}};
+    doNews();
+    const iv=setInterval(doNews,120000);
+    return()=>clearInterval(iv);
+  },[]);
+
   // ── Finnhub ──────────────────────────────────────────
   const doFH=useCallback(async()=>{
     try{
@@ -458,7 +473,7 @@ export default function App(){
 CRYPTO: ${cryptoBrief}
 EQUITIES: ${stockBrief}
 COMMODITIES: ${metalBrief}
-FOREX: ${fxBrief}${sigBrief}
+FOREX: ${fxBrief}${sigBrief}${newsFeed.length>0?`\nNEWS HEADLINES: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:""}
 Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
 {"headline":"one-line market sentiment","bias":"RISK ON|RISK OFF|NEUTRAL","btc":"2 sentence BTC analysis with key levels","eth":"1 sentence ETH","sol":"1 sentence SOL","xau":"2 sentence gold analysis","xag":"1 sentence silver","eurusd":"2 sentence EUR/USD analysis","usdjpy":"2 sentence USD/JPY with BOJ context","usdcad":"2 sentence USD/CAD","watchToday":["item1","item2","item3","item4","item5"],"keyRisk":"single sentence on biggest risk today"}`;
     try{
@@ -484,11 +499,12 @@ Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
     const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
+    const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
     const sys=`You are CLVRQuant, elite multi-market trading AI. All data below is REAL and LIVE from exchanges — use it for analysis. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
 CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (14 pairs): ${fxSnap}${sigSnap}
+FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}
 When the user asks about a specific asset, reference its exact live price and change%. For trade setups: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REASON. Be precise with numbers from the live data above. No disclaimers.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
@@ -715,6 +731,40 @@ When the user asks about a specific asset, reference its exact live price and ch
                 <button onClick={()=>dismissAlert(a.id)} style={{background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",padding:0}}>x</button>
               </div>
             );})}
+          </div>}
+
+          {newsFeed.length>0&&<div style={{marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.blue,letterSpacing:"0.15em"}}>LIVE NEWS INTELLIGENCE</div>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{newsFeed.length} STORIES</div>
+            </div>
+            <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto"}}>
+              {["ALL","BTC","ETH","SOL","XRP","EQUITIES"].map(f=>(
+                <button key={f} data-testid={`news-filter-${f}`} onClick={()=>setNewsFilter(f)} style={{background:newsFilter===f?"rgba(59,130,246,.15)":"transparent",border:`1px solid ${newsFilter===f?C.blue:C.border}`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:7,color:newsFilter===f?C.blue:C.muted,cursor:"pointer",letterSpacing:"0.08em",flexShrink:0}}>{f}</button>
+              ))}
+            </div>
+            {(newsFilter==="ALL"?newsFeed:newsFeed.filter(n=>{if(newsFilter==="EQUITIES")return n.assets?.some(a=>["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"].includes(a));return n.assets?.includes(newsFilter);})).slice(0,8).map(n=>{
+              const sentColor=n.sentiment>0.3?C.green:n.sentiment<-0.3?C.red:C.muted2;
+              const srcColor={blue:C.blue,cyan:C.cyan,orange:C.orange,green:C.green,gold:C.gold}[n.color]||C.blue;
+              const ago=((Date.now()-n.ts)/60000);const agoStr=ago<60?`${Math.floor(ago)}m`:ago<1440?`${Math.floor(ago/60)}h`:`${Math.floor(ago/1440)}d`;
+              return(
+                <div key={n.id} data-testid={`news-${n.id}`} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:3,padding:"10px 12px",marginBottom:4,cursor:"pointer"}} onClick={()=>{if(n.url&&n.url!=="#")window.open(n.url,"_blank");}}>
+                  <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                    <div style={{flexShrink:0,width:20,height:20,borderRadius:2,background:`${srcColor}15`,border:`1px solid ${srcColor}30`,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:MONO,fontSize:7,fontWeight:900,color:srcColor}}>{n.icon}</span></div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:SANS,fontSize:11,color:C.text,lineHeight:1.4,marginBottom:4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{n.title}</div>
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                        <span style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{n.source}</span>
+                        <span style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{agoStr} ago</span>
+                        {n.sentiment!==0&&<span style={{fontFamily:MONO,fontSize:7,color:sentColor,fontWeight:600}}>{n.sentiment>0?"+":""}{(n.sentiment*100).toFixed(0)}%</span>}
+                        {n.assets?.length>0&&n.assets.slice(0,3).map(a=><span key={a} style={{fontFamily:MONO,fontSize:6,color:srcColor,background:`${srcColor}12`,border:`1px solid ${srcColor}25`,borderRadius:2,padding:"1px 5px"}}>{a}</span>)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {newsFeed.length>8&&<div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"6px 0",letterSpacing:"0.1em"}}>{newsFeed.length-8} MORE STORIES</div>}
           </div>}
 
           {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
