@@ -30,7 +30,7 @@ const hlData: Record<string, { funding: number; oi: number; perpPrice: number; v
 const priceHistory: Record<string, { price: number; ts: number }[]> = {};
 const liveSignals: any[] = [];
 let signalIdCounter = 10000;
-const MOVE_THRESHOLD = 1.5;
+const MOVE_THRESHOLD = 0.8;
 const MOVE_WINDOW = 5 * 60 * 1000;
 const SIGNAL_COOLDOWN = 10 * 60 * 1000;
 const lastSignalTime: Record<string, number> = {};
