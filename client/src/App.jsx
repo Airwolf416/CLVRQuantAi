@@ -302,7 +302,7 @@ export default function App(){
 
   const checkVolumeSpike=useCallback((sym,vol)=>{
     const hist=volRef.current[sym]||[];
-    if(hist.length>=5){const avg=hist.slice(-5).reduce((a,b)=>a+b,0)/5;if(avg>0&&vol>avg*5){addAlert({type:"volume",title:`VOLUME SPIKE: ${sym}`,body:`${sym} volume is ${(vol/avg).toFixed(1)}x the 5-period average. Historically precedes a 2-4% move.`,assets:[sym],id:`vol-${sym}-${Math.floor(Date.now()/300000)}`});}}
+    if(hist.length>=5){const avg=hist.slice(-5).reduce((a,b)=>a+b,0)/5;if(avg>0&&vol>avg*5){addAlert({type:"volume",title:`CLVRQuant · VOLUME SPIKE: ${sym}`,body:`${sym} volume is ${(vol/avg).toFixed(1)}x the 5-period average. Historically precedes a 2-4% move.`,assets:[sym],id:`vol-${sym}-${Math.floor(Date.now()/300000)}`});}}
     volRef.current[sym]=[...hist,vol].slice(-20);
   },[addAlert]);
 
@@ -310,9 +310,9 @@ export default function App(){
     const hist=fundRef.current[sym]||[];
     if(hist.length>=3){
       const p3=hist.slice(-3);
-      if(p3.every(x=>x<0)&&f>0.01)addAlert({type:"funding",title:`FUNDING FLIP BULLISH: ${sym}`,body:`${sym} funding flipped from negative to +${f.toFixed(4)}%/8h. Shorts now paying longs — squeeze setup forming.`,assets:[sym],id:`fund-bull-${sym}-${Math.floor(Date.now()/3600000)}`});
-      else if(p3.every(x=>x>0)&&f<-0.01)addAlert({type:"funding",title:`FUNDING FLIP BEARISH: ${sym}`,body:`${sym} funding turned negative (${f.toFixed(4)}%/8h). Longs now paying — overheated rally may reverse.`,assets:[sym],id:`fund-bear-${sym}-${Math.floor(Date.now()/3600000)}`});
-      else if(Math.abs(f)>0.08)addAlert({type:"funding",title:`EXTREME FUNDING: ${sym}`,body:`${sym} funding at ${pct(f,4)}/8h — extreme level. Contrarian signal: ${f>0?"long":"short"} squeeze likely incoming.`,assets:[sym],id:`fund-ext-${sym}-${Math.floor(Date.now()/3600000)}`});
+      if(p3.every(x=>x<0)&&f>0.01)addAlert({type:"funding",title:`CLVRQuant · FUNDING FLIP BULLISH: ${sym}`,body:`${sym} funding flipped from negative to +${f.toFixed(4)}%/8h. Shorts now paying longs — squeeze setup forming.`,assets:[sym],id:`fund-bull-${sym}-${Math.floor(Date.now()/3600000)}`});
+      else if(p3.every(x=>x>0)&&f<-0.01)addAlert({type:"funding",title:`CLVRQuant · FUNDING FLIP BEARISH: ${sym}`,body:`${sym} funding turned negative (${f.toFixed(4)}%/8h). Longs now paying — overheated rally may reverse.`,assets:[sym],id:`fund-bear-${sym}-${Math.floor(Date.now()/3600000)}`});
+      else if(Math.abs(f)>0.08)addAlert({type:"funding",title:`CLVRQuant · EXTREME FUNDING: ${sym}`,body:`${sym} funding at ${pct(f,4)}/8h — extreme level. Contrarian signal: ${f>0?"long":"short"} squeeze likely incoming.`,assets:[sym],id:`fund-ext-${sym}-${Math.floor(Date.now()/3600000)}`});
     }
     fundRef.current[sym]=[...hist,f].slice(-10);
   },[addAlert]);
@@ -326,7 +326,7 @@ export default function App(){
         const key=`macro-${evt.id}-${threshold}`;
         if(!macroFired.current.has(key)&&diffMin<=threshold&&diffMin>threshold-0.6){
           macroFired.current.add(key);
-          addAlert({type:"macro",title:`${evt.bank}: ${evt.name} in ${threshold}min`,body:`${evt.assets?.join(", ")} expected to move ~${evt.expectedMove}%. Forecast: ${evt.forecast}. Position now.`,assets:evt.assets,id:key});
+          addAlert({type:"macro",title:`CLVRQuant · ${evt.bank}: ${evt.name} in ${threshold}min`,body:`${evt.assets?.join(", ")} expected to move ~${evt.expectedMove}%. Forecast: ${evt.forecast}. Position now.`,assets:evt.assets,id:key});
         }
       });
     });
@@ -377,8 +377,8 @@ export default function App(){
             setSigCount(c=>c+newSigs.length);
             setFlashSigId(newSigs[0].id);
             setTimeout(()=>setFlashSigId(null),3000);
-            try{if(typeof Notification!=="undefined"&&Notification.permission==="granted"){const s=newSigs[0];new Notification(`CLVRQuant Alpha: ${s.token} ${s.dir}`,{body:s.desc});}}catch(e){}
-            addAlert({type:"price",title:`ALPHA: ${newSigs[0].token} ${newSigs[0].dir}`,body:newSigs[0].desc,assets:[newSigs[0].token],id:`sig-${newSigs[0].id}`});
+            try{if(typeof Notification!=="undefined"&&Notification.permission==="granted"){const s=newSigs[0];new Notification(`CLVRQuant · ${s.token} ${s.dir}`,{body:s.desc});}}catch(e){}
+            addAlert({type:"price",title:`CLVRQuant · ${newSigs[0].token} ${newSigs[0].dir}`,body:newSigs[0].desc,assets:[newSigs[0].token],id:`sig-${newSigs[0].id}`});
           }
           lastSigTs.current=Math.max(...data.signals.map(s=>s.ts));
         }
