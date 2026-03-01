@@ -21,7 +21,7 @@ const FINNHUB_TTL = 120000;
 let finnhubFetchLock: Promise<any> | null = null;
 let stockRefreshRunning = false;
 let hlRefreshRunning = false;
-const hlData: Record<string, { funding: number; oi: number }> = {};
+const hlData: Record<string, { funding: number; oi: number; perpPrice: number }> = {};
 
 function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -46,6 +46,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
           chg: parseFloat(t.priceChangePercent),
           funding: hlData[sym]?.funding || 0,
           oi: hlData[sym]?.oi || 0,
+          perpPrice: hlData[sym]?.perpPrice || 0,
           live: true,
         };
       }
@@ -69,6 +70,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
             chg: CRYPTO_BASE[sym] ? +((price - CRYPTO_BASE[sym]) / CRYPTO_BASE[sym] * 100).toFixed(2) : 0,
             funding: hlData[sym]?.funding || 0,
             oi: hlData[sym]?.oi || 0,
+            perpPrice: price,
             live: true,
           };
         }
@@ -83,13 +85,22 @@ async function startHyperliquidRefreshLoop() {
   hlRefreshRunning = true;
   while (true) {
     try {
-      const r = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "metaAndAssetCtxs" }),
-        signal: AbortSignal.timeout(5000),
-      });
-      const meta: any = await r.json();
+      const [r1, r2] = await Promise.all([
+        fetch("https://api.hyperliquid.xyz/info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "allMids" }),
+          signal: AbortSignal.timeout(5000),
+        }),
+        fetch("https://api.hyperliquid.xyz/info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+          signal: AbortSignal.timeout(5000),
+        }),
+      ]);
+      const mids: any = await r1.json();
+      const meta: any = await r2.json();
       const universe = meta[0].universe;
       const ctxs = meta[1];
       universe.forEach((asset: any, i: number) => {
@@ -97,13 +108,14 @@ async function startHyperliquidRefreshLoop() {
           hlData[asset.name] = {
             funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
             oi: parseFloat(ctxs[i]?.openInterest || 0) * parseFloat(ctxs[i]?.markPx || 0),
+            perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) : 0,
           };
         }
       });
     } catch (e: any) {
       console.error("Hyperliquid refresh error:", e.message);
     }
-    await delay(10000);
+    await delay(5000);
   }
 }
 
