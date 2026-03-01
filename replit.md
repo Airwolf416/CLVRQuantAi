@@ -70,7 +70,7 @@ Preferred communication style: Simple, everyday language.
 - `client/index.html` — HTML shell with SEO meta tags
 - `client/src/main.tsx` — React entry point
 - `client/src/index.css` — Tailwind directives + CSS variables (for build pipeline)
-- `server/routes.ts` — API proxy routes with caching, background refresh, macro calendar, subscribe
+- `server/routes.ts` — API proxy routes with caching, background refresh, macro calendar, subscribe, live signal detection
 - `server/index.ts` — Express server with process.exit intercept
 - `server/vite.ts` — Vite dev middleware (DO NOT EDIT)
 - `vite.config.ts` — Vite config (DO NOT EDIT)

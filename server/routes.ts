@@ -27,6 +27,86 @@ let stockRefreshRunning = false;
 let hlRefreshRunning = false;
 const hlData: Record<string, { funding: number; oi: number; perpPrice: number }> = {};
 
+const priceHistory: Record<string, { price: number; ts: number }[]> = {};
+const liveSignals: any[] = [];
+let signalIdCounter = 10000;
+const MOVE_THRESHOLD = 1.5;
+const MOVE_WINDOW = 5 * 60 * 1000;
+const SIGNAL_COOLDOWN = 10 * 60 * 1000;
+const lastSignalTime: Record<string, number> = {};
+
+function recordPrice(sym: string, price: number) {
+  if (!price || price <= 0) return;
+  const now = Date.now();
+  if (!priceHistory[sym]) priceHistory[sym] = [];
+  priceHistory[sym].push({ price, ts: now });
+  priceHistory[sym] = priceHistory[sym].filter(p => now - p.ts < 15 * 60 * 1000);
+}
+
+function detectMoves() {
+  const now = Date.now();
+  for (const sym of CRYPTO_SYMS) {
+    const hist = priceHistory[sym];
+    if (!hist || hist.length < 3) continue;
+    if (lastSignalTime[sym] && now - lastSignalTime[sym] < SIGNAL_COOLDOWN) continue;
+
+    const current = hist[hist.length - 1];
+    const windowPts = hist.filter(p => now - p.ts >= MOVE_WINDOW * 0.8 && now - p.ts <= MOVE_WINDOW * 1.2);
+    const windowStart = windowPts.length > 0 ? windowPts[0] : hist.filter(p => now - p.ts <= MOVE_WINDOW).sort((a, b) => a.ts - b.ts)[0];
+    if (!windowStart || windowStart === current) continue;
+    if (now - windowStart.ts < MOVE_WINDOW * 0.5) continue;
+
+    const pctMove = ((current.price - windowStart.price) / windowStart.price) * 100;
+    if (Math.abs(pctMove) < MOVE_THRESHOLD) continue;
+
+    const dir = pctMove > 0 ? "LONG" : "SHORT";
+    const icon = pctMove > 0 ? "+" : "-";
+    const absPct = Math.abs(pctMove).toFixed(1);
+    const elapsed = Math.round((current.ts - windowStart.ts) / 60000);
+    const hl = hlData[sym];
+    const fundingStr = hl?.funding ? ` Funding: ${hl.funding >= 0 ? "+" : ""}${(hl.funding).toFixed(4)}%/8h.` : "";
+    const oiStr = hl?.oi ? ` OI: $${(hl.oi / 1e6).toFixed(0)}M.` : "";
+
+    const desc = pctMove > 0
+      ? `${sym} pumped +${absPct}% in ${elapsed}min. Price moved from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}`
+      : `${sym} dumped ${absPct}% in ${elapsed}min. Price dropped from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}`;
+
+    const confBase = Math.min(95, 65 + Math.floor(Math.abs(pctMove) * 5));
+    const tags = [
+      { l: "LIVE DETECTED", c: "green" },
+      { l: Math.abs(pctMove) >= 3 ? "MAJOR MOVE" : "BREAKOUT", c: Math.abs(pctMove) >= 3 ? "red" : "orange" },
+    ];
+    if (hl?.funding && Math.abs(hl.funding) > 0.01) tags.push({ l: hl.funding > 0 ? "HIGH FUND" : "NEG FUND", c: hl.funding > 0 ? "orange" : "green" });
+
+    const signal = {
+      id: signalIdCounter++,
+      icon,
+      dir,
+      token: sym,
+      conf: confBase,
+      lev: Math.abs(pctMove) >= 3 ? "5x" : "3x",
+      src: "alpha-detect",
+      desc,
+      tags,
+      ts: now,
+      real: true,
+      pctMove: +pctMove.toFixed(2),
+    };
+
+    liveSignals.unshift(signal);
+    if (liveSignals.length > 50) liveSignals.length = 50;
+    lastSignalTime[sym] = now;
+    console.log(`[SIGNAL] ${sym} ${dir} ${absPct}% in ${elapsed}min — price $${fmt2(current.price, sym)}`);
+  }
+}
+
+function fmt2(p: number, sym: string): string {
+  if (p >= 1000) return p.toFixed(0);
+  if (p >= 100) return p.toFixed(1);
+  if (p >= 1) return p.toFixed(2);
+  return p.toFixed(6);
+}
+
 function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
 async function fetchBinancePrices(): Promise<Record<string, any>> {
@@ -45,6 +125,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
     if (sym) {
       const price = parseFloat(t.lastPrice);
       if (price > 0) {
+        recordPrice(sym, price);
         result[sym] = {
           price,
           chg: parseFloat(t.priceChangePercent),
@@ -69,6 +150,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
       for (const sym of missingSym) {
         if (mids[sym]) {
           const price = parseFloat(mids[sym]);
+          recordPrice(sym, price);
           result[sym] = {
             price,
             chg: CRYPTO_BASE[sym] ? +((price - CRYPTO_BASE[sym]) / CRYPTO_BASE[sym] * 100).toFixed(2) : 0,
@@ -81,6 +163,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
       }
     } catch {}
   }
+  detectMoves();
   return result;
 }
 
@@ -302,6 +385,16 @@ export async function registerRoutes(
       }
     }
     res.json(result);
+  });
+
+  app.get("/api/signals", (_req, res) => {
+    const since = parseInt(_req.query.since as string) || 0;
+    const filtered = since ? liveSignals.filter(s => s.ts > since) : liveSignals;
+    res.json({
+      signals: filtered,
+      tracking: Object.keys(priceHistory).length,
+      historyDepth: Object.values(priceHistory).reduce((sum, h) => sum + h.length, 0),
+    });
   });
 
   app.get("/api/finnhub", async (_req, res) => {
