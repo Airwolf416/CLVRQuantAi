@@ -41,8 +41,8 @@ Preferred communication style: Simple, everyday language.
 - **MACRO_EVENTS**: 16 hardcoded 2026 macro events for frontend countdown timers (FED/ECB/BOJ/BOC/BOE/NFP/CPI/PCE)
 
 #### News Intelligence
-- **newsFeed**: Array of live news items from CryptoCompare API (and CryptoPanic when available)
-- **newsFilter**: Filter for news by asset (ALL/BTC/ETH/SOL/XRP/EQUITIES)
+- **newsFeed**: Array of live news items from CryptoCompare + Twitter/X (via RapidAPI Twitter API45) + CryptoPanic (when available)
+- **newsFilter**: Filter for news by asset (ALL/SOCIAL/BTC/ETH/SOL/XRP/EQUITIES)
 - News polling: every 120s via `/api/news`
 - News data fed into AI system prompt and morning brief context
 
@@ -70,7 +70,7 @@ Preferred communication style: Simple, everyday language.
 - **API Routes**:
   - `GET /api/crypto` — Binance spot prices + Hyperliquid funding/OI/volume for 30 tokens, cached 1.5s
   - `GET /api/perps` — Hyperliquid perp prices + funding/OI/volume for 30 tokens
-  - `GET /api/news` — Live news from CryptoCompare (+ CryptoPanic if API available), cached 120s, auto-tags assets
+  - `GET /api/news` — Live news from CryptoCompare + Twitter/X influencers via RapidAPI (+ CryptoPanic if available), cached 120s, auto-tags assets
   - `GET /api/finnhub` — Cached Finnhub stock/metal/forex data from background refresh loop
   - `GET /api/signals` — Live-detected signals (>1.5% moves in 5-min window)
   - `GET /api/macro` — FairEconomy calendar, today+ events only, HIGH+MED impact
@@ -121,6 +121,8 @@ Preferred communication style: Simple, everyday language.
 ### Environment Variables
 - `FINNHUB_KEY` — Required for stock quotes
 - `ANTHROPIC_API_KEY` — Required for AI analyst + daily brief features
+- `RAPIDAPI_KEY` — Required for Twitter/X influencer feed (Twitter API45 on RapidAPI)
+- `CRYPTOPANIC_API_KEY` — Optional, CryptoPanic news (may be blocked by Cloudflare)
 - `SESSION_SECRET` — Available but not currently used
 
 ## Important Notes

@@ -739,11 +739,11 @@ When the user asks about a specific asset, reference its exact live price and ch
               <div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{newsFeed.length} STORIES</div>
             </div>
             <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto"}}>
-              {["ALL","BTC","ETH","SOL","XRP","EQUITIES"].map(f=>(
+              {["ALL","SOCIAL","BTC","ETH","SOL","XRP","EQUITIES"].map(f=>(
                 <button key={f} data-testid={`news-filter-${f}`} onClick={()=>setNewsFilter(f)} style={{background:newsFilter===f?"rgba(59,130,246,.15)":"transparent",border:`1px solid ${newsFilter===f?C.blue:C.border}`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:7,color:newsFilter===f?C.blue:C.muted,cursor:"pointer",letterSpacing:"0.08em",flexShrink:0}}>{f}</button>
               ))}
             </div>
-            {(newsFilter==="ALL"?newsFeed:newsFeed.filter(n=>{if(newsFilter==="EQUITIES")return n.assets?.some(a=>["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"].includes(a));return n.assets?.includes(newsFilter);})).slice(0,8).map(n=>{
+            {(newsFilter==="ALL"?newsFeed:newsFeed.filter(n=>{if(newsFilter==="SOCIAL")return n.categories?.includes("twitter");if(newsFilter==="EQUITIES")return n.assets?.some(a=>["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"].includes(a));return n.assets?.includes(newsFilter);})).slice(0,8).map(n=>{
               const sentColor=n.sentiment>0.3?C.green:n.sentiment<-0.3?C.red:C.muted2;
               const srcColor={blue:C.blue,cyan:C.cyan,orange:C.orange,green:C.green,gold:C.gold}[n.color]||C.blue;
               const ago=((Date.now()-n.ts)/60000);const agoStr=ago<60?`${Math.floor(ago)}m`:ago<1440?`${Math.floor(ago/60)}h`:`${Math.floor(ago/1440)}d`;
