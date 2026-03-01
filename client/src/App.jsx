@@ -187,7 +187,7 @@ export default function App(){
       setHlStatus("live");
     }catch{setHlStatus("error");}
   },[triggerFlashes]);
-  useEffect(()=>{doHL();const iv=setInterval(doHL,3000);return()=>clearInterval(iv);},[doHL]);
+  useEffect(()=>{doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL]);
 
   // ── Finnhub ──────────────────────────────────────────
   const doFH=useCallback(async()=>{
@@ -510,8 +510,8 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
             ))}
           </div>
           {priceTab==="crypto"&&<div style={panel}>
-            <div style={ph}><PTitle>Crypto · Hyperliquid</PTitle><Badge label={hlLive?"LIVE":"Connecting"} color={hlLive?"green":"orange"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>api.hyperliquid.xyz · free · no key · 3s</div>
+            <div style={ph}><PTitle>Crypto · Binance Spot</PTitle><Badge label={hlLive?"LIVE":"Connecting"} color={hlLive?"green":"orange"}/></div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>binance.com spot · last traded price · 2s</div>
             {CRYPTO_SYMS.map(sym=>{const d=cryptoPrices[sym];return(<div key={sym}><PriceRow sym={sym} d={d} extra={d?.live&&d.funding?`Fund: ${pct(d.funding,4)}/8h · OI: $${(d.oi/1e6).toFixed(0)}M`:null}/>{d?.oiHistory?.length>3&&<div style={{padding:"2px 14px 8px",display:"flex",alignItems:"center",gap:8}}><span style={{fontFamily:MONO,fontSize:7,color:C.muted,flexShrink:0}}>OI</span><Sparkline data={d.oiHistory} width={90} height={18}/><span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>${(d.oi/1e6).toFixed(0)}M</span></div>}</div>);})}
           </div>}
           {priceTab==="equity"&&<div style={panel}>
@@ -823,7 +823,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
         </>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:7,color:C.muted,marginTop:6,letterSpacing:"0.12em"}}>
-          HYPERLIQUID · FINNHUB · NOT FINANCIAL ADVICE · © 2025 CLVRQUANT · MIKE CLAVER
+          BINANCE · FINNHUB · NOT FINANCIAL ADVICE · © 2025 CLVRQUANT · MIKE CLAVER
         </div>
       </div>
 
