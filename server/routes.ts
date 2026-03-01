@@ -432,7 +432,7 @@ export async function registerRoutes(
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 500,
+          max_tokens: 1024,
           system: system || "",
           messages: [{ role: "user", content: userMessage }],
         }),
