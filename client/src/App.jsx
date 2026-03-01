@@ -22,13 +22,14 @@ const MONO  = "'IBM Plex Mono', monospace";
 const SANS  = "'Barlow', system-ui, sans-serif";
 
 const pct=(v,d=2)=>{const n=Number(v);if(isNaN(n))return"—";return(n>=0?"+":"")+n.toFixed(d)+"%";};
+const FOREX_4D=["EURUSD","GBPUSD","AUDUSD","USDCHF","USDCAD","NZDUSD","EURGBP","USDSGD"];
+const FOREX_2D=["USDJPY","EURJPY","GBPJPY","USDMXN","USDZAR","USDTRY"];
 const fmt=(p,sym)=>{
   if(!p&&p!==0)return"—";p=Number(p);if(isNaN(p)||p===0)return"—";
-  if(["EURUSD","GBPUSD","AUDUSD","USDCHF"].includes(sym))return p.toFixed(4);
-  if(sym==="USDJPY")return p.toFixed(2);
-  if(sym==="USDCAD")return p.toFixed(4);
-  if(sym==="XAG")return"$"+p.toFixed(2);
-  if(sym==="XAU")return"$"+p.toFixed(0);
+  if(FOREX_4D.includes(sym))return p.toFixed(4);
+  if(FOREX_2D.includes(sym))return p.toFixed(2);
+  if(["XAG","NATGAS","COPPER"].includes(sym))return"$"+p.toFixed(2);
+  if(["XAU","PLATINUM","WTI","BRENT"].includes(sym))return"$"+p.toFixed(sym==="XAU"?0:2);
   if(p>=1000)return"$"+p.toFixed(0);
   if(p>=100)return"$"+p.toFixed(1);
   if(p>=1)return"$"+p.toFixed(2);
@@ -38,15 +39,17 @@ const rndInt=(a,b)=>Math.floor(a+Math.random()*(b-a+1));
 const timeAgo=(ts)=>{if(!ts)return"";const s=Math.floor((Date.now()-ts)/1000);if(s<10)return"just now";if(s<60)return`${s}s ago`;const m=Math.floor(s/60);if(m<60)return`${m}m ago`;const h=Math.floor(m/60);if(h<24)return`${h}h ago`;return`${Math.floor(h/24)}d ago`;};
 
 // ─── BASE PRICES ──────────────────────────────────────────
-const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072};
-const EQUITY_BASE={TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310};
-const METALS_BASE={XAU:3285,XAG:32.8};
-const FOREX_BASE={EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654};
+const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,MATIC:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18};
+const EQUITY_BASE={TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:72,SHOP:95,CRM:290,NFLX:850,DIS:105};
+const METALS_BASE={XAU:5280,XAG:94,WTI:99,BRENT:16,NATGAS:13,COPPER:31.5,PLATINUM:2370};
+const FOREX_BASE={EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
 const CRYPTO_SYMS=Object.keys(CRYPTO_BASE);
 const EQUITY_SYMS=Object.keys(EQUITY_BASE);
 const METALS_SYMS=Object.keys(METALS_BASE);
 const FOREX_SYMS=Object.keys(FOREX_BASE);
 const ALL_SYMS=[...CRYPTO_SYMS,...EQUITY_SYMS,...METALS_SYMS,...FOREX_SYMS];
+const METAL_LABELS={XAU:"Gold",XAG:"Silver",WTI:"Oil WTI",BRENT:"Oil Brent",NATGAS:"Nat Gas",COPPER:"Copper",PLATINUM:"Platinum"};
+const FOREX_LABELS={EURUSD:"EUR/USD",GBPUSD:"GBP/USD",USDJPY:"USD/JPY",USDCHF:"USD/CHF",AUDUSD:"AUD/USD",USDCAD:"USD/CAD",NZDUSD:"NZD/USD",EURGBP:"EUR/GBP",EURJPY:"EUR/JPY",GBPJPY:"GBP/JPY",USDMXN:"USD/MXN",USDZAR:"USD/ZAR",USDTRY:"USD/TRY",USDSGD:"USD/SGD"};
 
 // ─── SIGNALS & NEWS ───────────────────────────────────────
 const SIGNALS_POOL=[
@@ -78,6 +81,11 @@ const NEWS_POOL=[
 async function fetchHyperliquid(){
   const r=await fetch("/api/crypto");
   if(!r.ok)throw new Error(`Crypto API ${r.status}`);
+  return await r.json();
+}
+async function fetchPerps(){
+  const r=await fetch("/api/perps");
+  if(!r.ok)throw new Error(`Perps API ${r.status}`);
   return await r.json();
 }
 async function fetchFinnhub(){
@@ -125,7 +133,9 @@ export default function App(){
   const [sigSubTab,setSigSubTab]=useState("all");
   const [macroFilter,setMacroFilter]=useState("ALL");
 
+  const [cryptoSubTab,setCryptoSubTab]=useState("spot");
   const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false,oiHistory:[]}])));
+  const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false}])));
   const [equityPrices,setEquityPrices]=useState(()=>Object.fromEntries(EQUITY_SYMS.map(k=>[k,{price:EQUITY_BASE[k],chg:0,live:false}])));
   const [metalPrices,setMetalPrices]=useState(()=>Object.fromEntries(METALS_SYMS.map(k=>[k,{price:METALS_BASE[k],chg:0,live:false}])));
   const [forexPrices,setForexPrices]=useState(()=>Object.fromEntries(FOREX_SYMS.map(k=>[k,{price:FOREX_BASE[k],chg:0,live:false}])));
@@ -179,7 +189,7 @@ export default function App(){
     }
   },[]);
 
-  // ── Hyperliquid ──────────────────────────────────────
+  // ── Crypto Spot (Binance) ───────────────────────────
   const doHL=useCallback(async()=>{
     try{
       const data=await fetchHyperliquid();
@@ -188,6 +198,15 @@ export default function App(){
     }catch{setHlStatus("error");}
   },[triggerFlashes]);
   useEffect(()=>{doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL]);
+
+  // ── Crypto Perps (Hyperliquid) ─────────────────────
+  const doPerps=useCallback(async()=>{
+    try{
+      const data=await fetchPerps();
+      setPerpPrices(prev=>{const next={...prev};Object.entries(data).forEach(([sym,d])=>{next[sym]={...prev[sym],...d};});return next;});
+    }catch{}
+  },[]);
+  useEffect(()=>{doPerps();const iv=setInterval(doPerps,5000);return()=>clearInterval(iv);},[doPerps]);
 
   // ── Finnhub ──────────────────────────────────────────
   const doFH=useCallback(async()=>{
@@ -363,7 +382,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
   };
   const LiveDot=({live})=><div style={{width:5,height:5,borderRadius:"50%",flexShrink:0,background:live?C.green:C.orange,boxShadow:live?`0 0 6px ${C.green}`:"none"}}/>;
 
-  const PriceRow=({sym,d,extra})=>{
+  const PriceRow=({sym,d,extra,label})=>{
     if(!d)return null;
     const flash=flashes[sym];const isUp=Number(d.chg)>=0;
     return(
@@ -373,6 +392,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
         <div>
           <div style={{display:"flex",alignItems:"center",gap:7}}>
             <span style={{fontFamily:MONO,fontWeight:600,fontSize:12,color:C.text,letterSpacing:"0.05em"}}>{sym}</span>
+            {label&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>{label}</span>}
             <button onClick={()=>toggleWatch(sym)} style={{background:"none",border:"none",cursor:"pointer",padding:0,fontSize:11,color:isWatched(sym)?C.gold:C.muted,opacity:isWatched(sym)?1:.3,transition:"all .2s"}}>✦</button>
           </div>
           {extra&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:2}}>{extra}</div>}
@@ -419,7 +439,7 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
     if(sigSubTab==="watch")return watchlist.includes(s.token);
     if(sigSubTab==="crypto")return s.src==="hyperliquid";
     if(sigSubTab==="equity")return s.src==="trade.xyz";
-    if(sigSubTab==="metals")return["XAU","XAG"].includes(s.token);
+    if(sigSubTab==="metals")return["XAU","XAG","WTI","BRENT","NATGAS","COPPER","PLATINUM"].includes(s.token);
     if(sigSubTab==="forex")return FOREX_SYMS.includes(s.token);
     return true;
   });
@@ -505,29 +525,40 @@ Give: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REAS
         {tab==="prices"&&<>
           <div style={{marginBottom:14}}><SLabel>Market Data</SLabel></div>
           <div style={{display:"flex",gap:4,marginBottom:10,overflowX:"auto"}}>
-            {[{k:"crypto",l:"Crypto"},{k:"equity",l:"Equities",col:"blue"},{k:"metals",l:"Metals"},{k:"forex",l:"Forex",col:"teal"}].map(t=>(
+            {[{k:"crypto",l:"Crypto"},{k:"equity",l:"Equities",col:"blue"},{k:"metals",l:"Commodities"},{k:"forex",l:"Forex",col:"teal"}].map(t=>(
               <SubBtn key={t.k} k={t.k} label={t.l} col={t.col||"gold"} state={priceTab} setter={setPriceTab}/>
             ))}
           </div>
           {priceTab==="crypto"&&<div style={panel}>
-            <div style={ph}><PTitle>Crypto · Binance Spot</PTitle><Badge label={hlLive?"LIVE":"Connecting"} color={hlLive?"green":"orange"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>binance.com spot · last traded price · 2s</div>
-            {CRYPTO_SYMS.map(sym=>{const d=cryptoPrices[sym];const perpStr=d?.perpPrice?`Perp: ${fmt(d.perpPrice,sym)}`:"";const extraParts=[perpStr,d?.funding?`Fund: ${pct(d.funding,4)}/8h`:"",d?.oi?`OI: $${(d.oi/1e6).toFixed(0)}M`:""].filter(Boolean).join(" · ");return(<div key={sym}><PriceRow sym={sym} d={d} extra={d?.live&&extraParts?extraParts:null}/>{d?.oiHistory?.length>3&&<div style={{padding:"2px 14px 8px",display:"flex",alignItems:"center",gap:8}}><span style={{fontFamily:MONO,fontSize:7,color:C.muted,flexShrink:0}}>OI</span><Sparkline data={d.oiHistory} width={90} height={18}/><span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>${(d.oi/1e6).toFixed(0)}M</span></div>}</div>);})}
+            <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`}}>
+              {[{k:"spot",l:"Spot · Binance"},{k:"perp",l:"Perp · Hyperliquid"}].map(t=>(
+                <button key={t.k} data-testid={`crypto-tab-${t.k}`} onClick={()=>setCryptoSubTab(t.k)} style={{flex:1,padding:"9px 0",background:cryptoSubTab===t.k?"rgba(201,168,76,.06)":"transparent",border:"none",borderBottom:cryptoSubTab===t.k?`2px solid ${C.gold}`:"2px solid transparent",cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.1em",color:cryptoSubTab===t.k?C.gold:C.muted2,transition:"all .2s"}}>{t.l}</button>
+              ))}
+            </div>
+            {cryptoSubTab==="spot"&&<>
+              <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>binance.us spot · last traded price · 2s</div>
+              {CRYPTO_SYMS.map(sym=>{const d=cryptoPrices[sym];return <PriceRow key={sym} sym={sym} d={d}/>;})}
+            </>}
+            {cryptoSubTab==="perp"&&<>
+              <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>hyperliquid.xyz · perp mid-price · 5s</div>
+              {CRYPTO_SYMS.map(sym=>{const d=perpPrices[sym];const extraParts=[d?.funding?`Fund: ${pct(d.funding,4)}/8h`:"",d?.oi?`OI: $${(d.oi/1e6).toFixed(0)}M`:""].filter(Boolean).join(" · ");return(<div key={sym}><PriceRow sym={sym} d={d} extra={d?.live&&extraParts?extraParts:null}/></div>);})}
+            </>}
           </div>}
           {priceTab==="equity"&&<div style={panel}>
             <div style={ph}><PTitle>Equities · Finnhub</PTitle><Badge label={fhLive?`${Object.values(equityPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub.io · NYSE 9:30am–4pm ET</div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub.io · NYSE/NASDAQ 9:30am–4pm ET</div>
             {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]}/>)}
           </div>}
           {priceTab==="metals"&&<div style={panel}>
-            <div style={ph}><PTitle>Precious Metals</PTitle><Badge label={fhLive?`${Object.values(metalPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            {METALS_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={metalPrices[sym]}/>)}
+            <div style={ph}><PTitle>Commodities</PTitle><Badge label={fhLive?`${Object.values(metalPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>gold-api.com · metals · energy · 2min</div>
+            {METALS_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={metalPrices[sym]} label={METAL_LABELS[sym]}/>)}
             <div style={{padding:"10px 14px",fontFamily:MONO,fontSize:9,color:C.muted2}}>Gold/Silver Ratio: <span style={{color:C.gold2,fontWeight:600}}>{metalPrices.XAU?.price&&metalPrices.XAG?.price?(metalPrices.XAU.price/metalPrices.XAG.price).toFixed(0):"—"}:1</span>{metalPrices.XAU?.price&&metalPrices.XAG?.price&&(metalPrices.XAU.price/metalPrices.XAG.price)>=90&&<span style={{color:C.green}}> · bullish for silver</span>}</div>
           </div>}
           {priceTab==="forex"&&<div style={panel}>
-            <div style={ph}><PTitle>Forex · OANDA</PTitle><Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>24/5 · closed weekends</div>
-            {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]}/>)}
+            <div style={ph}><PTitle>Forex</PTitle><Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>exchangerate-api · 24/5 · closed weekends</div>
+            {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]}/>)}
           </div>}
         </>}
 

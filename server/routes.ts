@@ -4,16 +4,20 @@ import { storage } from "./storage";
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
-const CRYPTO_SYMS = ["BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","PEPE"];
-const CRYPTO_BASE: Record<string, number> = {BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072};
-const BINANCE_MAP: Record<string, string> = {BTC:"BTCUSDT",ETH:"ETHUSDT",SOL:"SOLUSDT",WIF:"WIFUSDT",DOGE:"DOGEUSDT",AVAX:"AVAXUSDT",LINK:"LINKUSDT",ARB:"ARBUSDT",PEPE:"PEPEUSDT"};
+const CRYPTO_SYMS = ["BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","PEPE","XRP","BNB","ADA","DOT","MATIC","UNI","AAVE","NEAR","SUI","APT","OP","TIA","SEI","JUP","ONDO","RENDER","INJ","FET","TAO","PENDLE","HBAR"];
+const CRYPTO_BASE: Record<string, number> = {BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,MATIC:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18};
+const BINANCE_MAP: Record<string, string> = {BTC:"BTCUSDT",ETH:"ETHUSDT",SOL:"SOLUSDT",WIF:"WIFUSDT",DOGE:"DOGEUSDT",AVAX:"AVAXUSDT",LINK:"LINKUSDT",ARB:"ARBUSDT",PEPE:"PEPEUSDT",XRP:"XRPUSDT",BNB:"BNBUSDT",ADA:"ADAUSDT",DOT:"DOTUSDT",UNI:"UNIUSDT",AAVE:"AAVEUSDT",NEAR:"NEARUSDT",SUI:"SUIUSDT",APT:"APTUSDT",OP:"OPUSDT",TIA:"TIAUSDT",SEI:"SEIUSDT",JUP:"JUPUSDT",ONDO:"ONDOUSDT",RENDER:"RENDERUSDT",FET:"FETUSDT",HBAR:"HBARUSDT"};
 const BINANCE_SYMS = Object.values(BINANCE_MAP);
 
-const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR"];
-const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310};
+const HL_PERP_SYMS = ["BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","kPEPE","XRP","BNB","ADA","DOT","MATIC","UNI","AAVE","NEAR","SUI","APT","OP","TIA","SEI","JUP","ONDO","RENDER","INJ","FET","TAO","PENDLE","HBAR"];
+const HL_TO_APP: Record<string, string> = {kPEPE:"PEPE"};
+const APP_TO_HL: Record<string, string> = {PEPE:"kPEPE"};
 
-const METALS_BASE: Record<string, number> = {XAU:3285,XAG:32.8};
-const FOREX_BASE: Record<string, number> = {EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654};
+const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"];
+const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:72,SHOP:95,CRM:290,NFLX:850,DIS:105};
+
+const METALS_BASE: Record<string, number> = {XAU:5280,XAG:94,WTI:99,BRENT:16,NATGAS:13,COPPER:31.5,PLATINUM:2370};
+const FOREX_BASE: Record<string, number> = {EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
 
 const cache: Record<string, { data: any; ts: number }> = {};
 const FINNHUB_TTL = 120000;
@@ -104,8 +108,9 @@ async function startHyperliquidRefreshLoop() {
       const universe = meta[0].universe;
       const ctxs = meta[1];
       universe.forEach((asset: any, i: number) => {
-        if (CRYPTO_SYMS.includes(asset.name)) {
-          hlData[asset.name] = {
+        if (HL_PERP_SYMS.includes(asset.name)) {
+          const appName = HL_TO_APP[asset.name] || asset.name;
+          hlData[appName] = {
             funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
             oi: parseFloat(ctxs[i]?.openInterest || 0) * parseFloat(ctxs[i]?.markPx || 0),
             perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) : 0,
@@ -179,11 +184,32 @@ async function fetchForex(): Promise<Record<string, any>> {
       USDCHF: { to: "CHF", invert: false },
       AUDUSD: { to: "AUD", invert: true },
       USDCAD: { to: "CAD", invert: false },
+      NZDUSD: { to: "NZD", invert: true },
+      USDMXN: { to: "MXN", invert: false },
+      USDZAR: { to: "ZAR", invert: false },
+      USDTRY: { to: "TRY", invert: false },
+      USDSGD: { to: "SGD", invert: false },
+    };
+    const crossPairs: Record<string, { base: string; quote: string }> = {
+      EURGBP: { base: "EUR", quote: "GBP" },
+      EURJPY: { base: "EUR", quote: "JPY" },
+      GBPJPY: { base: "GBP", quote: "JPY" },
     };
     for (const [sym, cfg] of Object.entries(pairs)) {
       const rate = rates[cfg.to];
       if (rate) {
         const price = cfg.invert ? +(1 / rate).toFixed(4) : +rate.toFixed(4);
+        const base = FOREX_BASE[sym];
+        forex[sym] = { price, chg: base ? +((price - base) / base * 100).toFixed(2) : 0, live: true };
+      } else {
+        forex[sym] = { price: FOREX_BASE[sym], chg: 0, live: false };
+      }
+    }
+    for (const [sym, cfg] of Object.entries(crossPairs)) {
+      const baseRate = rates[cfg.base];
+      const quoteRate = rates[cfg.quote];
+      if (baseRate && quoteRate) {
+        const price = +(quoteRate / baseRate).toFixed(4);
         const base = FOREX_BASE[sym];
         forex[sym] = { price, chg: base ? +((price - base) / base * 100).toFixed(2) : 0, live: true };
       } else {
@@ -200,7 +226,8 @@ async function fetchForex(): Promise<Record<string, any>> {
 
 async function fetchMetals(): Promise<Record<string, any>> {
   const metals: Record<string, any> = {};
-  for (const sym of ["XAU", "XAG"] as const) {
+  for (const sym of ["XAU", "XAG", "XPT"] as const) {
+    const appSym = sym === "XPT" ? "PLATINUM" : sym;
     try {
       const r = await fetch(
         `https://api.gold-api.com/price/${sym}`,
@@ -209,13 +236,27 @@ async function fetchMetals(): Promise<Record<string, any>> {
       if (r.ok) {
         const d: any = await r.json();
         if (d?.price && d.price > 0) {
-          const base = METALS_BASE[sym];
-          metals[sym] = { price: d.price, chg: base ? +((d.price - base) / base * 100).toFixed(2) : 0, live: true };
+          const base = METALS_BASE[appSym];
+          metals[appSym] = { price: d.price, chg: base ? +((d.price - base) / base * 100).toFixed(2) : 0, live: true };
           continue;
         }
       }
     } catch {}
-    metals[sym] = { price: METALS_BASE[sym], chg: 0, live: false };
+    metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
+  }
+  const fhCommodities: Record<string, string> = { WTI: "CL", BRENT: "BZ", NATGAS: "NG", COPPER: "HG" };
+  for (const [appSym, fhSym] of Object.entries(fhCommodities)) {
+    try {
+      const q = await fhQuoteSafe(fhSym);
+      if (q.live && q.price > 0) {
+        metals[appSym] = { price: q.price, chg: q.chg, live: true };
+      } else {
+        metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
+      }
+    } catch {
+      metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
+    }
+    await delay(300);
   }
   return metals;
 }
@@ -243,6 +284,26 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/perps", async (_req, res) => {
+    const result: Record<string, any> = {};
+    for (const sym of CRYPTO_SYMS) {
+      const hl = hlData[sym];
+      if (hl && hl.perpPrice > 0) {
+        const base = CRYPTO_BASE[sym];
+        result[sym] = {
+          price: hl.perpPrice,
+          chg: base ? +((hl.perpPrice - base) / base * 100).toFixed(2) : 0,
+          funding: hl.funding,
+          oi: hl.oi,
+          live: true,
+        };
+      } else {
+        result[sym] = { price: CRYPTO_BASE[sym], chg: 0, funding: 0, oi: 0, live: false };
+      }
+    }
+    res.json(result);
+  });
+
   app.get("/api/finnhub", async (_req, res) => {
     const cached = cache["finnhub"];
     if (cached) {
@@ -250,7 +311,8 @@ export async function registerRoutes(
     }
     const stocks: Record<string, any> = {};
     EQUITY_SYMS.forEach(sym => { stocks[sym] = { price: EQUITY_BASE[sym], chg: 0, live: false }; });
-    const metals: Record<string, any> = { XAU: { price: METALS_BASE.XAU, chg: 0, live: false }, XAG: { price: METALS_BASE.XAG, chg: 0, live: false } };
+    const metals: Record<string, any> = {};
+    Object.keys(METALS_BASE).forEach(sym => { metals[sym] = { price: METALS_BASE[sym], chg: 0, live: false }; });
     const forex: Record<string, any> = {};
     Object.entries(FOREX_BASE).forEach(([sym, price]) => { forex[sym] = { price, chg: 0, live: false }; });
     res.json({ stocks, metals, forex });
