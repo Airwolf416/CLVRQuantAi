@@ -78,11 +78,11 @@ Preferred communication style: Simple, everyday language.
 ## External Dependencies
 
 ### APIs
-- **Binance US** — Free, no API key, crypto spot last traded prices (primary price source)
-- **Hyperliquid** — Free, no API key, funding rates + open interest (background loop every 10s); fallback prices for tokens not on Binance US
-- **Finnhub** — Free tier API key (env var FINNHUB_KEY), stock quotes only
-- **gold-api.com** — Free, no API key, XAU and XAG spot prices
-- **ExchangeRate API** — Free, no API key, forex rates
+- **Binance US** — Free, no API key, crypto spot last traded prices for 26 tokens (primary price source); MATIC/INJ/TAO/PENDLE fallback to HL
+- **Hyperliquid** — Free, no API key, perp mid-prices + funding rates + open interest for 30 tokens (background loop every 5s); also provides spot fallback for non-Binance tokens
+- **Finnhub** — Free tier API key (env var FINNHUB_KEY), 16 stock quotes + commodity futures (CL=WTI, BZ=Brent, NG=NatGas, HG=Copper)
+- **gold-api.com** — Free, no API key, XAU/XAG/XPT (Platinum) spot prices
+- **ExchangeRate API** — Free, no API key, 14 forex pairs (11 USD-based + 3 cross pairs)
 - **FairEconomy** — Free, no API key, macro economic calendar (rate-limited)
 - **Anthropic Claude** — Requires `ANTHROPIC_API_KEY` environment variable
 
