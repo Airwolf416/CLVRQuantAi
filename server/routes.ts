@@ -391,6 +391,54 @@ export async function registerRoutes(
     res.json(result);
   });
 
+  const POLY_MARKETS = [
+    { id:"fed-cut-march",   cat:"macro",   label:"Fed cuts rates in March?",          slug:"will-the-fed-cut-rates-at-the-march-2025-meeting",    assets:["BTC","ETH","XAU","EURUSD"] },
+    { id:"fed-cut-may",     cat:"macro",   label:"Fed cuts rates in May?",             slug:"will-the-fed-cut-rates-at-the-may-2025-meeting",      assets:["BTC","ETH","XAU"] },
+    { id:"fed-cut-june",    cat:"macro",   label:"Fed cuts by June 2025?",             slug:"will-the-federal-reserve-cut-rates-by-june-2025",    assets:["BTC","XAU","EURUSD"] },
+    { id:"cpi-below-3",     cat:"macro",   label:"CPI below 3% in March?",             slug:"will-us-cpi-be-below-3-percent-in-march-2025",       assets:["BTC","XAU","EURUSD"] },
+    { id:"pce-soft",        cat:"macro",   label:"PCE below 2.5% in March?",           slug:"will-us-pce-be-below-25-in-march-2025",              assets:["BTC","ETH","SOL"] },
+    { id:"recession-2025",  cat:"macro",   label:"US recession in 2025?",              slug:"us-recession-in-2025",                               assets:["XAU","BTC","USDJPY"] },
+    { id:"btc-100k",        cat:"crypto",  label:"BTC hits $100k before June?",        slug:"will-bitcoin-reach-100000-before-june-2025",         assets:["BTC"] },
+    { id:"btc-150k",        cat:"crypto",  label:"BTC hits $150k in 2025?",            slug:"will-bitcoin-reach-150000-in-2025",                  assets:["BTC"] },
+    { id:"eth-5k",          cat:"crypto",  label:"ETH hits $5k in 2025?",              slug:"will-ethereum-reach-5000-in-2025",                   assets:["ETH"] },
+    { id:"eth-3k",          cat:"crypto",  label:"ETH hits $3k before June?",          slug:"will-ethereum-reach-3000-before-june-2025",          assets:["ETH"] },
+    { id:"sol-200",         cat:"crypto",  label:"SOL hits $200 in 2025?",             slug:"will-solana-reach-200-in-2025",                      assets:["SOL"] },
+    { id:"btc-strategic",   cat:"crypto",  label:"US strategic BTC reserve?",          slug:"will-us-establish-a-strategic-bitcoin-reserve",      assets:["BTC","ETH"] },
+    { id:"trump-tariff-90", cat:"trump",   label:"Trump pauses all tariffs?",          slug:"will-trump-pause-all-tariffs-90-days",               assets:["BTC","XAU","EURUSD"] },
+    { id:"trump-crypto-eo", cat:"trump",   label:"Trump signs crypto EO in 2025?",     slug:"will-trump-sign-crypto-executive-order-2025",        assets:["BTC","ETH","SOL"] },
+    { id:"trump-china",     cat:"trump",   label:"US-China trade deal in 2025?",       slug:"us-china-trade-deal-2025",                           assets:["BTC","XAU","USDCAD"] },
+    { id:"doge-budget",     cat:"trump",   label:"DOGE cuts $1T from budget?",         slug:"will-doge-cut-1-trillion-from-federal-budget-2025",  assets:["XAU","BTC"] },
+    { id:"dollar-collapse", cat:"trump",   label:"DXY drops 10%+ in 2025?",            slug:"will-the-dollar-index-drop-10-percent-2025",         assets:["XAU","BTC","EURUSD"] },
+  ];
+
+  app.get("/api/polymarket", async (_req, res) => {
+    const cached = cache["polymarket"];
+    if (cached && Date.now() - cached.ts < 60000) {
+      return res.json(cached.data);
+    }
+    const results: Record<string, any> = {};
+    const fetches = POLY_MARKETS.map(async (m) => {
+      try {
+        const r = await fetch(
+          `https://gamma-api.polymarket.com/markets?slug=${m.slug}&limit=1`,
+          { headers: { "Accept": "application/json" }, signal: AbortSignal.timeout(5000) }
+        );
+        if (!r.ok) return;
+        const d: any = await r.json();
+        const market = Array.isArray(d) ? d[0] : d?.markets?.[0];
+        if (!market) return;
+        const prices = market.outcomePrices ? JSON.parse(market.outcomePrices) : null;
+        const yes = prices ? Math.round(parseFloat(prices[0]) * 100) : null;
+        if (yes !== null) {
+          results[m.id] = { yes, live: true, cat: m.cat, label: m.label, assets: m.assets };
+        }
+      } catch {}
+    });
+    await Promise.allSettled(fetches);
+    cache["polymarket"] = { data: results, ts: Date.now() };
+    res.json(results);
+  });
+
   app.get("/api/signals", (_req, res) => {
     const since = parseInt(_req.query.since as string) || 0;
     const filtered = since ? liveSignals.filter(s => s.ts > since) : liveSignals;
