@@ -2,7 +2,7 @@
 
 ## Overview
 
-CLVRQuant v2 is a luxury-styled mobile-first market intelligence dashboard for cryptocurrency, stocks, metals, and forex. It displays real-time data from Binance (crypto spot), Hyperliquid (crypto perps/funding/OI/volume), Finnhub (stocks), gold-api.com (metals), and exchangerate-api.com (forex), plus an AI analyst powered by Anthropic Claude. Features include a macro central bank calendar, AI-powered daily brief, email subscription, price alerts, quant signals, and v2 additions: Radar command center with live alert system, macro countdown timers, volume spike detection, funding rate flip alerts, liquidation heatmap, and push notifications.
+CLVRQuant v2 is a luxury-styled mobile-first market intelligence dashboard for cryptocurrency, stocks, metals, and forex. It displays real-time data from Binance (crypto spot), Hyperliquid (crypto perps/funding/OI/volume), Finnhub (stocks), gold-api.com (metals), and exchangerate-api.com (forex), plus an AI analyst powered by Anthropic Claude. Features include a macro central bank calendar, AI-powered daily brief, email subscription, price alerts, quant signals, and v2 additions: Radar command center with live alert system, macro countdown timers, volume spike detection, funding rate flip alerts, liquidation heatmap, push notifications, and Phantom wallet integration with Perps PnL calculator.
 
 ## User Preferences
 
@@ -14,9 +14,10 @@ Preferred communication style: Simple, everyday language.
 - **Gold accent**: #c9a84c (primary), #e8c96d (light), #f7e0a0 (highlight)
 - **Fonts**: Playfair Display (SERIF — headers/titles), IBM Plex Mono (MONO — data/labels), Barlow (SANS — body)
 - **Design language**: 2px border-radius, letterSpacing 0.15em on labels, subtle gold gradients, grid overlay background on body, serif italic for CTAs
-- **Watchlist symbol**: ✦ (not ⭐)
+- **Watchlist symbol**: ✦ (not star emoji)
 - **Panels**: Matte navy with gold-tinted header backgrounds (rgba(201,168,76,.03))
-- **Buttons**: Gold-bordered with serif italic text (e.g. "Analyze →", "Subscribe →")
+- **Buttons**: Gold-bordered with serif italic text (e.g. "Analyze", "Subscribe")
+- **Font sizing**: Bumped up for iPhone/iPad readability — badges 9px, labels 10px, body 12-13px, panel titles 15px
 
 ## System Architecture
 
@@ -24,14 +25,27 @@ Preferred communication style: Simple, everyday language.
 
 - **Single-file React app** with inline styles (CLVRQuant theme, not Tailwind for main UI)
 - **Data polling**: Crypto every 3s via `/api/crypto`, Finnhub every 15s via `/api/finnhub`, signals/news rotate via 1s tick
-- **Bottom nav**: 7 tabs — Radar, Markets, Macro, Brief, Signals, Alerts, AI
-- **Radar tab** (v2): Command center with push notification prompt, active alerts panel, next macro event countdown (Countdown component), upcoming events list, volume spike monitor (6 crypto), funding rate monitor with flip detection, liquidation heatmap (BTC/ETH/SOL/XAU)
-- **Markets tab**: Sub-tabs for Crypto, Equities, Metals, Forex
+- **Bottom nav**: 8 tabs — Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI
+- **Max width**: 780px (optimized for iPad as well as iPhone)
+- **Radar tab** (v2): Command center with push notification prompt, active alerts panel, live news intelligence, next macro event countdown (Countdown component), upcoming events list, volume spike monitor (6 crypto), funding rate monitor with flip detection, liquidation heatmap (BTC/ETH/SOL/XAU)
+- **Markets tab**: Sub-tabs for Crypto (spot/perp), Equities, Metals, Forex
 - **Macro tab**: Central bank calendar (FED/ECB/BOJ/BOC/BOE/RBA) + US data events (CPI/NFP/PCE); bank filter; iCal download; Ask AI button
 - **Brief tab**: AI-generated morning market commentary with CLVRQuant-branded header, price snapshot, per-asset analysis (serif italic), watch items, key risk, Mike Claver attribution; email subscription form
-- **Signals tab**: With watchlist filter (✦ Watch), crypto/equity/metals/forex sub-filters
-- **Alerts tab**: Custom alerts on price/funding with browser notifications (guarded with `typeof Notification`)
+- **Signals tab**: With watchlist filter, crypto/equity/metals/forex sub-filters
+- **Alerts tab**: Custom alerts on price/funding with browser notifications
+- **Wallet tab**: Phantom wallet integration (connect/disconnect, SOL balance, SPL tokens, send SOL, sign messages, tx history, perps PnL calculator)
 - **AI tab**: Claude-powered analysis with live market context, gold-bordered buttons
+
+### Phantom Wallet (client/src/PhantomWallet.jsx)
+
+- **usePhantom hook**: Connects to Phantom browser extension, fetches SOL balance + SPL tokens via Solana RPC
+- **Known mints**: USDC, USDT, wSOL, ETH, mSOL, BONK, JUP mapped to symbols
+- **Sub-tabs**: Overview, Tokens, Send, Sign, History, PnL Calc
+- **sendSOL**: Uses @solana/web3.js (installed) for live SOL transfers via Phantom
+- **signMessage**: Wallet authentication via Phantom signMessage
+- **PerpsPnlCalculator**: Standalone perps PnL calculator with long/short direction, entry/exit price, size, leverage, maker/taker fees; calculates gross/net PnL, ROE, fees, margin, liquidation price, breakeven
+- **Styling**: Matches CLVRQuant navy/gold theme (not the purple/violet default)
+- **Available when disconnected**: PnL calculator shown even without wallet connection
 
 #### v2 Components
 - **sendPush**: Push notification helper (Notification API)
@@ -58,7 +72,7 @@ Preferred communication style: Simple, everyday language.
 - **checkMacroCountdowns**: Fires alerts at 60/30/10/2 minute thresholds before macro events
 
 #### Existing Features
-- **Watchlist**: ✦ symbol toggle; persisted in state
+- **Watchlist**: toggle; persisted in state
 - **OI sparklines**: SVG sparkline charts for crypto open interest history
 - **Share signal**: Copy signal to clipboard with textarea fallback for non-HTTPS
 - **Toast**: Gold background, useRef pattern to stabilize callback, 2500ms auto-dismiss
@@ -74,10 +88,11 @@ Preferred communication style: Simple, everyday language.
   - `GET /api/finnhub` — Cached Finnhub stock/metal/forex data from background refresh loop
   - `GET /api/signals` — Live-detected signals (>1.5% moves in 5-min window)
   - `GET /api/macro` — FairEconomy calendar, today+ events only, HIGH+MED impact
+  - `GET /api/polymarket` — Polymarket gamma API proxy, cached 60s, 17 market slugs
   - `POST /api/ai/analyze` — Anthropic Claude API proxy (max_tokens=1024)
   - `POST /api/subscribe` — Email subscription (in-memory)
 - **Hyperliquid background loop**: Every 5s, fetches allMids + metaAndAssetCtxs; stores funding, OI, perpPrice, volume (dayNtlVlm)
-- **Finnhub background loop**: 16 stocks × 1.5s delay (60 req/min free tier), refreshes every 120s
+- **Finnhub background loop**: 16 stocks x 1.5s delay (60 req/min free tier), refreshes every 120s
 - **Forex**: Free exchangerate-api.com (no key)
 - **Metals**: gold-api.com free API — XAU/XAG/XPT
 - **Macro**: FairEconomy calendar with content-type check; empty results not cached full 10 min
@@ -97,10 +112,11 @@ Preferred communication style: Simple, everyday language.
 ### Key Files
 
 - `client/src/App.jsx` — Main React dashboard (CLVRQuant v2 with all features)
+- `client/src/PhantomWallet.jsx` — Phantom wallet hook, PnL calculator, wallet panel component
 - `client/index.html` — HTML shell with SEO meta tags
 - `client/src/main.tsx` — React entry point
 - `client/src/index.css` — Tailwind directives + CSS variables (for build pipeline)
-- `server/routes.ts` — API proxy routes with caching, background refresh, macro calendar, subscribe, live signal detection, volume tracking
+- `server/routes.ts` — API proxy routes with caching, background refresh, macro calendar, subscribe, live signal detection, volume tracking, Polymarket proxy
 - `server/index.ts` — Express server with process.exit intercept
 - `server/vite.ts` — Vite dev middleware (DO NOT EDIT)
 - `vite.config.ts` — Vite config (DO NOT EDIT)
@@ -116,7 +132,12 @@ Preferred communication style: Simple, everyday language.
 - **gold-api.com** — Free, no API key, XAU/XAG/XPT spot prices
 - **ExchangeRate API** — Free, no API key, 14 forex pairs
 - **FairEconomy** — Free, no API key, macro economic calendar
+- **Polymarket** — Free gamma-api.polymarket.com, prediction market odds
+- **Solana RPC** — Free mainnet RPC (api.mainnet-beta.solana.com) for wallet balance/tokens
 - **Anthropic Claude** — Requires `ANTHROPIC_API_KEY` environment variable
+
+### NPM Packages
+- **@solana/web3.js** — Solana SDK for wallet send transactions
 
 ### Environment Variables
 - `FINNHUB_KEY` — Required for stock quotes
@@ -141,3 +162,4 @@ Preferred communication style: Simple, everyday language.
 - Signal detection: real only (no simulated), seenSigIds ref for dedup
 - AI system prompt includes ALL 30 crypto/16 stocks/7 commodities/14 forex with live prices
 - Morning brief JSON extracted via regex `{[\s\S]*}` to handle markdown-wrapped responses
+- No fake/mock data anywhere — all live API data only
