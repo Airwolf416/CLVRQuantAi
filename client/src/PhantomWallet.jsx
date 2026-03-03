@@ -32,10 +32,13 @@ export function usePhantom() {
   const [error, setError] = useState(null);
   const [txHistory, setTxHistory] = useState([]);
 
-  const getProvider = () =>
-    typeof window !== "undefined" && window.solana?.isPhantom
-      ? window.solana
-      : null;
+  const getProvider = () => {
+    if (typeof window === "undefined") return null;
+    const phantom = window.phantom?.solana;
+    if (phantom?.isPhantom) return phantom;
+    if (window.solana?.isPhantom) return window.solana;
+    return null;
+  };
 
   const fetchBalance = useCallback(async (pk) => {
     try {
@@ -122,9 +125,18 @@ export function usePhantom() {
     }
   }, [pubkey, status]);
 
+  const isInIframe = () => { try { return window.self !== window.top; } catch { return true; } };
+
   const connect = async () => {
     const provider = getProvider();
-    if (!provider) { setError("Phantom not installed"); return; }
+    if (!provider) {
+      if (isInIframe()) {
+        setError("iframe_blocked");
+      } else {
+        setError("Phantom not installed");
+      }
+      return;
+    }
     setStatus("connecting"); setError(null);
     try {
       const resp = await provider.connect();
@@ -336,9 +348,11 @@ export default function PhantomWalletPanel() {
       )}
 
       {error && (
-        <div style={{background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.25)`,borderRadius:2,padding:"11px 14px",marginBottom:12,fontSize:12,color:C.red,fontFamily:SANS}}>
-          {error === "Phantom not installed"
-            ? <span>Phantom not detected. <a href="https://phantom.app" target="_blank" rel="noreferrer" style={{color:C.purple,textDecoration:"underline"}}>Install Phantom</a></span>
+        <div style={{background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.25)`,borderRadius:2,padding:"11px 14px",marginBottom:12,fontSize:12,color:C.red,fontFamily:SANS,lineHeight:1.8}}>
+          {error === "iframe_blocked"
+            ? <span>Phantom cannot connect inside an embedded preview. <a href={window.location.href} target="_blank" rel="noreferrer" style={{color:C.gold2,textDecoration:"underline",fontWeight:600}}>Open in a new tab</a> to connect your wallet.</span>
+            : error === "Phantom not installed"
+            ? <span>Phantom not detected. <a href="https://phantom.app" target="_blank" rel="noreferrer" style={{color:C.purple,textDecoration:"underline"}}>Install Phantom</a> and refresh this page.</span>
             : error}
         </div>
       )}
@@ -351,9 +365,18 @@ export default function PhantomWalletPanel() {
             Link your Solana wallet for live portfolio tracking, trade signing, and AI-powered analysis.
           </div>
           <button data-testid="btn-connect-phantom" onClick={connect} disabled={status === "connecting"}
-            style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.35)`,color:C.gold2,borderRadius:2,padding:"13px 32px",cursor:status==="connecting"?"wait":"pointer",fontFamily:SERIF,fontWeight:700,fontStyle:"italic",fontSize:16,marginBottom:24}}>
+            style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.35)`,color:C.gold2,borderRadius:2,padding:"13px 32px",cursor:status==="connecting"?"wait":"pointer",fontFamily:SERIF,fontWeight:700,fontStyle:"italic",fontSize:16,marginBottom:12}}>
             {status === "connecting" ? "Connecting..." : "Connect Phantom"}
           </button>
+          {(typeof window !== "undefined" && (() => { try { return window.self !== window.top; } catch { return true; } })()) && (
+            <div style={{marginBottom:24}}>
+              <div style={{fontSize:11,color:C.muted,fontFamily:SANS,marginBottom:8}}>Wallet extensions require a full browser tab.</div>
+              <a href={typeof window !== "undefined" ? window.location.href : "#"} target="_blank" rel="noreferrer" data-testid="link-open-new-tab"
+                style={{display:"inline-block",padding:"8px 20px",border:`1px solid ${C.border}`,borderRadius:2,color:C.gold2,fontFamily:MONO,fontSize:11,letterSpacing:"0.08em",textDecoration:"none"}}>
+                OPEN IN NEW TAB
+              </a>
+            </div>
+          )}
           <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:32}}>
             {["Portfolio Tracking","SOL & SPL Tokens","Sign Transactions","AI Trade Context","Perps PnL"].map(f => (
               <div key={f} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 12px",fontSize:11,color:C.gold,fontFamily:MONO,letterSpacing:"0.06em"}}>{f}</div>
