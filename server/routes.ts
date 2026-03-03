@@ -439,6 +439,23 @@ export async function registerRoutes(
     res.json(results);
   });
 
+  app.post("/api/solana-rpc", async (req, res) => {
+    try {
+      const { method, params } = req.body;
+      const allowed = ["getBalance", "getTokenAccountsByOwner", "getSignaturesForAddress", "getLatestBlockhash"];
+      if (!allowed.includes(method)) return res.status(400).json({ error: "Method not allowed" });
+      const rpcRes = await fetch("https://api.mainnet-beta.solana.com", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      const data = await rpcRes.json();
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/signals", (_req, res) => {
     const since = parseInt(_req.query.since as string) || 0;
     const filtered = since ? liveSignals.filter(s => s.ts > since) : liveSignals;
