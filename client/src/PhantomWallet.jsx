@@ -8,9 +8,39 @@ const KNOWN_MINTS = {
   "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "mSOL",
   "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
   "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
+  "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": "RAY",
+  "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr": "POPCAT",
+  "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": "PYTH",
+  "DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7": "DRIFT",
+  "85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ": "W",
+  "hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux": "HNT",
+  "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof": "RNDR",
+  "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+  "CKaKtYvz6dKPyMvYq9Rh3UBrnNqYZAyd7iF4hJtjUvks": "GALA",
+  "FLAMEhfiTkCnGBKq8wtSUFcRSfMsPbHmAS7sGQTGcBfB": "FLAME",
 };
 
 const SOL_RPC = "https://api.mainnet-beta.solana.com";
+const SOL_PROXY = "/api/solana-rpc";
+
+async function solRpc(method, params) {
+  try {
+    const res = await fetch(SOL_PROXY, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method, params }),
+    });
+    return await res.json();
+  } catch {
+    const res = await fetch(SOL_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+    return await res.json();
+  }
+}
+
 
 const C = {
   bg:"#050709", panel:"#0c1220", border:"#141e35", border2:"#1c2b4a",
@@ -42,17 +72,12 @@ export function usePhantom() {
 
   const fetchBalance = useCallback(async (pk) => {
     try {
-      const res = await fetch(SOL_RPC, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "getBalance",
-          params: [pk],
-        }),
-      });
-      const { result } = await res.json();
-      setBalance((result.value / 1e9).toFixed(4));
+      const data = await solRpc("getBalance", [pk]);
+      if (data?.result?.value !== undefined) {
+        setBalance((data.result.value / 1e9).toFixed(4));
+      } else {
+        setBalance("--");
+      }
     } catch {
       setBalance("--");
     }
@@ -60,21 +85,12 @@ export function usePhantom() {
 
   const fetchTokens = useCallback(async (pk) => {
     try {
-      const res = await fetch(SOL_RPC, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "getTokenAccountsByOwner",
-          params: [
-            pk,
-            { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-            { encoding: "jsonParsed" },
-          ],
-        }),
-      });
-      const { result } = await res.json();
-      const parsed = (result?.value || [])
+      const data = await solRpc("getTokenAccountsByOwner", [
+        pk,
+        { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { encoding: "jsonParsed" },
+      ]);
+      const parsed = (data?.result?.value || [])
         .map((a) => {
           const info = a.account.data.parsed.info;
           return {
@@ -97,25 +113,34 @@ export function usePhantom() {
     setStatus("disconnected");
   }, []);
 
+  const [providerReady, setProviderReady] = useState(false);
+
   useEffect(() => {
-    const provider = getProvider();
-    if (!provider) return;
-    provider.on("connect", (pk) => {
-      setPubkey(pk.toString());
-      setStatus("connected");
-    });
-    provider.on("disconnect", () => {
-      setPubkey(null); setBalance(null); setTokens([]);
-      setStatus("disconnected");
-    });
-    provider.on("accountChanged", (pk) => {
-      if (pk) { setPubkey(pk.toString()); fetchBalance(pk.toString()); }
-      else disconnect();
-    });
-    if (provider.isConnected && provider.publicKey) {
-      setPubkey(provider.publicKey.toString());
-      setStatus("connected");
-    }
+    const setup = (provider) => {
+      if (!provider) return;
+      setProviderReady(true);
+      provider.on("connect", (pk) => {
+        setPubkey(pk.toString());
+        setStatus("connected");
+      });
+      provider.on("disconnect", () => {
+        setPubkey(null); setBalance(null); setTokens([]);
+        setStatus("disconnected");
+      });
+      provider.on("accountChanged", (pk) => {
+        if (pk) { setPubkey(pk.toString()); fetchBalance(pk.toString()); }
+        else disconnect();
+      });
+      if (provider.isConnected && provider.publicKey) {
+        setPubkey(provider.publicKey.toString());
+        setStatus("connected");
+      }
+    };
+    const p = getProvider();
+    if (p) { setup(p); return; }
+    const t1 = setTimeout(() => { const p2 = getProvider(); if (p2) setup(p2); }, 500);
+    const t2 = setTimeout(() => { const p3 = getProvider(); if (p3) setup(p3); }, 1500);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   useEffect(() => {
@@ -128,7 +153,11 @@ export function usePhantom() {
   const isInIframe = () => { try { return window.self !== window.top; } catch { return true; } };
 
   const connect = async () => {
-    const provider = getProvider();
+    let provider = getProvider();
+    if (!provider) {
+      await new Promise(r => setTimeout(r, 300));
+      provider = getProvider();
+    }
     if (!provider) {
       if (isInIframe()) {
         setError("iframe_blocked");
@@ -137,6 +166,7 @@ export function usePhantom() {
       }
       return;
     }
+    setProviderReady(true);
     setStatus("connecting"); setError(null);
     try {
       const resp = await provider.connect();
@@ -159,8 +189,7 @@ export function usePhantom() {
   const sendSOL = async (to, solAmount) => {
     const provider = getProvider();
     if (!provider || !pubkey) throw new Error("Wallet not connected");
-    const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
-    const connection = new Connection(SOL_RPC);
+    const { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
     const tx = new Transaction().add(
       SystemProgram.transfer({
         fromPubkey: new PublicKey(pubkey),
@@ -169,9 +198,11 @@ export function usePhantom() {
       })
     );
     tx.feePayer = new PublicKey(pubkey);
-    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    const bhData = await solRpc("getLatestBlockhash", []);
+    tx.recentBlockhash = bhData.result.value.blockhash;
     const { signature } = await provider.signAndSendTransaction(tx);
     setTxHistory(h => [{ sig: signature, type: "SOL Transfer", ts: Date.now() }, ...h.slice(0, 9)]);
+    fetchBalance(pubkey);
     return signature;
   };
 
@@ -352,7 +383,7 @@ export default function PhantomWalletPanel() {
           {error === "iframe_blocked"
             ? <span>Phantom cannot connect inside an embedded preview. <a href={window.location.href} target="_blank" rel="noreferrer" style={{color:C.gold2,textDecoration:"underline",fontWeight:600}}>Open in a new tab</a> to connect your wallet.</span>
             : error === "Phantom not installed"
-            ? <span>Phantom not detected. <a href="https://phantom.app" target="_blank" rel="noreferrer" style={{color:C.purple,textDecoration:"underline"}}>Install Phantom</a> and refresh this page.</span>
+            ? <span>Phantom not detected. If Phantom is installed, try refreshing the page. Otherwise <a href="https://phantom.app" target="_blank" rel="noreferrer" style={{color:C.purple,textDecoration:"underline"}}>install Phantom</a>. Make sure Phantom is enabled for this site in your browser extensions.</span>
             : error}
         </div>
       )}
