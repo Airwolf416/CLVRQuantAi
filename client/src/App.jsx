@@ -880,14 +880,13 @@ Also provide an overall market regime assessment and your best risk-adjusted set
               {(()=>{
                 const monthlyPrice=stripePrices.find(p=>p.interval==="month");
                 const yearlyPrice=stripePrices.find(p=>p.interval==="year");
-                const monthlyId=monthlyPrice?.price_id||"price_1T7fIwDrlfg4CQPCtCTMcDXx";
-                const yearlyId=yearlyPrice?.price_id||"price_1T7fIwDrlfg4CQPCvyMVwhmM";
+                const pricesReady=monthlyPrice&&yearlyPrice;
                 return<>
-                  <button data-testid="btn-checkout-monthly" onClick={()=>handleCheckout(monthlyId)} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer"}}>
+                  <button data-testid="btn-checkout-monthly" onClick={()=>pricesReady?handleCheckout(monthlyPrice.price_id):setToast("Prices loading, try again in a moment")} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer"}}>
                     <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.gold2}}>$29</div>
                     <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER MONTH</div>
                   </button>
-                  <button data-testid="btn-checkout-yearly" onClick={()=>handleCheckout(yearlyId)} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
+                  <button data-testid="btn-checkout-yearly" onClick={()=>pricesReady?handleCheckout(yearlyPrice.price_id):setToast("Prices loading, try again in a moment")} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
                     <div style={{position:"absolute",top:-8,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:700}}>SAVE 43%</div>
                     <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.green}}>$199</div>
                     <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER YEAR</div>

@@ -908,7 +908,25 @@ export async function registerRoutes(
         WHERE p.active = true AND pr.active = true
         ORDER BY pr.unit_amount ASC
       `);
-      res.json(result.rows);
+      if (result.rows.length > 0) {
+        return res.json(result.rows);
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const products = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
+      if (products.data.length === 0) return res.json([]);
+      const prices = await stripe.prices.list({ product: products.data[0].id, active: true });
+      const rows = prices.data.map(p => ({
+        id: products.data[0].id,
+        name: products.data[0].name,
+        description: products.data[0].description,
+        metadata: products.data[0].metadata,
+        price_id: p.id,
+        unit_amount: p.unit_amount,
+        currency: p.currency,
+        interval: p.recurring?.interval,
+      })).sort((a: any, b: any) => (a.unit_amount || 0) - (b.unit_amount || 0));
+      res.json(rows);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
