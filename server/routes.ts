@@ -928,6 +928,7 @@ export async function registerRoutes(
         line_items: [{ price: priceId, quantity: 1 }],
         success_url: `${baseUrl}?session_id={CHECKOUT_SESSION_ID}&status=success`,
         cancel_url: `${baseUrl}?status=cancel`,
+        payment_method_types: ['card'],
       };
 
       if (email) {
@@ -937,6 +938,7 @@ export async function registerRoutes(
       const session = await stripe.checkout.sessions.create(sessionParams);
       res.json({ url: session.url, sessionId: session.id });
     } catch (e: any) {
+      console.error('[stripe] Checkout error:', e.message, e.type, e.code);
       res.status(500).json({ error: e.message });
     }
   });
