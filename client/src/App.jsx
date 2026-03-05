@@ -1399,7 +1399,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         {tab==="ai"&&<>
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
           <ProGate feature="ai-analyst">
-          <div style={panel}>
+          <div style={{...panel,overflow:"visible"}}>
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="Claude · Live" color="gold"/></div>
             <div style={{padding:16}}>
               <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
@@ -1418,7 +1418,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
               <button data-testid="button-trade-ideas" onClick={runTradeIdeas} disabled={aiLoading} style={{width:"100%",height:48,marginTop:8,background:aiLoading?"rgba(0,199,135,.03)":"rgba(0,199,135,.08)",color:aiLoading?C.muted:C.green,border:`1px solid ${aiLoading?"rgba(0,199,135,.12)":"rgba(0,199,135,.3)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer",letterSpacing:"0.02em"}}>
                 {aiLoading?"QuantBrain Analyzing...":"Get Today's Trade Ideas + Analysis ✦"}
               </button>
-              {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",maxHeight:600,overflowY:"auto"}}>{aiOutput}</div>}
+              {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>}
             </div>
           </div>
           </ProGate>
