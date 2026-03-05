@@ -1,6 +1,8 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { pool } from "./db";
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
@@ -860,6 +862,163 @@ export async function registerRoutes(
       subscribers.push({ email, name: name || "Trader", timestamp: new Date().toISOString() });
     }
     res.json({ ok: true, count: subscribers.length });
+  });
+
+  app.get("/api/stripe/config", async (_req, res) => {
+    try {
+      const publishableKey = await getStripePublishableKey();
+      res.json({ publishableKey });
+    } catch (e: any) {
+      res.status(500).json({ error: "Stripe not configured" });
+    }
+  });
+
+  app.get("/api/stripe/products", async (_req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT p.id, p.name, p.description, p.metadata,
+               pr.id as price_id, pr.unit_amount, pr.currency,
+               pr.recurring_interval as interval
+        FROM stripe.products p
+        JOIN stripe.prices pr ON pr.product = p.id
+        WHERE p.active = true AND pr.active = true
+        ORDER BY pr.unit_amount ASC
+      `);
+      res.json(result.rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/stripe/checkout", async (req, res) => {
+    const { priceId, email } = req.body;
+    if (!priceId) return res.status(400).json({ error: "priceId required" });
+
+    try {
+      const stripe = await getUncachableStripeClient();
+      const domains = process.env.REPLIT_DOMAINS?.split(',') || [];
+      const baseUrl = domains.length > 0 ? `https://${domains[0]}` : 'http://localhost:5000';
+
+      const sessionParams: any = {
+        mode: 'subscription',
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${baseUrl}?session_id={CHECKOUT_SESSION_ID}&status=success`,
+        cancel_url: `${baseUrl}?status=cancel`,
+      };
+
+      if (email) {
+        sessionParams.customer_email = email;
+      }
+
+      const session = await stripe.checkout.sessions.create(sessionParams);
+      res.json({ url: session.url, sessionId: session.id });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/stripe/subscription", async (req, res) => {
+    const sessionId = req.query.session_id as string;
+    if (!sessionId) return res.json({ tier: "free" });
+
+    try {
+      const stripe = await getUncachableStripeClient();
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.payment_status === 'paid' && session.subscription) {
+        const sub = await stripe.subscriptions.retrieve(session.subscription as string);
+        return res.json({
+          tier: "pro",
+          status: sub.status,
+          currentPeriodEnd: sub.current_period_end,
+          cancelAtPeriodEnd: sub.cancel_at_period_end,
+        });
+      }
+      res.json({ tier: "free" });
+    } catch (e: any) {
+      res.json({ tier: "free" });
+    }
+  });
+
+  app.post("/api/stripe/portal", async (req, res) => {
+    const { customerId } = req.body;
+    if (!customerId) return res.status(400).json({ error: "customerId required" });
+
+    try {
+      const stripe = await getUncachableStripeClient();
+      const domains = process.env.REPLIT_DOMAINS?.split(',') || [];
+      const baseUrl = domains.length > 0 ? `https://${domains[0]}` : 'http://localhost:5000';
+
+      const portal = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url: baseUrl,
+      });
+      res.json({ url: portal.url });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  const OWNER_CODE = process.env.OWNER_CODE || "CLVR-OWNER-2026";
+
+  app.post("/api/verify-code", async (req, res) => {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: "Code required" });
+
+    if (code === OWNER_CODE) {
+      return res.json({ valid: true, tier: "pro", type: "owner", label: "Owner Access" });
+    }
+
+    try {
+      const ac = await storage.getAccessCode(code);
+      if (ac && ac.active) {
+        return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label });
+      }
+      res.json({ valid: false });
+    } catch {
+      res.json({ valid: false });
+    }
+  });
+
+  app.post("/api/access-codes", async (req, res) => {
+    const { ownerCode, code, label, type } = req.body;
+    if (ownerCode !== OWNER_CODE) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+    if (!code || !label) {
+      return res.status(400).json({ error: "code and label required" });
+    }
+    try {
+      const ac = await storage.createAccessCode({ code, label, type: type || "vip" });
+      res.json(ac);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/access-codes/revoke", async (req, res) => {
+    const { ownerCode, code } = req.body;
+    if (ownerCode !== OWNER_CODE) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+    try {
+      await storage.revokeAccessCode(code);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/access-codes", async (req, res) => {
+    const ownerCode = req.query.ownerCode as string;
+    if (ownerCode !== OWNER_CODE) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+    try {
+      const codes = await storage.listAccessCodes();
+      res.json(codes);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   return httpServer;
