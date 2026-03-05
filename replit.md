@@ -25,7 +25,7 @@ Preferred communication style: Simple, everyday language.
 
 - **Single-file React app** with inline styles (CLVRQuant theme, not Tailwind for main UI)
 - **Data polling**: Crypto every 3s via `/api/crypto`, Finnhub every 15s via `/api/finnhub`, signals/news rotate via 1s tick
-- **Bottom nav**: 8 tabs — Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI
+- **Bottom nav**: 10 tabs — Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, Brain, AI, Guide
 - **Max width**: 780px (optimized for iPad as well as iPhone)
 - **Radar tab** (v2): Command center with push notification prompt, active alerts panel, live news intelligence, next macro event countdown (Countdown component), upcoming events list, volume spike monitor (6 crypto), funding rate monitor with flip detection, liquidation heatmap (BTC/ETH/SOL/XAU)
 - **Markets tab**: Sub-tabs for Crypto (spot/perp), Equities, Metals, Forex
@@ -34,7 +34,9 @@ Preferred communication style: Simple, everyday language.
 - **Signals tab**: With watchlist filter, crypto/equity/metals/forex sub-filters
 - **Alerts tab**: Custom alerts on price/funding with browser notifications
 - **Wallet tab**: Phantom wallet integration (connect/disconnect, SOL balance, SPL tokens, send SOL, sign messages, tx history, perps PnL calculator)
+- **Brain tab**: QuantBrain AI — 8-factor confluence scoring, Kelly Criterion sizing, regime detection, trade setup builder, AI Analyst with structured trade ideas
 - **AI tab**: Claude-powered analysis with live market context, gold-bordered buttons
+- **Guide tab**: Comprehensive features guide explaining all 11 platform capabilities with data source listing
 
 ### Phantom Wallet (client/src/PhantomWallet.jsx)
 
@@ -113,6 +115,8 @@ Preferred communication style: Simple, everyday language.
 
 - `client/src/App.jsx` — Main React dashboard (CLVRQuant v2 with all features)
 - `client/src/PhantomWallet.jsx` — Phantom wallet hook, PnL calculator, wallet panel component
+- `client/src/QuantBrain.jsx` — Confluence scoring engine, Kelly Criterion, trade setup, regime detection, AI analyst
+- `client/src/FeaturesGuide.jsx` — Comprehensive platform features guide
 - `client/index.html` — HTML shell with SEO meta tags
 - `client/src/main.tsx` — React entry point
 - `client/src/index.css` — Tailwind directives + CSS variables (for build pipeline)

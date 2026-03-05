@@ -1,0 +1,582 @@
+import { useState, useEffect } from “react”;
+
+// ─── Confluence Scoring Engine ─────────────────────────────────────────────
+function calcConfluence(signals) {
+let score = 0;
+const breakdown = [];
+
+// Funding rate
+if (signals.fundingRate > 0.01) { score -= 1; breakdown.push({ label: “Funding Rate”, note: “Positive → longs overcrowded”, val: -1 }); }
+else if (signals.fundingRate < -0.01) { score += 1; breakdown.push({ label: “Funding Rate”, note: “Negative → shorts overcrowded”, val: +1 }); }
+else breakdown.push({ label: “Funding Rate”, note: “Neutral”, val: 0 });
+
+// Volume spike
+if (signals.volumeSpike >= 2) { score += 1; breakdown.push({ label: “Volume Spike”, note: `${signals.volumeSpike.toFixed(1)}x avg → momentum`, val: +1 }); }
+else breakdown.push({ label: “Volume”, note: “No significant spike”, val: 0 });
+
+// Open interest
+if (signals.oiTrend === “rising”) { score += 1; breakdown.push({ label: “Open Interest”, note: “Rising OI → new money entering”, val: +1 }); }
+else if (signals.oiTrend === “falling”) { score -= 1; breakdown.push({ label: “Open Interest”, note: “Falling OI → positions closing”, val: -1 }); }
+else breakdown.push({ label: “Open Interest”, note: “Flat”, val: 0 });
+
+// Polymarket BTC
+if (signals.polyBTC100k > 60) { score += 1; breakdown.push({ label: “Polymarket BTC $100k”, note: `${signals.polyBTC100k}% YES → bullish consensus`, val: +1 }); }
+else if (signals.polyBTC100k < 25) { score -= 1; breakdown.push({ label: “Polymarket BTC $100k”, note: `${signals.polyBTC100k}% YES → bearish consensus`, val: -1 }); }
+else breakdown.push({ label: “Polymarket BTC $100k”, note: `${signals.polyBTC100k}% YES → neutral`, val: 0 });
+
+// Fed cut odds (macro tailwind)
+if (signals.polyFedCut > 60) { score += 1; breakdown.push({ label: “Polymarket Fed Cut”, note: `${signals.polyFedCut}% YES → macro tailwind`, val: +1 }); }
+else if (signals.polyFedCut < 20) { score -= 1; breakdown.push({ label: “Polymarket Fed Cut”, note: `${signals.polyFedCut}% YES → macro headwind`, val: -1 }); }
+else breakdown.push({ label: “Polymarket Fed Cut”, note: `${signals.polyFedCut}% YES → neutral`, val: 0 });
+
+// Social sentiment
+if (signals.socialSentiment === “bullish”) { score += 1; breakdown.push({ label: “Social Sentiment”, note: “Bullish dominant”, val: +1 }); }
+else if (signals.socialSentiment === “bearish”) { score -= 1; breakdown.push({ label: “Social Sentiment”, note: “Bearish dominant”, val: -1 }); }
+else breakdown.push({ label: “Social Sentiment”, note: “Mixed/neutral”, val: 0 });
+
+// Liquidation heatmap
+if (signals.liqAbove > signals.liqBelow * 1.5) { score -= 1; breakdown.push({ label: “Liq Heatmap”, note: “Heavy liq cluster above → resistance”, val: -1 }); }
+else if (signals.liqBelow > signals.liqAbove * 1.5) { score += 1; breakdown.push({ label: “Liq Heatmap”, note: “Heavy liq cluster below → support”, val: +1 }); }
+else breakdown.push({ label: “Liq Heatmap”, note: “Balanced”, val: 0 });
+
+// Fear & Greed
+if (signals.fearGreed >= 75) { score -= 1; breakdown.push({ label: “Fear & Greed”, note: `${signals.fearGreed} → Extreme Greed (fade)`, val: -1 }); }
+else if (signals.fearGreed <= 25) { score += 1; breakdown.push({ label: “Fear & Greed”, note: `${signals.fearGreed} → Extreme Fear (buy)`, val: +1 }); }
+else breakdown.push({ label: “Fear & Greed”, note: `${signals.fearGreed} → Neutral`, val: 0 });
+
+// Regime detection
+const regime = signals.volumeSpike >= 2 && signals.oiTrend === “rising” ? “momentum” : “mean_reversion”;
+
+return { score, breakdown, regime, maxScore: 8 };
+}
+
+// ─── Kelly Criterion Calculator ────────────────────────────────────────────
+function kelly(winRate, rewardRiskRatio) {
+const w = winRate / 100;
+const r = rewardRiskRatio;
+const k = w - (1 - w) / r;
+return Math.max(0, Math.min(k * 100, 25)); // cap at 25% max
+}
+
+// ─── Score → Probability mapping ──────────────────────────────────────────
+function scoreToProbability(score) {
+// Map -8..+8 to 5%..95% using sigmoid-like curve
+const normalized = score / 8; // -1 to +1
+const prob = 50 + normalized * 40;
+return Math.max(5, Math.min(95, prob));
+}
+
+// ─── Main QuantBrain Component ─────────────────────────────────────────────
+export default function QuantBrain({ polymarketData, hyperliquidData, socialData, walletData }) {
+const [signals, setSignals] = useState({
+fundingRate: 0.005,
+volumeSpike: 1.2,
+oiTrend: “flat”,
+polyBTC100k: 38,
+polyFedCut: 14,
+socialSentiment: “neutral”,
+liqAbove: 50,
+liqBelow: 50,
+fearGreed: 45,
+});
+
+const [tradeSetup, setTradeSetup] = useState({
+asset: “BTC”,
+direction: “long”,
+entry: “”,
+target: “”,
+stop: “”,
+accountSize: “10000”,
+});
+
+const [aiResponse, setAiResponse] = useState(null);
+const [loading, setLoading] = useState(false);
+const [activeTab, setActiveTab] = useState(“signals”);
+
+// Auto-populate from live props if passed in
+useEffect(() => {
+if (hyperliquidData?.fundingRate !== undefined)
+setSignals(s => ({ …s, fundingRate: hyperliquidData.fundingRate }));
+if (hyperliquidData?.volumeSpike !== undefined)
+setSignals(s => ({ …s, volumeSpike: hyperliquidData.volumeSpike }));
+if (hyperliquidData?.oiTrend !== undefined)
+setSignals(s => ({ …s, oiTrend: hyperliquidData.oiTrend }));
+if (polymarketData?.btc100k !== undefined)
+setSignals(s => ({ …s, polyBTC100k: polymarketData.btc100k }));
+if (polymarketData?.fedCut !== undefined)
+setSignals(s => ({ …s, polyFedCut: polymarketData.fedCut }));
+if (socialData?.sentiment !== undefined)
+setSignals(s => ({ …s, socialSentiment: socialData.sentiment }));
+}, [hyperliquidData, polymarketData, socialData]);
+
+const { score, breakdown, regime, maxScore } = calcConfluence(signals);
+const probability = scoreToProbability(score);
+
+// R/R ratio from trade setup
+const entry = parseFloat(tradeSetup.entry);
+const target = parseFloat(tradeSetup.target);
+const stop = parseFloat(tradeSetup.stop);
+const rr = entry && target && stop
+? tradeSetup.direction === “long”
+? (target - entry) / (entry - stop)
+: (entry - target) / (stop - entry)
+: 2;
+
+const winRate = probability;
+const kellyPct = kelly(winRate, Math.max(rr, 0.1));
+const accountSize = parseFloat(tradeSetup.accountSize) || 10000;
+const positionSize = (accountSize * kellyPct / 100).toFixed(2);
+
+// Conviction label
+const conviction =
+score >= 5 ? { label: “HIGH CONVICTION LONG”, color: “#4ade80”, bg: “#14532d” } :
+score >= 3 ? { label: “MODERATE LONG BIAS”, color: “#86efac”, bg: “#1a3a2a” } :
+score <= -5 ? { label: “HIGH CONVICTION SHORT”, color: “#f87171”, bg: “#4c0519” } :
+score <= -3 ? { label: “MODERATE SHORT BIAS”, color: “#fca5a5”, bg: “#3a1a1a” } :
+{ label: “NO EDGE — STAY OUT”, color: “#888”, bg: “#1a1a1a” };
+
+// ── AI Analyst Call ──────────────────────────────────────────────────────
+const askAI = async () => {
+setLoading(true);
+setAiResponse(null);
+
+```
+const { score, breakdown, regime } = calcConfluence(signals);
+const prob = scoreToProbability(score);
+const k = kelly(prob, Math.max(rr, 0.1));
+
+const systemPrompt = `You are QuantBrain — an elite quantitative trading analyst for CLVRQuant AI, built on the combined reasoning of the world's best statisticians, traders, mathematicians, and probability theorists.
+```
+
+Your thinking framework:
+
+- Bayesian probability: continuously update your beliefs as new signals arrive. Never anchor to a prior view.
+- Kelly Criterion: size positions mathematically based on edge, not gut feel.
+- Regime detection: identify whether the market is in momentum, mean reversion, or transition — and adjust strategy accordingly.
+- First-principles reasoning: do NOT apply fixed correlation rules. Instead, reason from the current macro environment, liquidity conditions, risk sentiment, and signal data to derive which assets are likely moving together or diverging RIGHT NOW. Correlations are dynamic — what was true last month may be false today.
+- Cross-asset thinking: consider how the signals provided ripple across crypto, metals, forex, and equities. Think about capital flows, risk-on/risk-off dynamics, and relative strength — but derive these conclusions from the data, not from memory.
+- Expected value over prediction: your goal is never to “call the move.” Your goal is to find setups where the math favors participation.
+
+For every analysis:
+
+- Reason out loud about WHY correlations exist or are breaking down given current conditions
+- Challenge your own assumptions
+- If signals conflict, say so and explain the tension
+- If there is no edge, say so clearly and protect the trader’s capital
+
+Always structure your response with these EXACT sections:
+
+1. REGIME ASSESSMENT
+1. SIGNAL ANALYSIS (what the data is actually saying)
+1. BAYESIAN PROBABILITY ESTIMATE (with reasoning)
+1. TODAY’S TOP 3 TRADE IDEAS (derived from signals, not assumptions)
+1. CROSS-ASSET REASONING (which related assets are worth watching and WHY given today’s data)
+1. KELLY POSITION SIZING
+1. RISK WARNING
+1. VERDICT
+
+For each trade idea:
+TRADE: [ASSET] [LONG/SHORT]
+Entry: $X | Target: $X | Stop: $X
+R/R: X:1 | Probability: X% | Kelly: X%
+Rationale: [derive from current signals]
+Related assets to watch: [reasoned from today’s data, not hardcoded rules]
+
+Be precise, numerical, and ruthlessly honest.`;`
+
+```
+const userPrompt = `Analyze this trade setup using full quantitative rigor AND provide today's top trade ideas with correlated plays:
+```
+
+ASSET: ${tradeSetup.asset}
+DIRECTION: ${tradeSetup.direction.toUpperCase()}
+ENTRY: $${tradeSetup.entry || “not set”}
+TARGET: $${tradeSetup.target || “not set”}
+STOP: $${tradeSetup.stop || “not set”}
+ACCOUNT SIZE: $${accountSize}
+R/R RATIO: ${rr.toFixed(2)}
+
+CONFLUENCE SCORE: ${score} / ${maxScore} (${score > 0 ? “+” : “”}${score})
+REGIME: ${regime === “momentum” ? “MOMENTUM” : “MEAN REVERSION”}
+PROBABILITY ESTIMATE: ${prob.toFixed(1)}%
+KELLY FRACTION: ${k.toFixed(1)}% → $${(accountSize * k / 100).toFixed(2)} position size
+
+SIGNAL BREAKDOWN:
+${breakdown.map(b => `- ${b.label}: ${b.note} (${b.val > 0 ? "+" : ""}${b.val})`).join(”\n”)}
+
+POLYMARKET CONTEXT:
+
+- BTC $100k: ${signals.polyBTC100k}% YES
+- Fed Rate Cut: ${signals.polyFedCut}% YES
+- Fear & Greed Index: ${signals.fearGreed}
+
+${walletData ? `WALLET CONTEXT:\n- SOL Balance: ${walletData.balance} SOL\n- Holdings: ${walletData.tokens?.map(t => t.symbol).join(", ") || "none"}` : “”}
+
+TODAY’S DATE: ${new Date().toDateString()}
+
+Tasks:
+
+1. Analyze the ${tradeSetup.direction} ${tradeSetup.asset} setup above
+1. Give me TODAY’S TOP 3 TRADE IDEAS based on all signals (can include crypto, forex, metals)
+1. For each trade idea list the correlated plays (e.g. if BTC long → SOL long, XAU short)
+1. Tell me which correlated trades have the best risk-adjusted return today`;
+   
+   try {
+   const res = await fetch(“https://api.anthropic.com/v1/messages”, {
+   method: “POST”,
+   headers: { “Content-Type”: “application/json” },
+   body: JSON.stringify({
+   model: “claude-sonnet-4-20250514”,
+   max_tokens: 1000,
+   system: systemPrompt,
+   messages: [{ role: “user”, content: userPrompt }],
+   }),
+   });
+   const data = await res.json();
+   const text = data.content?.map(c => c.text || “”).join(”\n”) || “No response.”;
+   setAiResponse(text);
+   } catch (e) {
+   setAiResponse(“❌ Error calling AI: “ + e.message);
+   }
+   setLoading(false);
+   };
+
+// ── Styles ───────────────────────────────────────────────────────────────
+const S = {
+card: { background: “#111”, border: “1px solid #222”, borderRadius: 12, padding: 16, marginBottom: 12 },
+label: { fontSize: 11, color: “#555”, marginBottom: 4 },
+input: { width: “100%”, background: “#0d0d0d”, border: “1px solid #2a2a2a”, borderRadius: 8, padding: “9px 12px”, color: “#fff”, fontSize: 13, boxSizing: “border-box” },
+select: { width: “100%”, background: “#0d0d0d”, border: “1px solid #2a2a2a”, borderRadius: 8, padding: “9px 12px”, color: “#fff”, fontSize: 13, boxSizing: “border-box” },
+row2: { display: “grid”, gridTemplateColumns: “1fr 1fr”, gap: 12, marginBottom: 12 },
+tab: (active) => ({ background: active ? “#7c3aed” : “#1a1a1a”, border: “1px solid “ + (active ? “#7c3aed” : “#333”), color: active ? “#fff” : “#666”, borderRadius: 8, padding: “6px 14px”, cursor: “pointer”, fontSize: 12 }),
+};
+
+return (
+<div style={{ fontFamily: “‘Inter’,sans-serif”, background: “#0a0a0a”, color: “#e8e8e8”, padding: 20, minHeight: “100vh” }}>
+
+```
+  {/* Header */}
+  <div style={{ marginBottom: 20 }}>
+    <div style={{ fontSize: 11, color: "#7c3aed", letterSpacing: 3, marginBottom: 4 }}>CLVRQUANT v4</div>
+    <div style={{ fontSize: 22, fontWeight: 700 }}>⚡ QuantBrain AI Analyst</div>
+    <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>Bayesian · Kelly Criterion · Regime Detection · Multi-Factor Confluence</div>
+  </div>
+
+  {/* Conviction Banner */}
+  <div style={{ background: conviction.bg, border: `1px solid ${conviction.color}44`, borderRadius: 12, padding: "14px 18px", marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div>
+      <div style={{ fontSize: 11, color: "#555", marginBottom: 2 }}>CURRENT SIGNAL</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: conviction.color }}>{conviction.label}</div>
+    </div>
+    <div style={{ textAlign: "right" }}>
+      <div style={{ fontSize: 28, fontWeight: 800, color: conviction.color }}>{score > 0 ? "+" : ""}{score}</div>
+      <div style={{ fontSize: 11, color: "#555" }}>/ {maxScore} signals</div>
+    </div>
+  </div>
+
+  {/* Score Meters Row */}
+  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+    <div style={{ ...S.card, textAlign: "center", padding: 14 }}>
+      <div style={S.label}>WIN PROBABILITY</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color: probability >= 60 ? "#4ade80" : probability <= 40 ? "#f87171" : "#f59e0b" }}>
+        {probability.toFixed(0)}%
+      </div>
+    </div>
+    <div style={{ ...S.card, textAlign: "center", padding: 14 }}>
+      <div style={S.label}>KELLY SIZE</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color: "#a78bfa" }}>{kellyPct.toFixed(1)}%</div>
+    </div>
+    <div style={{ ...S.card, textAlign: "center", padding: 14 }}>
+      <div style={S.label}>REGIME</div>
+      <div style={{ fontSize: 14, fontWeight: 800, color: regime === "momentum" ? "#38bdf8" : "#fb923c" }}>
+        {regime === "momentum" ? "📈 MOM" : "🔁 MR"}
+      </div>
+    </div>
+  </div>
+
+  {/* Tabs */}
+  <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+    {["signals", "setup", "kelly", "ai analyst"].map(t => (
+      <button key={t} onClick={() => setActiveTab(t)} style={S.tab(activeTab === t)}>
+        {t === "signals" ? "📊 Signals" : t === "setup" ? "🎯 Trade Setup" : t === "kelly" ? "📐 Kelly" : "🤖 AI Analyst"}
+      </button>
+    ))}
+  </div>
+
+  {/* ── SIGNALS TAB ── */}
+  {activeTab === "signals" && (
+    <div>
+      <div style={{ fontSize: 12, color: "#555", marginBottom: 12 }}>Adjust signals manually or they auto-fill from live data</div>
+
+      <div style={S.row2}>
+        <div>
+          <div style={S.label}>Funding Rate (%)</div>
+          <input type="number" step="0.001" value={signals.fundingRate} onChange={e => setSignals(s => ({ ...s, fundingRate: parseFloat(e.target.value) }))} style={S.input} />
+        </div>
+        <div>
+          <div style={S.label}>Volume Spike (x avg)</div>
+          <input type="number" step="0.1" value={signals.volumeSpike} onChange={e => setSignals(s => ({ ...s, volumeSpike: parseFloat(e.target.value) }))} style={S.input} />
+        </div>
+      </div>
+
+      <div style={S.row2}>
+        <div>
+          <div style={S.label}>OI Trend</div>
+          <select value={signals.oiTrend} onChange={e => setSignals(s => ({ ...s, oiTrend: e.target.value }))} style={S.select}>
+            <option value="rising">Rising</option>
+            <option value="flat">Flat</option>
+            <option value="falling">Falling</option>
+          </select>
+        </div>
+        <div>
+          <div style={S.label}>Social Sentiment</div>
+          <select value={signals.socialSentiment} onChange={e => setSignals(s => ({ ...s, socialSentiment: e.target.value }))} style={S.select}>
+            <option value="bullish">Bullish</option>
+            <option value="neutral">Neutral</option>
+            <option value="bearish">Bearish</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={S.row2}>
+        <div>
+          <div style={S.label}>Polymarket BTC $100k (%)</div>
+          <input type="number" value={signals.polyBTC100k} onChange={e => setSignals(s => ({ ...s, polyBTC100k: parseFloat(e.target.value) }))} style={S.input} />
+        </div>
+        <div>
+          <div style={S.label}>Polymarket Fed Cut (%)</div>
+          <input type="number" value={signals.polyFedCut} onChange={e => setSignals(s => ({ ...s, polyFedCut: parseFloat(e.target.value) }))} style={S.input} />
+        </div>
+      </div>
+
+      <div style={S.row2}>
+        <div>
+          <div style={S.label}>Liq Cluster Above ($M)</div>
+          <input type="number" value={signals.liqAbove} onChange={e => setSignals(s => ({ ...s, liqAbove: parseFloat(e.target.value) }))} style={S.input} />
+        </div>
+        <div>
+          <div style={S.label}>Liq Cluster Below ($M)</div>
+          <input type="number" value={signals.liqBelow} onChange={e => setSignals(s => ({ ...s, liqBelow: parseFloat(e.target.value) }))} style={S.input} />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={S.label}>Fear & Greed Index (0-100)</div>
+        <input type="range" min="0" max="100" value={signals.fearGreed}
+          onChange={e => setSignals(s => ({ ...s, fearGreed: parseInt(e.target.value) }))}
+          style={{ width: "100%", accentColor: "#7c3aed" }} />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#555" }}>
+          <span>😱 Extreme Fear</span>
+          <span style={{ color: signals.fearGreed >= 75 ? "#f87171" : signals.fearGreed <= 25 ? "#4ade80" : "#888", fontWeight: 700 }}>{signals.fearGreed}</span>
+          <span>🤑 Extreme Greed</span>
+        </div>
+      </div>
+
+      {/* Confluence breakdown */}
+      <div style={S.card}>
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>Signal Breakdown</div>
+        {breakdown.map((b, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < breakdown.length - 1 ? "1px solid #1a1a1a" : "none" }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>{b.label}</div>
+              <div style={{ fontSize: 11, color: "#555" }}>{b.note}</div>
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: b.val > 0 ? "#4ade80" : b.val < 0 ? "#f87171" : "#444", minWidth: 24, textAlign: "right" }}>
+              {b.val > 0 ? "+" : ""}{b.val}
+            </div>
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, borderTop: "1px solid #2a2a2a", marginTop: 4 }}>
+          <span style={{ fontWeight: 700 }}>Total Score</span>
+          <span style={{ fontWeight: 800, fontSize: 16, color: score > 0 ? "#4ade80" : score < 0 ? "#f87171" : "#888" }}>{score > 0 ? "+" : ""}{score} / {maxScore}</span>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {/* ── SETUP TAB ── */}
+  {activeTab === "setup" && (
+    <div>
+      <div style={S.row2}>
+        <div>
+          <div style={S.label}>Asset</div>
+          <select value={tradeSetup.asset} onChange={e => setTradeSetup(s => ({ ...s, asset: e.target.value }))} style={S.select}>
+            {["BTC", "ETH", "SOL", "XAU", "EUR/USD", "SPX"].map(a => <option key={a}>{a}</option>)}
+          </select>
+        </div>
+        <div>
+          <div style={S.label}>Direction</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {["long", "short"].map(d => (
+              <button key={d} onClick={() => setTradeSetup(s => ({ ...s, direction: d }))}
+                style={{ flex: 1, padding: 9, borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 12,
+                  background: tradeSetup.direction === d ? (d === "long" ? "#14532d" : "#4c0519") : "#1a1a1a",
+                  color: tradeSetup.direction === d ? (d === "long" ? "#4ade80" : "#f87171") : "#666" }}>
+                {d === "long" ? "▲ LONG" : "▼ SHORT"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={S.row2}>
+        <div><div style={S.label}>Entry Price ($)</div><input value={tradeSetup.entry} onChange={e => setTradeSetup(s => ({ ...s, entry: e.target.value }))} placeholder="95000" style={S.input} /></div>
+        <div><div style={S.label}>Target Price ($)</div><input value={tradeSetup.target} onChange={e => setTradeSetup(s => ({ ...s, target: e.target.value }))} placeholder="100000" style={S.input} /></div>
+      </div>
+
+      <div style={S.row2}>
+        <div><div style={S.label}>Stop Loss ($)</div><input value={tradeSetup.stop} onChange={e => setTradeSetup(s => ({ ...s, stop: e.target.value }))} placeholder="92000" style={S.input} /></div>
+        <div><div style={S.label}>Account Size ($)</div><input value={tradeSetup.accountSize} onChange={e => setTradeSetup(s => ({ ...s, accountSize: e.target.value }))} placeholder="10000" style={S.input} /></div>
+      </div>
+
+      {entry && target && stop && (
+        <div style={{ ...S.card, borderColor: "#7c3aed44" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            {[
+              { label: "R/R Ratio", value: rr.toFixed(2) + ":1", color: rr >= 2 ? "#4ade80" : rr >= 1 ? "#f59e0b" : "#f87171" },
+              { label: "Risk $", value: "$" + (tradeSetup.direction === "long" ? entry - stop : stop - entry).toFixed(0), color: "#f87171" },
+              { label: "Reward $", value: "$" + (tradeSetup.direction === "long" ? target - entry : entry - target).toFixed(0), color: "#4ade80" },
+            ].map(m => (
+              <div key={m.label} style={{ textAlign: "center" }}>
+                <div style={S.label}>{m.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: m.color }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )}
+
+  {/* ── KELLY TAB ── */}
+  {activeTab === "kelly" && (
+    <div>
+      <div style={{ ...S.card, borderColor: "#7c3aed44" }}>
+        <div style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>📐 Kelly Criterion Position Sizing</div>
+        <div style={{ fontFamily: "monospace", background: "#0d0d0d", borderRadius: 8, padding: 14, fontSize: 13, color: "#a78bfa", marginBottom: 16, lineHeight: 1.8 }}>
+          Kelly % = W − (1 − W) / R<br />
+          W = {probability.toFixed(1)}% win rate<br />
+          R = {rr.toFixed(2)} reward/risk<br />
+          <span style={{ color: "#4ade80", fontWeight: 700 }}>Kelly = {kellyPct.toFixed(1)}%</span>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {[
+            { label: "Full Kelly", pct: kellyPct, note: "Max growth (volatile)" },
+            { label: "Half Kelly", pct: kellyPct / 2, note: "Recommended (safer)" },
+            { label: "Quarter Kelly", pct: kellyPct / 4, note: "Conservative" },
+            { label: "Fixed 1%", pct: 1, note: "Beginner safe" },
+          ].map(k => (
+            <div key={k.label} style={{ background: "#0d0d0d", borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: "#555" }}>{k.label}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#a78bfa" }}>{k.pct.toFixed(1)}%</div>
+              <div style={{ fontSize: 13, color: "#4ade80" }}>${(accountSize * k.pct / 100).toFixed(2)}</div>
+              <div style={{ fontSize: 10, color: "#444", marginTop: 2 }}>{k.note}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 14, fontSize: 11, color: "#555", lineHeight: 1.8, borderTop: "1px solid #1a1a1a", paddingTop: 12 }}>
+          ⚡ <strong style={{ color: "#888" }}>Pro tip:</strong> Most quant funds use Half Kelly or less. Full Kelly maximizes long-run growth but causes painful drawdowns. Never risk more than 5% per trade regardless of Kelly output.
+        </div>
+      </div>
+
+      {/* EV Calculator */}
+      <div style={S.card}>
+        <div style={{ fontSize: 13, color: "#888", marginBottom: 12 }}>Expected Value per Trade</div>
+        {(() => {
+          const w = probability / 100;
+          const reward = entry && target ? Math.abs(tradeSetup.direction === "long" ? target - entry : entry - target) : 100;
+          const risk = entry && stop ? Math.abs(tradeSetup.direction === "long" ? entry - stop : stop - entry) : 50;
+          const posSize = accountSize * kellyPct / 100;
+          const ev = (w * (posSize * reward / (entry || 1))) - ((1 - w) * (posSize * risk / (entry || 1)));
+          return (
+            <div style={{ textAlign: "center" }}>
+              <div style={S.label}>Expected Value (Kelly position)</div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: ev >= 0 ? "#4ade80" : "#f87171" }}>
+                {ev >= 0 ? "+" : ""}${ev.toFixed(2)}
+              </div>
+              <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>per trade on avg at ${posSize.toFixed(2)} position</div>
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  )}
+
+  {/* ── AI ANALYST TAB ── */}
+  {activeTab === "ai analyst" && (
+    <div>
+      {/* QuantBrain thinking card */}
+      <div style={{ ...S.card, borderColor: "#7c3aed22", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: "#7c3aed", letterSpacing: 2, marginBottom: 10 }}>HOW QUANTBRAIN THINKS</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
+          {[
+            { icon: "🧠", text: "Reasons from current signal data — not fixed rules" },
+            { icon: "📐", text: "Derives cross-asset relationships from macro context right now" },
+            { icon: "🔁", text: "Challenges its own assumptions and flags conflicting signals" },
+            { icon: "🎯", text: "Sizes positions via Kelly Criterion based on actual edge" },
+            { icon: "⚡", text: "Gives 3 trade ideas built from today's data, not yesterday's playbook" },
+          ].map(({ icon, text }) => (
+            <div key={text} style={{ display: "flex", alignItems: "center", gap: 10, background: "#0d0d0d", borderRadius: 8, padding: "8px 12px" }}>
+              <span style={{ fontSize: 16 }}>{icon}</span>
+              <span style={{ fontSize: 12, color: "#888" }}>{text}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ fontSize: 12, color: "#555", marginBottom: 16, lineHeight: 1.6 }}>
+        QuantBrain will analyze your setup, suggest <strong style={{ color: "#a78bfa" }}>today's top 3 trade ideas</strong>, and list correlated plays for each.
+      </div>
+
+      <button onClick={askAI} disabled={loading}
+        style={{ width: "100%", background: loading ? "#1a1a2e" : "linear-gradient(135deg,#7c3aed,#a855f7)", border: "1px solid #7c3aed", color: "#fff", borderRadius: 12, padding: "14px", cursor: loading ? "not-allowed" : "pointer", fontWeight: 800, fontSize: 15, marginBottom: 16 }}>
+        {loading ? "⚡ QuantBrain Analyzing…" : "⚡ Get Today's Trade Ideas + Analysis"}
+      </button>
+
+      {loading && (
+        <div style={{ ...S.card, textAlign: "center", padding: 30 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>🧠</div>
+          <div style={{ color: "#7c3aed", fontSize: 13 }}>Running Bayesian analysis…</div>
+          <div style={{ color: "#555", fontSize: 11, marginTop: 4 }}>Scoring {maxScore} signals · Calculating Kelly · Detecting regime</div>
+        </div>
+      )}
+
+      {aiResponse && (
+        <div style={{ ...S.card, borderColor: "#7c3aed33" }}>
+          <div style={{ fontSize: 11, color: "#7c3aed", marginBottom: 10, letterSpacing: 2 }}>QUANTBRAIN ANALYSIS</div>
+          <div style={{ fontSize: 13, lineHeight: 1.8, color: "#ccc", whiteSpace: "pre-wrap" }}>{aiResponse}</div>
+        </div>
+      )}
+
+      {/* Summary card always visible */}
+      <div style={{ ...S.card, marginTop: 12 }}>
+        <div style={{ fontSize: 11, color: "#555", marginBottom: 10 }}>CURRENT SNAPSHOT</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {[
+            { l: "Confluence", v: `${score > 0 ? "+" : ""}${score} / ${maxScore}`, c: score > 2 ? "#4ade80" : score < -2 ? "#f87171" : "#888" },
+            { l: "Win Probability", v: `${probability.toFixed(0)}%`, c: probability > 60 ? "#4ade80" : probability < 40 ? "#f87171" : "#f59e0b" },
+            { l: "Kelly Size", v: `${kellyPct.toFixed(1)}%`, c: "#a78bfa" },
+            { l: "Regime", v: regime === "momentum" ? "Momentum" : "Mean Rev", c: "#38bdf8" },
+            { l: "R/R", v: rr.toFixed(2) + ":1", c: rr >= 2 ? "#4ade80" : "#f59e0b" },
+            { l: "Position $", v: `$${positionSize}`, c: "#4ade80" },
+          ].map(({ l, v, c }) => (
+            <div key={l} style={{ background: "#0d0d0d", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 10, color: "#444" }}>{l}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: c, marginTop: 2 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )}
+
+  <div style={{ marginTop: 24, fontSize: 10, color: "#333", borderTop: "1px solid #1a1a1a", paddingTop: 12, lineHeight: 1.6 }}>
+    ⚠️ CLVRQuant QuantBrain is for informational purposes only. Not financial advice. Past signals do not guarantee future results. Always manage risk.
+  </div>
+</div>
+```
+
+);
+}

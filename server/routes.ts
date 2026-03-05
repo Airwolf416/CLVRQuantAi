@@ -628,7 +628,8 @@ export async function registerRoutes(
       return res.status(500).json({ error: "Anthropic API key not configured" });
     }
 
-    const { system, userMessage } = req.body;
+    const system = req.body.system || req.body.systemPrompt || "";
+    const userMessage = req.body.userMessage || req.body.prompt || "";
     if (!userMessage) {
       return res.status(400).json({ error: "userMessage is required" });
     }
@@ -660,7 +661,7 @@ export async function registerRoutes(
       }
 
       const text = (data.content || []).map((b: any) => b.text || "").join("") || "No response.";
-      res.json({ text });
+      res.json({ text, response: text });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
