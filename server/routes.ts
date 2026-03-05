@@ -850,18 +850,42 @@ export async function registerRoutes(
     }
   });
 
-  const subscribers: { email: string; name: string; timestamp: string }[] = [];
-
   app.post("/api/subscribe", async (req, res) => {
     const { email, name } = req.body;
     if (!email || !email.includes("@")) {
       return res.status(400).json({ error: "Valid email required" });
     }
-    const exists = subscribers.find(s => s.email === email);
-    if (!exists) {
-      subscribers.push({ email, name: name || "Trader", timestamp: new Date().toISOString() });
+    try {
+      await pool.query(
+        `INSERT INTO subscribers (id, email, name, active) VALUES (gen_random_uuid(), $1, $2, true) ON CONFLICT (email) DO UPDATE SET active = true, name = COALESCE($2, subscribers.name)`,
+        [email, name || "Trader"]
+      );
+      const countResult = await pool.query("SELECT count(*) FROM subscribers WHERE active = true");
+      res.json({ ok: true, count: parseInt(countResult.rows[0].count) });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
-    res.json({ ok: true, count: subscribers.length });
+  });
+
+  app.post("/api/unsubscribe", async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+    try {
+      await pool.query("UPDATE subscribers SET active = false WHERE email = $1", [email]);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/send-test-brief", async (req, res) => {
+    try {
+      const { sendDailyBriefEmails } = await import("./dailyBrief");
+      sendDailyBriefEmails().catch((e: any) => console.log("[test-brief] Error:", e.message));
+      res.json({ ok: true, message: "Brief generation started — check server logs" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get("/api/stripe/config", async (_req, res) => {
