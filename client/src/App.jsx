@@ -8,7 +8,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PhantomWalletPanel from "./PhantomWallet";
-import QuantBrainPanel from "./QuantBrain";
 import FeaturesGuide from "./FeaturesGuide";
 
 // ─── CLVRQuant Theme ──────────────────────────────────────
@@ -552,6 +551,99 @@ When the user asks about a specific asset, reference its exact live price and ch
     setAiLoading(false);
   };
 
+  // ── Trade Ideas (QuantBrain integrated) ─────────────────
+  const runTradeIdeas=async()=>{
+    if(aiLoading)return;
+    setAiLoading(true);setAiOutput("");
+    const btc=cryptoPrices["BTC"]||{};
+    const fundRate=btc.funding||0;
+    const volH=btc.volHistory||[];const lastVol=volH[volH.length-1]||0;
+    const avgVol=volH.length>=5?volH.slice(-5).reduce((a,b)=>a+b,0)/5:1;
+    const volSpike=avgVol>0?lastVol/avgVol:1;
+    const oiH=btc.oiHistory||[];
+    const oiTrend=oiH.length>=2?(oiH[oiH.length-1]>oiH[oiH.length-2]*1.02?"rising":oiH[oiH.length-1]<oiH[oiH.length-2]*0.98?"falling":"flat"):"flat";
+    let cScore=0;const bd=[];
+    if(fundRate>0.01){cScore-=1;bd.push("Funding +"+fundRate.toFixed(4)+"% (longs crowded, -1)");}
+    else if(fundRate<-0.01){cScore+=1;bd.push("Funding "+fundRate.toFixed(4)+"% (shorts crowded, +1)");}
+    else bd.push("Funding neutral (0)");
+    if(volSpike>=2){cScore+=1;bd.push("Volume "+volSpike.toFixed(1)+"x avg (momentum, +1)");}
+    else bd.push("Volume "+volSpike.toFixed(1)+"x (no spike, 0)");
+    if(oiTrend==="rising"){cScore+=1;bd.push("OI rising (new money, +1)");}
+    else if(oiTrend==="falling"){cScore-=1;bd.push("OI falling (closing, -1)");}
+    else bd.push("OI flat (0)");
+    const regime=volSpike>=2&&oiTrend==="rising"?"MOMENTUM":"MEAN REVERSION";
+    const prob=Math.max(5,Math.min(95,50+(cScore/8)*40));
+    const kellyPct=Math.max(0,Math.min(25,(prob/100)-(1-prob/100)/2))*100;
+    const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" LIVE":" est"}`:"n/a";};
+    const cryptoSnap=CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];const f=d?.funding?` F:${pct(d.funding,4)}/8h`:"";const oi=d?.oi?` OI:$${(d.oi/1e6).toFixed(0)}M`:"";return`${s}:${snap(s,cryptoPrices)}${f}${oi}`;}).join(" | ");
+    const stockSnap=EQUITY_SYMS.map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ");
+    const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
+    const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
+    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
+    const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:"";
+    const sys=`You are QuantBrain — an elite quantitative trading analyst for CLVRQuant AI, built on the combined reasoning of the world's best statisticians, traders, mathematicians, and probability theorists.
+
+Your thinking framework:
+- Bayesian probability: continuously update beliefs as new signals arrive
+- Kelly Criterion: size positions mathematically based on edge
+- Regime detection: identify momentum vs mean reversion and adjust
+- First-principles reasoning: derive correlations from current macro, not fixed rules
+- Cross-asset thinking: consider how signals ripple across crypto, metals, forex, equities
+- Expected value over prediction: find setups where the math favors participation
+
+Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}
+
+LIVE MARKET DATA:
+CRYPTO (${CRYPTO_SYMS.length} tokens): ${cryptoSnap}
+EQUITIES (${EQUITY_SYMS.length} stocks): ${stockSnap}
+COMMODITIES: ${metalSnap}
+FOREX (${FOREX_SYMS.length} pairs): ${fxSnap}${sigSnap}${newsSnap}
+
+QUANTBRAIN CONFLUENCE ENGINE (auto-scored from live data):
+Confluence Score: ${cScore > 0 ? "+" : ""}${cScore} / 8
+Regime: ${regime}
+Win Probability: ${prob.toFixed(1)}%
+Kelly Fraction: ${kellyPct.toFixed(1)}%
+Signal Breakdown:
+${bd.map(b=>"- "+b).join("\n")}
+
+Always structure your response with these EXACT sections:
+1. REGIME ASSESSMENT
+2. SIGNAL ANALYSIS (what the data is actually saying)
+3. BAYESIAN PROBABILITY ESTIMATE (with reasoning)
+4. TODAY'S TOP 3 TRADE IDEAS (derived from signals, not assumptions)
+5. CROSS-ASSET REASONING (which related assets are worth watching and WHY)
+6. KELLY POSITION SIZING
+7. RISK WARNING
+8. VERDICT
+
+For each trade idea use this format:
+TRADE: [ASSET] [LONG/SHORT]
+Entry: $X | Target: $X | Stop: $X
+R/R: X:1 | Probability: X% | Kelly: X%
+Rationale: [derive from current signals]
+Related assets to watch: [reasoned from today's data]
+
+Be precise, numerical, and ruthlessly honest. Use the EXACT live prices above.`;
+    const userMsg=`Give me TODAY'S TOP 3 TRADE IDEAS with full quantitative analysis.
+
+Use the live market data and QuantBrain confluence score above. For each trade:
+1. Specific entry, target, and stop loss based on current prices
+2. Risk/reward ratio and probability estimate
+3. Kelly-sized position recommendation
+4. Cross-asset correlations worth monitoring
+5. Key risk factors
+
+Also provide an overall market regime assessment and your best risk-adjusted setup of the day.`;
+    try{
+      const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg})});
+      const data=await res.json();
+      if(!res.ok){setAiOutput(data.error||`Error ${res.status}`);setAiLoading(false);return;}
+      setAiOutput(data.text||"No response.");
+    }catch(e){setAiOutput(`Error: ${e.message}`);}
+    setAiLoading(false);
+  };
+
   // ─── Style Helpers ─────────────────────────────────────
   const Badge=({label,color="gold",style={}})=>{
     const map={
@@ -685,7 +777,6 @@ When the user asks about a specific asset, reference its exact live price and ch
     {k:"signals",icon:"⚡",label:"Signals"},
     {k:"alerts",icon:"🔔",label:"Alerts"},
     {k:"wallet",icon:"👛",label:"Wallet"},
-    {k:"brain",icon:"🧠",label:"Brain"},
     {k:"ai",icon:"✦",label:"AI"},
     {k:"guide",icon:"📖",label:"Guide"},
   ];
@@ -1193,17 +1284,6 @@ When the user asks about a specific asset, reference its exact live price and ch
           <PhantomWalletPanel />
         </>}
 
-        {/* ══ QUANTBRAIN ══ */}
-        {tab==="brain"&&<>
-          <div style={{marginBottom:14}}><SLabel>QuantBrain AI</SLabel></div>
-          <div style={panel}>
-            <div style={ph}><PTitle>QuantBrain</PTitle><div style={{display:"flex",gap:6}}><Badge label="Confluence" color="gold"/><Badge label="Kelly" color="green"/></div></div>
-            <div style={{padding:16}}>
-              <QuantBrainPanel cryptoPrices={cryptoPrices} />
-            </div>
-          </div>
-        </>}
-
         {/* ══ AI ══ */}
         {tab==="ai"&&<>
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
@@ -1218,10 +1298,15 @@ When the user asks about a specific asset, reference its exact live price and ch
               </div>
               <textarea data-testid="input-ai-query" value={aiInput} onChange={e=>setAiInput(e.target.value)} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}
                 style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:12,color:C.text,fontFamily:SANS,fontSize:13,resize:"none",height:76,lineHeight:1.7}}/>
-              <button data-testid="button-ai-analyze" onClick={runAI} disabled={aiLoading} style={{width:"100%",height:44,marginTop:8,background:"rgba(201,168,76,.1)",color:aiLoading?C.muted:C.gold2,border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:15,cursor:aiLoading?"not-allowed":"pointer"}}>
-                {aiLoading?"Analyzing...":"Analyze →"}
+              <div style={{display:"flex",gap:6,marginTop:8}}>
+                <button data-testid="button-ai-analyze" onClick={runAI} disabled={aiLoading} style={{flex:1,height:44,background:"rgba(201,168,76,.1)",color:aiLoading?C.muted:C.gold2,border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer"}}>
+                  {aiLoading?"Analyzing...":"Analyze →"}
+                </button>
+              </div>
+              <button data-testid="button-trade-ideas" onClick={runTradeIdeas} disabled={aiLoading} style={{width:"100%",height:48,marginTop:8,background:aiLoading?"rgba(0,199,135,.03)":"rgba(0,199,135,.08)",color:aiLoading?C.muted:C.green,border:`1px solid ${aiLoading?"rgba(0,199,135,.12)":"rgba(0,199,135,.3)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer",letterSpacing:"0.02em"}}>
+                {aiLoading?"QuantBrain Analyzing...":"Get Today's Trade Ideas + Analysis ✦"}
               </button>
-              {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",maxHeight:360,overflowY:"auto"}}>{aiOutput}</div>}
+              {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",maxHeight:600,overflowY:"auto"}}>{aiOutput}</div>}
             </div>
           </div>
           <div style={{...panel,border:`1px solid rgba(255,140,0,.12)`}}>
