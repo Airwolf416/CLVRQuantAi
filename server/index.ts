@@ -81,6 +81,35 @@ app.use((req, res, next) => {
   next();
 });
 
+async function ensureStripeProducts() {
+  try {
+    const { getUncachableStripeClient } = await import('./stripeClient');
+    const stripe = await getUncachableStripeClient();
+    const existing = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
+    if (existing.data.length > 0) {
+      const prices = await stripe.prices.list({ product: existing.data[0].id, active: true });
+      log(`Stripe products OK: ${existing.data[0].id} with ${prices.data.length} prices`, 'stripe');
+      return;
+    }
+    const product = await stripe.products.create({
+      name: 'CLVRQuant Pro',
+      description: 'Full access to CLVRQuant AI trading intelligence: AI analyst, trade ideas, morning briefs, unlimited alerts, signals, liquidation heatmap, volume & funding monitors.',
+      metadata: { tier: 'pro', app: 'clvrquant' },
+    });
+    await stripe.prices.create({
+      product: product.id, unit_amount: 2900, currency: 'usd',
+      recurring: { interval: 'month' }, metadata: { plan: 'pro_monthly' },
+    });
+    await stripe.prices.create({
+      product: product.id, unit_amount: 19900, currency: 'usd',
+      recurring: { interval: 'year' }, metadata: { plan: 'pro_yearly' },
+    });
+    log(`Created Stripe product ${product.id} with monthly + yearly prices`, 'stripe');
+  } catch (e: any) {
+    console.error('[stripe] Product setup error:', e.message);
+  }
+}
+
 async function initStripe() {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -102,6 +131,7 @@ async function initStripe() {
       log('Stripe webhook configured', 'stripe');
     }
 
+    await ensureStripeProducts();
     await stripeSync.syncBackfill();
     log('Stripe sync complete', 'stripe');
   } catch (e: any) {
