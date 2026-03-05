@@ -8,6 +8,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PhantomWalletPanel from "./PhantomWallet";
+import QuantBrainPanel from "./QuantBrain";
+import FeaturesGuide from "./FeaturesGuide";
 
 // ─── CLVRQuant Theme ──────────────────────────────────────
 const C = {
@@ -318,16 +320,19 @@ export default function App(){
     fundRef.current[sym]=[...hist,f].slice(-10);
   },[addAlert]);
 
+  const macroEventsRef=useRef(MACRO_EVENTS);
+  useEffect(()=>{if(macroEvents.length>0){const merged=[...MACRO_EVENTS];macroEvents.forEach(be=>{if(!merged.find(m=>m.id===be.id)){merged.push({...be,timeET:be.time||"12:00",assets:be.assets||[],expectedMove:be.expectedMove||2});}});macroEventsRef.current=merged;}},[macroEvents]);
+
   const checkMacroCountdowns=useCallback(()=>{
     const now=new Date();
-    MACRO_EVENTS.forEach(evt=>{
-      const[h,m]=(evt.timeET||"12:00").split(":").map(Number);const[y,mo,d]=evt.date.split("-").map(Number);
+    macroEventsRef.current.forEach(evt=>{
+      const[h,m]=(evt.timeET||evt.time||"12:00").split(":").map(Number);const[y,mo,d]=evt.date.split("-").map(Number);
       const target=new Date(Date.UTC(y,mo-1,d,h+5,m,0));const diffMin=(target-now)/60000;
       [60,30,10,2].forEach(threshold=>{
         const key=`macro-${evt.id}-${threshold}`;
         if(!macroFired.current.has(key)&&diffMin<=threshold&&diffMin>threshold-0.6){
           macroFired.current.add(key);
-          addAlert({type:"macro",title:`CLVRQuant · ${evt.bank}: ${evt.name} in ${threshold}min`,body:`${evt.assets?.join(", ")} expected to move ~${evt.expectedMove}%. Forecast: ${evt.forecast}. Position now.`,assets:evt.assets,id:key});
+          addAlert({type:"macro",title:`CLVRQuant · ${evt.bank}: ${evt.name} in ${threshold}min`,body:`${evt.assets?.join(", ")||""} expected to move ~${evt.expectedMove||2}%. Forecast: ${evt.forecast}. Position now.`,assets:evt.assets,id:key});
         }
       });
     });
@@ -680,7 +685,9 @@ When the user asks about a specific asset, reference its exact live price and ch
     {k:"signals",icon:"⚡",label:"Signals"},
     {k:"alerts",icon:"🔔",label:"Alerts"},
     {k:"wallet",icon:"👛",label:"Wallet"},
+    {k:"brain",icon:"🧠",label:"Brain"},
     {k:"ai",icon:"✦",label:"AI"},
+    {k:"guide",icon:"📖",label:"Guide"},
   ];
 
   return(
@@ -1186,6 +1193,17 @@ When the user asks about a specific asset, reference its exact live price and ch
           <PhantomWalletPanel />
         </>}
 
+        {/* ══ QUANTBRAIN ══ */}
+        {tab==="brain"&&<>
+          <div style={{marginBottom:14}}><SLabel>QuantBrain AI</SLabel></div>
+          <div style={panel}>
+            <div style={ph}><PTitle>QuantBrain</PTitle><div style={{display:"flex",gap:6}}><Badge label="Confluence" color="gold"/><Badge label="Kelly" color="green"/></div></div>
+            <div style={{padding:16}}>
+              <QuantBrainPanel cryptoPrices={cryptoPrices} />
+            </div>
+          </div>
+        </>}
+
         {/* ══ AI ══ */}
         {tab==="ai"&&<>
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
@@ -1214,6 +1232,12 @@ When the user asks about a specific asset, reference its exact live price and ch
           </div>
         </>}
 
+        {/* ══ GUIDE ══ */}
+        {tab==="guide"&&<>
+          <div style={{marginBottom:14}}><SLabel>Platform Guide</SLabel></div>
+          <FeaturesGuide />
+        </>}
+
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT · MIKE CLAVER
         </div>
@@ -1224,10 +1248,10 @@ When the user asks about a specific asset, reference its exact live price and ch
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
           return(
-            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>setTab(item.k)} style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 1px 9px",background:"none",border:"none",borderTop:`2px solid ${active?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
-              <span style={{fontSize:item.k==="ai"?14:16,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:C.muted2}}>{item.icon}</span>
-              {macroAlert&&!active&&<div style={{position:"absolute",top:5,right:"calc(50% - 14px)",width:6,height:6,borderRadius:"50%",background:C.red}}/>}
-              <span style={{fontFamily:MONO,fontSize:8,marginTop:4,color:active?C.gold:C.muted,letterSpacing:"0.12em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
+            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>setTab(item.k)} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
+              <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:C.muted2}}>{item.icon}</span>
+              {macroAlert&&!active&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
+              <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:active?C.gold:C.muted,letterSpacing:"0.06em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
             </button>
           );
         })}
