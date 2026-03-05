@@ -21,6 +21,14 @@ export const accessCodes = pgTable("access_codes", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const subscribers = pgTable("subscribers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull().unique(),
+  name: text("name").notNull().default("Trader"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,

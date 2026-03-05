@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { WebhookHandlers } from "./webhookHandlers";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
+import { startDailyBriefScheduler } from "./dailyBrief";
 
 let shuttingDown = false;
 const _origExit = process.exit;
@@ -111,6 +112,7 @@ async function initStripe() {
 (async () => {
   await initStripe();
   await registerRoutes(httpServer, app);
+  startDailyBriefScheduler();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

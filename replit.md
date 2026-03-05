@@ -148,6 +148,15 @@ Preferred communication style: Simple, everyday language.
 - `RAPIDAPI_KEY` — Required for Twitter/X influencer feed (Twitter API45 on RapidAPI)
 - `CRYPTOPANIC_API_KEY` — Optional, CryptoPanic news (may be blocked by Cloudflare)
 - `SESSION_SECRET` — Available but not currently used
+- `OWNER_CODE` — Owner access code for permanent Pro access (default: CLVR-OWNER-2026)
+
+### Email System (Resend)
+- **Integration**: Resend via Replit connector (`conn_resend_01KJZGAYDD4MX7AK0VZYKCYMFW`)
+- **Client**: `server/resendClient.ts` — uses Replit connector for auth (never cache client)
+- **Subscribers**: Persisted in `subscribers` table (email, name, active flag)
+- **Daily Brief Scheduler**: `server/dailyBrief.ts` — generates AI brief via Claude + sends to all active subscribers at 6:00 AM ET
+- **Email template**: Luxury CLVRQuant-branded HTML with navy/gold theme, key moves table, analysis, watch items, risk level
+- **Routes**: `POST /api/subscribe`, `POST /api/unsubscribe`, `POST /api/send-test-brief` (admin test trigger)
 
 ## Monetization System (Stripe + Access Codes)
 
