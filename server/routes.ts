@@ -878,7 +878,7 @@ export async function registerRoutes(
       const result = await pool.query(`
         SELECT p.id, p.name, p.description, p.metadata,
                pr.id as price_id, pr.unit_amount, pr.currency,
-               pr.recurring_interval as interval
+               pr.recurring->>'interval' as interval
         FROM stripe.products p
         JOIN stripe.prices pr ON pr.product = p.id
         WHERE p.active = true AND pr.active = true
