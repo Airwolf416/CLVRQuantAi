@@ -273,6 +273,14 @@ export default function App(){
   const [briefData,setBriefData]=useState(null);
   const [briefDate,setBriefDate]=useState(null);
 
+  const [userTier,setUserTier]=useState(()=>{try{return localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
+  const [accessCodeInput,setAccessCodeInput]=useState("");
+  const [accessCodeMsg,setAccessCodeMsg]=useState("");
+  const [showUpgrade,setShowUpgrade]=useState(false);
+  const [stripePrices,setStripePrices]=useState([]);
+  const [checkoutLoading,setCheckoutLoading]=useState(false);
+  const isPro=userTier==="pro";
+
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
 
@@ -415,6 +423,46 @@ export default function App(){
     }catch{setFhStatus("error");}
   },[triggerFlashes]);
   useEffect(()=>{doFH();const iv=setInterval(doFH,15000);return()=>clearInterval(iv);},[doFH]);
+
+  useEffect(()=>{
+    const params=new URLSearchParams(window.location.search);
+    const sessionId=params.get("session_id");
+    const status=params.get("status");
+    if(status==="success"&&sessionId){
+      fetch(`/api/stripe/subscription?session_id=${sessionId}`).then(r=>r.json()).then(data=>{
+        if(data.tier==="pro"){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");}catch{}setToast("✦ Welcome to CLVRQuant Pro!");}
+      }).catch(()=>{});
+      window.history.replaceState({},document.title,window.location.pathname);
+    }
+    if(status==="cancel"){setToast("Checkout cancelled");window.history.replaceState({},document.title,window.location.pathname);}
+  },[]);
+
+  useEffect(()=>{
+    fetch("/api/stripe/products").then(r=>r.json()).then(data=>{
+      if(Array.isArray(data))setStripePrices(data);
+    }).catch(()=>{});
+  },[]);
+
+  const verifyAccessCode=async()=>{
+    if(!accessCodeInput.trim())return;
+    try{
+      const r=await fetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:accessCodeInput.trim()})});
+      const data=await r.json();
+      if(data.valid){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");localStorage.setItem("clvr_code",accessCodeInput.trim());}catch{}setAccessCodeMsg(`✦ ${data.label} — Pro access activated`);setToast("✦ Pro access activated!");}
+      else{setAccessCodeMsg("Invalid or expired code");}
+    }catch{setAccessCodeMsg("Verification failed");}
+  };
+
+  const handleCheckout=async(priceId)=>{
+    setCheckoutLoading(true);
+    try{
+      const r=await fetch("/api/stripe/checkout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({priceId})});
+      const data=await r.json();
+      if(data.url)window.location.href=data.url;
+      else setToast("Checkout failed");
+    }catch{setToast("Checkout error");}
+    setCheckoutLoading(false);
+  };
 
   // ── Macro calendar (auto-refresh every 5 min) ─────────
   const fetchMacro=useCallback(()=>{
@@ -680,6 +728,21 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   };
   const LiveDot=({live})=><div style={{width:5,height:5,borderRadius:"50%",flexShrink:0,background:live?C.green:C.orange,boxShadow:live?`0 0 6px ${C.green}`:"none"}}/>;
 
+  const ProGate=({feature,children})=>{
+    if(isPro)return children;
+    return(
+      <div data-testid={`progate-${feature}`} style={{position:"relative"}}>
+        <div style={{filter:"blur(4px)",opacity:0.3,pointerEvents:"none",maxHeight:180,overflow:"hidden"}}>{children}</div>
+        <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(5,7,9,.85)",backdropFilter:"blur(8px)",borderRadius:2}}>
+          <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.gold2,marginBottom:4}}>Pro Feature</div>
+          <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.12em",marginBottom:12,textTransform:"uppercase"}}>{feature}</div>
+          <button data-testid={`btn-upgrade-${feature}`} onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"8px 20px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
+        </div>
+      </div>
+    );
+  };
+
+
   const PriceRow=({sym,d,extra,label})=>{
     if(!d)return null;
     const flash=flashes[sym];const isUp=Number(d.chg)>=0;
@@ -799,6 +862,58 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
       {activeAlerts.length>0&&<div style={{animation:"slideDown .3s ease"}}><AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} C={C}/></div>}
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
+
+      {showUpgrade&&<div style={{position:"fixed",inset:0,zIndex:300,background:"rgba(0,0,0,.85)",backdropFilter:"blur(12px)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowUpgrade(false)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,maxWidth:420,width:"100%",maxHeight:"90vh",overflowY:"auto",position:"relative"}}>
+          <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`}}/>
+          <div style={{padding:"22px 20px",textAlign:"center"}}>
+            <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.gold2,marginBottom:2}}>CLVRQuant Pro</div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.2em",marginBottom:16}}>UNLOCK FULL INTELLIGENCE</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16,textAlign:"left"}}>
+              {["AI Market Analyst","QuantBrain Trade Ideas","Morning Briefs","Unlimited Alerts","Live Signals","Liquidation Heatmap","Volume Spike Monitor","Funding Rate Monitor"].map(f=>(
+                <div key={f} style={{fontFamily:MONO,fontSize:9,color:C.text,display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{color:C.gold,fontSize:10}}>✦</span>{f}
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:16}}>
+              {stripePrices.filter(p=>p.interval==="month").slice(0,1).map(p=>(
+                <button key={p.price_id} data-testid="btn-checkout-monthly" onClick={()=>handleCheckout(p.price_id)} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer"}}>
+                  <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.gold2}}>$29</div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER MONTH</div>
+                </button>
+              ))}
+              {stripePrices.filter(p=>p.interval==="year").slice(0,1).map(p=>(
+                <button key={p.price_id} data-testid="btn-checkout-yearly" onClick={()=>handleCheckout(p.price_id)} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
+                  <div style={{position:"absolute",top:-8,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:700}}>SAVE 43%</div>
+                  <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.green}}>$199</div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER YEAR</div>
+                </button>
+              ))}
+              {stripePrices.length===0&&<>
+                <button data-testid="btn-checkout-monthly" onClick={()=>setToast("Loading prices...")} style={{flex:1,padding:"14px 12px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,cursor:"pointer"}}>
+                  <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.gold2}}>$29</div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER MONTH</div>
+                </button>
+                <button data-testid="btn-checkout-yearly" onClick={()=>setToast("Loading prices...")} style={{flex:1,padding:"14px 12px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:2,cursor:"pointer",position:"relative"}}>
+                  <div style={{position:"absolute",top:-8,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:700}}>SAVE 43%</div>
+                  <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.green}}>$199</div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER YEAR</div>
+                </button>
+              </>}
+            </div>
+            <div style={{borderTop:`1px solid ${C.border}`,paddingTop:14}}>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>HAVE AN ACCESS CODE?</div>
+              <div style={{display:"flex",gap:6}}>
+                <input data-testid="input-access-code" value={accessCodeInput} onChange={e=>setAccessCodeInput(e.target.value)} placeholder="Enter code" style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 10px",color:C.text,fontFamily:MONO,fontSize:11}}/>
+                <button data-testid="btn-verify-code" onClick={verifyAccessCode} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,padding:"8px 14px",fontFamily:MONO,fontSize:9,color:C.gold,cursor:"pointer",letterSpacing:"0.1em"}}>VERIFY</button>
+              </div>
+              {accessCodeMsg&&<div style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("✦")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
+            </div>
+            <button onClick={()=>setShowUpgrade(false)} style={{marginTop:14,background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:9,cursor:"pointer",letterSpacing:"0.1em"}}>CLOSE</button>
+          </div>
+        </div>
+      </div>}
 
       {/* ── HEADER ── */}
       <div style={{padding:"12px 14px 10px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"rgba(5,7,9,.96)",zIndex:50,backdropFilter:"blur(14px)"}}>
@@ -922,6 +1037,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             );})}
           </div>}
 
+          <ProGate feature="volume-funding-monitors">
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
               <div style={{fontFamily:MONO,fontSize:9,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>VOLUME MONITOR</div>
