@@ -925,6 +925,8 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound alerts ON":"Sound alerts OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
             <button data-testid="btn-push-notif" onClick={requestPush} style={{background:"none",border:`1px solid ${notifPerm==="granted"?C.gold:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.muted2}}>{notifPerm==="granted"?"🔔":"🔕"}</button>
+            {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
+            :<button data-testid="btn-upgrade-header" onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
             <div style={{textAlign:"right"}}>
               <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
                 <LiveDot live={hlLive}/><span style={{fontFamily:MONO,fontSize:7,color:hlLive?C.green:C.orange}}>HL</span>
@@ -1077,6 +1079,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             </div>
             <LiqHeatmap sym={liqSym} price={liqSym==="XAU"?metalPrices.XAU?.price:cryptoPrices[liqSym]?.price}/>
           </div>
+          </ProGate>
 
           <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",letterSpacing:"0.1em"}}>CLVRQuant v2 RADAR — ALL DATA LIVE</div>
         </>}
@@ -1403,6 +1406,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         {/* ══ AI ══ */}
         {tab==="ai"&&<>
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
+          <ProGate feature="ai-analyst">
           <div style={panel}>
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="Claude · Live" color="gold"/></div>
             <div style={{padding:16}}>
@@ -1425,6 +1429,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
               {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",maxHeight:600,overflowY:"auto"}}>{aiOutput}</div>}
             </div>
           </div>
+          </ProGate>
           <div style={{...panel,border:`1px solid rgba(255,140,0,.12)`}}>
             <div style={{padding:"11px 14px",background:"rgba(255,140,0,.03)"}}>
               <div style={{fontFamily:MONO,fontSize:9,color:C.orange,letterSpacing:"0.22em",marginBottom:5}}>LEGAL DISCLAIMER</div>

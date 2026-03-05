@@ -149,6 +149,39 @@ Preferred communication style: Simple, everyday language.
 - `CRYPTOPANIC_API_KEY` — Optional, CryptoPanic news (may be blocked by Cloudflare)
 - `SESSION_SECRET` — Available but not currently used
 
+## Monetization System (Stripe + Access Codes)
+
+### Tier System
+- **Free tier**: Prices, macro calendar, news, 3 alerts
+- **Pro tier ($29/mo or $199/yr)**: AI analyst, QuantBrain trade ideas, morning briefs, unlimited alerts, signals, liquidation heatmap, volume/funding monitors
+
+### Stripe Integration
+- **Connector**: Replit Stripe integration (`conn_stripe_01KJZEVAXAFW56CC2Q2ZVCHAQ6`)
+- **Products**: CLVRQuant Pro (`prod_U5r0eZMxeY4zkz`) with monthly + yearly prices
+- **Webhook**: `/api/stripe/webhook` (raw body, before express.json())
+- **Backend files**: `server/stripeClient.ts`, `server/webhookHandlers.ts`, `server/seed-products.ts`
+- **DB tables**: `stripe.*` schema (auto-synced), `public.users` (tier, stripeCustomerId, stripeSubscriptionId), `public.access_codes`
+
+### Access Code System
+- **Owner code**: `OWNER_CODE` env var (default `CLVR-OWNER-2026`) — permanent Pro access
+- **VIP codes**: Stored in `access_codes` table with optional max_uses and expiration
+- **Verification**: `POST /api/verify-code` checks owner code first, then DB codes
+
+### Frontend Paywall
+- **ProGate component**: Wraps Pro features with blur overlay + upgrade CTA
+- **Upgrade modal**: Shows Pro features, monthly/yearly Stripe checkout buttons, access code input
+- **Header**: Shows PRO badge or UPGRADE button based on tier
+- **Persistence**: Tier stored in localStorage (`clvr_tier`), verified via Stripe session or access code
+
+### Stripe API Routes
+- `GET /api/stripe/config` — Stripe publishable key
+- `GET /api/stripe/products` — Active products with prices from `stripe.*` schema
+- `POST /api/stripe/checkout` — Creates Stripe Checkout session
+- `GET /api/stripe/subscription` — Verifies subscription from session_id
+- `POST /api/stripe/portal` — Customer portal link
+- `POST /api/verify-code` — Access code verification
+- `GET /api/access-codes` — List access codes (admin)
+
 ## Important Notes
 
 - DO NOT edit `server/vite.ts` or `vite.config.ts`
