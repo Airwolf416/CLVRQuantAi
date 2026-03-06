@@ -273,6 +273,37 @@ function Badge({label,color="gold",style={}}){
   return<span data-testid={`badge-${label}`} style={{fontSize:9,padding:"3px 8px",borderRadius:2,background:t.bg,color:t.color,border:`1px solid ${t.border}`,fontFamily:MONO,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:600,...style}}>{label}</span>;
 }
 
+// ─── PRICE ROW (Bloomberg-style tick arrows + flash) ──
+function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched}){
+  if(!d)return null;
+  const isUp=Number(d.chg)>=0;
+  const tickUp=flash==="green";
+  const tickDn=flash==="red";
+  const priceColor=tickUp?C.green:tickDn?C.red:C.white;
+  const arrow=tickUp?"↑":tickDn?"↓":"";
+  return(
+    <div data-testid={`price-row-${sym}`} style={{padding:"11px 14px",borderBottom:`1px solid ${C.border}`,
+      background:tickUp?"rgba(0,199,135,.10)":tickDn?"rgba(255,64,96,.10)":"transparent",
+      transition:"background .5s ease-out",
+      display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:8,alignItems:"center"}}>
+      <div>
+        <div style={{display:"flex",alignItems:"center",gap:7}}>
+          <span style={{fontFamily:MONO,fontWeight:600,fontSize:13,color:C.text,letterSpacing:"0.05em"}}>{sym}</span>
+          {label&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>{label}</span>}
+          <button onClick={()=>onToggleWatch(sym)} style={{background:"none",border:"none",cursor:"pointer",padding:0,fontSize:11,color:watched?C.gold:C.muted,opacity:watched?1:.3,transition:"all .2s"}}>✦</button>
+        </div>
+        {extra&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>{extra}</div>}
+      </div>
+      <div style={{fontFamily:MONO,fontSize:14,fontWeight:600,color:priceColor,transition:"color .5s ease-out",display:"flex",alignItems:"center",gap:2}}>
+        <span style={{fontSize:11,fontWeight:900,lineHeight:1,width:10,textAlign:"center",flexShrink:0}}>{arrow}</span>
+        {fmt(d.price,sym)}
+      </div>
+      <div style={{fontFamily:MONO,fontSize:11,color:isUp?C.green:C.red,minWidth:50,textAlign:"right"}}>{pct(d.chg)}</div>
+      {d.live?<Badge label="LIVE" color="green"/>:<Badge label="SIM" color="orange"/>}
+    </div>
+  );
+}
+
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
 function SignalCard({sig,marketData,onShare,onAiAnalyze}){
   const[expanded,setExpanded]=useState(false);
@@ -969,27 +1000,6 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const onUpgrade=useCallback(()=>setShowUpgrade(true),[]);
 
 
-  const PriceRow=({sym,d,extra,label})=>{
-    if(!d)return null;
-    const flash=flashes[sym];const isUp=Number(d.chg)>=0;
-    return(
-      <div data-testid={`price-row-${sym}`} style={{padding:"11px 14px",borderBottom:`1px solid ${C.border}`,transition:"background .35s",
-        background:flash==="green"?"rgba(0,199,135,.05)":flash==="red"?"rgba(255,64,96,.05)":"transparent",
-        display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:8,alignItems:"center"}}>
-        <div>
-          <div style={{display:"flex",alignItems:"center",gap:7}}>
-            <span style={{fontFamily:MONO,fontWeight:600,fontSize:13,color:C.text,letterSpacing:"0.05em"}}>{sym}</span>
-            {label&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>{label}</span>}
-            <button onClick={()=>toggleWatch(sym)} style={{background:"none",border:"none",cursor:"pointer",padding:0,fontSize:11,color:isWatched(sym)?C.gold:C.muted,opacity:isWatched(sym)?1:.3,transition:"all .2s"}}>✦</button>
-          </div>
-          {extra&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>{extra}</div>}
-        </div>
-        <div style={{fontFamily:MONO,fontSize:14,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,transition:"color .35s"}}>{fmt(d.price,sym)}</div>
-        <div style={{fontFamily:MONO,fontSize:11,color:isUp?C.green:C.red,minWidth:50,textAlign:"right"}}>{pct(d.chg)}</div>
-        {d.live?<Badge label="LIVE" color="green"/>:<Badge label="SIM" color="orange"/>}
-      </div>
-    );
-  };
 
   const onShareSig=useCallback((sig)=>shareSignal(sig),[shareSignal]);
   const onAiSig=useCallback((sig)=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");},[]);
@@ -1210,7 +1220,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                 style={{background:flash==="green"?"rgba(0,199,135,.08)":flash==="red"?"rgba(255,64,96,.06)":C.panel,
                   border:`1px solid ${d?.live?"rgba(201,168,76,.18)":C.border}`,borderRadius:2,padding:"5px 9px",flexShrink:0,cursor:"pointer",minWidth:64,transition:"background .35s"}}>
                 <div style={{fontFamily:MONO,fontSize:8,color:d?.live?C.gold:C.muted,letterSpacing:"0.08em"}}>{sym}</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,transition:"color .35s",marginTop:1}}>{fmt(d?.price,sym)}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,transition:"color .5s ease-out",marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{fmt(d?.price,sym)}</div>
                 <div style={{fontFamily:MONO,fontSize:9,color:isUp?C.green:C.red}}>{pct(d?.chg)}</div>
               </div>
             );
@@ -1365,28 +1375,28 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             </div>
             {cryptoSubTab==="spot"&&<>
               <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>binance.us spot · last traded price · 2s</div>
-              {CRYPTO_SYMS.map(sym=>{const d=cryptoPrices[sym];return <PriceRow key={sym} sym={sym} d={d}/>;})}
+              {CRYPTO_SYMS.map(sym=>{const d=cryptoPrices[sym];return <PriceRow key={sym} sym={sym} d={d} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>;})}
             </>}
             {cryptoSubTab==="perp"&&<>
               <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>hyperliquid.xyz · perp mid-price · 5s</div>
-              {CRYPTO_SYMS.map(sym=>{const d=perpPrices[sym];const extraParts=[d?.funding?`Fund: ${pct(d.funding,4)}/8h`:"",d?.oi?`OI: $${(d.oi/1e6).toFixed(0)}M`:""].filter(Boolean).join(" · ");return(<div key={sym}><PriceRow sym={sym} d={d} extra={d?.live&&extraParts?extraParts:null}/></div>);})}
+              {CRYPTO_SYMS.map(sym=>{const d=perpPrices[sym];const extraParts=[d?.funding?`Fund: ${pct(d.funding,4)}/8h`:"",d?.oi?`OI: $${(d.oi/1e6).toFixed(0)}M`:""].filter(Boolean).join(" · ");return(<div key={sym}><PriceRow sym={sym} d={d} extra={d?.live&&extraParts?extraParts:null} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/></div>);})}
             </>}
           </div>}
           {priceTab==="equity"&&<div style={panel}>
             <div style={ph}><PTitle>Equities · Finnhub</PTitle><Badge label={fhLive?`${Object.values(equityPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
             <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub.io · NYSE/NASDAQ 9:30am–4pm ET</div>
-            {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]}/>)}
+            {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
           </div>}
           {priceTab==="metals"&&<div style={panel}>
             <div style={ph}><PTitle>Commodities</PTitle><Badge label={fhLive?`${Object.values(metalPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
             <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>gold-api.com · finnhub.io · live · 2min</div>
-            {METALS_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={metalPrices[sym]} label={METAL_LABELS[sym]}/>)}
+            {METALS_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={metalPrices[sym]} label={METAL_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
             <div style={{padding:"10px 14px",fontFamily:MONO,fontSize:9,color:C.muted2}}>Gold/Silver Ratio: <span style={{color:C.gold2,fontWeight:600}}>{metalPrices.XAU?.price&&metalPrices.XAG?.price?(metalPrices.XAU.price/metalPrices.XAG.price).toFixed(0):"—"}:1</span>{metalPrices.XAU?.price&&metalPrices.XAG?.price&&(metalPrices.XAU.price/metalPrices.XAG.price)>=90&&<span style={{color:C.green}}> · bullish for silver</span>}</div>
           </div>}
           {priceTab==="forex"&&<div style={panel}>
             <div style={ph}><PTitle>Forex</PTitle><Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
             <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>exchangerate-api · 24/5 · closed weekends</div>
-            {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]}/>)}
+            {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
           </div>}
         </>}
 
