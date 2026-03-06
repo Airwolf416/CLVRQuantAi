@@ -6,10 +6,14 @@ import { z } from "zod";
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
+  email: text("email").notNull().unique(),
   password: text("password").notNull(),
+  name: text("name").notNull().default("Trader"),
+  subscribeToBrief: boolean("subscribe_to_brief").notNull().default(false),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   tier: text("tier").notNull().default("free"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const accessCodes = pgTable("access_codes", {
@@ -31,7 +35,10 @@ export const subscribers = pgTable("subscribers", {
 
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
+  email: true,
   password: true,
+  name: true,
+  subscribeToBrief: true,
 });
 
 export const insertAccessCodeSchema = createInsertSchema(accessCodes).pick({

@@ -3,6 +3,8 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { pool } from "./db";
+import bcrypt from "bcryptjs";
+import session from "express-session";
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
