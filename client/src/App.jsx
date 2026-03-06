@@ -6,7 +6,7 @@
 // Backend-proxied API calls (keys stored server-side)
 // ─────────────────────────────────────────────────────────
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
@@ -210,6 +210,23 @@ function FactorBreakdown({factors,score,C:_C}){
     </div>
   );
 }
+
+// ─── AI INPUT (stable, memoized to prevent mobile keyboard retraction) ──
+const AIInput=memo(function AIInput({value,onChange,placeholder}){
+  const ref=useRef(null);
+  const prevValue=useRef(value);
+  useEffect(()=>{
+    if(ref.current&&prevValue.current!==value&&document.activeElement!==ref.current){
+      ref.current.value=value;
+    }
+    prevValue.current=value;
+  },[value]);
+  return<textarea ref={ref} data-testid="input-ai-query" defaultValue={value}
+    onChange={e=>onChange(e.target.value)}
+    onFocus={e=>{e.target.style.transform="translateZ(0)";}}
+    placeholder={placeholder}
+    style={{width:"100%",background:"rgba(12,18,32,1)",border:"1px solid #141e35",borderRadius:2,padding:12,color:"#c8d0e0",fontFamily:"'Barlow',sans-serif",fontSize:13,resize:"none",height:76,lineHeight:1.7}}/>;
+});
 
 // ─── BADGE ──────────────────────────────────────────────
 function Badge({label,color="gold",style={}}){
@@ -423,7 +440,7 @@ function Dashboard({user,setUser}){
   const [tab,setTab]=useState("radar");
   const [priceTab,setPriceTab]=useState("crypto");
   const [sigSubTab,setSigSubTab]=useState("all");
-  const [sigSort,setSigSort]=useState("score");
+  const [sigSort,setSigSort]=useState("recent");
   const [macroFilter,setMacroFilter]=useState("ALL");
 
   const [cryptoSubTab,setCryptoSubTab]=useState("spot");
@@ -972,6 +989,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
   const onShareSig=useCallback((sig)=>shareSignal(sig),[shareSignal]);
   const onAiSig=useCallback((sig)=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");},[]);
+  const onAiChange=useCallback((v)=>setAiInput(v),[]);
 
   const hlLive=hlStatus==="live",fhLive=fhStatus==="live";
   const allSignals=[...liveSignals].sort((a,b)=>(b.ts||0)-(a.ts||0));
@@ -1740,8 +1758,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                   {sym}{d?.live?" ✦":""}
                 </button>;})}
               </div>
-              <textarea data-testid="input-ai-query" value={aiInput} onChange={e=>setAiInput(e.target.value)} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}
-                style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:12,color:C.text,fontFamily:SANS,fontSize:13,resize:"none",height:76,lineHeight:1.7}}/>
+              <AIInput value={aiInput} onChange={onAiChange} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
               <div style={{display:"flex",gap:6,marginTop:8}}>
                 <button data-testid="button-ai-analyze" onClick={runAI} disabled={aiLoading} style={{flex:1,height:44,background:"rgba(201,168,76,.1)",color:aiLoading?C.muted:C.gold2,border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer"}}>
                   {aiLoading?"Analyzing...":"Analyze →"}
