@@ -1,10 +1,11 @@
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
+import WebSocket from "ws";
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
@@ -372,6 +373,99 @@ async function fetchMetals(): Promise<Record<string, any>> {
   return metals;
 }
 
+// ─── Finnhub WebSocket for real-time equity + commodity ETF prices ───
+const FH_WS_SYMS: Record<string, string> = {};
+EQUITY_SYMS.forEach(sym => { FH_WS_SYMS[EQUITY_FH_MAP[sym] || sym] = `eq:${sym}`; });
+Object.entries(ENERGY_ETF_MAP).forEach(([appSym, cfg]) => { FH_WS_SYMS[cfg.etfSym] = `etf:${appSym}:${cfg.factor}`; });
+const FOREX_FH_SYMS: Record<string, string> = {
+  "OANDA:EUR_USD":"EURUSD","OANDA:GBP_USD":"GBPUSD","OANDA:USD_JPY":"USDJPY",
+  "OANDA:USD_CHF":"USDCHF","OANDA:AUD_USD":"AUDUSD","OANDA:USD_CAD":"USDCAD",
+  "OANDA:NZD_USD":"NZDUSD","OANDA:EUR_GBP":"EURGBP","OANDA:EUR_JPY":"EURJPY",
+  "OANDA:GBP_JPY":"GBPJPY","OANDA:USD_MXN":"USDMXN","OANDA:USD_ZAR":"USDZAR",
+  "OANDA:USD_TRY":"USDTRY","OANDA:USD_SGD":"USDSGD",
+};
+
+const livePrices: Record<string, { price: number; chg: number; ts: number; type: string }> = {};
+const sseClients: Set<Response> = new Set();
+
+function broadcastSSE(data: Record<string, any>) {
+  const msg = `data: ${JSON.stringify(data)}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(msg); } catch { sseClients.delete(res); }
+  }
+}
+
+let fhWsConnected = false;
+function startFinnhubWebSocket() {
+  if (!FINNHUB_KEY) return;
+  let retries = 0;
+  const connect = () => {
+    const ws = new WebSocket(`wss://ws.finnhub.io?token=${FINNHUB_KEY}`);
+    ws.on("open", () => {
+      fhWsConnected = true;
+      retries = 0;
+      for (const sym of Object.keys(FH_WS_SYMS)) {
+        ws.send(JSON.stringify({ type: "subscribe", symbol: sym }));
+      }
+      for (const sym of Object.keys(FOREX_FH_SYMS)) {
+        ws.send(JSON.stringify({ type: "subscribe", symbol: sym }));
+      }
+      console.log(`[finnhub-ws] connected, subscribed to ${Object.keys(FH_WS_SYMS).length} equities/ETFs + ${Object.keys(FOREX_FH_SYMS).length} forex`);
+    });
+    ws.on("message", (raw: any) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type !== "trade" || !msg.data?.length) return;
+        const batch: Record<string, any> = {};
+        for (const trade of msg.data) {
+          const fhSym = trade.s;
+          const price = trade.p;
+          if (!price || price <= 0) continue;
+
+          const eqMapping = FH_WS_SYMS[fhSym];
+          if (eqMapping) {
+            if (eqMapping.startsWith("eq:")) {
+              const appSym = eqMapping.slice(3);
+              const base = EQUITY_BASE[appSym];
+              const chg = base ? +((price - base) / base * 100).toFixed(2) : 0;
+              livePrices[appSym] = { price, chg, ts: Date.now(), type: "equity" };
+              batch[appSym] = { price, chg, type: "equity" };
+            } else if (eqMapping.startsWith("etf:")) {
+              const parts = eqMapping.split(":");
+              const appSym = parts[1];
+              const factor = parseFloat(parts[2]);
+              const commodityPrice = +(price * factor).toFixed(2);
+              const base = METALS_BASE[appSym];
+              const chg = base ? +((commodityPrice - base) / base * 100).toFixed(2) : 0;
+              livePrices[appSym] = { price: commodityPrice, chg, ts: Date.now(), type: "metal" };
+              batch[appSym] = { price: commodityPrice, chg, type: "metal" };
+            }
+          }
+          const fxMapping = FOREX_FH_SYMS[fhSym];
+          if (fxMapping) {
+            const base = FOREX_BASE[fxMapping];
+            const chg = base ? +((price - base) / base * 100).toFixed(2) : 0;
+            livePrices[fxMapping] = { price, chg, ts: Date.now(), type: "forex" };
+            batch[fxMapping] = { price, chg, type: "forex" };
+          }
+        }
+        if (Object.keys(batch).length && sseClients.size > 0) {
+          broadcastSSE(batch);
+        }
+      } catch {}
+    });
+    ws.on("error", () => { fhWsConnected = false; });
+    ws.on("close", () => {
+      fhWsConnected = false;
+      retries++;
+      const backoff = Math.min(retries * 3000, 30000);
+      console.log(`[finnhub-ws] disconnected, retrying in ${backoff / 1000}s`);
+      setTimeout(connect, backoff);
+    });
+  };
+  connect();
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -379,6 +473,27 @@ export async function registerRoutes(
 
   startStockRefreshLoop();
   startHyperliquidRefreshLoop();
+  startFinnhubWebSocket();
+
+  app.get("/api/stream", (req, res) => {
+    if (sseClients.size >= 50) {
+      return res.status(503).json({ error: "Too many stream connections" });
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    const status = { wsConnected: fhWsConnected };
+    res.write(`data: ${JSON.stringify(status)}\n\n`);
+    sseClients.add(res);
+    const heartbeat = setInterval(() => {
+      try { res.write(": heartbeat\n\n"); }
+      catch { sseClients.delete(res); clearInterval(heartbeat); }
+    }, 15000);
+    req.on("close", () => { sseClients.delete(res); clearInterval(heartbeat); });
+  });
 
   app.get("/api/crypto", async (_req, res) => {
     const cached = cache["crypto"];
