@@ -90,7 +90,10 @@ Stripe is integrated for subscription management, handling product definitions, 
 
 -   **Integration**: Resend via Replit connector for email sending.
 -   **Subscribers**: Stored in `subscribers` DB table. Users can opt-in during signup.
--   **Daily Brief Scheduler**: Generates and sends AI briefs to active subscribers.
+-   **Daily Brief Scheduler**: Generates and sends AI briefs at 6AM ET daily to active subscribers.
+-   **Brief Format**: Price table (crypto/forex/metals/equities), per-instrument AI commentary (BTC, EUR/USD, USD/CAD, USD/JPY, Gold & Silver), watch items, risk level, direct app link, PWA install instructions.
+-   **Data Source**: Pulls from local server cached APIs (`/api/crypto`, `/api/finnhub`) to avoid external API blocks.
+-   **Sender**: Uses `onboarding@resend.dev` fallback when configured sender is Gmail (unverifiable domain).
 
 ### Monetization System (Stripe)
 
