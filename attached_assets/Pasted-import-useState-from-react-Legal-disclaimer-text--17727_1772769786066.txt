@@ -1,0 +1,353 @@
+import { useState } from “react”;
+
+// ─── Legal disclaimer text ────────────────────────────────────────────────
+const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide financial advice, investment recommendations, or trading signals. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.`;
+
+// ─── Floating particle background ────────────────────────────────────────
+function Particles() {
+const pts = Array.from({ length: 18 }, (_, i) => ({
+x: Math.random() * 100, y: Math.random() * 100,
+s: 1 + Math.random() * 2, d: 4 + Math.random() * 8,
+}));
+return (
+<div style={{ position: “absolute”, inset: 0, overflow: “hidden”, pointerEvents: “none” }}>
+{pts.map((p, i) => (
+<div key={i} style={{
+position: “absolute”, left: `${p.x}%`, top: `${p.y}%`,
+width: p.s, height: p.s, borderRadius: “50%”,
+background: i % 3 === 0 ? “#7c3aed” : i % 3 === 1 ? “#f59e0b” : “#38bdf8”,
+opacity: 0.3,
+animation: `float${i % 3} ${p.d}s ease-in-out infinite`,
+}} />
+))}
+</div>
+);
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────
+export default function WelcomePage({ onEnter }) {
+const [mode, setMode] = useState(“welcome”); // welcome | signin | signup | verify
+const [form, setForm] = useState({ name: “”, email: “”, password: “”, confirm: “”, dailyEmail: false, agreeTerms: false });
+const [loading, setLoading] = useState(false);
+const [error, setError] = useState(””);
+const [showLegal, setShowLegal] = useState(false);
+const [showSpam, setShowSpam] = useState(false);
+
+const set = (k, v) => { setForm(f => ({ …f, [k]: v })); setError(””); };
+
+// ── Sign Up ──────────────────────────────────────────────────────────────
+const handleSignUp = async () => {
+if (!form.name.trim()) return setError(“Please enter your name.”);
+if (!form.email.includes(”@”)) return setError(“Please enter a valid email.”);
+if (form.password.length < 6) return setError(“Password must be at least 6 characters.”);
+if (form.password !== form.confirm) return setError(“Passwords do not match.”);
+if (!form.agreeTerms) return setError(“You must agree to the terms to continue.”);
+setLoading(true);
+// ── Replace this block with your Replit backend call ──
+// await fetch(”/api/signup”, { method:“POST”, body: JSON.stringify(form) })
+// The backend should:
+// 1. Create user in DB
+// 2. Send welcome email via your existing email function
+// 3. If dailyEmail: subscribe to 6am daily email list
+await new Promise(r => setTimeout(r, 1400)); // simulate API
+setLoading(false);
+setMode(“verify”);
+};
+
+// ── Sign In ──────────────────────────────────────────────────────────────
+const handleSignIn = async () => {
+if (!form.email.includes(”@”)) return setError(“Please enter a valid email.”);
+if (!form.password) return setError(“Please enter your password.”);
+setLoading(true);
+// ── Replace with your Replit auth call ──
+// await fetch(”/api/signin”, { method:“POST”, body: JSON.stringify({ email: form.email, password: form.password }) })
+await new Promise(r => setTimeout(r, 1200));
+setLoading(false);
+if (onEnter) onEnter({ name: form.email.split(”@”)[0], email: form.email, plan: “free” });
+};
+
+const S = {
+input: { width: “100%”, background: “#0d0d0d”, border: “1px solid #2a2a2a”, borderRadius: 10, padding: “12px 14px”, color: “#fff”, fontSize: 14, boxSizing: “border-box”, outline: “none” },
+btn: (grad) => ({ width: “100%”, background: grad || “linear-gradient(135deg,#7c3aed,#a855f7)”, border: “none”, color: “#fff”, borderRadius: 11, padding: “13px”, cursor: “pointer”, fontWeight: 800, fontSize: 15 }),
+ghost: { width: “100%”, background: “transparent”, border: “1px solid #2a2a2a”, color: “#888”, borderRadius: 11, padding: “13px”, cursor: “pointer”, fontWeight: 600, fontSize: 14 },
+label: { fontSize: 12, color: “#666”, marginBottom: 5, display: “block” },
+card: { background: “#0d0d1a”, border: “1px solid #1a1a2e”, borderRadius: 20, padding: “32px 28px”, width: “100%”, maxWidth: 420, margin: “0 auto” },
+};
+
+return (
+<div style={{ fontFamily: “‘Inter’,sans-serif”, background: “#080810”, color: “#e8e8e8”, minHeight: “100vh”, display: “flex”, flexDirection: “column”, alignItems: “center”, justifyContent: “center”, padding: 20, position: “relative”, overflow: “hidden” }}>
+<style>{`@keyframes float0 { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-20px)} } @keyframes float1 { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-14px)} } @keyframes float2 { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-24px)} } @keyframes gradshift { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} } @keyframes glow { 0%,100%{box-shadow:0 0 40px #7c3aed22} 50%{box-shadow:0 0 80px #7c3aed44} } input::placeholder { color: #333; } input:focus { border-color: #7c3aed !important; } * { box-sizing: border-box; }`}</style>
+
+```
+  <Particles />
+
+  {/* BG radial glow */}
+  <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translateX(-50%)", width: 500, height: 500, background: "radial-gradient(circle,#7c3aed14 0%,transparent 70%)", pointerEvents: "none" }} />
+
+  {/* ── WELCOME SCREEN ── */}
+  {mode === "welcome" && (
+    <div style={{ textAlign: "center", maxWidth: 480, width: "100%", position: "relative", zIndex: 1 }}>
+      {/* Logo */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 72, height: 72, background: "linear-gradient(135deg,#7c3aed,#f59e0b)", borderRadius: 18, marginBottom: 16, animation: "glow 3s ease-in-out infinite" }}>
+          <span style={{ fontSize: 36, fontWeight: 900, color: "#fff" }}>C</span>
+        </div>
+      </div>
+
+      {/* Brand name */}
+      <div style={{ fontSize: "clamp(40px,10vw,72px)", fontWeight: 900, letterSpacing: -2, lineHeight: 1, marginBottom: 6 }}>
+        <span style={{ background: "linear-gradient(135deg,#fff,#a78bfa,#f59e0b)", backgroundSize: "200%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "gradshift 5s ease infinite" }}>
+          CLVRQuant
+        </span>
+      </div>
+      <div style={{ fontSize: 13, color: "#7c3aed", letterSpacing: 5, marginBottom: 28, fontWeight: 700 }}>AI · MARKET INTELLIGENCE</div>
+
+      {/* Intro */}
+      <p style={{ fontSize: 15, color: "#888", lineHeight: 1.8, marginBottom: 10, maxWidth: 380, margin: "0 auto 20px" }}>
+        Your personal quantitative market intelligence terminal. Real-time signals, AI-powered analysis, Polymarket odds, and Phantom Wallet — all in one place.
+      </p>
+
+      {/* NOT a trading platform badge */}
+      <div style={{ background: "#0a0a1f", border: "1px solid #7c3aed33", borderRadius: 12, padding: "12px 18px", marginBottom: 28, fontSize: 12, color: "#a78bfa", lineHeight: 1.7 }}>
+        📚 <strong style={{ color: "#fff" }}>This is an education & information platform.</strong><br />
+        CLVRQuant does <strong>not</strong> execute trades, manage funds, or provide financial advice.<br />
+        All content is for <strong>informational and learning purposes only.</strong>
+      </div>
+
+      {/* CTA buttons */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+        <button onClick={() => setMode("signup")} style={S.btn()}>
+          🚀 Create Free Account
+        </button>
+        <button onClick={() => setMode("signin")} style={S.ghost}>
+          Sign In
+        </button>
+        <button onClick={() => onEnter && onEnter({ plan: "free", guest: true })}
+          style={{ ...S.ghost, fontSize: 13, color: "#555", borderColor: "#1a1a1a" }}>
+          Continue as Guest (limited access)
+        </button>
+      </div>
+
+      {/* Legal disclaimer small */}
+      <div style={{ fontSize: 10, color: "#333", lineHeight: 1.7, maxWidth: 380, margin: "0 auto" }}>
+        By using CLVRQuant you agree that all market data and AI analysis is for informational purposes only. Trading involves substantial risk of loss. CLVRQuant, Mike Claver, and affiliated entities bear <strong style={{ color: "#444" }}>no liability</strong> for any financial decisions or losses. Use entirely at your own risk.{" "}
+        <span onClick={() => setShowLegal(true)} style={{ color: "#7c3aed", cursor: "pointer", textDecoration: "underline" }}>Read full disclaimer →</span>
+      </div>
+
+      <div style={{ marginTop: 20, fontSize: 10, color: "#2a2a2a" }}>© 2025 CLVRQuant · Mike Claver™ · Not a registered financial advisor</div>
+    </div>
+  )}
+
+  {/* ── SIGN UP ── */}
+  {mode === "signup" && (
+    <div style={{ ...S.card, position: "relative", zIndex: 1, animation: "glow 4s ease-in-out infinite" }}>
+      <div style={{ textAlign: "center", marginBottom: 24 }}>
+        <div style={{ fontSize: 28, fontWeight: 900, marginBottom: 4 }}>
+          <span style={{ color: "#a855f7" }}>CLVR</span>Quant
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>Create your account</div>
+        <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>Free forever · No credit card required</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <label style={S.label}>Full Name</label>
+          <input value={form.name} onChange={e => set("name", e.target.value)} placeholder="Your name" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Email Address</label>
+          <input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="you@email.com" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Password</label>
+          <input type="password" value={form.password} onChange={e => set("password", e.target.value)} placeholder="Min 6 characters" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Confirm Password</label>
+          <input type="password" value={form.confirm} onChange={e => set("confirm", e.target.value)} placeholder="Repeat password" style={S.input} />
+        </div>
+
+        {/* Daily email opt-in */}
+        <div style={{ background: "#0a0a1f", border: "1px solid #7c3aed22", borderRadius: 10, padding: "12px 14px" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={form.dailyEmail} onChange={e => set("dailyEmail", e.target.checked)}
+              style={{ marginTop: 2, accentColor: "#7c3aed", width: 16, height: 16, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: 13, color: "#e8e8e8", fontWeight: 600 }}>📧 Daily 6AM Market Brief</div>
+              <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>Receive a daily morning email with key market signals, top setups to watch, and QuantBrain insights before the market opens.</div>
+            </div>
+          </label>
+          {/* Spam disclaimer */}
+          <div style={{ marginTop: 8, fontSize: 10, color: "#444", lineHeight: 1.6, borderTop: "1px solid #1a1a1a", paddingTop: 8 }}>
+            🔒 We respect your inbox. We will <strong style={{ color: "#666" }}>never</strong> sell, share, or spam your email. You can unsubscribe at any time from any email we send. CLVRQuant emails are sent from <em>noreply@clvrquantai.com</em>.{" "}
+            <span onClick={() => setShowSpam(true)} style={{ color: "#7c3aed", cursor: "pointer" }}>Email policy →</span>
+          </div>
+        </div>
+
+        {/* Terms agreement */}
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+          <input type="checkbox" checked={form.agreeTerms} onChange={e => set("agreeTerms", e.target.checked)}
+            style={{ marginTop: 2, accentColor: "#7c3aed", width: 16, height: 16, flexShrink: 0 }} />
+          <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6 }}>
+            I understand that CLVRQuant is for <strong style={{ color: "#888" }}>informational purposes only</strong> and is not financial advice. I trade at my own risk. CLVRQuant and Mike Claver bear no liability for my financial decisions.{" "}
+            <span onClick={() => setShowLegal(true)} style={{ color: "#7c3aed", cursor: "pointer" }}>Read full disclaimer →</span>
+          </div>
+        </label>
+
+        {error && <div style={{ background: "#2a1010", border: "1px solid #f87171", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#f87171" }}>⚠️ {error}</div>}
+
+        <button onClick={handleSignUp} disabled={loading} style={S.btn()}>
+          {loading ? "Creating account…" : "Create Account →"}
+        </button>
+
+        <div style={{ textAlign: "center", fontSize: 12, color: "#444" }}>
+          Already have an account?{" "}
+          <span onClick={() => { setMode("signin"); setError(""); }} style={{ color: "#a855f7", cursor: "pointer" }}>Sign in →</span>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {/* ── SIGN IN ── */}
+  {mode === "signin" && (
+    <div style={{ ...S.card, position: "relative", zIndex: 1, animation: "glow 4s ease-in-out infinite" }}>
+      <div style={{ textAlign: "center", marginBottom: 24 }}>
+        <div style={{ fontSize: 28, fontWeight: 900, marginBottom: 4 }}>
+          <span style={{ color: "#a855f7" }}>CLVR</span>Quant
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>Welcome back</div>
+        <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>Sign in to your account</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <label style={S.label}>Email Address</label>
+          <input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="you@email.com" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Password</label>
+          <input type="password" value={form.password} onChange={e => set("password", e.target.value)} placeholder="Your password" style={S.input} />
+        </div>
+
+        <div style={{ textAlign: "right" }}>
+          <span style={{ fontSize: 12, color: "#7c3aed", cursor: "pointer" }}>Forgot password?</span>
+        </div>
+
+        {error && <div style={{ background: "#2a1010", border: "1px solid #f87171", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#f87171" }}>⚠️ {error}</div>}
+
+        <button onClick={handleSignIn} disabled={loading} style={S.btn()}>
+          {loading ? "Signing in…" : "Sign In →"}
+        </button>
+
+        {/* Free plan access note */}
+        <div style={{ background: "#0a0a1f", border: "1px solid #7c3aed22", borderRadius: 10, padding: "10px 14px", fontSize: 11, color: "#666", lineHeight: 1.6 }}>
+          🆓 <strong style={{ color: "#888" }}>Free plan includes:</strong> Radar tab, Macro Calendar, basic BTC/ETH/SOL prices, and read-only Polymarket odds. Upgrade anytime for full QuantBrain AI access.
+        </div>
+
+        <div style={{ textAlign: "center", fontSize: 12, color: "#444" }}>
+          Don't have an account?{" "}
+          <span onClick={() => { setMode("signup"); setError(""); }} style={{ color: "#a855f7", cursor: "pointer" }}>Sign up free →</span>
+        </div>
+
+        <button onClick={() => setMode("welcome")} style={{ ...S.ghost, fontSize: 12, color: "#444", borderColor: "#1a1a1a" }}>
+          ← Back
+        </button>
+      </div>
+    </div>
+  )}
+
+  {/* ── EMAIL VERIFY / WELCOME ── */}
+  {mode === "verify" && (
+    <div style={{ ...S.card, textAlign: "center", position: "relative", zIndex: 1 }}>
+      <div style={{ fontSize: 56, marginBottom: 16 }}>📬</div>
+      <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Check your inbox!</div>
+      <div style={{ fontSize: 14, color: "#888", lineHeight: 1.8, marginBottom: 20 }}>
+        We sent a welcome email to<br />
+        <strong style={{ color: "#a855f7" }}>{form.email}</strong>
+      </div>
+
+      <div style={{ background: "#0a0a1f", border: "1px solid #7c3aed22", borderRadius: 12, padding: "14px 16px", marginBottom: 20, textAlign: "left" }}>
+        <div style={{ fontSize: 11, color: "#7c3aed", letterSpacing: 2, marginBottom: 10 }}>YOUR WELCOME EMAIL INCLUDES</div>
+        {[
+          "👋 A personal welcome from Mike Claver",
+          "📊 How to use the Radar & Alpha Signals tabs",
+          "🧠 Introduction to QuantBrain AI analysis",
+          "🎯 How confluence scoring works",
+          "🔮 How to connect your Phantom Wallet",
+          form.dailyEmail ? "📧 You're subscribed to the 6AM Daily Brief ✓" : "📧 How to subscribe to the 6AM Daily Brief",
+          "⚠️ Important disclaimer — please read",
+        ].map((item, i) => (
+          <div key={i} style={{ fontSize: 12, color: "#666", padding: "4px 0", borderBottom: i < 6 ? "1px solid #111" : "none" }}>{item}</div>
+        ))}
+      </div>
+
+      {form.dailyEmail && (
+        <div style={{ background: "#0a1400", border: "1px solid #4ade8033", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#4ade80" }}>
+          ✅ You're subscribed to the 6AM Daily Market Brief. First email tomorrow morning!
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: "#444", marginBottom: 20, lineHeight: 1.6 }}>
+        Didn't receive it? Check your spam folder. Emails come from <em>noreply@clvrquantai.com</em>
+      </div>
+
+      <button onClick={() => onEnter && onEnter({ name: form.name, email: form.email, plan: "free", dailyEmail: form.dailyEmail })}
+        style={S.btn()}>
+        Enter CLVRQuant →
+      </button>
+    </div>
+  )}
+
+  {/* ── LEGAL MODAL ── */}
+  {showLegal && (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={() => setShowLegal(false)}>
+      <div style={{ background: "#0d0d1a", border: "1px solid #2a2a3a", borderRadius: 16, padding: 24, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto" }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#f59e0b", marginBottom: 14 }}>⚠️ Full Disclaimer & Terms of Use</div>
+        <div style={{ fontSize: 12, color: "#666", lineHeight: 1.9, marginBottom: 16 }}>{LEGAL}</div>
+        <div style={{ fontSize: 11, color: "#555", lineHeight: 1.7, borderTop: "1px solid #1a1a1a", paddingTop: 12, marginBottom: 16 }}>
+          <strong style={{ color: "#888" }}>Created by:</strong> Mike Claver<br />
+          <strong style={{ color: "#888" }}>Entity:</strong> CLVRQuant<br />
+          <strong style={{ color: "#888" }}>Purpose:</strong> Market education and information only<br />
+          <strong style={{ color: "#888" }}>Not registered as:</strong> Investment advisor, broker, or financial institution<br />
+          <strong style={{ color: "#888" }}>Jurisdiction:</strong> Users are responsible for compliance with local laws
+        </div>
+        <button onClick={() => setShowLegal(false)} style={{ width: "100%", background: "#1a1a2e", border: "1px solid #333", color: "#888", borderRadius: 8, padding: 10, cursor: "pointer", fontSize: 13 }}>
+          Close
+        </button>
+      </div>
+    </div>
+  )}
+
+  {/* ── SPAM / EMAIL POLICY MODAL ── */}
+  {showSpam && (
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={() => setShowSpam(false)}>
+      <div style={{ background: "#0d0d1a", border: "1px solid #2a2a3a", borderRadius: 16, padding: 24, maxWidth: 420, width: "100%" }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#38bdf8", marginBottom: 14 }}>🔒 Email & Anti-Spam Policy</div>
+        {[
+          ["What we send", "Welcome email on signup, optional 6AM daily market brief, and occasional product updates (max 1-2/month)."],
+          ["What we never do", "We will never sell, rent, or share your email address with any third party, advertiser, or data broker."],
+          ["Unsubscribe", "Every email contains an unsubscribe link. One click and you're off the list — no questions asked."],
+          ["Daily Brief", "Subscribed to the 6AM brief? You can unsubscribe at any time via the link in any daily email."],
+          ["Spam", "CLVRQuant has a strict zero-spam policy. If you receive something you didn't expect, email us and we'll fix it immediately."],
+          ["Sender", "All emails come from noreply@clvrquantai.com. Add us to your safe senders to avoid the spam folder."],
+        ].map(([title, body]) => (
+          <div key={title} style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 2 }}>{title}</div>
+            <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6 }}>{body}</div>
+          </div>
+        ))}
+        <button onClick={() => setShowSpam(false)} style={{ width: "100%", background: "#1a1a2e", border: "1px solid #333", color: "#888", borderRadius: 8, padding: 10, cursor: "pointer", fontSize: 13, marginTop: 8 }}>
+          Close
+        </button>
+      </div>
+    </div>
+  )}
+</div>
+```
+
+);
+}

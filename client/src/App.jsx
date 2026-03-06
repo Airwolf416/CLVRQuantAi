@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import PhantomWalletPanel from "./PhantomWallet";
 import FeaturesGuide from "./FeaturesGuide";
+import WelcomePage from "./WelcomePage";
 
 // ─── CLVRQuant Theme ──────────────────────────────────────
 const C = {
@@ -269,6 +270,14 @@ function Toast({msg,onDone}){
 // APP
 // ═══════════════════════════════════════════════════════════
 export default function App(){
+  const [user,setUser]=useState(null);
+
+  if(!user) return <WelcomePage onEnter={setUser}/>;
+
+  return <Dashboard user={user} setUser={setUser}/>;
+}
+
+function Dashboard({user,setUser}){
   const [tab,setTab]=useState("radar");
   const [priceTab,setPriceTab]=useState("crypto");
   const [sigSubTab,setSigSubTab]=useState("all");
@@ -326,7 +335,7 @@ export default function App(){
   const [briefData,setBriefData]=useState(null);
   const [briefDate,setBriefDate]=useState(null);
 
-  const [userTier,setUserTier]=useState(()=>{try{return localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
+  const [userTier,setUserTier]=useState(()=>{try{return user?.tier||localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
   const [accessCodeInput,setAccessCodeInput]=useState("");
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
   const [showUpgrade,setShowUpgrade]=useState(false);
@@ -1009,6 +1018,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             <button data-testid="btn-push-notif" onClick={requestPush} style={{background:"none",border:`1px solid ${notifPerm==="granted"?C.gold:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.muted2}}>{notifPerm==="granted"?"🔔":"🔕"}</button>
             {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
             :<button data-testid="btn-upgrade-header" onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
+            <button data-testid="btn-signout" onClick={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"3px 6px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>OUT</button>
             <div style={{textAlign:"right"}}>
               <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
                 <LiveDot live={hlLive}/><span style={{fontFamily:MONO,fontSize:7,color:hlLive?C.green:C.orange}}>HL</span>
@@ -1347,25 +1357,14 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             </div>
           </>}
 
-          {/* Subscribe */}
+          {/* Subscribe info */}
           <div style={{...panel,border:`1px solid rgba(201,168,76,.18)`}}>
             <div style={{...ph,background:"rgba(201,168,76,.04)",borderBottom:`1px solid rgba(201,168,76,.12)`}}>
-              <PTitle>Subscribe to Daily Brief</PTitle>
+              <PTitle>Daily Brief Delivery</PTitle>
               <Badge label="6:00 AM daily" color="gold"/>
             </div>
             <div style={{padding:16}}>
-              <div style={{fontSize:11,color:C.muted2,lineHeight:1.8,marginBottom:14,fontStyle:"italic"}}>Receive this brief in your inbox every weekday at 6:00 AM.</div>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                <input data-testid="input-sub-name" value={subName} onChange={e=>setSubName(e.target.value)} placeholder="Your name (optional)" style={{background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"10px 12px",color:C.text,fontFamily:SANS,fontSize:11}}/>
-                <input data-testid="input-sub-email" value={subEmail} onChange={e=>setSubEmail(e.target.value)} placeholder="your@email.com" type="email" style={{background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"10px 12px",color:C.text,fontFamily:SANS,fontSize:11}}/>
-                <button data-testid="button-subscribe" onClick={handleSubscribe} disabled={subLoading} style={{height:42,background:"rgba(201,168,76,.1)",color:subLoading?C.muted:C.gold2,border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:subLoading?"not-allowed":"pointer"}}>
-                  {subLoading?"Subscribing...":"Subscribe →"}
-                </button>
-              </div>
-              {subList.length>0&&<div style={{marginTop:12,padding:"10px 12px",background:"rgba(0,0,0,.2)",borderRadius:2}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.18em",marginBottom:7}}>SUBSCRIBED ({subList.length})</div>
-                {subList.map(e=><div key={e} style={{display:"flex",alignItems:"center",gap:7,marginBottom:4}}><span style={{color:C.gold,fontSize:8,fontFamily:MONO}}>✦</span><span style={{fontFamily:MONO,fontSize:10,color:C.text}}>{e}</span></div>)}
-              </div>}
+              <div style={{fontSize:11,color:C.muted2,lineHeight:1.8,fontStyle:"italic"}}>Daily briefs are delivered to your inbox every weekday at 6:00 AM ET. You can manage your subscription from your account settings or the unsubscribe link in any email.</div>
             </div>
           </div>
         </>}

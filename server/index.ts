@@ -49,6 +49,21 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+import session from "express-session";
+const isProduction = process.env.NODE_ENV === "production";
+app.set("trust proxy", 1);
+app.use(session({
+  secret: process.env.SESSION_SECRET!,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isProduction,
+  },
+}));
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
