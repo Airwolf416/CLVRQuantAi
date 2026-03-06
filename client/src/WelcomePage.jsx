@@ -144,16 +144,8 @@ export default function WelcomePage({ onEnter }) {
 
       {mode === "welcome" && (
         <div data-testid="welcome-screen" style={{ textAlign: "center", maxWidth: 480, width: "100%", position: "relative", zIndex: 1 }}>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 72, height: 72, background: "linear-gradient(135deg,#c9a84c,#e8c96d)", borderRadius: 14, marginBottom: 16, animation: "goldPulse 3s ease-in-out infinite" }}>
-              <span style={{ fontFamily: SERIF, fontSize: 36, fontWeight: 900, color: C.bg }}>C</span>
-            </div>
-          </div>
-
-          <div style={{ fontSize: "clamp(40px,10vw,64px)", fontWeight: 900, letterSpacing: -1, lineHeight: 1, marginBottom: 6, fontFamily: SERIF }}>
-            <span style={{ background: "linear-gradient(135deg,#f0f4ff,#e8c96d,#c9a84c)", backgroundSize: "200%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "goldShift 5s ease infinite" }}>
-              CLVRQuant
-            </span>
+          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: "clamp(40px,10vw,64px)", color: C.gold2, letterSpacing: "0.04em", lineHeight: 1, marginBottom: 6, textShadow: "0 0 40px rgba(201,168,76,.3)" }}>
+            CLVRQuant
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.gold, letterSpacing: "0.35em", marginBottom: 28, fontWeight: 600 }}>AI · MARKET INTELLIGENCE</div>
 
@@ -195,8 +187,8 @@ export default function WelcomePage({ onEnter }) {
         <div data-testid="signup-screen" style={{ background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: "28px 24px", width: "100%", maxWidth: 420, margin: "0 auto", position: "relative", zIndex: 1, animation: "goldPulse 4s ease-in-out infinite" }}>
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: `linear-gradient(90deg,transparent,${C.gold},transparent)` }} />
           <div style={{ textAlign: "center", marginBottom: 24 }}>
-            <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 900, marginBottom: 4 }}>
-              <span style={{ color: C.gold2 }}>CLVR</span><span style={{ color: C.white }}>Quant</span>
+            <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 900, marginBottom: 4, color: C.gold2 }}>
+              CLVRQuant
             </div>
             <div style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 700, color: C.white }}>Create your account</div>
             <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 4, letterSpacing: "0.12em" }}>Free forever · No credit card required</div>
@@ -263,8 +255,8 @@ export default function WelcomePage({ onEnter }) {
         <div data-testid="signin-screen" style={{ background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: "28px 24px", width: "100%", maxWidth: 420, margin: "0 auto", position: "relative", zIndex: 1, animation: "goldPulse 4s ease-in-out infinite" }}>
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: `linear-gradient(90deg,transparent,${C.gold},transparent)` }} />
           <div style={{ textAlign: "center", marginBottom: 24 }}>
-            <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 900, marginBottom: 4 }}>
-              <span style={{ color: C.gold2 }}>CLVR</span><span style={{ color: C.white }}>Quant</span>
+            <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 900, marginBottom: 4, color: C.gold2 }}>
+              CLVRQuant
             </div>
             <div style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 700, color: C.white }}>Welcome back</div>
             <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 4, letterSpacing: "0.12em" }}>Sign in to your account</div>
