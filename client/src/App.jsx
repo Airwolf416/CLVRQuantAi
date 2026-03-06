@@ -762,7 +762,46 @@ function Dashboard({user,setUser}){
       setFhStatus(anyLive?"live":"closed");
     }catch{setFhStatus("error");}
   },[triggerFlashes]);
-  useEffect(()=>{doFH();const iv=setInterval(doFH,15000);return()=>clearInterval(iv);},[doFH]);
+  useEffect(()=>{doFH();const iv=setInterval(doFH,60000);return()=>clearInterval(iv);},[doFH]);
+
+  // ── SSE stream for real-time equity/commodity/forex (Finnhub WebSocket) ──
+  const sseBuf=useRef({});
+  const sseRaf=useRef(null);
+  const flushSSE=useCallback(()=>{
+    const buf={...sseBuf.current};sseBuf.current={};sseRaf.current=null;
+    if(!Object.keys(buf).length)return;
+    const eqU={},mtU={},fxU={};
+    Object.entries(buf).forEach(([sym,d])=>{
+      if(d.type==="equity")eqU[sym]={price:d.price,chg:d.chg,live:true};
+      else if(d.type==="metal")mtU[sym]={price:d.price,chg:d.chg,live:true};
+      else if(d.type==="forex")fxU[sym]={price:d.price,chg:d.chg,live:true};
+    });
+    if(Object.keys(eqU).length)setEquityPrices(prev=>{const n={...prev,...eqU};triggerFlashes(n);return n;});
+    if(Object.keys(mtU).length)setMetalPrices(prev=>{const n={...prev,...mtU};triggerFlashes(n);return n;});
+    if(Object.keys(fxU).length)setForexPrices(prev=>{const n={...prev,...fxU};triggerFlashes(n);return n;});
+    setFhStatus("live");
+  },[triggerFlashes]);
+
+  useEffect(()=>{
+    let es;let reconTimer;let retries=0;
+    const connect=()=>{
+      try{
+        es=new EventSource("/api/stream");
+        es.onmessage=(e)=>{
+          try{
+            const data=JSON.parse(e.data);
+            if(!data||!Object.keys(data).length)return;
+            Object.assign(sseBuf.current,data);
+            if(!sseRaf.current)sseRaf.current=requestAnimationFrame(flushSSE);
+          }catch{}
+        };
+        es.onopen=()=>{retries=0;};
+        es.onerror=()=>{es.close();retries++;if(retries<10)reconTimer=setTimeout(connect,3000*Math.min(retries,5));};
+      }catch{}
+    };
+    connect();
+    return()=>{clearTimeout(reconTimer);if(sseRaf.current)cancelAnimationFrame(sseRaf.current);try{es.close();}catch{}};
+  },[flushSSE]);
 
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
@@ -1441,18 +1480,18 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           </div>}
           {priceTab==="equity"&&<div style={panel}>
             <div style={ph}><PTitle>Equities · Finnhub</PTitle><Badge label={fhLive?`${Object.values(equityPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub.io · NYSE/NASDAQ 9:30am–4pm ET</div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time trades · NYSE/NASDAQ</div>
             {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
           </div>}
           {priceTab==="metals"&&<div style={panel}>
             <div style={ph}><PTitle>Commodities</PTitle><Badge label={fhLive?`${Object.values(metalPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>gold-api.com · finnhub.io · live · 2min</div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>gold-api.com · finnhub websocket · real-time</div>
             {METALS_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={metalPrices[sym]} label={METAL_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
             <div style={{padding:"10px 14px",fontFamily:MONO,fontSize:9,color:C.muted2}}>Gold/Silver Ratio: <span style={{color:C.gold2,fontWeight:600}}>{metalPrices.XAU?.price&&metalPrices.XAG?.price?(metalPrices.XAU.price/metalPrices.XAG.price).toFixed(0):"—"}:1</span>{metalPrices.XAU?.price&&metalPrices.XAG?.price&&(metalPrices.XAU.price/metalPrices.XAG.price)>=90&&<span style={{color:C.green}}> · bullish for silver</span>}</div>
           </div>}
           {priceTab==="forex"&&<div style={panel}>
             <div style={ph}><PTitle>Forex</PTitle><Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>exchangerate-api · 24/5 · closed weekends</div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time · 24/5</div>
             {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
           </div>}
         </>}
