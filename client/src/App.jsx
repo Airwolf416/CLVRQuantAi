@@ -931,7 +931,9 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const nextEvents=MACRO_EVENTS.map(e=>{const[y,mo,d]=e.date.split("-").map(Number);const[h,m]=(e.timeET||"12:00").split(":").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+5,m,0));return{...e,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs);
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
 
-  const NAV=[
+  const isGuest=!!user?.guest;
+  const GUEST_TABS=["radar","prices","macro"];
+  const NAV_ALL=[
     {k:"radar",icon:"📡",label:"Radar"},
     {k:"prices",icon:"💹",label:"Markets"},
     {k:"macro",icon:"🏦",label:"Macro"},
@@ -942,6 +944,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
     {k:"ai",icon:"✦",label:"AI"},
     {k:"guide",icon:"📖",label:"Guide"},
   ];
+  const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
 
   return(
     <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:76,paddingTop:"env(safe-area-inset-top,0px)",maxWidth:780,margin:"0 auto",position:"relative"}}>
