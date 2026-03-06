@@ -158,7 +158,7 @@ async function fetchBinancePrices(): Promise<Record<string, any>> {
           recordPrice(sym, price);
           result[sym] = {
             price,
-            chg: CRYPTO_BASE[sym] ? +((price - CRYPTO_BASE[sym]) / CRYPTO_BASE[sym] * 100).toFixed(2) : 0,
+            chg: hlData[sym]?.dayChg ?? (CRYPTO_BASE[sym] ? +((price - CRYPTO_BASE[sym]) / CRYPTO_BASE[sym] * 100).toFixed(2) : 0),
             funding: hlData[sym]?.funding || 0,
             oi: hlData[sym]?.oi || 0,
             perpPrice: price,
@@ -199,11 +199,15 @@ async function startHyperliquidRefreshLoop() {
       universe.forEach((asset: any, i: number) => {
         if (HL_PERP_SYMS.includes(asset.name)) {
           const appName = HL_TO_APP[asset.name] || asset.name;
+          const markPx = parseFloat(ctxs[i]?.markPx || 0);
+          const prevDayPx = parseFloat(ctxs[i]?.prevDayPx || 0);
+          const dayChg = prevDayPx > 0 ? +((markPx - prevDayPx) / prevDayPx * 100).toFixed(2) : 0;
           hlData[appName] = {
             funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
-            oi: parseFloat(ctxs[i]?.openInterest || 0) * parseFloat(ctxs[i]?.markPx || 0),
+            oi: parseFloat(ctxs[i]?.openInterest || 0) * markPx,
             perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) : 0,
             volume: parseFloat(ctxs[i]?.dayNtlVlm || 0),
+            dayChg,
           };
         }
       });
