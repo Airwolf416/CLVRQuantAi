@@ -211,6 +211,76 @@ function FactorBreakdown({factors,score,C:_C}){
   );
 }
 
+// ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
+function SignalCard({sig,marketData,onShare,onAiAnalyze}){
+  const[expanded,setExpanded]=useState(false);
+  const isLong=sig.dir==="LONG";
+  const dirColor=isLong?C.green:C.red;
+  const dirBg=isLong?"rgba(0,199,135,.06)":"rgba(255,64,96,.06)";
+  const md=marketData[sig.token]||{};
+  const priceMoveAbs=Math.abs(sig.pctMove||0);
+  const fundingRate=md.funding||0;
+  const oiM=md.oi?Math.round(md.oi/1e6):0;
+  const vH=md.volHistory||[];const avgVol=vH.length>=3?vH.slice(-5).reduce((a,b)=>a+b,0)/Math.min(vH.length,5):0;
+  const lastVol=vH[vH.length-1]||0;const volumeMultiplier=avgVol>0?lastVol/avgVol:1;
+  const{total:qScore,factors}=scoreSignal({priceMoveAbs,direction:isLong?"long":"short",fundingRate,oiM,volumeMultiplier});
+  const conviction=qScore>=75?"HIGH":qScore>=55?"MED":"LOW";
+  const convColor=qScore>=75?C.green:qScore>=55?C.orange:C.red;
+  const moveType=priceMoveAbs>=3?"MAJOR MOVE":priceMoveAbs>=2?"BREAKOUT":"MOMENTUM";
+  const minutesAgo=sig.ts?Math.floor((Date.now()-sig.ts)/60000):0;
+  return(
+    <div data-testid={`signal-card-${sig.id}`} style={{background:C.panel,border:`1px solid ${qScore>=75?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
+      <div style={{padding:"14px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:28,height:28,background:dirBg,border:`1px solid ${dirColor}44`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:900,fontFamily:MONO,color:dirColor,flexShrink:0}}>
+            {isLong?"+":"\u2212"}
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+              <span style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:C.white,letterSpacing:"0.05em"}}>{sig.token}</span>
+              <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:dirBg,color:dirColor,border:`1px solid ${dirColor}44`,fontFamily:MONO,letterSpacing:"0.1em"}}>{sig.dir}</span>
+              {sig.real&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,199,135,.06)",color:C.green,border:"1px solid rgba(0,199,135,.25)",fontFamily:MONO,letterSpacing:"0.1em",animation:"pulse 2s infinite"}}>LIVE</span>}
+              <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.06)",color:C.gold,border:"1px solid rgba(201,168,76,.25)",fontFamily:MONO,letterSpacing:"0.1em"}}>ALPHA-DETECT</span>
+              <span style={{fontFamily:MONO,fontSize:9,color:sig.pctMove>0?C.green:C.red,fontWeight:700}}>{sig.pctMove>0?"+":""}{sig.pctMove}%</span>
+              <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
+            </div>
+            <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,marginTop:5,lineHeight:1.55}}>{sig.desc}</div>
+            <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap",alignItems:"center"}}>
+              {sig.tags.map((tg,j)=><Badge key={j} label={tg.l} color={tg.c}/>)}
+              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.purple,fontFamily:MONO,letterSpacing:"0.08em"}}>{moveType}</span>
+              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.muted2,fontFamily:MONO}}>{"\u2264"}{sig.lev}</span>
+              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${convColor}44`,color:convColor,fontFamily:MONO,fontWeight:700}}>{conviction}</span>
+              {volumeMultiplier>1.5&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.cyan}44`,color:C.cyan,fontFamily:MONO}}>Vol {volumeMultiplier.toFixed(1)}x</span>}
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+            <ScoreRing score={qScore} C={C}/>
+            <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
+              style={{fontSize:9,padding:"3px 8px",borderRadius:2,border:`1px solid ${C.border}`,background:C.bg,color:C.muted2,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.08em"}}>share</button>
+          </div>
+        </div>
+      </div>
+      {expanded&&<div style={{padding:"0 14px 14px"}}>
+        <FactorBreakdown factors={factors} score={qScore} C={C}/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:10}}>
+          {[
+            {l:"Funding",v:fundingRate!==0?(fundingRate>0?"+":"")+pct(fundingRate,4):"Neutral",c:fundingRate>0.02?C.red:fundingRate<-0.02?C.green:C.muted2},
+            {l:"Open Interest",v:oiM>0?`$${oiM}M`:"N/A",c:oiM>100?C.green:C.muted2},
+            {l:"Volume",v:volumeMultiplier>0?`${volumeMultiplier.toFixed(1)}x`:"N/A",c:volumeMultiplier>2?C.cyan:C.muted2},
+          ].map(({l,v,c})=>(
+            <div key={l} style={{background:C.bg,borderRadius:2,padding:"8px 10px",textAlign:"center",border:`1px solid ${C.border}`}}>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginBottom:3,letterSpacing:"0.1em"}}>{l}</div>
+              <div style={{fontFamily:MONO,fontSize:12,fontWeight:700,color:c}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <button data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();onAiAnalyze(sig);}}
+          style={{width:"100%",marginTop:10,padding:"8px 0",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.25)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer"}}>Analyze with AI</button>
+      </div>}
+    </div>
+  );
+}
+
 // ─── LIQUIDATION HEATMAP ─────────────────────────────────
 function LiqHeatmap({sym,price,oi}){
   if(!price)return null;
@@ -898,75 +968,8 @@ Also provide an overall market regime assessment and your best risk-adjusted set
     );
   };
 
-  const SignalCard=({sig,marketData})=>{
-    const[expanded,setExpanded]=useState(false);
-    const isLong=sig.dir==="LONG";
-    const dirColor=isLong?C.green:C.red;
-    const dirBg=isLong?"rgba(0,199,135,.06)":"rgba(255,64,96,.06)";
-    const md=marketData[sig.token]||{};
-    const priceMoveAbs=Math.abs(sig.pctMove||0);
-    const fundingRate=md.funding||0;
-    const oiM=md.oi?Math.round(md.oi/1e6):0;
-    const vH=md.volHistory||[];const avgVol=vH.length>=3?vH.slice(-5).reduce((a,b)=>a+b,0)/Math.min(vH.length,5):0;
-    const lastVol=vH[vH.length-1]||0;const volumeMultiplier=avgVol>0?lastVol/avgVol:1;
-    const{total:qScore,factors}=scoreSignal({priceMoveAbs,direction:isLong?"long":"short",fundingRate,oiM,volumeMultiplier});
-    const conviction=qScore>=75?"HIGH":qScore>=55?"MED":"LOW";
-    const convColor=qScore>=75?C.green:qScore>=55?C.orange:C.red;
-    const moveType=priceMoveAbs>=3?"MAJOR MOVE":priceMoveAbs>=2?"BREAKOUT":"MOMENTUM";
-    const minutesAgo=sig.ts?Math.floor((Date.now()-sig.ts)/60000):0;
-
-    return(
-      <div data-testid={`signal-card-${sig.id}`} style={{background:C.panel,border:`1px solid ${qScore>=75?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
-        <div style={{padding:"14px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{width:28,height:28,background:dirBg,border:`1px solid ${dirColor}44`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:900,fontFamily:MONO,color:dirColor,flexShrink:0}}>
-              {isLong?"+":"−"}
-            </div>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
-                <span style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:C.white,letterSpacing:"0.05em"}}>{sig.token}</span>
-                <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:dirBg,color:dirColor,border:`1px solid ${dirColor}44`,fontFamily:MONO,letterSpacing:"0.1em"}}>{sig.dir}</span>
-                {sig.real&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,199,135,.06)",color:C.green,border:`1px solid rgba(0,199,135,.25)`,fontFamily:MONO,letterSpacing:"0.1em",animation:"pulse 2s infinite"}}>LIVE</span>}
-                <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.06)",color:C.gold,border:`1px solid rgba(201,168,76,.25)`,fontFamily:MONO,letterSpacing:"0.1em"}}>ALPHA-DETECT</span>
-                <span style={{fontFamily:MONO,fontSize:9,color:sig.pctMove>0?C.green:C.red,fontWeight:700}}>{sig.pctMove>0?"+":""}{sig.pctMove}%</span>
-                <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
-              </div>
-              <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,marginTop:5,lineHeight:1.55}}>{sig.desc}</div>
-              <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap",alignItems:"center"}}>
-                {sig.tags.map((tg,j)=><Badge key={j} label={tg.l} color={tg.c}/>)}
-                <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.purple,fontFamily:MONO,letterSpacing:"0.08em"}}>{moveType}</span>
-                <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.muted2,fontFamily:MONO}}>≤{sig.lev}</span>
-                <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${convColor}44`,color:convColor,fontFamily:MONO,fontWeight:700}}>{conviction}</span>
-                {volumeMultiplier>1.5&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.cyan}44`,color:C.cyan,fontFamily:MONO}}>Vol {volumeMultiplier.toFixed(1)}x</span>}
-              </div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
-              <ScoreRing score={qScore} C={C}/>
-              <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();shareSignal(sig);}}
-                style={{fontSize:9,padding:"3px 8px",borderRadius:2,border:`1px solid ${C.border}`,background:C.bg,color:C.muted2,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.08em"}}>share</button>
-            </div>
-          </div>
-        </div>
-        {expanded&&<div style={{padding:"0 14px 14px"}}>
-          <FactorBreakdown factors={factors} score={qScore} C={C}/>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:10}}>
-            {[
-              {l:"Funding",v:fundingRate!==0?(fundingRate>0?"+":"")+pct(fundingRate,4):"Neutral",c:fundingRate>0.02?C.red:fundingRate<-0.02?C.green:C.muted2},
-              {l:"Open Interest",v:oiM>0?`$${oiM}M`:"N/A",c:oiM>100?C.green:C.muted2},
-              {l:"Volume",v:volumeMultiplier>0?`${volumeMultiplier.toFixed(1)}x`:"N/A",c:volumeMultiplier>2?C.cyan:C.muted2},
-            ].map(({l,v,c})=>(
-              <div key={l} style={{background:C.bg,borderRadius:2,padding:"8px 10px",textAlign:"center",border:`1px solid ${C.border}`}}>
-                <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginBottom:3,letterSpacing:"0.1em"}}>{l}</div>
-                <div style={{fontFamily:MONO,fontSize:12,fontWeight:700,color:c}}>{v}</div>
-              </div>
-            ))}
-          </div>
-          <button data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");}}
-            style={{width:"100%",marginTop:10,padding:"8px 0",background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer"}}>Analyze with AI →</button>
-        </div>}
-      </div>
-    );
-  };
+  const onShareSig=useCallback((sig)=>shareSignal(sig),[shareSignal]);
+  const onAiSig=useCallback((sig)=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");},[]);
 
   const hlLive=hlStatus==="live",fhLive=fhStatus==="live";
   const allSignals=[...liveSignals].sort((a,b)=>(b.ts||0)-(a.ts||0));
@@ -1626,7 +1629,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                 Signals appear when any tracked token moves &gt;1.5% within a 5-minute window.<br/>
                 Tracking {sigTracking} tokens in real-time. Detector is armed.
               </div>}
-            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices}/>);
+            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig}/>);
           })()}
         </>}
 
