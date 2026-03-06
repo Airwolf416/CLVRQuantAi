@@ -167,8 +167,9 @@ async function sendDailyBriefEmails() {
 
     for (const sub of subs) {
       try {
+        const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
         await client.emails.send({
-          from: fromEmail || "CLVRQuant <onboarding@resend.dev>",
+          from: senderAddress,
           to: sub.email,
           subject: `CLVRQuant Daily Brief — ${today}`,
           html,
