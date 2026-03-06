@@ -1005,21 +1005,42 @@ export async function registerRoutes(
   });
 
   const OWNER_CODE = process.env.OWNER_CODE || "CLVR-OWNER-2026";
+  const OWNER_USER_ID = "fb7ce6a0-a770-4f17-af04-aa69ff9c4dfc";
 
   app.post("/api/verify-code", async (req, res) => {
     const { code } = req.body;
+    const userId = (req.session as any)?.userId || null;
     if (!code) return res.status(400).json({ error: "Code required" });
 
     if (code === OWNER_CODE) {
+      if (!userId || userId !== OWNER_USER_ID) {
+        return res.json({ valid: false, error: "This code is reserved" });
+      }
       return res.json({ valid: true, tier: "pro", type: "owner", label: "Owner Access" });
+    }
+
+    if (!userId) {
+      return res.json({ valid: false, error: "You must be signed in to use an access code" });
     }
 
     try {
       const ac = await storage.getAccessCode(code);
-      if (ac && ac.active) {
-        return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label });
+      if (!ac || !ac.active) {
+        return res.json({ valid: false });
       }
-      res.json({ valid: false });
+      if (ac.expiresAt && new Date(ac.expiresAt) < new Date()) {
+        return res.json({ valid: false, error: "This code has expired" });
+      }
+      if (ac.usedBy && ac.usedBy !== userId) {
+        return res.json({ valid: false, error: "This code has already been claimed by another user" });
+      }
+      if (!ac.usedBy) {
+        await pool.query(
+          "UPDATE access_codes SET used_by = $1, used_at = NOW() WHERE code = $2",
+          [userId, code]
+        );
+      }
+      return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label });
     } catch {
       res.json({ valid: false });
     }
@@ -1034,8 +1055,16 @@ export async function registerRoutes(
       return res.status(400).json({ error: "code and label required" });
     }
     try {
-      const ac = await storage.createAccessCode({ code, label, type: type || "vip" });
-      res.json(ac);
+      const codeType = type || "vip";
+      const ac = await storage.createAccessCode({ code, label, type: codeType });
+      if (codeType === "vip") {
+        const expiresAt = new Date();
+        expiresAt.setMonth(expiresAt.getMonth() + 3);
+        await pool.query("UPDATE access_codes SET expires_at = $1 WHERE code = $2", [expiresAt, code]);
+        res.json({ ...ac, expiresAt });
+      } else {
+        res.json(ac);
+      }
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

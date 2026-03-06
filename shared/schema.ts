@@ -22,6 +22,9 @@ export const accessCodes = pgTable("access_codes", {
   label: text("label").notNull(),
   type: text("type").notNull().default("vip"),
   active: boolean("active").notNull().default(true),
+  usedBy: text("used_by"),
+  usedAt: timestamp("used_at"),
+  expiresAt: timestamp("expires_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
