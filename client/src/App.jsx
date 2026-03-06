@@ -315,11 +315,7 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze}){
               {volumeMultiplier>1.5&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.cyan}44`,color:C.cyan,fontFamily:MONO}}>Vol {volumeMultiplier.toFixed(1)}x</span>}
             </div>
           </div>
-          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
-            <ScoreRing score={qScore} C={C}/>
-            <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
-              style={{fontSize:9,padding:"3px 8px",borderRadius:2,border:`1px solid ${C.border}`,background:C.bg,color:C.muted2,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.08em"}}>share</button>
-          </div>
+          <ScoreRing score={qScore} C={C}/>
         </div>
       </div>
       {expanded&&<div style={{padding:"0 14px 14px"}}>
@@ -336,8 +332,12 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze}){
             </div>
           ))}
         </div>
-        <button data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();onAiAnalyze(sig);}}
-          style={{width:"100%",marginTop:10,padding:"8px 0",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.25)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer"}}>Analyze with AI</button>
+        <div style={{display:"flex",gap:8,marginTop:10}}>
+          <button data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();onAiAnalyze(sig);}}
+            style={{flex:1,padding:"8px 0",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.25)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer"}}>Analyze with AI</button>
+          <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
+            style={{padding:"8px 16px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:2,fontFamily:MONO,fontSize:10,color:C.muted2,cursor:"pointer",letterSpacing:"0.08em"}}>↗ Share</button>
+        </div>
       </div>}
     </div>
   );
@@ -1101,7 +1101,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
 
   const isGuest=!!user?.guest;
-  const GUEST_TABS=["radar","prices","macro"];
+  const GUEST_TABS=["radar","prices","macro","about"];
   const NAV_ALL=[
     {k:"radar",icon:"📡",label:"Radar"},
     {k:"prices",icon:"💹",label:"Markets"},
@@ -1111,6 +1111,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
     {k:"alerts",icon:"🔔",label:"Alerts"},
     {k:"wallet",icon:"👛",label:"Wallet"},
     {k:"ai",icon:"✦",label:"AI"},
+    {k:"about",icon:"📖",label:"About"},
     {k:"account",icon:"⚙",label:"Account"},
   ];
   const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
@@ -1378,7 +1379,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           </div>}
           {priceTab==="metals"&&<div style={panel}>
             <div style={ph}><PTitle>Commodities</PTitle><Badge label={fhLive?`${Object.values(metalPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>gold-api.com · metals · energy · 2min</div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>gold-api.com · finnhub.io · live · 2min</div>
             {METALS_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={metalPrices[sym]} label={METAL_LABELS[sym]}/>)}
             <div style={{padding:"10px 14px",fontFamily:MONO,fontSize:9,color:C.muted2}}>Gold/Silver Ratio: <span style={{color:C.gold2,fontWeight:600}}>{metalPrices.XAU?.price&&metalPrices.XAG?.price?(metalPrices.XAU.price/metalPrices.XAG.price).toFixed(0):"—"}:1</span>{metalPrices.XAU?.price&&metalPrices.XAG?.price&&(metalPrices.XAU.price/metalPrices.XAG.price)>=90&&<span style={{color:C.green}}> · bullish for silver</span>}</div>
           </div>}
@@ -1789,6 +1790,72 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         </>}
 
         {/* ══ GUIDE ══ */}
+        {tab==="about"&&<>
+          <div style={{...panel,border:`1px solid rgba(201,168,76,.18)`}}>
+            <div style={{padding:"28px 18px 10px",textAlign:"center"}}>
+              <div style={{fontFamily:SERIF,fontSize:28,fontWeight:900,color:C.white,letterSpacing:"-0.02em"}}>CLVR<span style={{color:C.gold}}>Quant</span></div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.3em",marginTop:4}}>TRADE SMARTER WITH AI</div>
+              <div style={{width:40,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`,margin:"16px auto"}}/>
+              <div style={{fontFamily:SERIF,fontSize:15,color:C.muted2,fontStyle:"italic",lineHeight:1.8,maxWidth:480,margin:"0 auto"}}>
+                CLVRQuant was built by a trader, for traders. After years of switching between dozens of tabs, apps, and feeds just to stay on top of the markets, the idea was simple: put everything you need in one clean, intelligent dashboard.
+              </div>
+            </div>
+          </div>
+          <div style={panel}>
+            <div style={ph}><PTitle>Why CLVRQuant?</PTitle></div>
+            <div style={{padding:"8px 16px 16px"}}>
+              {[
+                {t:"One Dashboard, All Markets",d:"Crypto, equities, commodities, forex, and macro events — all live, all in one place. No more tab-switching."},
+                {t:"AI-Powered Intelligence",d:"Claude AI analyzes real-time data across all asset classes, giving you trade ideas with specific entries, targets, and stops. Not generic advice — data-driven analysis using live prices and your actual signals."},
+                {t:"Real Alpha Signals",d:"Our QuantBrain engine detects price moves, anomalies, and momentum shifts across 32 crypto assets, 16 equities, and commodities in real-time. Every signal is scored using multiple on-chain and market factors."},
+                {t:"Stay Ahead Daily",d:"The Morning Brief summarizes overnight moves, key macro events, and top setups before you even open a chart. Price alerts notify you when targets hit. The macro calendar keeps you aware of Fed decisions, CPI, NFP, and central bank events worldwide."},
+                {t:"Built for Mobile",d:"Designed mobile-first so you can check markets, review signals, and get AI analysis from anywhere — your pocket trading terminal."},
+              ].map(({t,d},i)=>(
+                <div key={i} style={{marginBottom:14}}>
+                  <div style={{fontFamily:SERIF,fontSize:14,fontWeight:700,color:C.gold2,marginBottom:4}}>{t}</div>
+                  <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.8}}>{d}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={panel}>
+            <div style={ph}><PTitle>Glossary</PTitle><Badge label="Learn" color="gold"/></div>
+            <div style={{padding:"8px 16px 16px"}}>
+              {[
+                {t:"QuantBrain Score",d:"A 0–100 confluence score that measures how strong a trading signal is. It combines price movement, funding rates, open interest, volume, and momentum into a single number. 75+ is high conviction, 55-74 is medium, below 55 is low."},
+                {t:"Alpha Signal",d:"A detected trading opportunity where the asset is showing unusual activity — a significant price move, volume spike, or momentum shift that could indicate a profitable trade setup."},
+                {t:"Confluence",d:"When multiple independent indicators point in the same direction. The more factors that align (price move + rising volume + favorable funding + momentum), the stronger the signal."},
+                {t:"Funding Rate",d:"In perpetual futures markets, the funding rate is a periodic payment between long and short traders. Positive funding means longs pay shorts (market is bullish/overleveraged). Negative funding means shorts pay longs (bearish/overleveraged shorts). Extreme funding often precedes reversals."},
+                {t:"Open Interest (OI)",d:"The total value of outstanding derivative contracts (futures/options) for an asset. Rising OI with rising price = new money entering (bullish). Rising OI with falling price = new shorts (bearish). Falling OI = positions closing."},
+                {t:"Kelly Criterion",d:"A mathematical formula used to determine optimal position size. It balances expected return against risk. A Kelly fraction of 2-3% means risking 2-3% of your portfolio on that trade — conservative but mathematically optimal for long-term growth."},
+                {t:"Leverage",d:"Borrowing funds to increase your position size. 5x leverage means a 1% price move gives you a 5% gain (or loss). Higher leverage = higher risk. Our signals suggest max leverage based on conviction level."},
+                {t:"LONG vs SHORT",d:"LONG means you profit when the price goes up (buy low, sell high). SHORT means you profit when the price goes down (sell high, buy back lower)."},
+                {t:"Perpetual Futures (Perps)",d:"Derivative contracts that let you trade an asset's price without owning it. Unlike traditional futures, they have no expiration date. They track the spot price through the funding rate mechanism."},
+                {t:"Volume Multiplier",d:"Compares current trading volume to the recent average. A 2.5x volume multiplier means trading activity is 2.5 times higher than normal — often a sign something significant is happening."},
+                {t:"Macro Events",d:"Major economic announcements that move all markets: Federal Reserve interest rate decisions (FOMC), Consumer Price Index (CPI = inflation measure), Non-Farm Payrolls (NFP = jobs data), and GDP reports."},
+                {t:"Risk/Reward Ratio",d:"The potential profit versus potential loss of a trade. A 3:1 R/R means you could make 3x what you're risking. Professional traders typically look for at least 2:1 ratios."},
+                {t:"Conviction Level",d:"HIGH (75+ score): strong multi-factor alignment, consider full position. MEDIUM (55-74): moderate signal, consider half position. LOW (below 55): weak signal, exercise caution or skip."},
+                {t:"SIM vs LIVE",d:"LIVE means the price is fetched in real-time from market data providers. SIM (simulated) means the data source is temporarily unavailable and a reference price is shown instead."},
+                {t:"Morning Brief",d:"A daily AI-generated market summary that covers overnight price moves, key macro events, and the top trading setups for the day. Delivered fresh each session."},
+                {t:"Polymarket Odds",d:"Real-time prediction market probabilities from Polymarket.com. These show what the crowd believes about future events (elections, regulations, etc.) and can impact crypto/equity sentiment."},
+              ].map(({t,d},i)=>(
+                <div key={i} data-testid={`glossary-${i}`} style={{marginBottom:16,paddingBottom:16,borderBottom:i<15?`1px solid ${C.border}`:"none"}}>
+                  <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.gold2,letterSpacing:"0.04em",marginBottom:5}}>{t}</div>
+                  <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.9}}>{d}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{...panel,border:`1px solid rgba(201,168,76,.12)`}}>
+            <div style={{padding:"14px 16px",textAlign:"center"}}>
+              <div style={{fontFamily:SERIF,fontSize:13,color:C.muted2,fontStyle:"italic",lineHeight:1.8}}>
+                "Markets reward the prepared. CLVRQuant keeps you prepared."
+              </div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,marginTop:8,letterSpacing:"0.15em"}}>CLVRQUANT · MIKE CLAVER</div>
+            </div>
+          </div>
+        </>}
+
         {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={setShowUpgrade}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
