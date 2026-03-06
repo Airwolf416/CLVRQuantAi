@@ -54,6 +54,10 @@ const ALL_SYMS=[...CRYPTO_SYMS,...EQUITY_SYMS,...METALS_SYMS,...FOREX_SYMS];
 const METAL_LABELS={XAU:"Gold",XAG:"Silver",WTI:"Oil WTI",BRENT:"Oil Brent",NATGAS:"Nat Gas",COPPER:"Copper",PLATINUM:"Platinum"};
 const FOREX_LABELS={EURUSD:"EUR/USD",GBPUSD:"GBP/USD",USDJPY:"USD/JPY",USDCHF:"USD/CHF",AUDUSD:"AUD/USD",USDCAD:"USD/CAD",NZDUSD:"NZD/USD",EURGBP:"EUR/GBP",EURJPY:"EUR/JPY",GBPJPY:"GBP/JPY",USDMXN:"USD/MXN",USDZAR:"USD/ZAR",USDTRY:"USD/TRY",USDSGD:"USD/SGD"};
 
+// ─── BINANCE WEBSOCKET SYMBOL MAP ────────────────────────
+const BINANCE_WS_MAP={BTC:"btcusdt",ETH:"ethusdt",SOL:"solusdt",WIF:"wifusdt",DOGE:"dogeusdt",AVAX:"avaxusdt",LINK:"linkusdt",ARB:"arbusdt",PEPE:"pepeusdt",XRP:"xrpusdt",BNB:"bnbusdt",ADA:"adausdt",DOT:"dotusdt",MATIC:"maticusdt",UNI:"uniusdt",AAVE:"aaveusdt",NEAR:"nearusdt",SUI:"suiusdt",APT:"aptusdt",OP:"opusdt",TIA:"tiausdt",SEI:"seiusdt",JUP:"jupusdt",ONDO:"ondousdt",RENDER:"renderusdt",INJ:"injusdt",FET:"fetusdt",TAO:"taousdt",PENDLE:"pendleusdt",HBAR:"hbarusdt",TRUMP:"trumpusdt",HYPE:"hypeusdt"};
+const BINANCE_REVERSE=Object.fromEntries(Object.entries(BINANCE_WS_MAP).map(([k,v])=>[v,k]));
+
 // ─── SIGNALS (live only — no simulated data) ─────────────
 
 // ─── API FETCHERS (proxied through backend) ──────────────
@@ -577,7 +581,7 @@ function Dashboard({user,setUser}){
     });
     if(Object.keys(nF).length){
       setFlashes(f=>({...f,...nF}));
-      setTimeout(()=>setFlashes(f=>{const n={...f};Object.keys(nF).forEach(k=>delete n[k]);return n;}),700);
+      setTimeout(()=>setFlashes(f=>{const n={...f};Object.keys(nF).forEach(k=>delete n[k]);return n;}),350);
     }
   },[]);
 
@@ -628,7 +632,27 @@ function Dashboard({user,setUser}){
     });
   },[addAlert]);
 
-  // ── Crypto Spot (Binance) ───────────────────────────
+  // ── Crypto Spot (Binance WebSocket — real-time) ─────
+  const wsBuf=useRef({});
+  const rafId=useRef(null);
+
+  const flushWS=useCallback(()=>{
+    const buf={...wsBuf.current};
+    wsBuf.current={};
+    rafId.current=null;
+    if(!Object.keys(buf).length)return;
+    setCryptoPrices(prev=>{
+      const next={...prev};
+      Object.entries(buf).forEach(([sym,price])=>{
+        const base=CRYPTO_BASE[sym];
+        const chg=base?+((price-base)/base*100).toFixed(2):0;
+        next[sym]={...prev[sym],price,chg,live:true};
+      });
+      triggerFlashes(next);return next;
+    });
+    setHlStatus("live");
+  },[triggerFlashes]);
+
   const doHL=useCallback(async()=>{
     try{
       const data=await fetchHyperliquid();
@@ -647,7 +671,40 @@ function Dashboard({user,setUser}){
       setHlStatus("live");
     }catch{setHlStatus("error");}
   },[triggerFlashes,checkVolumeSpike,checkFundingFlip]);
-  useEffect(()=>{doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL]);
+
+  useEffect(()=>{
+    doHL();
+    let wsConnected=false;let lastMsg=0;
+    const iv=setInterval(()=>{
+      if(!wsConnected||(lastMsg&&Date.now()-lastMsg>10000)){wsConnected=false;doHL();}
+    },2000);
+    const streams=Object.values(BINANCE_WS_MAP).map(s=>s+"@trade").join("/");
+    const url="wss://stream.binance.com:9443/stream?streams="+streams;
+    let ws;let reconTimer;let retries=0;
+    const connect=()=>{
+      try{
+        ws=new WebSocket(url);
+        ws.onmessage=(e)=>{
+          lastMsg=Date.now();
+          try{
+            const msg=JSON.parse(e.data);
+            const d=msg.data;if(!d||!d.s)return;
+            const sym=BINANCE_REVERSE[d.s.toLowerCase()];
+            if(!sym)return;
+            const price=parseFloat(d.p);
+            if(!price||isNaN(price))return;
+            wsBuf.current[sym]=price;
+            if(!rafId.current)rafId.current=requestAnimationFrame(flushWS);
+          }catch{}
+        };
+        ws.onopen=()=>{wsConnected=true;retries=0;lastMsg=Date.now();setHlStatus("live");};
+        ws.onerror=()=>{};
+        ws.onclose=()=>{wsConnected=false;retries++;if(retries<5)reconTimer=setTimeout(connect,3000*retries);};
+      }catch{wsConnected=false;}
+    };
+    connect();
+    return()=>{clearInterval(iv);clearTimeout(reconTimer);if(rafId.current)cancelAnimationFrame(rafId.current);try{ws.onclose=null;ws.close();}catch{}};
+  },[doHL,flushWS]);
 
   // ── Crypto Perps (Hyperliquid) ─────────────────────
   const doPerps=useCallback(async()=>{
@@ -1374,7 +1431,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
               ))}
             </div>
             {cryptoSubTab==="spot"&&<>
-              <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>binance.us spot · last traded price · 2s</div>
+              <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>binance websocket · real-time trades · ~16ms</div>
               {CRYPTO_SYMS.map(sym=>{const d=cryptoPrices[sym];return <PriceRow key={sym} sym={sym} d={d} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>;})}
             </>}
             {cryptoSubTab==="perp"&&<>
@@ -1807,7 +1864,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
               <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.3em",marginTop:4}}>TRADE SMARTER WITH AI</div>
               <div style={{width:40,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`,margin:"16px auto"}}/>
               <div style={{fontFamily:SERIF,fontSize:15,color:C.muted2,fontStyle:"italic",lineHeight:1.8,maxWidth:480,margin:"0 auto"}}>
-                CLVRQuant was built by a trader, for traders. After years of switching between dozens of tabs, apps, and feeds just to stay on top of the markets, the idea was simple: put everything you need in one clean, intelligent dashboard.
+                CLVRQuant was born from frustration. After years of switching between dozens of tabs, apps, and feeds just to stay on top of the markets, the idea was simple: put everything you need in one clean, intelligent dashboard.
               </div>
             </div>
           </div>
@@ -1819,7 +1876,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                 {t:"AI-Powered Intelligence",d:"Claude AI analyzes real-time data across all asset classes, giving you trade ideas with specific entries, targets, and stops. Not generic advice — data-driven analysis using live prices and your actual signals."},
                 {t:"Real Alpha Signals",d:"Our QuantBrain engine detects price moves, anomalies, and momentum shifts across 32 crypto assets, 16 equities, and commodities in real-time. Every signal is scored using multiple on-chain and market factors."},
                 {t:"Stay Ahead Daily",d:"The Morning Brief summarizes overnight moves, key macro events, and top setups before you even open a chart. Price alerts notify you when targets hit. The macro calendar keeps you aware of Fed decisions, CPI, NFP, and central bank events worldwide."},
-                {t:"Built for Mobile",d:"Designed mobile-first so you can check markets, review signals, and get AI analysis from anywhere — your pocket trading terminal."},
+                {t:"Built for Mobile",d:"Designed mobile-first so you can check markets, review signals, and get AI analysis from anywhere — your pocket market intelligence hub."},
               ].map(({t,d},i)=>(
                 <div key={i} style={{marginBottom:14}}>
                   <div style={{fontFamily:SERIF,fontSize:14,fontWeight:700,color:C.gold2,marginBottom:4}}>{t}</div>
