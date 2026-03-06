@@ -2,209 +2,98 @@
 
 ## Overview
 
-CLVRQuant v2 is a luxury-styled mobile-first market intelligence dashboard for cryptocurrency, stocks, metals, and forex. It displays real-time data from Binance (crypto spot), Hyperliquid (crypto perps/funding/OI/volume), Finnhub (stocks), gold-api.com (metals), and exchangerate-api.com (forex), plus an AI analyst powered by Anthropic Claude. Features include a macro central bank calendar, AI-powered daily brief, email subscription, price alerts, quant signals, and v2 additions: Radar command center with live alert system, macro countdown timers, volume spike detection, funding rate flip alerts, liquidation heatmap, push notifications, and Phantom wallet integration with Perps PnL calculator.
+CLVRQuant v2 is a luxury-styled, mobile-first market intelligence dashboard providing real-time data and AI-powered analysis for cryptocurrency, stocks, metals, and forex. It integrates data from various financial APIs and features an AI analyst powered by Anthropic Claude. Key capabilities include a market intelligence radar, macro-economic calendar, AI-driven daily brief, custom alerts, quant signals, and Phantom wallet integration with a Perps PnL calculator. The project's vision is to empower users with sophisticated, AI-enhanced market insights in a sleek, intuitive interface, targeting both individual traders and financial enthusiasts seeking a competitive edge.
 
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
 
-## Design System — CLVRQuant Navy/Gold Aesthetic
-
-- **Theme**: Always dark mode (no toggle) — bg:#050709, panel:#0c1220, border:#141e35
-- **Gold accent**: #c9a84c (primary), #e8c96d (light), #f7e0a0 (highlight)
-- **Fonts**: Playfair Display (SERIF — headers/titles), IBM Plex Mono (MONO — data/labels), Barlow (SANS — body)
-- **Design language**: 2px border-radius, letterSpacing 0.15em on labels, subtle gold gradients, grid overlay background on body, serif italic for CTAs
-- **Watchlist symbol**: ✦ (not star emoji)
-- **Panels**: Matte navy with gold-tinted header backgrounds (rgba(201,168,76,.03))
-- **Buttons**: Gold-bordered with serif italic text (e.g. "Analyze", "Subscribe")
-- **Font sizing**: Bumped up for iPhone/iPad readability — badges 9px, labels 10px, body 12-13px, panel titles 15px
-
 ## System Architecture
+
+### Design System — CLVRQuant Navy/Gold Aesthetic
+
+The application exclusively uses a dark mode theme (`bg:#050709`, `panel:#0c1220`, `border:#141e35`) with a consistent gold accent (`#c9a84c` primary). Typography includes Playfair Display (serif for headers), IBM Plex Mono (monospace for data), and Barlow (sans-serif for body). Design elements feature 2px border-radius, `letterSpacing 0.15em` on labels, subtle gold gradients, a grid overlay background, and serif italic for CTAs. UI components like panels and buttons adhere to this aesthetic, and font sizes are optimized for mobile readability.
+
+### Authentication (client/src/WelcomePage.jsx)
+
+The app is gated by a WelcomePage that shows before the main dashboard. Users can:
+- **Create Account**: Name, email, password, optional daily brief opt-in, terms agreement. Sends welcome email via Resend.
+- **Sign In**: Email + password authentication with bcrypt.
+- **Continue as Guest**: Limited access without an account.
+
+Auth uses express-session with SESSION_SECRET. Routes: POST `/api/auth/signup`, POST `/api/auth/signin`, GET `/api/auth/me`, POST `/api/auth/signout`. The WelcomePage checks `/api/auth/me` on mount for session persistence.
 
 ### Frontend (client/src/App.jsx)
 
-- **Single-file React app** with inline styles (CLVRQuant theme, not Tailwind for main UI)
-- **Data polling**: Crypto every 3s via `/api/crypto`, Finnhub every 15s via `/api/finnhub`, signals/news rotate via 1s tick
-- **Bottom nav**: 9 tabs — Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, Guide
-- **Max width**: 780px (optimized for iPad as well as iPhone)
-- **Radar tab** (v2): Command center with push notification prompt, active alerts panel, live news intelligence, next macro event countdown (Countdown component), upcoming events list, volume spike monitor (6 crypto), funding rate monitor with flip detection, liquidation heatmap (BTC/ETH/SOL/XAU)
-- **Markets tab**: Sub-tabs for Crypto (spot/perp), Equities, Metals, Forex
-- **Macro tab**: Central bank calendar (FED/ECB/BOJ/BOC/BOE/RBA) + US data events (CPI/NFP/PCE); bank filter; iCal download; Ask AI button
-- **Brief tab**: AI-generated morning market commentary with CLVRQuant-branded header, price snapshot, per-asset analysis (serif italic), watch items, key risk, Mike Claver attribution; email subscription form
-- **Signals tab**: With watchlist filter, crypto/equity/metals/forex sub-filters
-- **Alerts tab**: Custom alerts on price/funding with browser notifications
-- **Wallet tab**: Phantom wallet integration (connect/disconnect, SOL balance, SPL tokens, send SOL, sign messages, tx history, perps PnL calculator)
-- **AI tab**: Claude-powered analysis with live market context + integrated QuantBrain engine; two buttons: "Analyze" (custom queries) and "Get Today's Trade Ideas + Analysis" (QuantBrain confluence scoring, Kelly Criterion, regime detection, structured trade ideas — all running behind the scenes)
-- **Guide tab**: Comprehensive features guide explaining all 11 platform capabilities with data source listing
+The frontend is a React application split into `App` (auth gate) and `Dashboard` (main content) components with inline styles, optimized for a maximum width of 780px. It features a bottom navigation bar with nine tabs: Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, and Guide.
 
-### Phantom Wallet (client/src/PhantomWallet.jsx)
+-   **Radar**: A command center with active alerts, live news, macro event countdowns, volume spike detection, funding rate flip alerts, and a liquidation heatmap.
+-   **Markets**: Displays real-time data for Crypto (spot/perp), Equities, Metals, and Forex.
+-   **Macro**: Provides a central bank and US economic data calendar with filtering and AI integration.
+-   **Brief**: Presents an AI-generated daily market commentary with asset analysis and a subscription form.
+-   **Signals**: Offers quantifiable trading signals with filtering options.
+-   **Alerts**: Allows users to set custom price and funding alerts with browser notifications.
+-   **Wallet**: Integrates with Phantom wallet for Solana operations, including a Perps PnL calculator.
+-   **AI**: Provides Claude-powered market analysis and trade ideas, leveraging the QuantBrain engine for confluence scoring, Kelly Criterion, and regime detection.
+-   **Guide**: A comprehensive guide to platform features.
 
-- **usePhantom hook**: Connects to Phantom browser extension, fetches SOL balance + SPL tokens via Solana RPC
-- **Known mints**: USDC, USDT, wSOL, ETH, mSOL, BONK, JUP mapped to symbols
-- **Sub-tabs**: Overview, Tokens, Send, Sign, History, PnL Calc
-- **sendSOL**: Uses @solana/web3.js (installed) for live SOL transfers via Phantom
-- **signMessage**: Wallet authentication via Phantom signMessage
-- **PerpsPnlCalculator**: Standalone perps PnL calculator with long/short direction, entry/exit price, size, leverage, maker/taker fees; calculates gross/net PnL, ROE, fees, margin, liquidation price, breakeven
-- **Styling**: Matches CLVRQuant navy/gold theme (not the purple/violet default)
-- **Available when disconnected**: PnL calculator shown even without wallet connection
-
-#### v2 Components
-- **sendPush**: Push notification helper (Notification API)
-- **AlertBanner**: Dismissible fixed alert banner at top of screen; color-coded by type (macro=orange, volume=cyan, funding=green, liq=red, price=gold)
-- **Countdown**: Live countdown timer with days/hours/min/sec; hot (red <30min), warm (orange <2hr), normal (muted) states; compact mode for inline use
-- **LiqHeatmap**: Liquidation/stop cluster visualization; seeded from price levels; green=long liquidations below, red=short liquidations above
-- **MACRO_EVENTS**: 16 hardcoded 2026 macro events for frontend countdown timers (FED/ECB/BOJ/BOC/BOE/NFP/CPI/PCE)
-
-#### News Intelligence
-- **newsFeed**: Array of live news items from CryptoCompare + Twitter/X (via RapidAPI Twitter API45) + CryptoPanic (when available)
-- **newsFilter**: Filter for news by asset (ALL/SOCIAL/BTC/ETH/SOL/XRP/EQUITIES)
-- News polling: every 120s via `/api/news`
-- News data fed into AI system prompt and morning brief context
-
-#### v2 State and Callbacks
-- **notifPerm**: Push notification permission state
-- **liqSym**: Selected symbol for liquidation heatmap (BTC/ETH/SOL/XAU)
-- **activeAlerts**: Array of active alert objects with type, title, body, assets
-- **volRef/fundRef**: Refs tracking volume/funding history for spike/flip detection
-- **firedAlerts/macroFired**: Deduplication refs for alerts
-- **addAlert**: Creates alert, deduplicates, sends push notification, triggers toast
-- **checkVolumeSpike**: Fires alert when volume >5x the 5-period average
-- **checkFundingFlip**: Fires alert on funding sign reversal or extreme levels (>0.08%)
-- **checkMacroCountdowns**: Fires alerts at 60/30/10/2 minute thresholds before macro events
-
-#### Existing Features
-- **Watchlist**: toggle; persisted in state
-- **OI sparklines**: SVG sparkline charts for crypto open interest history
-- **Share signal**: Copy signal to clipboard with textarea fallback for non-HTTPS
-- **Toast**: Gold background, useRef pattern to stabilize callback, 2500ms auto-dismiss
-- **Tick interval**: Uses tickRef.current (useRef); runs checkMacroCountdowns every second
-- **Fonts**: Playfair Display + IBM Plex Mono + Barlow loaded via @import in App.jsx style tag
+Key components include `AlertBanner` for notifications, `Countdown` for macro events, and `LiqHeatmap` for liquidation clusters. News intelligence is sourced from CryptoCompare and Twitter/X, and feeds into the AI system.
 
 ### Backend (server/routes.ts)
 
-- **API Routes**:
-  - `GET /api/crypto` — Binance spot prices + Hyperliquid funding/OI/volume for 30 tokens, cached 1.5s
-  - `GET /api/perps` — Hyperliquid perp prices + funding/OI/volume for 30 tokens
-  - `GET /api/news` — Live news from CryptoCompare + Twitter/X influencers via RapidAPI (+ CryptoPanic if available), cached 120s, auto-tags assets
-  - `GET /api/finnhub` — Cached Finnhub stock/metal/forex data from background refresh loop
-  - `GET /api/signals` — Live-detected signals (>1.5% moves in 5-min window)
-  - `GET /api/macro` — FairEconomy calendar, today+ events only, HIGH+MED impact
-  - `GET /api/polymarket` — Polymarket gamma API proxy, cached 60s, 17 market slugs
-  - `POST /api/ai/analyze` — Anthropic Claude API proxy (max_tokens=1024)
-  - `POST /api/subscribe` — Email subscription (in-memory)
-- **Hyperliquid background loop**: Every 5s, fetches allMids + metaAndAssetCtxs; stores funding, OI, perpPrice, volume (dayNtlVlm)
-- **Finnhub background loop**: 16 stocks x 1.5s delay (60 req/min free tier), refreshes every 120s
-- **Forex**: Free exchangerate-api.com (no key)
-- **Metals**: gold-api.com free API — XAU/XAG/XPT
-- **Macro**: FairEconomy calendar with content-type check; empty results not cached full 10 min
-- **Signal detection**: MOVE_THRESHOLD=1.5%, MOVE_WINDOW=5min, SIGNAL_COOLDOWN=10min; windowStart must be >=50% of MOVE_WINDOW old
+The backend provides API routes for all data and AI interactions. It acts as a proxy for external APIs, caching responses to manage rate limits and improve performance.
 
-### Server Stability (server/index.ts)
+-   **Data Routes**: `/api/crypto` (Binance, Hyperliquid), `/api/perps` (Hyperliquid), `/api/finnhub` (stocks, metals, forex), `/api/signals`, `/api/macro` (FairEconomy calendar), `/api/polymarket`.
+-   **AI Routes**: `/api/ai/analyze` (Anthropic Claude proxy).
+-   **Subscription Routes**: `/api/subscribe`.
+Background loops are used for refreshing Hyperliquid, Finnhub, and news data at regular intervals. Signal detection identifies significant price movements.
 
-- **process.exit(1) intercept**: Vite's esbuild service crash handler blocked to keep Express running
-- **SIGTERM/SIGINT handlers**: Set shuttingDown flag so real shutdown still works
+### Monetization System (Stripe + Access Codes)
 
-### Build System
+CLVRQuant implements a tiered monetization model:
+-   **Free Tier**: Basic features like prices, macro calendar, news, and limited alerts.
+-   **Pro Tier**: Access to AI analysis, QuantBrain trade ideas, morning briefs, unlimited alerts, signals, liquidation heatmap, and volume/funding monitors.
 
-- **Client**: Vite builds React app to `dist/public/`
-- **Server**: esbuild bundles Express server to `dist/index.cjs`
-- **Dev**: `npm run dev` runs tsx with Vite middleware (HMR)
-
-### Key Files
-
-- `client/src/App.jsx` — Main React dashboard (CLVRQuant v2 with all features)
-- `client/src/PhantomWallet.jsx` — Phantom wallet hook, PnL calculator, wallet panel component
-- `client/src/QuantBrain.jsx` — Confluence scoring engine, Kelly Criterion, trade setup, regime detection, AI analyst
-- `client/src/FeaturesGuide.jsx` — Comprehensive platform features guide
-- `client/index.html` — HTML shell with SEO meta tags
-- `client/src/main.tsx` — React entry point
-- `client/src/index.css` — Tailwind directives + CSS variables (for build pipeline)
-- `server/routes.ts` — API proxy routes with caching, background refresh, macro calendar, subscribe, live signal detection, volume tracking, Polymarket proxy
-- `server/index.ts` — Express server with process.exit intercept
-- `server/vite.ts` — Vite dev middleware (DO NOT EDIT)
-- `vite.config.ts` — Vite config (DO NOT EDIT)
+Stripe is integrated for subscription management, handling product definitions, checkout sessions, webhooks, and customer portals. An access code system, including an owner code and VIP codes, provides alternative Pro access. A `ProGate` component in the frontend manages feature access based on the user's tier.
 
 ## External Dependencies
 
 ### APIs
-- **Binance** — Free, no API key, crypto spot prices for 26 tokens (primary); MATIC/INJ/TAO/PENDLE fallback to HL
-- **Hyperliquid** — Free, no API key, perp prices + funding + OI + 24h volume for 30 tokens (background loop every 5s)
-- **CryptoCompare** — Free, no API key, crypto news feed (popular/latest) with sentiment votes
-- **CryptoPanic** — API key (env var CRYPTOPANIC_API_KEY), hot news with sentiment (behind Cloudflare, may fail from servers)
-- **Finnhub** — Free tier API key (env var FINNHUB_KEY), 16 stock quotes + commodity futures
-- **gold-api.com** — Free, no API key, XAU/XAG/XPT spot prices
-- **ExchangeRate API** — Free, no API key, 14 forex pairs
-- **FairEconomy** — Free, no API key, macro economic calendar
-- **Polymarket** — Free gamma-api.polymarket.com, prediction market odds
-- **Solana RPC** — Free mainnet RPC (api.mainnet-beta.solana.com) for wallet balance/tokens
-- **Anthropic Claude** — Requires `ANTHROPIC_API_KEY` environment variable
+
+-   **Binance**: Crypto spot prices.
+-   **Hyperliquid**: Crypto perpetual prices, funding rates, open interest, and volume.
+-   **CryptoCompare**: Crypto news feed.
+-   **Finnhub**: Stock quotes and commodity futures (requires `FINNHUB_KEY`).
+-   **gold-api.com**: Precious metals spot prices.
+-   **ExchangeRate API**: Forex pairs.
+-   **FairEconomy**: Macroeconomic calendar.
+-   **Polymarket**: Prediction market odds.
+-   **Solana RPC**: For Phantom wallet balance and token data.
+-   **Anthropic Claude**: AI analysis and daily brief generation (requires `ANTHROPIC_API_KEY`).
+-   **Twitter API45 (via RapidAPI)**: For Twitter/X influencer feeds (requires `RAPIDAPI_KEY`).
+-   **CryptoPanic**: Hot news (optional, requires `CRYPTOPANIC_API_KEY`).
 
 ### NPM Packages
-- **@solana/web3.js** — Solana SDK for wallet send transactions
+
+-   **@solana/web3.js**: Solana SDK for wallet transactions.
 
 ### Environment Variables
-- `FINNHUB_KEY` — Required for stock quotes
-- `ANTHROPIC_API_KEY` — Required for AI analyst + daily brief features
-- `RAPIDAPI_KEY` — Required for Twitter/X influencer feed (Twitter API45 on RapidAPI)
-- `CRYPTOPANIC_API_KEY` — Optional, CryptoPanic news (may be blocked by Cloudflare)
-- `SESSION_SECRET` — Available but not currently used
-- `OWNER_CODE` — Owner access code for permanent Pro access (default: CLVR-OWNER-2026)
+
+-   `FINNHUB_KEY`
+-   `ANTHROPIC_API_KEY`
+-   `RAPIDAPI_KEY`
+-   `CRYPTOPANIC_API_KEY` (optional)
+-   `SESSION_SECRET` (required for auth sessions)
+-   `OWNER_CODE`
 
 ### Email System (Resend)
-- **Integration**: Resend via Replit connector (`conn_resend_01KJZGAYDD4MX7AK0VZYKCYMFW`)
-- **Client**: `server/resendClient.ts` — uses Replit connector for auth (never cache client)
-- **Subscribers**: Persisted in `subscribers` table (email, name, active flag)
-- **Daily Brief Scheduler**: `server/dailyBrief.ts` — generates AI brief via Claude + sends to all active subscribers at 6:00 AM ET
-- **Email template**: Luxury CLVRQuant-branded HTML with navy/gold theme, key moves table, analysis, watch items, risk level
-- **Routes**: `POST /api/subscribe`, `POST /api/unsubscribe`, `POST /api/send-test-brief` (admin test trigger)
 
-## Monetization System (Stripe + Access Codes)
+-   **Integration**: Resend via Replit connector for email sending.
+-   **Subscribers**: Stored in `subscribers` DB table. Users can opt-in during signup.
+-   **Daily Brief Scheduler**: Generates and sends AI briefs to active subscribers.
 
-### Tier System
-- **Free tier**: Prices, macro calendar, news, 3 alerts
-- **Pro tier ($29/mo or $199/yr)**: AI analyst, QuantBrain trade ideas, morning briefs, unlimited alerts, signals, liquidation heatmap, volume/funding monitors
+### Monetization System (Stripe)
 
-### Stripe Integration
-- **Connector**: Replit Stripe integration (`conn_stripe_01KJZEVAXAFW56CC2Q2ZVCHAQ6`)
-- **Products**: CLVRQuant Pro (`prod_U5r0eZMxeY4zkz`) with monthly + yearly prices
-- **Webhook**: `/api/stripe/webhook` (raw body, before express.json())
-- **Backend files**: `server/stripeClient.ts`, `server/webhookHandlers.ts`, `server/seed-products.ts`
-- **DB tables**: `stripe.*` schema (auto-synced), `public.users` (tier, stripeCustomerId, stripeSubscriptionId), `public.access_codes`
-
-### Access Code System
-- **Owner code**: `OWNER_CODE` env var (default `CLVR-OWNER-2026`) — permanent Pro access
-- **VIP codes**: Stored in `access_codes` table with optional max_uses and expiration
-- **Verification**: `POST /api/verify-code` checks owner code first, then DB codes
-
-### Frontend Paywall
-- **ProGate component**: Wraps Pro features with blur overlay + upgrade CTA
-- **Upgrade modal**: Shows Pro features, monthly/yearly Stripe checkout buttons, access code input
-- **Header**: Shows PRO badge or UPGRADE button based on tier
-- **Persistence**: Tier stored in localStorage (`clvr_tier`), verified via Stripe session or access code
-
-### Stripe API Routes
-- `GET /api/stripe/config` — Stripe publishable key
-- `GET /api/stripe/products` — Active products with prices from `stripe.*` schema
-- `POST /api/stripe/checkout` — Creates Stripe Checkout session
-- `GET /api/stripe/subscription` — Verifies subscription from session_id
-- `POST /api/stripe/portal` — Customer portal link
-- `POST /api/verify-code` — Access code verification
-- `GET /api/access-codes` — List access codes (admin)
-
-## Important Notes
-
-- DO NOT edit `server/vite.ts` or `vite.config.ts`
-- DO NOT edit `package.json` without user permission
-- The app uses inline styles, not Tailwind for the main UI
-- All external API calls are proxied through the backend (no API keys in frontend)
-- USDCAD displays 4 decimal places
-- Email subscribers stored in-memory (not persisted to DB)
-- Toast fix: useRef(onDone) pattern with empty dep array prevents re-render loop
-- Notification API: always guard with `typeof Notification !== "undefined"`
-- Clipboard: check `navigator.clipboard && window.isSecureContext` first, then fallback to `document.execCommand("copy")`
-- CLVRQuant is always dark mode — no dark/light toggle
-- Crypto volume tracked via Hyperliquid `dayNtlVlm` field
-- Signal detection: real only (no simulated), seenSigIds ref for dedup
-- AI system prompt includes ALL 30 crypto/16 stocks/7 commodities/14 forex with live prices
-- Morning brief JSON extracted via regex `{[\s\S]*}` to handle markdown-wrapped responses
-- No fake/mock data anywhere — all live API data only
+-   **Integration**: Stripe via Replit connector for subscription management.
+-   **Products**: CLVRQuant Pro with monthly and yearly pricing.
+-   **Database**: `stripe.*` schema for syncing Stripe data, `public.users` for user tier and subscription IDs, `public.access_codes` for managing access codes.

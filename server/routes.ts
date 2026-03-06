@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
-import session from "express-session";
+import { getUncachableResendClient } from "./resendClient";
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
@@ -1052,6 +1052,113 @@ export async function registerRoutes(
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  app.post("/api/auth/signup", async (req, res) => {
+    const { name, email, password, dailyEmail } = req.body;
+    if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
+    if (!password || password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
+    if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
+    try {
+      const existing = await storage.getUserByEmail(email.toLowerCase().trim());
+      if (existing) return res.status(409).json({ error: "An account with this email already exists" });
+      const hashed = await bcrypt.hash(password, 12);
+      const user = await storage.createUser({
+        username: email.toLowerCase().trim(),
+        email: email.toLowerCase().trim(),
+        password: hashed,
+        name: name.trim(),
+        subscribeToBrief: !!dailyEmail,
+      });
+      if (dailyEmail) {
+        await pool.query(
+          `INSERT INTO subscribers (id, email, name, active) VALUES (gen_random_uuid(), $1, $2, true) ON CONFLICT (email) DO UPDATE SET active = true, name = COALESCE($2, subscribers.name)`,
+          [email.toLowerCase().trim(), name.trim()]
+        );
+      }
+      try {
+        const { client: resend, fromEmail } = await getUncachableResendClient();
+        await resend.emails.send({
+          from: fromEmail,
+          to: email.toLowerCase().trim(),
+          subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
+          html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
+              <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">AI · MARKET INTELLIGENCE</div>
+            </div>
+            <div style="border-top:1px solid #141e35;padding-top:20px">
+              <p style="font-size:16px;color:#f0f4ff;margin-bottom:4px">Welcome, <strong>${name.trim()}</strong></p>
+              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant account is live. Here's what you have access to:</p>
+              <div style="background:#0c1220;border:1px solid #141e35;border-radius:4px;padding:16px;margin:16px 0">
+                <div style="font-family:monospace;font-size:10px;color:#c9a84c;letter-spacing:0.15em;margin-bottom:10px">YOUR FEATURES</div>
+                ${[
+                  "Real-time prices — 32 crypto, 16 equities, 7 commodities, 14 forex",
+                  "Live signal detection — QuantBrain AI scoring",
+                  "Macro calendar — Central bank decisions & economic events",
+                  "AI Market Analyst — Ask anything, get trade ideas",
+                  "Price alerts — Custom notifications",
+                  "Phantom Wallet — Solana integration",
+                  dailyEmail ? "📧 Daily 6AM Brief — Subscribed ✓" : "📧 Daily 6AM Brief — Not subscribed",
+                ].map(f => `<div style="font-size:12px;color:#c8d4ee;padding:4px 0;display:flex;align-items:center;gap:8px"><span style="color:#c9a84c">✦</span> ${f}</div>`).join("")}
+              </div>
+              ${dailyEmail ? `<div style="background:rgba(201,168,76,0.06);border:1px solid rgba(201,168,76,0.2);border-radius:4px;padding:12px 16px;margin:12px 0">
+                <div style="font-size:11px;color:#c9a84c;font-weight:700">Daily Brief Enrolled</div>
+                <div style="font-size:11px;color:#6b7fa8;margin-top:4px;line-height:1.6">You'll receive a morning market brief at 6:00 AM ET every weekday with key levels, signals, and AI insights. You can unsubscribe anytime.</div>
+              </div>` : ""}
+              <div style="background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.15);border-radius:4px;padding:12px 16px;margin:16px 0">
+                <div style="font-size:10px;color:#ff8c00;font-weight:700;letter-spacing:0.15em;margin-bottom:4px">IMPORTANT DISCLAIMER</div>
+                <div style="font-size:10px;color:#6b7fa8;line-height:1.7">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss. CLVRQuant and Mike Claver bear no liability for any financial decisions.</div>
+              </div>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</p>
+            </div>
+          </div>`,
+        });
+      } catch (emailErr: any) {
+        console.error("Welcome email failed:", emailErr.message);
+      }
+      (req.session as any).userId = user.id;
+      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+    } catch (e: any) {
+      console.error("Signup error:", e.message);
+      if (e.message?.includes("unique") || e.message?.includes("duplicate")) {
+        return res.status(409).json({ error: "An account with this email already exists" });
+      }
+      res.status(500).json({ error: "Signup failed. Please try again." });
+    }
+  });
+
+  app.post("/api/auth/signin", async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
+    if (!password) return res.status(400).json({ error: "Password required" });
+    try {
+      const user = await storage.getUserByEmail(email.toLowerCase().trim());
+      if (!user) return res.status(401).json({ error: "Invalid email or password" });
+      const valid = await bcrypt.compare(password, user.password);
+      if (!valid) return res.status(401).json({ error: "Invalid email or password" });
+      (req.session as any).userId = user.id;
+      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+    } catch (e: any) {
+      res.status(500).json({ error: "Sign in failed" });
+    }
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.json({ user: null });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.json({ user: null });
+      res.json({ user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+    } catch {
+      res.json({ user: null });
+    }
+  });
+
+  app.post("/api/auth/signout", (req, res) => {
+    req.session.destroy(() => {});
+    res.json({ ok: true });
   });
 
   app.get("/api/access-codes", async (req, res) => {
