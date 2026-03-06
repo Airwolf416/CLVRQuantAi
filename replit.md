@@ -25,7 +25,7 @@ Auth uses express-session with SESSION_SECRET. Routes: POST `/api/auth/signup`, 
 
 ### Frontend (client/src/App.jsx)
 
-The frontend is a React application split into `App` (auth gate) and `Dashboard` (main content) components with inline styles, optimized for a maximum width of 780px. It features a bottom navigation bar with nine tabs: Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, and Guide.
+The frontend is a React application split into `App` (auth gate) and `Dashboard` (main content) components with inline styles, optimized for a maximum width of 780px. It features a bottom navigation bar with nine tabs: Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, and Account.
 
 -   **Radar**: A command center with active alerts, live news, macro event countdowns, volume spike detection, funding rate flip alerts, and a liquidation heatmap.
 -   **Markets**: Displays real-time data for Crypto (spot/perp), Equities, Metals, and Forex.
@@ -35,9 +35,9 @@ The frontend is a React application split into `App` (auth gate) and `Dashboard`
 -   **Alerts**: Allows users to set custom price and funding alerts with browser notifications.
 -   **Wallet**: Integrates with Phantom wallet for Solana operations, including a Perps PnL calculator.
 -   **AI**: Provides Claude-powered market analysis and trade ideas, leveraging the QuantBrain engine for confluence scoring, Kelly Criterion, and regime detection.
--   **Guide**: A comprehensive guide to platform features.
+-   **Account** (client/src/AccountPage.jsx): User account management with Subscription, Emails, Billing, and Legal tabs. Only visible to authenticated users (not guests).
 
-Key components include `AlertBanner` for notifications, `Countdown` for macro events, and `LiqHeatmap` for liquidation clusters. News intelligence is sourced from CryptoCompare and Twitter/X, and feeds into the AI system.
+Key components include `AlertBanner` for notifications, `Countdown` for macro events, and `LiqHeatmap` for liquidation clusters (using real OI data from Hyperliquid + leverage distribution). News intelligence is sourced from CryptoCompare and Twitter/X, and feeds into the AI system. Both AI and Brief tabs include live macro event context in their prompts.
 
 ### Backend (server/routes.ts)
 

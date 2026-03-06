@@ -212,22 +212,31 @@ function FactorBreakdown({factors,score,C:_C}){
 }
 
 // ─── LIQUIDATION HEATMAP ─────────────────────────────────
-function LiqHeatmap({sym,price}){
+function LiqHeatmap({sym,price,oi}){
   if(!price)return null;
   const step=sym==="BTC"?500:sym==="ETH"?50:sym==="SOL"?5:sym==="XAU"?20:null;
   if(!step)return null;
-  const seed=Math.floor(price/step);
+  const oiM=oi?(oi/1e6):0;
+  const leverages=[5,10,15,20,25,50];
   const levels=[];
-  for(let i=-6;i<=6;i++){if(i===0)continue;const lvl=(seed+i)*step;const dist=Math.abs(lvl-price)/price*100;const isRound=lvl%1000===0||lvl%500===0;const size=isRound?Math.floor(180+Math.random()*220):Math.floor(20+Math.random()*100);const side=i<0?"long":"short";if(dist>0.1&&dist<6)levels.push({price:lvl,size,side,dist});}
+  leverages.forEach(lev=>{
+    const liqUp=price*(1+1/lev);const liqDn=price*(1-1/lev);
+    const roundUp=Math.round(liqUp/step)*step;const roundDn=Math.round(liqDn/step)*step;
+    const distUp=Math.abs(roundUp-price)/price*100;const distDn=Math.abs(roundDn-price)/price*100;
+    const weight=lev<=10?0.35:lev<=25?0.25:0.15;
+    const sizeBase=oiM>0?oiM*weight:50*weight;
+    if(distUp>0.2&&distUp<25&&!levels.find(l=>l.price===roundUp))levels.push({price:roundUp,size:Math.round(sizeBase*(lev<=10?1.8:lev<=25?1.2:0.6)),side:"short",dist:distUp,lev});
+    if(distDn>0.2&&distDn<25&&!levels.find(l=>l.price===roundDn))levels.push({price:roundDn,size:Math.round(sizeBase*(lev<=10?1.8:lev<=25?1.2:0.6)),side:"long",dist:distDn,lev});
+  });
   levels.sort((a,b)=>a.price-b.price);
-  const above=levels.filter(l=>l.price>price).slice(0,4).reverse();
-  const below=levels.filter(l=>l.price<price).reverse().slice(0,4);
+  const above=levels.filter(l=>l.price>price).slice(0,5);
+  const below=levels.filter(l=>l.price<price).reverse().slice(0,5);
   const maxSize=Math.max(...levels.map(l=>l.size),1);
   return(<div>
     {above.reverse().map(l=>(<div key={l.price} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}><div style={{fontFamily:MONO,fontSize:10,color:C.red,width:68,textAlign:"right"}}>{fmt(l.price,sym)}</div><div style={{flex:1,position:"relative",height:14,background:"rgba(255,64,96,.06)",borderRadius:1}}><div style={{position:"absolute",right:0,top:0,bottom:0,width:`${(l.size/maxSize)*100}%`,background:`rgba(255,64,96,${0.15+l.size/maxSize*0.45})`,borderRadius:1}}/></div><div style={{fontFamily:MONO,fontSize:9,color:C.muted2,width:42}}>${l.size}M</div></div>))}
     <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,marginTop:2}}><div style={{fontFamily:MONO,fontSize:11,color:C.gold,width:68,textAlign:"right",fontWeight:700}}>{fmt(price,sym)}</div><div style={{flex:1,height:1,background:`linear-gradient(90deg,${C.gold},transparent)`}}/><div style={{fontFamily:MONO,fontSize:9,color:C.gold,width:42}}>NOW</div></div>
     {below.map(l=>(<div key={l.price} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}><div style={{fontFamily:MONO,fontSize:10,color:C.green,width:68,textAlign:"right"}}>{fmt(l.price,sym)}</div><div style={{flex:1,position:"relative",height:14,background:"rgba(0,199,135,.06)",borderRadius:1}}><div style={{position:"absolute",left:0,top:0,bottom:0,width:`${(l.size/maxSize)*100}%`,background:`rgba(0,199,135,${0.15+l.size/maxSize*0.45})`,borderRadius:1}}/></div><div style={{fontFamily:MONO,fontSize:9,color:C.muted2,width:42}}>${l.size}M</div></div>))}
-    <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}><div style={{fontFamily:MONO,fontSize:9,color:C.green}}>GREEN = LONG LIQDS BELOW</div><div style={{fontFamily:MONO,fontSize:9,color:C.red}}>SHORT LIQDS ABOVE</div></div>
+    <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}><div style={{fontFamily:MONO,fontSize:9,color:C.green}}>LONG LIQUIDATIONS</div><div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>Based on {oiM>0?`$${oiM.toFixed(0)}M OI`:"live OI"}</div><div style={{fontFamily:MONO,fontSize:9,color:C.red}}>SHORT LIQUIDATIONS</div></div>
   </div>);
 }
 
@@ -281,10 +290,7 @@ function Dashboard({user,setUser}){
   const [flashes,setFlashes]=useState({});
   const prevRef=useRef({});
   const [watchlist,setWatchlist]=useState(["BTC","ETH","SOL","XAU","TSLA"]);
-  const [alerts,setAlerts]=useState([
-    {id:1,sym:"BTC",field:"funding",condition:"above",threshold:0.05,triggered:false,label:"BTC funding > 0.05%"},
-    {id:2,sym:"XAU",field:"price",condition:"above",threshold:3400,triggered:false,label:"XAU price > $3,400"},
-  ]);
+  const [alerts,setAlerts]=useState([]);
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [liveSignals,setLiveSignals]=useState([]);
@@ -599,11 +605,12 @@ function Dashboard({user,setUser}){
     const metalBrief=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}: ${snapBrief(s,metalPrices)}`).join(" | ");
     const fxBrief=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}: ${snapBrief(s,forexPrices)}`).join(" | ");
     const sigBrief=liveSignals.length>0?`\nLIVE SIGNALS DETECTED: ${liveSignals.slice(0,3).map(s=>`${s.token} ${s.dir} ${s.pctMove||""}%`).join(", ")}`:"";
+    const macroSnap=macroEvents.length>0?`\nUPCOMING MACRO EVENTS: ${macroEvents.filter(e=>new Date(e.date)>=new Date()).slice(0,8).map(e=>`${e.date} ${e.time||""} ${e.bank}: ${e.name} (${e.impact}) prev:${e.current} fcast:${e.forecast}`).join(" | ")}`:"";
     const prompt=`Generate a concise morning market brief for ${todayStr}. ALL data below is REAL and LIVE from exchanges:
 CRYPTO: ${cryptoBrief}
 EQUITIES: ${stockBrief}
 COMMODITIES: ${metalBrief}
-FOREX: ${fxBrief}${sigBrief}${newsFeed.length>0?`\nNEWS HEADLINES: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:""}
+FOREX: ${fxBrief}${sigBrief}${macroSnap}${newsFeed.length>0?`\nNEWS HEADLINES: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:""}
 Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
 {"headline":"one-line market sentiment","bias":"RISK ON|RISK OFF|NEUTRAL","btc":"2 sentence BTC analysis with key levels","eth":"1 sentence ETH","sol":"1 sentence SOL","xau":"2 sentence gold analysis","xag":"1 sentence silver","eurusd":"2 sentence EUR/USD analysis","usdjpy":"2 sentence USD/JPY with BOJ context","usdcad":"2 sentence USD/CAD","watchToday":["item1","item2","item3","item4","item5"],"keyRisk":"single sentence on biggest risk today"}`;
     try{
@@ -630,11 +637,12 @@ Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
+    const macroAiSnap=macroEvents.length>0?`\nUPCOMING MACRO EVENTS: ${macroEvents.filter(e=>new Date(e.date)>=new Date()).slice(0,8).map(e=>`${e.date} ${e.time||""} ${e.bank}: ${e.name} (${e.impact}) prev:${e.current} fcast:${e.forecast}`).join(" | ")}`:"";
     const sys=`You are CLVRQuant, elite multi-market trading AI. All data below is REAL and LIVE from exchanges — use it for analysis. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
 CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}
+FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${macroAiSnap}
 When the user asks about a specific asset, reference its exact live price and change%. For trade setups: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REASON. Be precise with numbers from the live data above. No disclaimers.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
@@ -1156,7 +1164,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                 ))}
               </div>
             </div>
-            <LiqHeatmap sym={liqSym} price={liqSym==="XAU"?metalPrices.XAU?.price:cryptoPrices[liqSym]?.price}/>
+            <LiqHeatmap sym={liqSym} price={liqSym==="XAU"?metalPrices.XAU?.price:cryptoPrices[liqSym]?.price} oi={cryptoPrices[liqSym]?.oi||0}/>
           </div>
           </ProGate>
 

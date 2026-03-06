@@ -100,11 +100,20 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
   const metalStr = marketData.metals.map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ");
   const eqStr = marketData.equities.map(e => `${e.symbol}: ${e.price} (${e.change})`).join(" | ");
 
+  let macroStr = "";
+  try {
+    const macroRes = await fetch("http://localhost:5000/api/macro").then(r => r.json());
+    if (Array.isArray(macroRes) && macroRes.length > 0) {
+      macroStr = macroRes.filter((e: any) => e.impact === "HIGH").slice(0, 8).map((e: any) => `${e.date} ${e.time||""} ${e.bank}: ${e.name} prev:${e.current} fcast:${e.forecast}`).join(" | ");
+    }
+  } catch {}
+
   const prompt = `Generate a morning market brief for ${today}. ALL data below is REAL and LIVE:
 CRYPTO: ${cryptoStr || "Data unavailable"}
 EQUITIES: ${eqStr || "Data unavailable"}
 METALS: ${metalStr || "Data unavailable"}
 FOREX: ${fxStr || "Data unavailable"}
+${macroStr ? `UPCOMING MACRO EVENTS: ${macroStr}` : ""}
 
 Return a JSON object with EXACTLY these fields:
 {
