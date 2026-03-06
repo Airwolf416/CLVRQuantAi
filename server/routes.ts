@@ -1005,7 +1005,15 @@ export async function registerRoutes(
   });
 
   const OWNER_CODE = process.env.OWNER_CODE || "CLVR-OWNER-2026";
-  const OWNER_USER_ID = "fb7ce6a0-a770-4f17-af04-aa69ff9c4dfc";
+  const OWNER_EMAIL = "mikeclaver@gmail.com";
+
+  async function isOwner(userId: string): Promise<boolean> {
+    if (!userId) return false;
+    try {
+      const user = await storage.getUser(userId);
+      return user?.email === OWNER_EMAIL;
+    } catch { return false; }
+  }
 
   app.post("/api/verify-code", async (req, res) => {
     const { code } = req.body;
@@ -1013,7 +1021,7 @@ export async function registerRoutes(
     if (!code) return res.status(400).json({ error: "Code required" });
 
     if (code === OWNER_CODE) {
-      if (!userId || userId !== OWNER_USER_ID) {
+      if (!userId || !(await isOwner(userId))) {
         return res.json({ valid: false, error: "This code is reserved" });
       }
       return res.json({ valid: true, tier: "pro", type: "owner", label: "Owner Access" });
@@ -1167,8 +1175,9 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Invalid email or password" });
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) return res.status(401).json({ error: "Invalid email or password" });
-      const tier = user.id === OWNER_USER_ID ? "pro" : user.tier;
-      if (user.id === OWNER_USER_ID && user.tier !== "pro") {
+      const ownerMatch = user.email === OWNER_EMAIL;
+      const tier = ownerMatch ? "pro" : user.tier;
+      if (ownerMatch && user.tier !== "pro") {
         await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [user.id]);
       }
       (req.session as any).userId = user.id;
@@ -1184,7 +1193,7 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(userId);
       if (!user) return res.json({ user: null });
-      const tier = user.id === OWNER_USER_ID ? "pro" : user.tier;
+      const tier = user.email === OWNER_EMAIL ? "pro" : user.tier;
       res.json({ user: { id: user.id, name: user.name, email: user.email, tier } });
     } catch {
       res.json({ user: null });
