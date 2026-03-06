@@ -1167,8 +1167,12 @@ export async function registerRoutes(
       if (!user) return res.status(401).json({ error: "Invalid email or password" });
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) return res.status(401).json({ error: "Invalid email or password" });
+      const tier = user.id === OWNER_USER_ID ? "pro" : user.tier;
+      if (user.id === OWNER_USER_ID && user.tier !== "pro") {
+        await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [user.id]);
+      }
       (req.session as any).userId = user.id;
-      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier } });
     } catch (e: any) {
       res.status(500).json({ error: "Sign in failed" });
     }
@@ -1180,7 +1184,8 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(userId);
       if (!user) return res.json({ user: null });
-      res.json({ user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+      const tier = user.id === OWNER_USER_ID ? "pro" : user.tier;
+      res.json({ user: { id: user.id, name: user.name, email: user.email, tier } });
     } catch {
       res.json({ user: null });
     }
