@@ -242,7 +242,7 @@ function ProGate({feature,isPro,onUpgrade,children}){
 }
 
 // ─── AI INPUT (stable, memoized to prevent mobile keyboard retraction) ──
-const AIInput=memo(function AIInput({value,onChange,onFocusChange,placeholder}){
+const AIInput=memo(function AIInput({value,onChange,placeholder}){
   const ref=useRef(null);
   useEffect(()=>{
     if(ref.current&&document.activeElement!==ref.current){
@@ -251,8 +251,6 @@ const AIInput=memo(function AIInput({value,onChange,onFocusChange,placeholder}){
   },[value]);
   return<textarea ref={ref} data-testid="input-ai-query" defaultValue={value}
     onChange={e=>onChange(e.target.value)}
-    onFocus={()=>onFocusChange&&onFocusChange(true)}
-    onBlur={()=>onFocusChange&&onFocusChange(false)}
     placeholder={placeholder}
     style={{width:"100%",background:"rgba(12,18,32,1)",border:"1px solid #141e35",borderRadius:2,padding:12,color:"#c8d0e0",fontFamily:"'Barlow',sans-serif",fontSize:16,resize:"none",height:76,lineHeight:1.7}}/>;
 });
@@ -502,7 +500,7 @@ function Dashboard({user,setUser}){
   const [aiInput,setAiInput]=useState("");
   const [aiOutput,setAiOutput]=useState("");
   const [aiLoading,setAiLoading]=useState(false);
-  const [aiFocused,setAiFocused]=useState(false);
+  const [aiTimeframe,setAiTimeframe]=useState("today");
   const idRef=useRef(300);
   const volRef=useRef({});
   const fundRef=useRef({});
@@ -618,7 +616,7 @@ function Dashboard({user,setUser}){
       setHlStatus("live");
     }catch{setHlStatus("error");}
   },[triggerFlashes,checkVolumeSpike,checkFundingFlip]);
-  useEffect(()=>{if(aiFocused)return;doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL,aiFocused]);
+  useEffect(()=>{doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL]);
 
   // ── Crypto Perps (Hyperliquid) ─────────────────────
   const doPerps=useCallback(async()=>{
@@ -627,7 +625,7 @@ function Dashboard({user,setUser}){
       setPerpPrices(prev=>{const next={...prev};Object.entries(data).forEach(([sym,d])=>{next[sym]={...prev[sym],...d};});return next;});
     }catch{}
   },[]);
-  useEffect(()=>{if(aiFocused)return;doPerps();const iv=setInterval(doPerps,5000);return()=>clearInterval(iv);},[doPerps,aiFocused]);
+  useEffect(()=>{doPerps();const iv=setInterval(doPerps,5000);return()=>clearInterval(iv);},[doPerps]);
 
   // ── Live Signal Detection ─────────────────────────
   const lastSigTs=useRef(0);
@@ -927,7 +925,7 @@ Always structure your response with these EXACT sections:
 1. REGIME ASSESSMENT
 2. SIGNAL ANALYSIS (what the data is actually saying)
 3. BAYESIAN PROBABILITY ESTIMATE (with reasoning)
-4. TODAY'S TOP 3 TRADE IDEAS (derived from signals, not assumptions)
+4. TOP 3 TRADE IDEAS (derived from signals, not assumptions — consider all asset classes including commodities/oil)
 5. CROSS-ASSET REASONING (which related assets are worth watching and WHY)
 6. KELLY POSITION SIZING
 7. RISK WARNING
@@ -941,7 +939,11 @@ Rationale: [derive from current signals]
 Related assets to watch: [reasoned from today's data]
 
 Be precise, numerical, and ruthlessly honest. Use the EXACT live prices above.`;
-    const userMsg=`Give me TODAY'S TOP 3 TRADE IDEAS with full quantitative analysis.
+    const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week horizon)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month horizon)":"TODAY'S (intraday/swing)";
+    const tfHint=aiTimeframe==="midterm"?"Focus on weekly chart setups, sector rotation, macro trends. Entries can be scaled in. Use wider stops and targets appropriate for multi-week holds.":aiTimeframe==="longterm"?"Focus on monthly chart structures, macro regime shifts, secular trends, yield curves, commodity supercycles. Position sizing for multi-month conviction holds with wide stops.":"Focus on intraday and short-term swing setups. Use tight entries and stops based on current price action.";
+    const userMsg=`Give me ${tfLabel} TOP 3 TRADE IDEAS with full quantitative analysis.
+
+${tfHint}
 
 Use the live market data and QuantBrain confluence score above. For each trade:
 1. Specific entry, target, and stop loss based on current prices
@@ -950,7 +952,7 @@ Use the live market data and QuantBrain confluence score above. For each trade:
 4. Cross-asset correlations worth monitoring
 5. Key risk factors
 
-Also provide an overall market regime assessment and your best risk-adjusted setup of the day.`;
+Also provide an overall market regime assessment and your best risk-adjusted setup.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg})});
       const data=await res.json();
@@ -992,7 +994,6 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const onShareSig=useCallback((sig)=>shareSignal(sig),[shareSignal]);
   const onAiSig=useCallback((sig)=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");},[]);
   const onAiChange=useCallback((v)=>setAiInput(v),[]);
-  const onAiFocus=useCallback((focused)=>setAiFocused(focused),[]);
 
   const hlLive=hlStatus==="live",fhLive=fhStatus==="live";
   const allSignals=[...liveSignals].sort((a,b)=>(b.ts||0)-(a.ts||0));
@@ -1201,7 +1202,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         </div>
         {/* Ticker chips */}
         <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:2}}>
-          {["BTC","ETH","SOL","XAU","XAG","EURUSD","TSLA","NVDA"].map(sym=>{
+          {["BTC","ETH","SOL","XAU","WTI","EURUSD","TSLA","NVDA"].map(sym=>{
             const d=allPrices[sym],flash=flashes[sym];const isUp=Number(d?.chg)>=0;
             return(
               <div key={sym} data-testid={`ticker-${sym}`} onClick={()=>{setAiInput(`${sym} — long or short right now?`);setTab("ai");}}
@@ -1533,7 +1534,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             </div>
             <div style={panel}>
               <div style={ph}><PTitle>Live Prices</PTitle></div>
-              {[{sym:"BTC",label:"BTC/USD",prices:cryptoPrices},{sym:"ETH",label:"ETH/USD",prices:cryptoPrices},{sym:"SOL",label:"SOL/USD",prices:cryptoPrices},{sym:"EURUSD",label:"EUR/USD",prices:forexPrices},{sym:"USDJPY",label:"USD/JPY",prices:forexPrices},{sym:"USDCAD",label:"USD/CAD",prices:forexPrices},{sym:"XAU",label:"Gold XAU",prices:metalPrices},{sym:"XAG",label:"Silver XAG",prices:metalPrices}].map(({sym,label,prices})=>{
+              {[{sym:"BTC",label:"BTC/USD",prices:cryptoPrices},{sym:"ETH",label:"ETH/USD",prices:cryptoPrices},{sym:"SOL",label:"SOL/USD",prices:cryptoPrices},{sym:"EURUSD",label:"EUR/USD",prices:forexPrices},{sym:"USDJPY",label:"USD/JPY",prices:forexPrices},{sym:"USDCAD",label:"USD/CAD",prices:forexPrices},{sym:"XAU",label:"Gold XAU",prices:metalPrices},{sym:"WTI",label:"Oil WTI",prices:metalPrices},{sym:"XAG",label:"Silver XAG",prices:metalPrices}].map(({sym,label,prices})=>{
                 const d=prices[sym];const chg=d?.chg||0;
                 return(<div key={sym} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:10,alignItems:"center",padding:"10px 14px",borderBottom:`1px solid ${C.border}`}}>
                   <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.06em"}}>{label}</div>
@@ -1756,19 +1757,24 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="Claude · Live" color="gold"/></div>
             <div style={{padding:16}}>
               <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
-                {["BTC","ETH","SOL","TRUMP","HYPE","XAU","EURUSD","TSLA","NVDA"].map(sym=>{const d=allPrices[sym];return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${fmt(d?.price,sym)} 24h:${pct(d?.chg)}`)}
+                {["BTC","ETH","SOL","TRUMP","HYPE","XAU","WTI","EURUSD","TSLA","NVDA"].map(sym=>{const d=allPrices[sym];return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${fmt(d?.price,sym)} 24h:${pct(d?.chg)}`)}
                   style={{padding:"5px 11px",borderRadius:2,border:`1px solid ${d?.live?"rgba(201,168,76,.28)":C.border}`,background:C.panel,color:d?.live?C.gold2:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.08em",cursor:"pointer"}}>
                   {sym}{d?.live?" ✦":""}
                 </button>;})}
               </div>
-              <AIInput value={aiInput} onChange={onAiChange} onFocusChange={onAiFocus} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
+              <AIInput value={aiInput} onChange={onAiChange} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
               <div style={{display:"flex",gap:6,marginTop:8}}>
                 <button data-testid="button-ai-analyze" onClick={runAI} disabled={aiLoading} style={{flex:1,height:44,background:"rgba(201,168,76,.1)",color:aiLoading?C.muted:C.gold2,border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer"}}>
                   {aiLoading?"Analyzing...":"Analyze →"}
                 </button>
               </div>
-              <button data-testid="button-trade-ideas" onClick={runTradeIdeas} disabled={aiLoading} style={{width:"100%",height:48,marginTop:8,background:aiLoading?"rgba(0,199,135,.03)":"rgba(0,199,135,.08)",color:aiLoading?C.muted:C.green,border:`1px solid ${aiLoading?"rgba(0,199,135,.12)":"rgba(0,199,135,.3)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer",letterSpacing:"0.02em"}}>
-                {aiLoading?"QuantBrain Analyzing...":"Get Today's Trade Ideas + Analysis ✦"}
+              <div style={{display:"flex",gap:4,marginTop:10,marginBottom:6}}>
+                {[{k:"today",l:"Today"},{k:"midterm",l:"Mid-Term (1-4 wks)"},{k:"longterm",l:"Long-Term (1-3 mo)"}].map(t=>(
+                  <button key={t.k} data-testid={`ai-tf-${t.k}`} onClick={()=>setAiTimeframe(t.k)} style={{flex:1,padding:"6px 4px",borderRadius:2,border:`1px solid ${aiTimeframe===t.k?"rgba(0,199,135,.4)":C.border}`,background:aiTimeframe===t.k?"rgba(0,199,135,.08)":C.panel,color:aiTimeframe===t.k?C.green:C.muted,fontFamily:MONO,fontSize:8,letterSpacing:"0.06em",cursor:"pointer",transition:"all .2s"}}>{t.l}</button>
+                ))}
+              </div>
+              <button data-testid="button-trade-ideas" onClick={runTradeIdeas} disabled={aiLoading} style={{width:"100%",height:48,background:aiLoading?"rgba(0,199,135,.03)":"rgba(0,199,135,.08)",color:aiLoading?C.muted:C.green,border:`1px solid ${aiLoading?"rgba(0,199,135,.12)":"rgba(0,199,135,.3)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer",letterSpacing:"0.02em"}}>
+                {aiLoading?"QuantBrain Analyzing...":`Get ${aiTimeframe==="today"?"Today's":aiTimeframe==="midterm"?"Mid-Term":"Long-Term"} Trade Ideas ✦`}
               </button>
               {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>}
             </div>
