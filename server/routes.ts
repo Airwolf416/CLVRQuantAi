@@ -760,10 +760,18 @@ export async function registerRoutes(
     return { todayStart, endDate };
   }
 
+  const COUNTRY_TO_REGION: Record<string,string> = {
+    USD:"United States",EUR:"Eurozone",GBP:"United Kingdom",
+    CAD:"Canada",JPY:"Japan",AUD:"Australia",CHF:"Switzerland",NZD:"New Zealand",CNY:"China",
+  };
+  const COUNTRY_TO_CODE: Record<string,string> = {
+    USD:"US",EUR:"EU",GBP:"UK",CAD:"CA",JPY:"JP",AUD:"AU",CHF:"CH",NZD:"NZ",CNY:"CN",
+  };
+
   async function fetchLiveCalendar(): Promise<any[]> {
     try {
       const res = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", {
-        headers: { "User-Agent": "AlphaScan/1.0" },
+        headers: { "User-Agent": "CLVRQuant/2.0" },
       });
       if (!res.ok) return [];
       const ct = res.headers.get("content-type") || "";
@@ -773,24 +781,40 @@ export async function registerRoutes(
       try { data = JSON.parse(text); } catch { return []; }
       if (!Array.isArray(data)) return [];
       const relevant = data.filter((e: any) =>
-        (e.impact === "High" || e.impact === "Medium") &&
+        (e.impact === "High" || e.impact === "Medium" || e.impact === "Low") &&
         ["USD","EUR","GBP","JPY","CAD","AUD","CHF","NZD"].includes(e.country) &&
         e.title !== "Bank Holiday"
       );
-      return relevant.map((e: any, i: number) => ({
-        id: 10000 + i,
-        bank: mapCountryToBank(e.country, e.title),
-        flag: countryFlag(e.country),
-        name: e.title,
-        date: e.date ? e.date.split("T")[0] : "",
-        time: e.date ? new Date(e.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) + " ET" : "",
-        current: e.previous || "—",
-        forecast: e.forecast || "—",
-        impact: e.impact === "High" ? "HIGH" : "MED",
-        desc: `${e.title}. Previous: ${e.previous || "N/A"}. Forecast: ${e.forecast || "TBD"}.`,
-        currency: e.country,
-        live: true,
-      }));
+      return relevant.map((e: any, i: number) => {
+        const dateStr = e.date ? e.date.split("T")[0] : "";
+        const timeET = e.date ? new Date(e.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" }) : "00:00";
+        const actual = (e.actual !== undefined && e.actual !== null && e.actual !== "") ? String(e.actual) : null;
+        const forecast = (e.forecast !== undefined && e.forecast !== null && e.forecast !== "") ? String(e.forecast) : "—";
+        const previous = (e.previous !== undefined && e.previous !== null && e.previous !== "") ? String(e.previous) : "—";
+        const released = actual !== null;
+        const cc = COUNTRY_TO_CODE[e.country] || e.country?.slice(0,2).toUpperCase() || "US";
+        return {
+          id: 10000 + i,
+          bank: mapCountryToBank(e.country, e.title),
+          flag: countryFlag(e.country),
+          name: e.title,
+          date: dateStr,
+          time: timeET + " ET",
+          timeET,
+          country: cc,
+          region: COUNTRY_TO_REGION[e.country] || e.country || cc,
+          current: previous,
+          forecast,
+          previous,
+          actual,
+          unit: "",
+          released,
+          impact: e.impact === "High" ? "HIGH" : e.impact === "Medium" ? "MED" : "LOW",
+          desc: `${e.title}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : " Pending release."}`,
+          currency: e.country,
+          live: true,
+        };
+      });
     } catch {
       return [];
     }

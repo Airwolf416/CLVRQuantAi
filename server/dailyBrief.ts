@@ -104,7 +104,7 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
   try {
     const macroRes = await fetch("http://localhost:5000/api/macro").then(r => r.json());
     if (Array.isArray(macroRes) && macroRes.length > 0) {
-      macroStr = macroRes.filter((e: any) => e.impact === "HIGH").slice(0, 8).map((e: any) => `${e.date} ${e.time||""} ${e.bank}: ${e.name} prev:${e.current} fcast:${e.forecast}`).join(" | ");
+      macroStr = macroRes.filter((e: any) => e.impact === "HIGH" || e.impact === "MED").slice(0, 12).map((e: any) => `${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual}`:""}`).join(" | ");
     }
   } catch {}
 

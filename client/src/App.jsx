@@ -243,6 +243,67 @@ function LiqHeatmap({sym,price,oi}){
 // ─── MACRO EVENTS (frontend countdowns) ──────────────────
 const MACRO_EVENTS=[];
 
+// ─── MACRO EVENT CARD ────────────────────────────────────
+function MacroCard({evt,imp,surprise,marketImpacts,bc,isToday,isLiveNow,status,onAskAI,onAddCal,onGoAI}){
+  const [expanded,setExpanded]=useState(false);
+  return(
+    <div data-testid={`macro-card-${evt.id}`} style={{background:C.panel,border:`1px solid ${evt.released?(surprise?.color===C.red?C.red+"22":surprise?.color===C.green?C.green+"22":C.border):imp.color+"22"}`,borderRadius:2,marginBottom:8,overflow:"hidden",opacity:evt.released?1:0.88}}>
+      <div style={{padding:"12px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
+        <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+          <div style={{textAlign:"center",minWidth:40,flexShrink:0}}>
+            <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:evt.released?C.muted:C.white}}>{(evt.timeET||evt.time||"").replace(" ET","")}</div>
+            <div style={{fontSize:16,marginTop:2}}>{evt.flag||({"US":"\u{1F1FA}\u{1F1F8}","EU":"\u{1F1EA}\u{1F1FA}","UK":"\u{1F1EC}\u{1F1E7}","CA":"\u{1F1E8}\u{1F1E6}","JP":"\u{1F1EF}\u{1F1F5}","AU":"\u{1F1E6}\u{1F1FA}","CH":"\u{1F1E8}\u{1F1ED}","NZ":"\u{1F1F3}\u{1F1FF}"}[evt.country])||"\u{1F310}"}</div>
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",marginBottom:4}}>
+              <span style={{fontFamily:SERIF,fontSize:12,fontWeight:700,color:evt.released?C.muted2:C.white}}>{evt.name}</span>
+              {isLiveNow&&<span style={{fontFamily:MONO,fontSize:7,background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.3)",color:C.green,borderRadius:2,padding:"1px 5px",fontWeight:700,letterSpacing:"0.1em",animation:"pulse 1.4s ease infinite"}}>LIVE NOW</span>}
+              <span style={{fontFamily:MONO,fontSize:7,background:imp.bg,color:imp.color,border:`1px solid ${imp.color}33`,borderRadius:2,padding:"1px 5px",fontWeight:700,letterSpacing:"0.08em"}}>{imp.label}</span>
+              {evt.released&&surprise&&<span style={{fontFamily:MONO,fontSize:7,background:"rgba(0,0,0,.3)",border:`1px solid ${surprise.color}33`,color:surprise.color,borderRadius:2,padding:"1px 5px",fontWeight:700}}>{surprise.label}</span>}
+              {!evt.released&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>PENDING</span>}
+              {isToday&&!isLiveNow&&<span style={{fontFamily:MONO,fontSize:7,color:C.red,border:`1px solid ${C.red}33`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.4s ease infinite"}}>TODAY</span>}
+              {evt.live&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>LIVE</span>}
+            </div>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginBottom:6}}>{evt.region||evt.country} · {evt.date}</div>
+            <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+              {evt.actual&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:15,fontWeight:800,color:surprise?.color||C.white}}>{evt.actual}<span style={{fontSize:8,color:C.muted,marginLeft:2}}>{evt.unit||""}</span></div></div>}
+              <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>FORECAST</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted2}}>{evt.forecast}</div></div>
+              <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>PREVIOUS</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>{evt.previous||evt.current}</div></div>
+            </div>
+          </div>
+          <div style={{color:C.muted,fontSize:12,flexShrink:0,marginTop:4,fontFamily:MONO}}>{expanded?"\u25B2":"\u25BC"}</div>
+        </div>
+      </div>
+      {expanded&&(
+        <div style={{padding:"0 14px 12px",borderTop:`1px solid ${C.border}`}}>
+          <div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 12px",marginTop:10,marginBottom:8}}>
+            <div style={{fontFamily:MONO,fontSize:7,color:C.gold,letterSpacing:"0.15em",marginBottom:4}}>QUANTBRAIN ANALYSIS</div>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,lineHeight:1.7}}>{evt.desc}</div>
+          </div>
+          {marketImpacts&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.15em",marginBottom:6}}>MARKET IMPACT</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}>
+                {marketImpacts.map((m,i)=>(
+                  <div key={i} style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"7px 9px"}}>
+                    <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,marginBottom:2,color:C.white}}>{m.asset} <span style={{color:m.color,fontSize:9}}>{m.dir}</span></div>
+                    <div style={{fontFamily:MONO,fontSize:8,color:C.muted,lineHeight:1.4}}>{m.reason}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={{display:"flex",gap:6}}>
+            <button data-testid={`macro-ask-ai-${evt.id}`} onClick={onAskAI} style={{flex:1,background:"rgba(201,168,76,.08)",border:`1px solid ${C.gold}33`,color:C.gold2,borderRadius:2,padding:"7px",cursor:"pointer",fontFamily:MONO,fontWeight:700,fontSize:9,letterSpacing:"0.08em"}}>Ask QuantBrain</button>
+            <button onClick={onAddCal} style={{background:"none",border:`1px solid ${C.border}`,color:C.muted2,borderRadius:2,padding:"7px 10px",cursor:"pointer",fontFamily:MONO,fontSize:8,letterSpacing:"0.08em"}}>+ Cal</button>
+            <button onClick={onGoAI} style={{background:"none",border:`1px solid ${C.border}`,color:C.muted2,borderRadius:2,padding:"7px 10px",cursor:"pointer",fontFamily:MONO,fontSize:8,letterSpacing:"0.08em"}}>AI Tab</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── TOAST (useRef fix) ──────────────────────────────────
 function Toast({msg,onDone}){
   const onDoneRef=useRef(onDone);
@@ -335,6 +396,12 @@ function Dashboard({user,setUser}){
 
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
+  const [macroAiEvent,setMacroAiEvent]=useState(null);
+  const [macroAiResp,setMacroAiResp]=useState(null);
+  const [macroAiLoading,setMacroAiLoading]=useState(false);
+  const [macroCalTab,setMacroCalTab]=useState("today");
+  const [macroImpactFilter,setMacroImpactFilter]=useState("ALL");
+  const [macroRegionFilter,setMacroRegionFilter]=useState("ALL");
 
   // ── flash helper ─────────────────────────────────────
   const triggerFlashes=useCallback((updates)=>{
@@ -516,14 +583,26 @@ function Dashboard({user,setUser}){
     setCheckoutLoading(false);
   };
 
-  // ── Macro calendar (auto-refresh every 5 min) ─────────
+  // ── Macro calendar (auto-refresh every 60s) ─────────
   const fetchMacro=useCallback(()=>{
     fetch("/api/macro").then(r=>r.json()).then(data=>{
       if(Array.isArray(data)) setMacroEvents(data);
       setMacroLoading(false);
     }).catch(()=>setMacroLoading(false));
   },[]);
-  useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,300000);return()=>clearInterval(iv);},[fetchMacro]);
+  useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,60000);return()=>clearInterval(iv);},[fetchMacro]);
+
+  const askMacroAI=async(evt)=>{
+    setMacroAiEvent(evt);setMacroAiResp(null);setMacroAiLoading(true);
+    try{
+      const sys=`You are QuantBrain, an elite quantitative market intelligence analyst for CLVRQuant. Provide concise, data-driven analysis of economic releases. Focus on: 1) What the data means for markets, 2) Which assets are most affected, 3) How this changes the macro picture, 4) What to watch next. Be precise and use numbers.`;
+      const msg=`Analyze this economic release:\n\nEvent: ${evt.name}\nCountry/Region: ${evt.region||evt.country}\nForecast: ${evt.forecast} ${evt.unit||""}\nPrevious: ${evt.previous||evt.current} ${evt.unit||""}\nActual: ${evt.actual||"Not yet released"} ${evt.unit||""}\nImpact Level: ${evt.impact}\nToday: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}\n\n${evt.actual?`The actual came in ${parseFloat(evt.actual)>parseFloat(evt.forecast)?"ABOVE":"BELOW"} expectations.`:"This event has not yet been released."}\n\nWhat does this mean for markets? Which assets move? What's the macro implication? What should I watch next?`;
+      const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:msg})});
+      const data=await res.json();
+      setMacroAiResp(data.text||"No response.");
+    }catch(e){setMacroAiResp("Error: "+(e.message||"Try again."));}
+    setMacroAiLoading(false);
+  };
 
   const allPrices={...cryptoPrices,...equityPrices,...metalPrices,...forexPrices};
 
@@ -605,7 +684,7 @@ function Dashboard({user,setUser}){
     const metalBrief=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}: ${snapBrief(s,metalPrices)}`).join(" | ");
     const fxBrief=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}: ${snapBrief(s,forexPrices)}`).join(" | ");
     const sigBrief=liveSignals.length>0?`\nLIVE SIGNALS DETECTED: ${liveSignals.slice(0,3).map(s=>`${s.token} ${s.dir} ${s.pctMove||""}%`).join(", ")}`:"";
-    const macroSnap=macroEvents.length>0?`\nUPCOMING MACRO EVENTS: ${macroEvents.filter(e=>new Date(e.date)>=new Date()).slice(0,8).map(e=>`${e.date} ${e.time||""} ${e.bank}: ${e.name} (${e.impact}) prev:${e.current} fcast:${e.forecast}`).join(" | ")}`:"";
+    const macroSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual} ${e.released?"RELEASED":""}`:""}`).join(" | ")}`:"";
     const prompt=`Generate a concise morning market brief for ${todayStr}. ALL data below is REAL and LIVE from exchanges:
 CRYPTO: ${cryptoBrief}
 EQUITIES: ${stockBrief}
@@ -637,7 +716,7 @@ Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
-    const macroAiSnap=macroEvents.length>0?`\nUPCOMING MACRO EVENTS: ${macroEvents.filter(e=>new Date(e.date)>=new Date()).slice(0,8).map(e=>`${e.date} ${e.time||""} ${e.bank}: ${e.name} (${e.impact}) prev:${e.current} fcast:${e.forecast}`).join(" | ")}`:"";
+    const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual} ${e.released?"RELEASED":""}`:""}`).join(" | ")}`:"";
     const sys=`You are CLVRQuant, elite multi-market trading AI. All data below is REAL and LIVE from exchanges — use it for analysis. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
 CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
@@ -916,6 +995,77 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const filteredMacro=macroFilter==="ALL"?macroEvents:macroEvents.filter(e=>e.bank===macroFilter||e.bank.startsWith(macroFilter));
   const sortedMacro=[...filteredMacro].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const upcomingCount=macroEvents.length;
+
+  const MACRO_FLAG={"US":"\u{1F1FA}\u{1F1F8}","EU":"\u{1F1EA}\u{1F1FA}","UK":"\u{1F1EC}\u{1F1E7}","CA":"\u{1F1E8}\u{1F1E6}","JP":"\u{1F1EF}\u{1F1F5}","CN":"\u{1F1E8}\u{1F1F3}","AU":"\u{1F1E6}\u{1F1FA}","CH":"\u{1F1E8}\u{1F1ED}","NZ":"\u{1F1F3}\u{1F1FF}"};
+  const MACRO_IMPACT={HIGH:{color:C.red,bg:"rgba(255,64,96,.08)",label:"HIGH"},MED:{color:C.orange,bg:"rgba(245,158,11,.08)",label:"MED"},LOW:{color:C.green,bg:"rgba(0,199,135,.08)",label:"LOW"}};
+
+  const parseMacroNum=(s)=>{if(!s||s==="—")return NaN;const str=String(s).trim();const m=str.match(/^([+-]?\d+\.?\d*)\s*([KMBkmb%]?)$/);if(!m)return parseFloat(str.replace(/[^0-9.-]/g,""));let n=parseFloat(m[1]);const u=m[2].toUpperCase();if(u==="K")n*=1000;if(u==="M")n*=1e6;if(u==="B")n*=1e9;return n;};
+  const getMacroSurprise=(evt)=>{
+    if(!evt.actual||!evt.forecast||evt.forecast==="—")return null;
+    const a=parseMacroNum(evt.actual);
+    const f=parseMacroNum(evt.forecast);
+    if(isNaN(a)||isNaN(f))return null;
+    const diff=a-f;
+    const pctDiff=f!==0?Math.abs(diff/f)*100:Math.abs(diff);
+    if(pctDiff<1&&Math.abs(diff)<0.05)return{label:"IN LINE",color:C.muted2};
+    return diff>0?{label:`BEAT +${Math.abs(diff).toFixed(1)}`,color:C.green}:{label:`MISS ${diff.toFixed(1)}`,color:C.red};
+  };
+
+  const getMacroMarketImpact=(evt)=>{
+    if(!evt.released||!evt.actual)return null;
+    const impacts=[];const name=(evt.name||"").toLowerCase();
+    if(name.includes("non-farm")||name.includes("nfp")||name.includes("employment change")){
+      const actual=parseMacroNum(evt.actual);
+      if(actual<0){
+        impacts.push({asset:"USD",dir:"BEARISH",color:C.red,reason:"Jobs collapse = rate cut expectations surge"});
+        impacts.push({asset:"XAU",dir:"BULLISH",color:C.green,reason:"Safe haven demand + rate cut tailwind"});
+        impacts.push({asset:"BTC",dir:"CAUTIOUS",color:C.orange,reason:"Risk-off initially but rate cuts medium-term bullish"});
+        impacts.push({asset:"SPX",dir:"BEARISH",color:C.red,reason:"Recession fears dominate"});
+      }else{
+        impacts.push({asset:"USD",dir:"BULLISH",color:C.green,reason:"Strong labor market supports USD"});
+        impacts.push({asset:"XAU",dir:"BEARISH",color:C.red,reason:"Less safe-haven demand"});
+      }
+    }
+    if(name.includes("gdp")){
+      const actual=parseMacroNum(evt.actual);
+      const forecast=parseMacroNum(evt.forecast);
+      if(!isNaN(actual)&&!isNaN(forecast)){
+        impacts.push({asset:evt.currency||"USD",dir:actual<forecast?"BEARISH":"BULLISH",color:actual<forecast?C.red:C.green,reason:actual<forecast?"Below forecast GDP = weakness":"Above forecast GDP = strength"});
+      }
+    }
+    if(name.includes("cpi")||name.includes("inflation")){
+      const actual=parseMacroNum(evt.actual);
+      const forecast=parseMacroNum(evt.forecast);
+      if(!isNaN(actual)&&!isNaN(forecast)){
+        impacts.push({asset:"USD",dir:actual>forecast?"BULLISH":"BEARISH",color:actual>forecast?C.green:C.red,reason:actual>forecast?"Hot inflation = hawkish Fed":"Cool inflation = dovish Fed"});
+        impacts.push({asset:"XAU",dir:actual>forecast?"BEARISH":"BULLISH",color:actual>forecast?C.red:C.green,reason:actual>forecast?"Higher rates weigh on gold":"Lower rates support gold"});
+      }
+    }
+    if(name.includes("earnings")||name.includes("wages")){
+      impacts.push({asset:"USD",dir:"MIXED",color:C.orange,reason:"Hot wages = sticky inflation, limits Fed cuts"});
+    }
+    if(name.includes("retail sales")){
+      const actual=parseMacroNum(evt.actual);
+      if(!isNaN(actual)){
+        impacts.push({asset:"USD",dir:actual<0?"BEARISH":"BULLISH",color:actual<0?C.red:C.green,reason:actual<0?"Weak consumer spending = recession risk":"Strong consumer spending"});
+      }
+    }
+    return impacts.length>0?impacts:null;
+  };
+
+  const macroTodayStr=new Date().toDateString();
+  const macroTodayEvents=macroEvents.filter(e=>new Date(e.date).toDateString()===macroTodayStr);
+  const macroWeekEnd=new Date();macroWeekEnd.setDate(macroWeekEnd.getDate()+(7-macroWeekEnd.getDay()));macroWeekEnd.setHours(23,59,59,999);
+  const macroWeekEvents=macroEvents.filter(e=>{const d=new Date(e.date);return d>=new Date(new Date().toDateString())&&d<=macroWeekEnd;});
+  const macroAllFiltered=(macroCalTab==="today"?macroTodayEvents:macroWeekEvents)
+    .filter(e=>macroRegionFilter==="ALL"||(e.country||"").toUpperCase()===macroRegionFilter)
+    .filter(e=>macroImpactFilter==="ALL"||e.impact===macroImpactFilter)
+    .sort((a,b)=>{const da=new Date(a.date).getTime();const db=new Date(b.date).getTime();if(da!==db)return da-db;const ta=a.timeET||a.time||"00:00";const tb=b.timeET||b.time||"00:00";return ta.localeCompare(tb);});
+  const macroReleasedCount=macroAllFiltered.filter(e=>e.released).length;
+  const macroPendingCount=macroAllFiltered.filter(e=>!e.released).length;
+  const macroHighCount=macroAllFiltered.filter(e=>e.impact==="HIGH").length;
+  const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&new Date(e.date)>=new Date(new Date().toDateString())).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
+  const macroNextPending=macroSortedForNext[0]||null;
 
   const requestPush=async()=>{if(typeof Notification!=="undefined"){try{const p=await Notification.requestPermission();setNotifPerm(p);if(p==="granted"){setToast("Alerts enabled (browser + in-app)");return;}}catch(e){}}setNotifPerm("granted");setToast("In-app alerts enabled");};
 
@@ -1214,64 +1364,116 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>
-          <div style={{marginBottom:14}}><SLabel>Central Bank Calendar</SLabel></div>
+          <div style={{marginBottom:14}}><SLabel>Macro Calendar</SLabel></div>
           {macroLoading&&<div style={{padding:20,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>Loading calendar...</div>}
+
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
             {[
-              {label:"Next 14d",val:macroEvents.length,col:C.cyan},
-              {label:"HIGH Impact",val:macroEvents.filter(e=>e.impact==="HIGH").length,col:C.orange},
-              {label:"Live Feed",val:macroEvents.filter(e=>e.live).length||"—",col:C.green},
+              {label:"HIGH IMPACT",val:macroHighCount,col:C.red,bg:"rgba(255,64,96,.08)",bc:"rgba(255,64,96,.2)"},
+              {label:"RELEASED",val:macroReleasedCount,col:C.green,bg:"rgba(0,199,135,.08)",bc:"rgba(0,199,135,.2)"},
+              {label:"PENDING",val:macroPendingCount,col:C.orange,bg:"rgba(245,158,11,.08)",bc:"rgba(245,158,11,.2)"},
             ].map(s=>(
-              <div key={s.label} style={{...panel,marginBottom:0,padding:"12px",textAlign:"center",border:`1px solid ${C.border2}`}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.15em",marginBottom:5}}>{s.label}</div>
-                <div style={{fontFamily:SERIF,fontWeight:900,fontSize:26,color:s.col,lineHeight:1}}>{s.val}</div>
+              <div key={s.label} data-testid={`macro-stat-${s.label.toLowerCase().replace(" ","-")}`} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:2,padding:"10px",textAlign:"center"}}>
+                <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:s.col,lineHeight:1}}>{s.val}</div>
+                <div style={{fontFamily:MONO,fontSize:7,color:s.col+"88",letterSpacing:"0.12em",marginTop:4}}>{s.label}</div>
               </div>
             ))}
           </div>
-          <div style={{display:"flex",gap:4,marginBottom:10,overflowX:"auto"}}>
-            {["ALL","FED","ECB","BOJ","BOC","BOE","RBA","CPI"].map(b=>(
-              <SubBtn key={b} k={b} label={b} col={b==="ALL"?"gold":b==="FED"?"blue":b==="ECB"?"purple":b==="BOJ"?"teal":b==="BOC"?"gold":b==="BOE"?"green":b==="RBA"?"cyan":"orange"} state={macroFilter} setter={setMacroFilter}/>
+
+          {macroNextPending&&(
+            <div data-testid="macro-next-event" style={{background:"rgba(201,168,76,.04)",border:`1px solid ${C.border2}`,borderRadius:2,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.gold,letterSpacing:"0.18em",marginBottom:3}}>NEXT RELEASE</div>
+                <div style={{fontFamily:SERIF,fontWeight:700,fontSize:13,color:C.white}}>{MACRO_FLAG[macroNextPending.country]||macroNextPending.flag||""} {macroNextPending.name}</div>
+                <div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>Forecast: {macroNextPending.forecast} · {macroNextPending.time||macroNextPending.timeET||""}</div>
+              </div>
+              <div style={{fontFamily:MONO,fontSize:20,color:C.gold,animation:"pulse 2s infinite"}}>⏳</div>
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:4,marginBottom:10}}>
+            {["today","week"].map(t=>(
+              <button key={t} data-testid={`macro-tab-${t}`} onClick={()=>setMacroCalTab(t)}
+                style={{background:macroCalTab===t?"rgba(201,168,76,.12)":"transparent",border:`1px solid ${macroCalTab===t?C.gold+"44":C.border}`,color:macroCalTab===t?C.gold:C.muted,borderRadius:2,padding:"6px 14px",cursor:"pointer",fontFamily:MONO,fontSize:10,fontWeight:macroCalTab===t?700:400,letterSpacing:"0.08em"}}>
+                {t==="today"?"Today":"This Week"}
+              </button>
             ))}
           </div>
-          <div style={panel}>
-            <div style={ph}>
-              <PTitle>Today & Upcoming</PTitle>
-              <div style={{display:"flex",gap:5}}><Badge label={`${sortedMacro.length} events`} color="gold"/><Badge label="AUTO-REFRESH" color="green" style={{fontSize:7}}/></div>
-            </div>
-            {sortedMacro.length===0&&<div style={{padding:24,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>No events scheduled.</div>}
-            {sortedMacro.map(evt=>{
-              const status=eventStatus(evt.date);const isToday=status.label==="TODAY";const bc=bankColor[evt.bank]||C.gold;
-              return(
-                <div key={evt.id} style={{padding:"13px 14px",borderBottom:`1px solid ${C.border}`,background:isToday?"rgba(255,64,96,.03)":"transparent"}}>
-                  <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:8}}>
-                    <div style={{flex:1}}>
-                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:5}}>
-                        <span style={{fontSize:13}}>{evt.flag}</span>
-                        <span style={{fontFamily:MONO,fontWeight:600,fontSize:10,color:bc,letterSpacing:"0.1em"}}>{evt.bank}</span>
-                        <Badge label={evt.impact} color={evt.impact==="HIGH"?"red":evt.impact==="MED"?"orange":"teal"}/>
-                        {isToday&&<Badge label="TODAY" color="red" style={{animation:"pulse 1.4s ease infinite"}}/>}
-                        {status.label!=="PAST"&&status.label!=="TODAY"&&<Badge label={status.label} color={status.color}/>}
-                        {evt.live&&<Badge label="LIVE" color="green" style={{fontSize:7}}/>}
-                      </div>
-                      <div style={{fontFamily:SERIF,fontWeight:700,fontSize:13,color:C.white,marginBottom:3}}>{evt.name}</div>
-                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{evt.date} · {evt.time}</div>
-                    </div>
-                    <div style={{flexShrink:0,textAlign:"right",minWidth:72}}>
-                      {evt.current&&evt.current!=="—"&&<><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:2}}>Current</div><div style={{fontFamily:MONO,fontSize:10,color:C.text}}>{evt.current}</div></>}
-                      {evt.forecast&&evt.forecast!=="—"&&<div style={{marginTop:5}}><Badge label={evt.forecast} color={evt.forecast.includes("–")||evt.forecast.includes("-")?"red":evt.forecast==="Hold"?"green":"gold"}/></div>}
-                    </div>
-                  </div>
-                  <div style={{fontSize:10,color:C.muted2,lineHeight:1.7,padding:"8px 10px",background:"rgba(0,0,0,.18)",borderRadius:2,borderLeft:`2px solid ${bc}33`}}>{evt.desc}</div>
-                  <div style={{display:"flex",gap:6,marginTop:8}}>
-                    <button onClick={()=>{setAiInput(`${evt.bank} ${evt.name} on ${evt.date}: forecast ${evt.forecast}. How to position? Which assets most affected?`);setTab("ai");}}
-                      style={{background:"none",border:`1px solid ${C.border}`,color:C.muted2,borderRadius:2,padding:"3px 9px",fontFamily:MONO,fontSize:7,letterSpacing:"0.12em",cursor:"pointer"}}>Ask AI ✦</button>
-                    <button onClick={()=>{const cal=`BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nSUMMARY:${evt.bank} - ${evt.name}\nDTSTART:${evt.date.replace(/-/g,"")}\nDTEND:${evt.date.replace(/-/g,"")}\nDESCRIPTION:${evt.desc}\nEND:VEVENT\nEND:VCALENDAR`;const blob=new Blob([cal],{type:"text/calendar"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${evt.bank}-${evt.date}.ics`;a.click();setToast("Calendar event saved ✦");}}
-                      style={{background:"none",border:`1px solid ${C.border}`,color:C.muted2,borderRadius:2,padding:"3px 9px",fontFamily:MONO,fontSize:7,letterSpacing:"0.12em",cursor:"pointer"}}>Add to Cal</button>
-                  </div>
-                </div>
-              );
-            })}
+
+          <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto"}}>
+            {["ALL","US","EU","UK","CA","JP","AU"].map(r=>(
+              <button key={r} data-testid={`macro-region-${r}`} onClick={()=>setMacroRegionFilter(r)}
+                style={{background:macroRegionFilter===r?"rgba(201,168,76,.1)":"transparent",border:`1px solid ${macroRegionFilter===r?C.gold+"44":C.border}`,color:macroRegionFilter===r?C.gold2:C.muted,borderRadius:2,padding:"5px 10px",cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.08em"}}>
+                {MACRO_FLAG[r]||""} {r}
+              </button>
+            ))}
           </div>
+
+          <div style={{display:"flex",gap:4,marginBottom:14,overflowX:"auto"}}>
+            {["ALL","HIGH","MED","LOW"].map(i=>{const mi=MACRO_IMPACT[i];return(
+              <button key={i} data-testid={`macro-impact-${i}`} onClick={()=>setMacroImpactFilter(i)}
+                style={{background:macroImpactFilter===i?(mi?.bg||"rgba(201,168,76,.1)"):"transparent",border:`1px solid ${macroImpactFilter===i?(mi?.color||C.gold)+"44":C.border}`,color:macroImpactFilter===i?(mi?.color||C.gold):C.muted,borderRadius:2,padding:"5px 10px",cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.08em"}}>
+                {i}
+              </button>
+            );})}
+          </div>
+
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{macroAllFiltered.length} events · ForexFactory + Central Banks · 60s refresh</div>
+            <Badge label="LIVE" color="green" style={{fontSize:7}}/>
+          </div>
+
+          {macroAllFiltered.length===0&&<div style={{padding:30,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>No events match your filters.</div>}
+
+          {macroAllFiltered.map(evt=>{
+            const imp=MACRO_IMPACT[evt.impact]||MACRO_IMPACT.LOW;
+            const surprise=getMacroSurprise(evt);
+            const marketImpacts=getMacroMarketImpact(evt);
+            const status=eventStatus(evt.date);
+            const isToday=status.label==="TODAY";
+            const bc=bankColor[evt.bank]||C.gold;
+            const nowTime=new Date().toTimeString().slice(0,5);
+            const isLiveNow=!evt.released&&isToday&&(evt.timeET||"").slice(0,5)===nowTime;
+            return(
+              <MacroCard key={evt.id||evt.name+evt.date} evt={evt} imp={imp} surprise={surprise} marketImpacts={marketImpacts} bc={bc} isToday={isToday} isLiveNow={isLiveNow} status={status} onAskAI={()=>askMacroAI(evt)} onAddCal={()=>{const cal=`BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nSUMMARY:${evt.bank} - ${evt.name}\nDTSTART:${evt.date.replace(/-/g,"")}\nDTEND:${evt.date.replace(/-/g,"")}\nDESCRIPTION:${evt.desc||evt.name}\nEND:VEVENT\nEND:VCALENDAR`;const blob=new Blob([cal],{type:"text/calendar"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${evt.bank}-${evt.date}.ics`;a.click();setToast("Calendar event saved");}} onGoAI={()=>{setAiInput(`${evt.bank} ${evt.name} on ${evt.date}: forecast ${evt.forecast}, previous ${evt.previous||evt.current}${evt.actual?`, actual ${evt.actual}`:""}. How to position? Which assets most affected?`);setTab("ai");}}/>
+            );
+          })}
+
+          <div style={{marginTop:12,display:"flex",gap:10,flexWrap:"wrap",fontFamily:MONO,fontSize:8,color:C.muted,justifyContent:"center"}}>
+            <span>HIGH Impact</span><span>MED Impact</span><span>LOW Impact</span><span>· Tap any card for analysis</span>
+          </div>
+
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",marginTop:4,letterSpacing:"0.1em"}}>CLVRQuant v2 · ALL DATA LIVE · Not financial advice</div>
+
+          {macroAiEvent&&(
+            <div data-testid="macro-ai-modal" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:0}} onClick={()=>{setMacroAiEvent(null);setMacroAiResp(null);}}>
+              <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:"4px 4px 0 0",padding:20,width:"100%",maxWidth:520,maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                  <div>
+                    <div style={{fontFamily:MONO,fontSize:7,color:C.gold,letterSpacing:"0.18em"}}>QUANTBRAIN ANALYSIS</div>
+                    <div style={{fontFamily:SERIF,fontSize:14,fontWeight:700,color:C.white,marginTop:3}}>{macroAiEvent.name}</div>
+                  </div>
+                  <button data-testid="macro-ai-close" onClick={()=>{setMacroAiEvent(null);setMacroAiResp(null);}} style={{background:C.border,border:"none",color:C.muted2,borderRadius:2,padding:"5px 10px",cursor:"pointer",fontFamily:MONO,fontSize:12}}>✕</button>
+                </div>
+                <div style={{display:"flex",gap:8,marginBottom:14}}>
+                  {[{l:"Actual",v:macroAiEvent.actual||"Pending",c:C.white},{l:"Forecast",v:macroAiEvent.forecast,c:C.muted2},{l:"Previous",v:macroAiEvent.previous||macroAiEvent.current,c:C.muted}].map(({l,v,c})=>(
+                    <div key={l} style={{flex:1,background:"rgba(0,0,0,.3)",border:`1px solid ${C.border}`,borderRadius:2,padding:"7px 8px",textAlign:"center"}}>
+                      <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:2}}>{l}</div>
+                      <div style={{fontFamily:MONO,fontSize:13,fontWeight:700,color:c}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {macroAiLoading?(
+                  <div style={{textAlign:"center",padding:28}}>
+                    <div style={{fontFamily:MONO,fontSize:11,color:C.gold,animation:"pulse 1.4s ease infinite"}}>QuantBrain analyzing...</div>
+                  </div>
+                ):(
+                  <div style={{fontFamily:MONO,fontSize:11,color:C.text,lineHeight:1.9,whiteSpace:"pre-wrap"}}>{macroAiResp}</div>
+                )}
+                <div style={{marginTop:14,fontFamily:MONO,fontSize:7,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:10,letterSpacing:"0.08em"}}>For informational purposes only. Not financial advice. CLVRQuant · Mike Claver</div>
+              </div>
+            </div>
+          )}
         </>}
 
         {/* ══ BRIEF ══ */}
