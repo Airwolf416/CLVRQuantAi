@@ -1,0 +1,374 @@
+import { useState, useEffect, useRef } from “react”;
+
+// ─── QuantBrain Confluence Scorer ─────────────────────────────────────────
+function scoreSignal({ priceMoveAbs, direction, fundingRate, oiM, volumeMultiplier, socialSentiment, fearGreed, liqImbalance }) {
+let score = 0;
+const factors = [];
+
+// 1. Price move strength (0-20pts)
+const moveScore = Math.min(priceMoveAbs / 5 * 20, 20);
+score += moveScore;
+factors.push({ label: “Price Move”, pts: +moveScore.toFixed(1), note: `${priceMoveAbs.toFixed(2)}% move` });
+
+// 2. Funding rate alignment (0-15pts)
+const fundingAligned = (direction === “long” && fundingRate < 0) || (direction === “short” && fundingRate > 0);
+const fundingPts = fundingAligned ? 15 : fundingRate === 0 ? 5 : 0;
+score += fundingPts;
+factors.push({ label: “Funding Rate”, pts: fundingPts, note: fundingAligned ? “Aligned ✓” : “Against signal” });
+
+// 3. OI confirmation (0-15pts)
+const oiPts = oiM > 500 ? 15 : oiM > 100 ? 10 : oiM > 20 ? 6 : 2;
+score += oiPts;
+factors.push({ label: “Open Interest”, pts: oiPts, note: `$${oiM}M OI` });
+
+// 4. Volume spike (0-20pts)
+const volPts = Math.min(volumeMultiplier * 5, 20);
+score += volPts;
+factors.push({ label: “Volume”, pts: +volPts.toFixed(1), note: `${volumeMultiplier.toFixed(1)}x avg` });
+
+// 5. Social sentiment (0-10pts)
+const sentPts = (direction === “long” && socialSentiment === “bullish”) || (direction === “short” && socialSentiment === “bearish”) ? 10 : socialSentiment === “neutral” ? 5 : 0;
+score += sentPts;
+factors.push({ label: “Social”, pts: sentPts, note: socialSentiment });
+
+// 6. Fear & Greed contrarian (0-10pts)
+const fgPts = (direction === “long” && fearGreed < 30) ? 10 : (direction === “short” && fearGreed > 70) ? 10 : (fearGreed >= 40 && fearGreed <= 60) ? 5 : 2;
+score += fgPts;
+factors.push({ label: “Fear & Greed”, pts: fgPts, note: `Index: ${fearGreed}` });
+
+// 7. Liq imbalance (0-10pts)
+const liqPts = (direction === “long” && liqImbalance < -0.2) ? 10 : (direction === “short” && liqImbalance > 0.2) ? 10 : 4;
+score += liqPts;
+factors.push({ label: “Liq Heatmap”, pts: liqPts, note: liqImbalance > 0.2 ? “Clusters above” : liqImbalance < -0.2 ? “Clusters below” : “Balanced” });
+
+const total = Math.min(Math.round(score), 100);
+return { total, factors };
+}
+
+// ─── Mock signal generator ────────────────────────────────────────────────
+const ASSETS = [
+{ sym: “BTC”, cat: “CRYPTO”, price: 95420 },
+{ sym: “ETH”, cat: “CRYPTO”, price: 3214 },
+{ sym: “SOL”, cat: “CRYPTO”, price: 182.4 },
+{ sym: “UNI”, cat: “CRYPTO”, price: 4.13 },
+{ sym: “HYPE”, cat: “CRYPTO”, price: 30.67 },
+{ sym: “HBAR”, cat: “CRYPTO”, price: 0.1006 },
+{ sym: “XAU”, cat: “METALS”, price: 2341 },
+{ sym: “XAG”, cat: “METALS”, price: 27.4 },
+{ sym: “EUR/USD”, cat: “FOREX”, price: 1.0821 },
+{ sym: “GBP/USD”, cat: “FOREX”, price: 1.2634 },
+{ sym: “SPX”, cat: “EQUITIES”, price: 5280 },
+{ sym: “AAPL”, cat: “EQUITIES”, price: 188.5 },
+];
+
+const SENTIMENTS = [“bullish”, “bearish”, “neutral”];
+const MOVE_TYPES = [“BREAKOUT”, “REVERSAL”, “MOMENTUM”, “FADE”, “SQUEEZE”];
+
+function generateSignal(id) {
+const asset = ASSETS[Math.floor(Math.random() * ASSETS.length)];
+const direction = Math.random() > 0.5 ? “long” : “short”;
+const priceMoveAbs = 0.8 + Math.random() * 4.5;
+const priceMovePct = direction === “long” ? priceMoveAbs : -priceMoveAbs;
+const fundingRate = (Math.random() - 0.5) * 0.002;
+const oiM = Math.round(10 + Math.random() * 800);
+const volumeMultiplier = 0.5 + Math.random() * 4;
+const socialSentiment = SENTIMENTS[Math.floor(Math.random() * 3)];
+const fearGreed = Math.round(20 + Math.random() * 60);
+const liqImbalance = (Math.random() - 0.5) * 0.8;
+const minutesAgo = Math.floor(Math.random() * 45);
+const moveType = MOVE_TYPES[Math.floor(Math.random() * MOVE_TYPES.length)];
+const maxLev = [2, 3, 5, 10][Math.floor(Math.random() * 4)];
+const prevPrice = direction === “long”
+? asset.price / (1 + priceMovePct / 100)
+: asset.price / (1 + priceMovePct / 100);
+
+const { total, factors } = scoreSignal({ priceMoveAbs, direction, fundingRate, oiM, volumeMultiplier, socialSentiment, fearGreed, liqImbalance });
+
+return {
+id, asset, direction, priceMoveAbs, priceMovePct, fundingRate, oiM,
+volumeMultiplier, socialSentiment, fearGreed, liqImbalance,
+minutesAgo, moveType, maxLev, prevPrice, score: total, factors,
+isLive: minutesAgo < 5,
+};
+}
+
+function initSignals() {
+return Array.from({ length: 18 }, (_, i) => generateSignal(i));
+}
+
+// ─── Score Ring ───────────────────────────────────────────────────────────
+function ScoreRing({ score }) {
+const color = score >= 75 ? “#4ade80” : score >= 55 ? “#f59e0b” : “#f87171”;
+const r = 20, circ = 2 * Math.PI * r;
+const dash = (score / 100) * circ;
+return (
+<div style={{ position: “relative”, width: 52, height: 52, flexShrink: 0 }}>
+<svg width=“52” height=“52” style={{ transform: “rotate(-90deg)” }}>
+<circle cx="26" cy="26" r={r} fill="none" stroke="#1a1a1a" strokeWidth="4" />
+<circle cx=“26” cy=“26” r={r} fill=“none” stroke={color} strokeWidth=“4”
+strokeDasharray={`${dash} ${circ}`} strokeLinecap=“round” style={{ transition: “stroke-dasharray 1s ease” }} />
+</svg>
+<div style={{ position: “absolute”, inset: 0, display: “flex”, alignItems: “center”, justifyContent: “center”, fontSize: 13, fontWeight: 800, color }}>{score}</div>
+</div>
+);
+}
+
+// ─── Factor Tooltip ───────────────────────────────────────────────────────
+function FactorBreakdown({ factors, score }) {
+return (
+<div style={{ background: “#0d0d0d”, border: “1px solid #2a2a2a”, borderRadius: 12, padding: 14, marginTop: 10 }}>
+<div style={{ fontSize: 10, color: “#555”, letterSpacing: 2, marginBottom: 10 }}>QUANTBRAIN SCORE BREAKDOWN</div>
+{factors.map((f, i) => (
+<div key={i} style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center”, padding: “5px 0”, borderBottom: i < factors.length - 1 ? “1px solid #151515” : “none” }}>
+<div>
+<span style={{ fontSize: 12, color: “#888” }}>{f.label}</span>
+<span style={{ fontSize: 10, color: “#444”, marginLeft: 8 }}>{f.note}</span>
+</div>
+<div style={{ fontSize: 12, fontWeight: 700, color: f.pts >= 10 ? “#4ade80” : f.pts >= 5 ? “#f59e0b” : “#f87171” }}>+{typeof f.pts === “number” ? f.pts.toFixed(0) : f.pts}</div>
+</div>
+))}
+<div style={{ display: “flex”, justifyContent: “space-between”, paddingTop: 8, borderTop: “1px solid #2a2a2a”, marginTop: 4 }}>
+<span style={{ fontSize: 12, fontWeight: 700, color: “#fff” }}>Total Score</span>
+<span style={{ fontSize: 14, fontWeight: 900, color: score >= 75 ? “#4ade80” : score >= 55 ? “#f59e0b” : “#f87171” }}>{score}/100</span>
+</div>
+</div>
+);
+}
+
+// ─── Signal Card ──────────────────────────────────────────────────────────
+function SignalCard({ sig, watchlist, onWatch }) {
+const [expanded, setExpanded] = useState(false);
+const isLong = sig.direction === “long”;
+const color = isLong ? “#4ade80” : “#f87171”;
+const bg = isLong ? “#0a1f0a” : “#1f0a0a”;
+const scoreColor = sig.score >= 75 ? “#4ade80” : sig.score >= 55 ? “#f59e0b” : “#f87171”;
+const conviction = sig.score >= 75 ? “HIGH” : sig.score >= 55 ? “MED” : “LOW”;
+const convColor = sig.score >= 75 ? “#4ade80” : sig.score >= 55 ? “#f59e0b” : “#f87171”;
+
+const fmt = (n) => n >= 1000 ? `$${n.toLocaleString()}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(6)}`;
+
+return (
+<div style={{ background: “#0d0d0d”, border: `1px solid ${sig.score >= 75 ? color + "44" : "#1a1a1a"}`, borderRadius: 14, marginBottom: 10, overflow: “hidden”, transition: “border-color 0.3s” }}>
+{/* Main row */}
+<div style={{ padding: “14px 16px”, cursor: “pointer” }} onClick={() => setExpanded(e => !e)}>
+<div style={{ display: “flex”, alignItems: “center”, gap: 10 }}>
+{/* Direction button */}
+<div style={{ width: 28, height: 28, background: bg, border: `1px solid ${color}44`, borderRadius: 7, display: “flex”, alignItems: “center”, justifyContent: “center”, fontSize: 14, fontWeight: 900, color, flexShrink: 0 }}>
+{isLong ? “+” : “−”}
+</div>
+
+```
+      {/* Asset + badges */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{sig.asset.sym}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: bg, color, border: `1px solid ${color}44` }}>
+            {isLong ? "LONG" : "SHORT"}
+          </span>
+          {sig.isLive && (
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#0a1a0a", color: "#4ade80", border: "1px solid #4ade8044", animation: "pulse 2s infinite" }}>
+              LIVE
+            </span>
+          )}
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#1a1400", color: "#f59e0b", border: "1px solid #f59e0b44" }}>
+            ALPHA-DETECT
+          </span>
+          <span style={{ fontSize: 10, color, fontWeight: 700 }}>{sig.priceMovePct > 0 ? "+" : ""}{sig.priceMovePct.toFixed(2)}%</span>
+          <span style={{ fontSize: 10, color: "#444" }}>{sig.minutesAgo}m ago</span>
+        </div>
+
+        {/* Description */}
+        <div style={{ fontSize: 11, color: "#666", marginTop: 5, lineHeight: 1.5 }}>
+          {sig.asset.sym} {isLong ? "pumped" : "dumped"} {sig.priceMoveAbs.toFixed(1)}% · {fmt(sig.prevPrice)} → {fmt(sig.asset.price)} · Funding: {sig.fundingRate > 0 ? "+" : ""}{(sig.fundingRate * 100).toFixed(4)}%/h · OI: ${sig.oiM}M
+        </div>
+
+        {/* Tags */}
+        <div style={{ display: "flex", gap: 6, marginTop: 7, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#111", border: "1px solid #222", color: "#666" }}>LIVE DETECTED</span>
+          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#111", border: "1px solid #222", color: "#a78bfa" }}>{sig.moveType}</span>
+          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#111", border: "1px solid #222", color: "#888" }}>≤{sig.maxLev}x</span>
+          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#111", border: `1px solid ${convColor}44`, color: convColor }}>
+            {conviction} CONVICTION
+          </span>
+          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#111", border: "1px solid #222", color: "#38bdf8" }}>
+            Vol {sig.volumeMultiplier.toFixed(1)}x
+          </span>
+        </div>
+      </div>
+
+      {/* Score ring + watch */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+        <ScoreRing score={sig.score} />
+        <button onClick={e => { e.stopPropagation(); onWatch(sig.asset.sym); }}
+          style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, border: `1px solid ${watchlist.includes(sig.asset.sym) ? "#f59e0b44" : "#222"}`, background: watchlist.includes(sig.asset.sym) ? "#1a1400" : "#111", color: watchlist.includes(sig.asset.sym) ? "#f59e0b" : "#555", cursor: "pointer" }}>
+          {watchlist.includes(sig.asset.sym) ? "★ watching" : "☆ watch"}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  {/* Expanded breakdown */}
+  {expanded && (
+    <div style={{ padding: "0 16px 14px" }}>
+      <FactorBreakdown factors={sig.factors} score={sig.score} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 }}>
+        {[
+          { l: "Social", v: sig.socialSentiment, c: sig.socialSentiment === "bullish" ? "#4ade80" : sig.socialSentiment === "bearish" ? "#f87171" : "#888" },
+          { l: "Fear & Greed", v: sig.fearGreed, c: sig.fearGreed > 70 ? "#f87171" : sig.fearGreed < 30 ? "#4ade80" : "#f59e0b" },
+          { l: "Liq Bias", v: sig.liqImbalance > 0.2 ? "Above" : sig.liqImbalance < -0.2 ? "Below" : "Balanced", c: "#a78bfa" },
+        ].map(({ l, v, c }) => (
+          <div key={l} style={{ background: "#111", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
+            <div style={{ fontSize: 9, color: "#444", marginBottom: 3 }}>{l}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: c, textTransform: "capitalize" }}>{v}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────
+export default function AlphaSignals() {
+const [signals, setSignals] = useState(initSignals);
+const [filter, setFilter] = useState(“ALL”);
+const [minScore, setMinScore] = useState(0);
+const [watchlist, setWatchlist] = useState([]);
+const [sortBy, setSortBy] = useState(“score”);
+const [newCount, setNewCount] = useState(0);
+const nextId = useRef(100);
+
+// Simulate live incoming signals every 8s
+useEffect(() => {
+const t = setInterval(() => {
+const newSig = generateSignal(nextId.current++);
+setSignals(prev => [newSig, …prev.slice(0, 29)]);
+setNewCount(n => n + 1);
+setTimeout(() => setNewCount(n => Math.max(0, n - 1)), 5000);
+}, 8000);
+return () => clearInterval(t);
+}, []);
+
+const onWatch = (sym) => setWatchlist(w => w.includes(sym) ? w.filter(s => s !== sym) : […w, sym]);
+
+const cats = [“ALL”, “+WATCH”, “CRYPTO”, “EQUITIES”, “METALS”, “FOREX”];
+
+const filtered = signals
+.filter(s => {
+if (filter === “+WATCH”) return watchlist.includes(s.asset.sym);
+if (filter !== “ALL”) return s.asset.cat === filter;
+return true;
+})
+.filter(s => s.score >= minScore)
+.sort((a, b) => sortBy === “score” ? b.score - a.score : a.minutesAgo - b.minutesAgo);
+
+const detected = signals.filter(s => s.isLive).length;
+const avgScore = signals.length ? Math.round(signals.reduce((a, s) => a + s.score, 0) / signals.length) : 0;
+const highConv = signals.filter(s => s.score >= 75).length;
+
+return (
+<div style={{ fontFamily: “‘Inter’,sans-serif”, background: “#080810”, color: “#e8e8e8”, minHeight: “100vh”, padding: “16px” }}>
+<style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} } @keyframes slidein { from{transform:translateY(-10px);opacity:0} to{transform:translateY(0);opacity:1} }`}</style>
+
+```
+  {/* Header */}
+  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+    <div>
+      <div style={{ fontSize: 10, color: "#7c3aed", letterSpacing: 3, marginBottom: 4 }}>CLVRQUANT v4</div>
+      <div style={{ fontSize: 18, fontWeight: 800 }}>⚡ QUANT AI SIGNALS</div>
+      <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>tracking {signals.length} tokens · 1.5% move threshold · 5min window</div>
+    </div>
+    <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ background: "#0a1f0a", border: "1px solid #4ade8044", borderRadius: 8, padding: "6px 12px", textAlign: "center" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#4ade80" }}>{detected}</div>
+        <div style={{ fontSize: 9, color: "#4ade8088" }}>LIVE</div>
+      </div>
+      <div style={{ background: "#1a1400", border: "1px solid #f59e0b44", borderRadius: 8, padding: "6px 12px", textAlign: "center" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#f59e0b" }}>{signals.length}</div>
+        <div style={{ fontSize: 9, color: "#f59e0b88" }}>TRACKING</div>
+      </div>
+      <div style={{ background: "#0a0a1f", border: "1px solid #7c3aed44", borderRadius: 8, padding: "6px 12px", textAlign: "center" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#a855f7" }}>{highConv}</div>
+        <div style={{ fontSize: 9, color: "#a855f788" }}>HIGH CONV</div>
+      </div>
+    </div>
+  </div>
+
+  {/* New signal flash */}
+  {newCount > 0 && (
+    <div style={{ background: "#0a1a2e", border: "1px solid #38bdf844", borderRadius: 10, padding: "8px 14px", marginBottom: 10, fontSize: 12, color: "#38bdf8", animation: "slidein 0.3s ease", display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ animation: "pulse 1s infinite" }}>●</span>
+      New signal detected — {newCount} incoming
+    </div>
+  )}
+
+  {/* Category filters */}
+  <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+    {cats.map(c => (
+      <button key={c} onClick={() => setFilter(c)}
+        style={{ padding: "6px 14px", borderRadius: 8, border: `1px solid ${filter === c ? "#7c3aed" : "#222"}`, background: filter === c ? "#7c3aed" : "#111", color: filter === c ? "#fff" : "#666", cursor: "pointer", fontSize: 12, fontWeight: filter === c ? 700 : 400 }}>
+        {c}{c === "+WATCH" && watchlist.length > 0 ? ` (${watchlist.length})` : ""}
+      </button>
+    ))}
+  </div>
+
+  {/* Controls row */}
+  <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+    <div style={{ flex: 1, minWidth: 180 }}>
+      <div style={{ fontSize: 10, color: "#555", marginBottom: 4 }}>MIN SCORE: <span style={{ color: "#a855f7", fontWeight: 700 }}>{minScore}+</span></div>
+      <input type="range" min="0" max="80" step="5" value={minScore}
+        onChange={e => setMinScore(+e.target.value)}
+        style={{ width: "100%", accentColor: "#7c3aed" }} />
+    </div>
+    <div>
+      <div style={{ fontSize: 10, color: "#555", marginBottom: 4 }}>SORT BY</div>
+      <div style={{ display: "flex", gap: 6 }}>
+        {["score", "recent"].map(s => (
+          <button key={s} onClick={() => setSortBy(s)}
+            style={{ padding: "5px 12px", borderRadius: 7, border: `1px solid ${sortBy === s ? "#7c3aed" : "#222"}`, background: sortBy === s ? "#7c3aed" : "#111", color: sortBy === s ? "#fff" : "#666", cursor: "pointer", fontSize: 11 }}>
+            {s === "score" ? "🏆 Score" : "🕐 Recent"}
+          </button>
+        ))}
+      </div>
+    </div>
+    <div style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "5px 12px", fontSize: 11, color: "#555" }}>
+      Avg score: <span style={{ color: avgScore >= 65 ? "#4ade80" : "#f59e0b", fontWeight: 700 }}>{avgScore}</span>
+    </div>
+  </div>
+
+  {/* Score legend */}
+  <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+    {[
+      { label: "HIGH (75+)", color: "#4ade80", bg: "#0a1f0a" },
+      { label: "MED (55-74)", color: "#f59e0b", bg: "#1a1400" },
+      { label: "LOW (<55)", color: "#f87171", bg: "#1f0a0a" },
+    ].map(({ label, color, bg }) => (
+      <div key={label} style={{ background: bg, border: `1px solid ${color}33`, borderRadius: 6, padding: "4px 10px", fontSize: 10, color, fontWeight: 700 }}>
+        ● {label}
+      </div>
+    ))}
+    <div style={{ fontSize: 10, color: "#444", padding: "4px 0" }}>Tap any card to see QuantBrain breakdown →</div>
+  </div>
+
+  {/* Signal feed */}
+  {filtered.length === 0 ? (
+    <div style={{ textAlign: "center", padding: 40, color: "#333", fontSize: 13 }}>
+      No signals match your filters. Lower the min score or change category.
+    </div>
+  ) : (
+    filtered.map(sig => (
+      <SignalCard key={sig.id} sig={sig} watchlist={watchlist} onWatch={onWatch} />
+    ))
+  )}
+
+  <div style={{ marginTop: 16, fontSize: 10, color: "#2a2a2a", textAlign: "center", lineHeight: 1.6 }}>
+    ⚠️ CLVRQuant AI provides market information only. Not financial advice. © 2025 CLVRQuant · Mike Claver™
+  </div>
+</div>
+```
+
+);
+}
