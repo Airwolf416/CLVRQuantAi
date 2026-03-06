@@ -1205,6 +1205,99 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  app.get("/api/account", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const tier = user.email === OWNER_EMAIL ? "pro" : user.tier;
+      const subRow = await pool.query("SELECT active FROM subscribers WHERE email = $1", [user.email]);
+      const dailyEmail = subRow.rows.length > 0 ? subRow.rows[0].active : false;
+      let stripeInfo: any = null;
+      if (user.stripeSubscriptionId) {
+        try {
+          const stripe = await getUncachableStripeClient();
+          const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+          stripeInfo = {
+            status: sub.status,
+            currentPeriodEnd: (sub as any).current_period_end ? new Date((sub as any).current_period_end * 1000).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : null,
+            cancelAtPeriodEnd: (sub as any).cancel_at_period_end || false,
+            interval: (sub as any).items?.data?.[0]?.price?.recurring?.interval || "month",
+            amount: (sub as any).items?.data?.[0]?.price?.unit_amount ? "$" + ((sub as any).items.data[0].price.unit_amount / 100).toFixed(2) : null,
+          };
+        } catch (e: any) { console.log("[account] Stripe sub fetch error:", e.message); }
+      }
+      let invoices: any[] = [];
+      if (user.stripeCustomerId) {
+        try {
+          const stripe = await getUncachableStripeClient();
+          const inv = await stripe.invoices.list({ customer: user.stripeCustomerId, limit: 10 });
+          invoices = inv.data.map((i: any) => ({
+            date: new Date(i.created * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+            description: i.lines?.data?.[0]?.description || "CLVRQuant Pro",
+            amount: "$" + ((i.amount_paid || 0) / 100).toFixed(2),
+            status: i.status === "paid" ? "Paid" : i.status,
+          }));
+        } catch (e: any) { console.log("[account] Stripe invoices fetch error:", e.message); }
+      }
+      res.json({
+        id: user.id, name: user.name, email: user.email, tier,
+        memberSince: user.createdAt ? new Date(user.createdAt).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : "2026",
+        dailyEmail,
+        stripeCustomerId: user.stripeCustomerId || null,
+        stripeSubscriptionId: user.stripeSubscriptionId || null,
+        subscription: stripeInfo,
+        invoices,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/account/toggle-daily-email", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const { subscribe } = req.body;
+      if (subscribe) {
+        await pool.query(
+          "INSERT INTO subscribers (id, email, name, active) VALUES (gen_random_uuid(), $1, $2, true) ON CONFLICT (email) DO UPDATE SET active = true",
+          [user.email, user.name]
+        );
+      } else {
+        await pool.query("UPDATE subscribers SET active = false WHERE email = $1", [user.email]);
+      }
+      res.json({ ok: true, dailyEmail: !!subscribe });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/account", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (user.stripeSubscriptionId) {
+        try {
+          const stripe = await getUncachableStripeClient();
+          await stripe.subscriptions.cancel(user.stripeSubscriptionId);
+        } catch (e: any) { console.log("[account] Stripe cancel error:", e.message); }
+      }
+      await pool.query("UPDATE subscribers SET active = false WHERE email = $1", [user.email]);
+      await pool.query("UPDATE access_codes SET used_by = NULL, used_at = NULL WHERE used_by = $1", [userId]);
+      await pool.query("DELETE FROM users WHERE id = $1", [userId]);
+      req.session.destroy(() => {});
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/access-codes", async (req, res) => {
     const ownerCode = req.query.ownerCode as string;
     if (ownerCode !== OWNER_CODE) {

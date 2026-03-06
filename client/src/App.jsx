@@ -8,8 +8,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import PhantomWalletPanel from "./PhantomWallet";
-import FeaturesGuide from "./FeaturesGuide";
 import WelcomePage from "./WelcomePage";
+import AccountPage from "./AccountPage";
 
 // ─── CLVRQuant Theme ──────────────────────────────────────
 const C = {
@@ -942,7 +942,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
     {k:"alerts",icon:"🔔",label:"Alerts"},
     {k:"wallet",icon:"👛",label:"Wallet"},
     {k:"ai",icon:"✦",label:"AI"},
-    {k:"guide",icon:"📖",label:"Guide"},
+    {k:"account",icon:"⚙",label:"Account"},
   ];
   const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
 
@@ -1564,10 +1564,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         </>}
 
         {/* ══ GUIDE ══ */}
-        {tab==="guide"&&<>
-          <div style={{marginBottom:14}}><SLabel>Platform Guide</SLabel></div>
-          <FeaturesGuide />
-        </>}
+        {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={setShowUpgrade}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT · MIKE CLAVER
