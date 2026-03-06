@@ -29,7 +29,7 @@ The frontend is a React application split into `App` (auth gate) and `Dashboard`
 
 -   **Radar**: A command center with active alerts, live news, macro event countdowns, volume spike detection, funding rate flip alerts, and a liquidation heatmap.
 -   **Markets**: Displays real-time data for Crypto (spot/perp), Equities, Metals, and Forex.
--   **Macro**: Provides a central bank and US economic data calendar with filtering and AI integration.
+-   **Macro**: Enhanced macro calendar with live ForexFactory data (60s refresh). Features expandable EventCards with actual/forecast/previous values, BEAT/MISS surprise indicators, market impact analysis (NFP, GDP, CPI, retail sales, wages), QuantBrain AI analysis per event, region filters (US/EU/UK/CA/JP/AU), impact filters (HIGH/MED/LOW), Today/Week toggle, Next Release banner, and Add to Calendar. Central bank schedule (MACRO_2026) provides fallback for FOMC/ECB/BOJ/BOC/BOE/RBA dates.
 -   **Brief**: Presents an AI-generated daily market commentary with asset analysis and a subscription form.
 -   **Signals**: Offers quantifiable trading signals with filtering options.
 -   **Alerts**: Allows users to set custom price and funding alerts with browser notifications.

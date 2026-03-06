@@ -1,0 +1,450 @@
+import { useState, useEffect, useCallback } from “react”;
+
+// ─── Impact colors ─────────────────────────────────────────────────────────
+const IMPACT = {
+high:   { color: “#f87171”, bg: “#2a1010”, label: “HIGH”,   dot: “🔴” },
+medium: { color: “#f59e0b”, bg: “#1a1400”, label: “MED”,    dot: “🟡” },
+low:    { color: “#4ade80”, bg: “#0a1f0a”, label: “LOW”,    dot: “🟢” },
+};
+
+const FLAG = { “US”: “🇺🇸”, “EU”: “🇪🇺”, “UK”: “🇬🇧”, “CA”: “🇨🇦”, “JP”: “🇯🇵”, “CN”: “🇨🇳”, “DE”: “🇩🇪”, “FR”: “🇫🇷” };
+
+// ─── Fallback hardcoded events for today (Mar 6 2026) ─────────────────────
+const TODAY_EVENTS = [
+{
+id: 1, time: “08:00”, country: “EU”, region: “Eurozone”,
+event: “GDP Q4 2025 (Final)”, impact: “high”,
+forecast: “1.3%”, previous: “1.4%”, actual: “1.2%”,
+unit: “YoY”, released: true,
+analysis: “Final Q4 GDP confirmed below forecast — Eurozone growth cooling heading into 2026.”,
+},
+{
+id: 2, time: “08:30”, country: “US”, region: “United States”,
+event: “Non-Farm Payrolls (Feb)”, impact: “high”,
+forecast: “+59K”, previous: “+130K”, actual: “-92K”,
+unit: “jobs”, released: true,
+analysis: “Massive miss. Worst NFP in 4 months. Labor market deteriorating fast — Fed cut odds surging.”,
+},
+{
+id: 3, time: “08:30”, country: “US”, region: “United States”,
+event: “Unemployment Rate (Feb)”, impact: “high”,
+forecast: “4.3%”, previous: “4.3%”, actual: “4.4%”,
+unit: “%”, released: true,
+analysis: “Unemployment ticked higher — confirms weak NFP. Both Fed mandates now at risk.”,
+},
+{
+id: 4, time: “08:30”, country: “US”, region: “United States”,
+event: “Average Hourly Earnings (Feb)”, impact: “high”,
+forecast: “3.7%”, previous: “3.7%”, actual: “3.8%”,
+unit: “YoY”, released: true,
+analysis: “Wages beat while jobs collapsed — stagflation risk rising. Complicates Fed’s path.”,
+},
+{
+id: 5, time: “08:30”, country: “US”, region: “United States”,
+event: “Retail Sales (Feb)”, impact: “high”,
+forecast: “-0.3%”, previous: “0.0%”, actual: null,
+unit: “MoM”, released: false,
+analysis: “Key data point after NFP shock. A negative print would confirm recession fears.”,
+},
+{
+id: 6, time: “08:30”, country: “US”, region: “United States”,
+event: “Core Retail Sales (Feb)”, impact: “medium”,
+forecast: “+0.1%”, previous: “0.0%”, actual: null,
+unit: “MoM”, released: false,
+analysis: “Strip out autos — better picture of underlying consumer health.”,
+},
+{
+id: 7, time: “10:00”, country: “US”, region: “United States”,
+event: “Michigan Consumer Sentiment (Prel)”, impact: “medium”,
+forecast: “64.5”, previous: “64.7”, actual: null,
+unit: “index”, released: false,
+analysis: “Consumer confidence under pressure from tariffs and labor weakness.”,
+},
+{
+id: 8, time: “13:00”, country: “US”, region: “United States”,
+event: “Baker Hughes Oil Rig Count”, impact: “low”,
+forecast: “—”, previous: “485”, actual: null,
+unit: “rigs”, released: false,
+analysis: “Weekly oil supply indicator. Watch for impact on crude prices.”,
+},
+];
+
+// ─── Surprise indicator ────────────────────────────────────────────────────
+function getSurprise(event) {
+if (!event.actual || !event.forecast) return null;
+const a = parseFloat(event.actual.replace(/[^0-9.-]/g, “”));
+const f = parseFloat(event.forecast.replace(/[^0-9.-]/g, “”));
+if (isNaN(a) || isNaN(f)) return null;
+const diff = a - f;
+if (Math.abs(diff) < 0.05) return { label: “IN LINE”, color: “#888” };
+return diff > 0
+? { label: `BEAT +${Math.abs(diff).toFixed(1)}`, color: “#4ade80” }
+: { label: `MISS -${Math.abs(diff).toFixed(1)}`, color: “#f87171” };
+}
+
+// ─── QuantBrain market impact assessment ──────────────────────────────────
+function getMarketImpact(event) {
+if (!event.released || !event.actual) return null;
+const impacts = [];
+const name = event.event.toLowerCase();
+
+if (name.includes(“non-farm”) || name.includes(“nfp”)) {
+const actual = parseFloat(event.actual.replace(/[^0-9.-]/g, “”));
+if (actual < 0) {
+impacts.push({ asset: “USD”, dir: “🔴 BEARISH”, reason: “Jobs collapse → rate cut expectations surge” });
+impacts.push({ asset: “XAU”, dir: “🟢 BULLISH”, reason: “Safe haven demand + rate cut tailwind” });
+impacts.push({ asset: “BTC”, dir: “🟡 CAUTIOUS”, reason: “Risk-off initially but rate cuts medium-term bullish” });
+impacts.push({ asset: “SPX”, dir: “🔴 BEARISH”, reason: “Recession fears dominate” });
+}
+}
+if (name.includes(“gdp”)) {
+impacts.push({ asset: “EUR”, dir: “🔴 BEARISH”, reason: “Below forecast GDP → ECB cut odds rise” });
+impacts.push({ asset: “EUR/USD”, dir: “🔴 BEARISH”, reason: “Euro weakness on slow growth” });
+}
+if (name.includes(“earnings”) || name.includes(“wages”)) {
+impacts.push({ asset: “USD”, dir: “🟡 MIXED”, reason: “Hot wages = sticky inflation, limits Fed cuts” });
+}
+return impacts.length > 0 ? impacts : null;
+}
+
+// ─── Event Card ────────────────────────────────────────────────────────────
+function EventCard({ event, onAskAI }) {
+const [expanded, setExpanded] = useState(false);
+const imp = IMPACT[event.impact];
+const surprise = getSurprise(event);
+const marketImpacts = getMarketImpact(event);
+const isNow = !event.released && event.time === new Date().toTimeString().slice(0, 5);
+
+return (
+<div style={{
+background: “#0d0d0d”,
+border: `1px solid ${event.released ? (surprise?.color === "#f87171" ? "#f8717133" : surprise?.color === "#4ade80" ? "#4ade8033" : "#1a1a1a") : imp.color + "22"}`,
+borderRadius: 14, marginBottom: 10, overflow: “hidden”,
+opacity: event.released ? 1 : 0.85,
+}}>
+<div style={{ padding: “14px 16px”, cursor: “pointer” }} onClick={() => setExpanded(e => !e)}>
+<div style={{ display: “flex”, gap: 10, alignItems: “flex-start” }}>
+
+```
+      {/* Time + flag */}
+      <div style={{ textAlign: "center", minWidth: 44, flexShrink: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: event.released ? "#444" : "#e8e8e8", fontFamily: "monospace" }}>{event.time}</div>
+        <div style={{ fontSize: 18, marginTop: 2 }}>{FLAG[event.country] || "🌍"}</div>
+      </div>
+
+      {/* Main content */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: event.released ? "#888" : "#fff" }}>{event.event}</span>
+          {isNow && <span style={{ fontSize: 10, background: "#0a1f0a", border: "1px solid #4ade8044", color: "#4ade80", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>LIVE NOW</span>}
+          <span style={{ fontSize: 10, background: imp.bg, color: imp.color, border: `1px solid ${imp.color}33`, borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>{imp.dot} {imp.label}</span>
+          {event.released && surprise && (
+            <span style={{ fontSize: 10, background: "#111", border: `1px solid ${surprise.color}44`, color: surprise.color, borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>{surprise.label}</span>
+          )}
+          {!event.released && <span style={{ fontSize: 10, color: "#555", border: "1px solid #222", borderRadius: 4, padding: "1px 6px" }}>PENDING</span>}
+        </div>
+
+        <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>{event.region}</div>
+
+        {/* Forecast / Actual row */}
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          {event.actual && (
+            <div>
+              <div style={{ fontSize: 9, color: "#444", marginBottom: 1 }}>ACTUAL</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: surprise?.color || "#fff" }}>{event.actual}<span style={{ fontSize: 10, color: "#555", marginLeft: 2 }}>{event.unit}</span></div>
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize: 9, color: "#444", marginBottom: 1 }}>FORECAST</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#888" }}>{event.forecast}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 9, color: "#444", marginBottom: 1 }}>PREVIOUS</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#555" }}>{event.previous}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Expand chevron */}
+      <div style={{ color: "#333", fontSize: 16, flexShrink: 0, marginTop: 4 }}>{expanded ? "▲" : "▼"}</div>
+    </div>
+  </div>
+
+  {/* Expanded */}
+  {expanded && (
+    <div style={{ padding: "0 16px 14px", borderTop: "1px solid #111" }}>
+      {/* Analysis */}
+      <div style={{ background: "#0a0a1a", border: "1px solid #1a1a2e", borderRadius: 10, padding: "10px 14px", marginTop: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: "#7c3aed", letterSpacing: 2, marginBottom: 5 }}>QUANTBRAIN ANALYSIS</div>
+        <div style={{ fontSize: 12, color: "#888", lineHeight: 1.7 }}>{event.analysis}</div>
+      </div>
+
+      {/* Market impacts */}
+      {marketImpacts && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: "#555", letterSpacing: 2, marginBottom: 8 }}>MARKET IMPACT</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            {marketImpacts.map((m, i) => (
+              <div key={i} style={{ background: "#111", border: "1px solid #1a1a1a", borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 2 }}>{m.asset} <span style={{ fontSize: 11 }}>{m.dir}</span></div>
+                <div style={{ fontSize: 10, color: "#555", lineHeight: 1.4 }}>{m.reason}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Ask AI button */}
+      <button onClick={() => onAskAI(event)}
+        style={{ width: "100%", background: "linear-gradient(135deg,#7c3aed,#a855f7)", border: "none", color: "#fff", borderRadius: 9, padding: "9px", cursor: "pointer", fontWeight: 700, fontSize: 13 }}>
+        ✦ Ask QuantBrain about this event
+      </button>
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─── AI Modal ──────────────────────────────────────────────────────────────
+function AIModal({ event, onClose }) {
+const [response, setResponse] = useState(null);
+const [loading, setLoading] = useState(true);
+
+useEffect(() => {
+const ask = async () => {
+try {
+const res = await fetch(“https://api.anthropic.com/v1/messages”, {
+method: “POST”,
+headers: { “Content-Type”: “application/json” },
+body: JSON.stringify({
+model: “claude-sonnet-4-20250514”,
+max_tokens: 1000,
+system: `You are QuantBrain, an elite quantitative market intelligence analyst for CLVRQuant AI. You provide concise, data-driven analysis of economic releases. Focus on: 1) What the data means for markets, 2) Which assets are most affected, 3) How this changes the macro picture, 4) What to watch next. Always remind users this is information only, not financial advice. Be precise and use numbers.`,
+messages: [{
+role: “user”,
+content: `Analyze this economic release for me:
+
+Event: ${event.event}
+Country/Region: ${event.region}
+Forecast: ${event.forecast} ${event.unit}
+Previous: ${event.previous} ${event.unit}
+Actual: ${event.actual || “Not yet released”} ${event.unit}
+Impact Level: ${event.impact.toUpperCase()}
+Today’s Date: March 6, 2026
+
+${event.actual ? `The actual came in ${parseFloat(event.actual) > parseFloat(event.forecast) ? "ABOVE" : "BELOW"} expectations.` : “This event has not yet been released.”}
+
+What does this mean for markets? Which assets move? What’s the macro implication? What should I watch next?`
+}]
+})
+});
+const data = await res.json();
+setResponse(data.content?.map(c => c.text || “”).join(”\n”) || “No response.”);
+} catch (e) {
+setResponse(“❌ Error: “ + e.message);
+}
+setLoading(false);
+};
+ask();
+}, [event]);
+
+return (
+<div style={{ position: “fixed”, inset: 0, background: “#000000dd”, zIndex: 300, display: “flex”, alignItems: “flex-end”, justifyContent: “center”, padding: 0 }}
+onClick={onClose}>
+<div style={{ background: “#0d0d1a”, border: “1px solid #2a2a3a”, borderRadius: “20px 20px 0 0”, padding: 24, width: “100%”, maxWidth: 520, maxHeight: “80vh”, overflowY: “auto” }}
+onClick={e => e.stopPropagation()}>
+<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center”, marginBottom: 16 }}>
+<div>
+<div style={{ fontSize: 11, color: “#7c3aed”, letterSpacing: 2 }}>QUANTBRAIN ANALYSIS</div>
+<div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{event.event}</div>
+</div>
+<button onClick={onClose} style={{ background: “#1a1a1a”, border: “none”, color: “#888”, borderRadius: 8, padding: “6px 12px”, cursor: “pointer”, fontSize: 14 }}>✕</button>
+</div>
+
+```
+    {/* Data summary */}
+    <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+      {[
+        { l: "Actual", v: event.actual || "Pending", c: "#fff" },
+        { l: "Forecast", v: event.forecast, c: "#888" },
+        { l: "Previous", v: event.previous, c: "#555" },
+      ].map(({ l, v, c }) => (
+        <div key={l} style={{ flex: 1, background: "#111", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
+          <div style={{ fontSize: 9, color: "#444", marginBottom: 3 }}>{l}</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: c }}>{v}</div>
+        </div>
+      ))}
+    </div>
+
+    {loading ? (
+      <div style={{ textAlign: "center", padding: 32 }}>
+        <div style={{ fontSize: 32, marginBottom: 10 }}>🧠</div>
+        <div style={{ color: "#7c3aed", fontSize: 13 }}>QuantBrain analyzing…</div>
+      </div>
+    ) : (
+      <div style={{ fontSize: 13, color: "#ccc", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{response}</div>
+    )}
+
+    <div style={{ marginTop: 16, fontSize: 10, color: "#333", borderTop: "1px solid #111", paddingTop: 12 }}>
+      ⚠️ For informational purposes only. Not financial advice. CLVRQuant · Mike Claver™
+    </div>
+  </div>
+</div>
+```
+
+);
+}
+
+// ─── Main Component ────────────────────────────────────────────────────────
+export default function EconCalendar() {
+const [events, setEvents] = useState(TODAY_EVENTS);
+const [filter, setFilter] = useState(“ALL”);
+const [impactFilter, setImpactFilter] = useState(“ALL”);
+const [aiEvent, setAiEvent] = useState(null);
+const [lastUpdate, setLastUpdate] = useState(new Date());
+const [tab, setTab] = useState(“today”); // today | week
+
+// Simulate live updates every 30s (replace with real API polling)
+useEffect(() => {
+const t = setInterval(() => {
+setLastUpdate(new Date());
+// In production: fetch from your backend which pulls from:
+// - Finnhub economic calendar API
+// - ForexFactory RSS feed
+// - Investing.com calendar
+}, 30000);
+return () => clearInterval(t);
+}, []);
+
+const regions = [“ALL”, “US”, “EU”, “UK”, “CA”, “JP”];
+const impacts = [“ALL”, “high”, “medium”, “low”];
+
+const filtered = events
+.filter(e => filter === “ALL” || e.country === filter)
+.filter(e => impactFilter === “ALL” || e.impact === impactFilter);
+
+const released = filtered.filter(e => e.released).length;
+const pending = filtered.filter(e => !e.released).length;
+const highImpact = filtered.filter(e => e.impact === “high”).length;
+
+// Next event countdown
+const nextEvent = events.find(e => !e.released);
+
+return (
+<div style={{ fontFamily: “‘Inter’,sans-serif”, background: “#080810”, color: “#e8e8e8”, minHeight: “100vh”, padding: 16 }}>
+<style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
+
+```
+  {/* Header */}
+  <div style={{ marginBottom: 16 }}>
+    <div style={{ fontSize: 10, color: "#7c3aed", letterSpacing: 3, marginBottom: 4 }}>CLVRQUANT v4</div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+      <div>
+        <div style={{ fontSize: 18, fontWeight: 800 }}>📅 Macro Calendar</div>
+        <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>
+          Updated {lastUpdate.toLocaleTimeString()} · {new Date().toDateString()}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ background: "#2a1010", border: "1px solid #f8717133", borderRadius: 8, padding: "5px 10px", textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#f87171" }}>{highImpact}</div>
+          <div style={{ fontSize: 9, color: "#f8717188" }}>HIGH</div>
+        </div>
+        <div style={{ background: "#0a1f0a", border: "1px solid #4ade8033", borderRadius: 8, padding: "5px 10px", textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#4ade80" }}>{released}</div>
+          <div style={{ fontSize: 9, color: "#4ade8088" }}>DONE</div>
+        </div>
+        <div style={{ background: "#1a1400", border: "1px solid #f59e0b33", borderRadius: 8, padding: "5px 10px", textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#f59e0b" }}>{pending}</div>
+          <div style={{ fontSize: 9, color: "#f59e0b88" }}>PENDING</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {/* Next event banner */}
+  {nextEvent && (
+    <div style={{ background: "#0a0a1f", border: "1px solid #7c3aed33", borderRadius: 12, padding: "10px 14px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div>
+        <div style={{ fontSize: 10, color: "#7c3aed", letterSpacing: 2, marginBottom: 2 }}>NEXT RELEASE</div>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>{FLAG[nextEvent.country]} {nextEvent.event}</div>
+        <div style={{ fontSize: 11, color: "#555" }}>Forecast: {nextEvent.forecast} · at {nextEvent.time} ET</div>
+      </div>
+      <div style={{ fontSize: 24, animation: "pulse 2s infinite" }}>⏳</div>
+    </div>
+  )}
+
+  {/* NFP shock banner */}
+  {events.find(e => e.event.includes("Non-Farm") && e.released) && (
+    <div style={{ background: "#2a1010", border: "1px solid #f8717166", borderRadius: 12, padding: "10px 14px", marginBottom: 14 }}>
+      <div style={{ fontSize: 11, color: "#f87171", fontWeight: 800, marginBottom: 2 }}>🚨 NFP SHOCK — MAJOR MISS</div>
+      <div style={{ fontSize: 12, color: "#f8717188", lineHeight: 1.6 }}>
+        NFP came in at <strong style={{ color: "#f87171" }}>-92K</strong> vs forecast +59K. Unemployment rose to 4.4%. USD under heavy pressure. Fed cut odds surging for July. Watch Retail Sales at 08:30 ET.
+      </div>
+    </div>
+  )}
+
+  {/* Tabs */}
+  <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+    {["today", "week"].map(t => (
+      <button key={t} onClick={() => setTab(t)}
+        style={{ background: tab === t ? "#7c3aed" : "#111", border: `1px solid ${tab === t ? "#7c3aed" : "#222"}`, color: tab === t ? "#fff" : "#666", borderRadius: 8, padding: "6px 16px", cursor: "pointer", fontSize: 12, fontWeight: tab === t ? 700 : 400, textTransform: "capitalize" }}>
+        {t === "today" ? "📅 Today" : "📆 This Week"}
+      </button>
+    ))}
+  </div>
+
+  {/* Region filters */}
+  <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+    {regions.map(r => (
+      <button key={r} onClick={() => setFilter(r)}
+        style={{ background: filter === r ? "#1a1a2e" : "#111", border: `1px solid ${filter === r ? "#7c3aed" : "#222"}`, color: filter === r ? "#a78bfa" : "#555", borderRadius: 7, padding: "5px 12px", cursor: "pointer", fontSize: 12 }}>
+        {FLAG[r] || ""} {r}
+      </button>
+    ))}
+  </div>
+
+  {/* Impact filters */}
+  <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+    {impacts.map(i => (
+      <button key={i} onClick={() => setImpactFilter(i)}
+        style={{ background: impactFilter === i ? IMPACT[i]?.bg || "#1a1a1a" : "#111", border: `1px solid ${impactFilter === i ? (IMPACT[i]?.color || "#7c3aed") + "44" : "#222"}`, color: impactFilter === i ? IMPACT[i]?.color || "#fff" : "#555", borderRadius: 7, padding: "5px 12px", cursor: "pointer", fontSize: 11, textTransform: "capitalize" }}>
+        {IMPACT[i]?.dot || "⚪"} {i}
+      </button>
+    ))}
+  </div>
+
+  {/* Events */}
+  {tab === "today" ? (
+    filtered.length === 0 ? (
+      <div style={{ textAlign: "center", padding: 40, color: "#333" }}>No events match your filters.</div>
+    ) : (
+      filtered.map(e => <EventCard key={e.id} event={e} onAskAI={setAiEvent} />)
+    )
+  ) : (
+    <div style={{ textAlign: "center", padding: 40, color: "#555", fontSize: 13 }}>
+      📆 Week view coming soon — will show Mon–Fri events with countdown timers.
+    </div>
+  )}
+
+  {/* Legend */}
+  <div style={{ marginTop: 16, display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: "#333" }}>
+    <span>🔴 High Impact</span>
+    <span>🟡 Medium Impact</span>
+    <span>🟢 Low Impact</span>
+    <span>· Tap any card for QuantBrain analysis</span>
+  </div>
+
+  <div style={{ marginTop: 12, fontSize: 10, color: "#2a2a2a", textAlign: "center" }}>
+    ⚠️ For informational purposes only. Not financial advice. © 2025 CLVRQuant · Mike Claver™
+  </div>
+
+  {/* AI Modal */}
+  {aiEvent && <AIModal event={aiEvent} onClose={() => setAiEvent(null)} />}
+</div>
+```
+
+);
+}
