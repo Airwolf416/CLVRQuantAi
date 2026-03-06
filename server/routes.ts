@@ -21,12 +21,12 @@ const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","A
 const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:66,SHOP:95,CRM:290,NFLX:850,DIS:105};
 const EQUITY_FH_MAP: Record<string, string> = { SQ: "XYZ" };
 
-const METALS_BASE: Record<string, number> = {XAU:5160,XAG:84,WTI:68,BRENT:72,NATGAS:4,COPPER:5.8,PLATINUM:2150};
+const METALS_BASE: Record<string, number> = {XAU:5160,XAG:84,WTI:91,BRENT:93,NATGAS:4,COPPER:5.8,PLATINUM:2150};
 const metalsRef: Record<string, {price:number,ts:number}> = {};
 
 const ENERGY_ETF_MAP: Record<string, {etfSym: string, factor: number}> = {
-  WTI: { etfSym: "USO", factor: 0.625 },
-  BRENT: { etfSym: "BNO", factor: 1.62 },
+  WTI: { etfSym: "USO", factor: 0.840 },
+  BRENT: { etfSym: "BNO", factor: 2.105 },
   NATGAS: { etfSym: "UNG", factor: 0.32 },
 };
 const FOREX_BASE: Record<string, number> = {EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
