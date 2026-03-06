@@ -1078,8 +1078,9 @@ export async function registerRoutes(
       }
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
+        const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
         await resend.emails.send({
-          from: fromEmail,
+          from: senderAddress,
           to: email.toLowerCase().trim(),
           subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
