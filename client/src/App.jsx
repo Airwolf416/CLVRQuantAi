@@ -138,10 +138,11 @@ function AlertBanner({alerts,onDismiss,C:_C}){
 }
 
 // ─── COUNTDOWN TIMER ─────────────────────────────────────
+function parseTimeET(timeStr){const tp=(timeStr||"12:00").match(/(\d+):(\d+)/);let h=tp?parseInt(tp[1]):12;const m=tp?parseInt(tp[2]):0;const isPM=timeStr&&timeStr.toLowerCase().includes("pm")&&h<12;if(isPM)h+=12;const isAM=timeStr&&timeStr.toLowerCase().includes("am")&&h===12;if(isAM)h=0;const isET=!timeStr||timeStr.includes("ET");return{h,m,offsetUTC:isET?5:0};}
 function Countdown({dateStr,timeET,compact=false}){
   const[diff,setDiff]=useState(null);
   useEffect(()=>{
-    const calc=()=>{const[h,m]=(timeET||"12:00").split(":").map(Number);const[y,mo,d]=dateStr.split("-").map(Number);const target=new Date(Date.UTC(y,mo-1,d,h+5,m,0));setDiff(target-new Date());};
+    const calc=()=>{const{h,m,offsetUTC}=parseTimeET(timeET);const[y,mo,d]=dateStr.split("-").map(Number);const target=new Date(Date.UTC(y,mo-1,d,h+offsetUTC,m,0));setDiff(target-new Date());};
     calc();const iv=setInterval(calc,1000);return()=>clearInterval(iv);
   },[dateStr,timeET]);
   if(diff===null)return null;
@@ -231,24 +232,7 @@ function LiqHeatmap({sym,price}){
 }
 
 // ─── MACRO EVENTS (frontend countdowns) ──────────────────
-const MACRO_EVENTS=[
-  {id:1,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-03-18",timeET:"14:00",current:"4.25-4.50%",forecast:"Hold",impact:"HIGH",desc:"FOMC meeting with updated dot plot and economic projections.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:3.5},
-  {id:2,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-04-29",timeET:"14:00",current:"4.25-4.50%",forecast:"Hold",impact:"HIGH",desc:"Federal Reserve rate decision. Watch for guidance on rate path.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD"],expectedMove:3.0},
-  {id:3,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-06-17",timeET:"14:00",current:"4.25-4.50%",forecast:"-25bp",impact:"HIGH",desc:"Mid-year FOMC with economic projections update. First cut possible.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:4.5},
-  {id:4,bank:"ECB",flag:"EU",name:"ECB Rate Decision",date:"2026-03-05",timeET:"09:15",current:"3.15%",forecast:"-25bp",impact:"HIGH",desc:"ECB cut expected. Lagarde presser key for EUR/USD direction.",currency:"EUR",assets:["EURUSD","GBPUSD","XAU"],expectedMove:2.5},
-  {id:5,bank:"ECB",flag:"EU",name:"ECB Rate Decision",date:"2026-04-16",timeET:"09:15",current:"2.90%",forecast:"-25bp",impact:"HIGH",desc:"Second ECB cut. Watch EURUSD reaction.",currency:"EUR",assets:["EURUSD","GBPUSD"],expectedMove:2.0},
-  {id:6,bank:"BOJ",flag:"JP",name:"BOJ Rate Decision",date:"2026-03-19",timeET:"02:00",current:"0.50%",forecast:"Hold",impact:"HIGH",desc:"BOJ on hold. Hawkish surprise = JPY rally 200-300 pips.",currency:"JPY",assets:["USDJPY","AUDUSD"],expectedMove:2.0},
-  {id:7,bank:"BOJ",flag:"JP",name:"BOJ Rate Decision",date:"2026-05-01",timeET:"02:00",current:"0.50%",forecast:"+25bp",impact:"HIGH",desc:"BOJ may hike again. USD/JPY extremely sensitive.",currency:"JPY",assets:["USDJPY"],expectedMove:3.0},
-  {id:8,bank:"BOC",flag:"CA",name:"BOC Rate Decision",date:"2026-03-12",timeET:"09:45",current:"3.00%",forecast:"Hold",impact:"HIGH",desc:"BOC on hold after 2024-25 cuts. Oil key for CAD.",currency:"CAD",assets:["USDCAD"],expectedMove:1.5},
-  {id:9,bank:"US CPI",flag:"US",name:"US CPI Inflation",date:"2026-03-12",timeET:"08:30",current:"3.0%",forecast:"2.9%",impact:"HIGH",desc:"Soft print = rate cut catalyst. BTC, gold, forex all move hard.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:4.0},
-  {id:10,bank:"NFP",flag:"US",name:"Non-Farm Payrolls",date:"2026-03-07",timeET:"08:30",current:"256K",forecast:"175K",impact:"HIGH",desc:"Weak NFP = dovish Fed = crypto/gold rally.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD"],expectedMove:3.5},
-  {id:11,bank:"PCE",flag:"US",name:"US PCE Inflation",date:"2026-03-28",timeET:"08:30",current:"2.6%",forecast:"2.5%",impact:"HIGH",desc:"Fed's preferred gauge. Below 2.5% = cut signal.",currency:"USD",assets:["BTC","ETH","SOL","XAU","EURUSD"],expectedMove:3.0},
-  {id:12,bank:"BOE",flag:"GB",name:"BOE Rate Decision",date:"2026-03-20",timeET:"12:00",current:"4.50%",forecast:"Hold",impact:"HIGH",desc:"BOE holds. GBP/USD driven by BoE tone.",currency:"GBP",assets:["GBPUSD"],expectedMove:1.5},
-  {id:13,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-07-29",timeET:"14:00",current:"4.00-4.25%",forecast:"-25bp",impact:"HIGH",desc:"July FOMC rate decision.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD"],expectedMove:3.0},
-  {id:14,bank:"FED",flag:"US",name:"FOMC Rate Decision",date:"2026-09-16",timeET:"14:00",current:"3.75-4.00%",forecast:"-25bp",impact:"HIGH",desc:"September FOMC with updated dot plot.",currency:"USD",assets:["BTC","ETH","XAU","EURUSD","USDJPY"],expectedMove:4.0},
-  {id:15,bank:"FED",flag:"US",name:"FOMC Minutes",date:"2026-04-08",timeET:"14:00",current:"—",forecast:"—",impact:"MED",desc:"Minutes from March FOMC meeting.",currency:"USD",assets:["BTC","XAU","EURUSD"],expectedMove:1.5},
-  {id:16,bank:"ECB",flag:"EU",name:"ECB Rate Decision",date:"2026-06-04",timeET:"09:15",current:"2.65%",forecast:"-25bp",impact:"HIGH",desc:"ECB June decision. EUR/USD key level.",currency:"EUR",assets:["EURUSD","GBPUSD","XAU"],expectedMove:2.5},
-];
+const MACRO_EVENTS=[];
 
 // ─── TOAST (useRef fix) ──────────────────────────────────
 function Toast({msg,onDone}){
@@ -389,14 +373,14 @@ function Dashboard({user,setUser}){
     fundRef.current[sym]=[...hist,f].slice(-10);
   },[addAlert]);
 
-  const macroEventsRef=useRef(MACRO_EVENTS);
-  useEffect(()=>{if(macroEvents.length>0){const merged=[...MACRO_EVENTS];macroEvents.forEach(be=>{if(!merged.find(m=>m.id===be.id)){merged.push({...be,timeET:be.time||"12:00",assets:be.assets||[],expectedMove:be.expectedMove||2});}});macroEventsRef.current=merged;}},[macroEvents]);
+  const macroEventsRef=useRef([]);
+  useEffect(()=>{if(macroEvents.length>0){macroEventsRef.current=macroEvents.map(e=>({...e,timeET:e.timeET||e.time||"12:00",assets:e.assets||[],expectedMove:e.expectedMove||2}));}},[macroEvents]);
 
   const checkMacroCountdowns=useCallback(()=>{
     const now=new Date();
     macroEventsRef.current.forEach(evt=>{
-      const[h,m]=(evt.timeET||evt.time||"12:00").split(":").map(Number);const[y,mo,d]=evt.date.split("-").map(Number);
-      const target=new Date(Date.UTC(y,mo-1,d,h+5,m,0));const diffMin=(target-now)/60000;
+      const timeStr=evt.timeET||evt.time||"12:00";const tp=timeStr.match(/(\d+):(\d+)/);let h=tp?parseInt(tp[1]):12;const m=tp?parseInt(tp[2]):0;const isPM=timeStr.toLowerCase().includes("pm")&&h<12;if(isPM)h+=12;const isET=timeStr.includes("ET");const[y,mo,d]=evt.date.split("-").map(Number);
+      const target=new Date(Date.UTC(y,mo-1,d,isET?h+5:h,m,0));const diffMin=(target-now)/60000;
       [60,30,10,2].forEach(threshold=>{
         const key=`macro-${evt.id}-${threshold}`;
         if(!macroFired.current.has(key)&&diffMin<=threshold&&diffMin>threshold-0.6){
@@ -928,7 +912,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const requestPush=async()=>{if(typeof Notification!=="undefined"){try{const p=await Notification.requestPermission();setNotifPerm(p);if(p==="granted"){setToast("Alerts enabled (browser + in-app)");return;}}catch(e){}}setNotifPerm("granted");setToast("In-app alerts enabled");};
 
   const todayDate=new Date();
-  const nextEvents=MACRO_EVENTS.map(e=>{const[y,mo,d]=e.date.split("-").map(Number);const[h,m]=(e.timeET||"12:00").split(":").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+5,m,0));return{...e,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs);
+  const nextEvents=macroEvents.map(e=>{const timeStr=e.timeET||e.time||"12:00";const timeParts=timeStr.match(/(\d+):(\d+)/);const h=timeParts?parseInt(timeParts[1]):12;const m=timeParts?parseInt(timeParts[2]):0;const isET=timeStr.includes("ET");const[y,mo,d]=e.date.split("-").map(Number);const t=new Date(Date.UTC(y,mo-1,d,isET?h+5:h,m,0));return{...e,timeET:timeStr,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs);
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
 
   const isGuest=!!user?.guest;
