@@ -211,21 +211,50 @@ function FactorBreakdown({factors,score,C:_C}){
   );
 }
 
+// ─── LAYOUT HELPERS (stable, outside Dashboard) ──────────
+function SLabel({children}){
+  return(
+    <div style={{fontFamily:MONO,fontSize:10,letterSpacing:"0.25em",textTransform:"uppercase",color:C.gold,marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+      <span style={{flex:"0 0 24px",height:1,background:`linear-gradient(90deg,${C.gold},transparent)`,display:"inline-block"}}/>
+      {children}
+    </div>
+  );
+}
+function PTitle({children}){return<span style={{fontFamily:SERIF,fontWeight:700,fontSize:15,color:C.white}}>{children}</span>;}
+function SubBtn({k,label,col="gold",state,setter}){
+  const active=state===k;
+  const ac=col==="green"?C.green:col==="blue"?C.blue:col==="teal"?C.teal:col==="red"?C.red:col==="purple"?C.purple:col==="orange"?C.orange:col==="cyan"?C.cyan:C.gold;
+  return<button onClick={()=>setter(k)} style={{padding:"6px 12px",borderRadius:2,whiteSpace:"nowrap",outline:"none",cursor:"pointer",fontFamily:MONO,fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",border:`1px solid ${active?ac:C.border}`,background:active?"rgba(201,168,76,.07)":C.panel,color:active?ac:C.muted2,transition:"all .2s"}}>{label}</button>;
+}
+function LiveDot({live}){return<div style={{width:5,height:5,borderRadius:"50%",flexShrink:0,background:live?C.green:C.orange,boxShadow:live?`0 0 6px ${C.green}`:"none"}}/>;}
+function ProGate({feature,isPro,onUpgrade,children}){
+  if(isPro)return children;
+  return(
+    <div data-testid={`progate-${feature}`} style={{position:"relative"}}>
+      <div style={{filter:"blur(4px)",opacity:0.3,pointerEvents:"none",maxHeight:180,overflow:"hidden"}}>{children}</div>
+      <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(5,7,9,.85)",backdropFilter:"blur(8px)",borderRadius:2}}>
+        <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.gold2,marginBottom:4}}>Pro Feature</div>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.12em",marginBottom:12,textTransform:"uppercase"}}>{feature}</div>
+        <button data-testid={`btn-upgrade-${feature}`} onClick={onUpgrade} style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"8px 20px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── AI INPUT (stable, memoized to prevent mobile keyboard retraction) ──
-const AIInput=memo(function AIInput({value,onChange,placeholder}){
+const AIInput=memo(function AIInput({value,onChange,onFocusChange,placeholder}){
   const ref=useRef(null);
-  const prevValue=useRef(value);
   useEffect(()=>{
-    if(ref.current&&prevValue.current!==value&&document.activeElement!==ref.current){
+    if(ref.current&&document.activeElement!==ref.current){
       ref.current.value=value;
     }
-    prevValue.current=value;
   },[value]);
   return<textarea ref={ref} data-testid="input-ai-query" defaultValue={value}
     onChange={e=>onChange(e.target.value)}
-    onFocus={e=>{e.target.style.transform="translateZ(0)";}}
+    onFocus={()=>onFocusChange&&onFocusChange(true)}
+    onBlur={()=>onFocusChange&&onFocusChange(false)}
     placeholder={placeholder}
-    style={{width:"100%",background:"rgba(12,18,32,1)",border:"1px solid #141e35",borderRadius:2,padding:12,color:"#c8d0e0",fontFamily:"'Barlow',sans-serif",fontSize:13,resize:"none",height:76,lineHeight:1.7}}/>;
+    style={{width:"100%",background:"rgba(12,18,32,1)",border:"1px solid #141e35",borderRadius:2,padding:12,color:"#c8d0e0",fontFamily:"'Barlow',sans-serif",fontSize:16,resize:"none",height:76,lineHeight:1.7}}/>;
 });
 
 // ─── BADGE ──────────────────────────────────────────────
@@ -473,6 +502,7 @@ function Dashboard({user,setUser}){
   const [aiInput,setAiInput]=useState("");
   const [aiOutput,setAiOutput]=useState("");
   const [aiLoading,setAiLoading]=useState(false);
+  const [aiFocused,setAiFocused]=useState(false);
   const idRef=useRef(300);
   const volRef=useRef({});
   const fundRef=useRef({});
@@ -588,7 +618,7 @@ function Dashboard({user,setUser}){
       setHlStatus("live");
     }catch{setHlStatus("error");}
   },[triggerFlashes,checkVolumeSpike,checkFundingFlip]);
-  useEffect(()=>{doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL]);
+  useEffect(()=>{if(aiFocused)return;doHL();const iv=setInterval(doHL,2000);return()=>clearInterval(iv);},[doHL,aiFocused]);
 
   // ── Crypto Perps (Hyperliquid) ─────────────────────
   const doPerps=useCallback(async()=>{
@@ -597,7 +627,7 @@ function Dashboard({user,setUser}){
       setPerpPrices(prev=>{const next={...prev};Object.entries(data).forEach(([sym,d])=>{next[sym]={...prev[sym],...d};});return next;});
     }catch{}
   },[]);
-  useEffect(()=>{doPerps();const iv=setInterval(doPerps,5000);return()=>clearInterval(iv);},[doPerps]);
+  useEffect(()=>{if(aiFocused)return;doPerps();const iv=setInterval(doPerps,5000);return()=>clearInterval(iv);},[doPerps,aiFocused]);
 
   // ── Live Signal Detection ─────────────────────────
   const lastSigTs=useRef(0);
@@ -932,37 +962,9 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
   // ─── Style Helpers ─────────────────────────────────────
 
-  const SLabel=({children})=>(
-    <div style={{fontFamily:MONO,fontSize:10,letterSpacing:"0.25em",textTransform:"uppercase",color:C.gold,marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
-      <span style={{flex:"0 0 24px",height:1,background:`linear-gradient(90deg,${C.gold},transparent)`,display:"inline-block"}}/>
-      {children}
-    </div>
-  );
-
   const panel={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,overflow:"hidden",marginBottom:10};
   const ph={display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",borderBottom:`1px solid ${C.border}`,background:"rgba(201,168,76,.03)"};
-  const PTitle=({children})=><span style={{fontFamily:SERIF,fontWeight:700,fontSize:15,color:C.white}}>{children}</span>;
-
-  const SubBtn=({k,label,col="gold",state,setter})=>{
-    const active=state===k;
-    const ac=col==="green"?C.green:col==="blue"?C.blue:col==="teal"?C.teal:col==="red"?C.red:col==="purple"?C.purple:col==="orange"?C.orange:col==="cyan"?C.cyan:C.gold;
-    return<button onClick={()=>setter(k)} style={{padding:"6px 12px",borderRadius:2,whiteSpace:"nowrap",outline:"none",cursor:"pointer",fontFamily:MONO,fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",border:`1px solid ${active?ac:C.border}`,background:active?"rgba(201,168,76,.07)":C.panel,color:active?ac:C.muted2,transition:"all .2s"}}>{label}</button>;
-  };
-  const LiveDot=({live})=><div style={{width:5,height:5,borderRadius:"50%",flexShrink:0,background:live?C.green:C.orange,boxShadow:live?`0 0 6px ${C.green}`:"none"}}/>;
-
-  const ProGate=({feature,children})=>{
-    if(isPro)return children;
-    return(
-      <div data-testid={`progate-${feature}`} style={{position:"relative"}}>
-        <div style={{filter:"blur(4px)",opacity:0.3,pointerEvents:"none",maxHeight:180,overflow:"hidden"}}>{children}</div>
-        <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(5,7,9,.85)",backdropFilter:"blur(8px)",borderRadius:2}}>
-          <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.gold2,marginBottom:4}}>Pro Feature</div>
-          <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.12em",marginBottom:12,textTransform:"uppercase"}}>{feature}</div>
-          <button data-testid={`btn-upgrade-${feature}`} onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"8px 20px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
-        </div>
-      </div>
-    );
-  };
+  const onUpgrade=useCallback(()=>setShowUpgrade(true),[]);
 
 
   const PriceRow=({sym,d,extra,label})=>{
@@ -990,6 +992,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const onShareSig=useCallback((sig)=>shareSignal(sig),[shareSignal]);
   const onAiSig=useCallback((sig)=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");},[]);
   const onAiChange=useCallback((v)=>setAiInput(v),[]);
+  const onAiFocus=useCallback((focused)=>setAiFocused(focused),[]);
 
   const hlLive=hlStatus==="live",fhLive=fhStatus==="live";
   const allSignals=[...liveSignals].sort((a,b)=>(b.ts||0)-(a.ts||0));
@@ -1299,7 +1302,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             );})}
           </div>}
 
-          <ProGate feature="volume-funding-monitors">
+          <ProGate feature="volume-funding-monitors" isPro={isPro} onUpgrade={onUpgrade}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
               <div style={{fontFamily:MONO,fontSize:9,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>VOLUME MONITOR</div>
@@ -1748,7 +1751,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         {/* ══ AI ══ */}
         {tab==="ai"&&<>
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
-          <ProGate feature="ai-analyst">
+          <ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}>
           <div style={{...panel,overflow:"visible"}}>
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="Claude · Live" color="gold"/></div>
             <div style={{padding:16}}>
@@ -1758,7 +1761,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                   {sym}{d?.live?" ✦":""}
                 </button>;})}
               </div>
-              <AIInput value={aiInput} onChange={onAiChange} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
+              <AIInput value={aiInput} onChange={onAiChange} onFocusChange={onAiFocus} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
               <div style={{display:"flex",gap:6,marginTop:8}}>
                 <button data-testid="button-ai-analyze" onClick={runAI} disabled={aiLoading} style={{flex:1,height:44,background:"rgba(201,168,76,.1)",color:aiLoading?C.muted:C.gold2,border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer"}}>
                   {aiLoading?"Analyzing...":"Analyze →"}
