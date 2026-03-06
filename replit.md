@@ -25,7 +25,7 @@ Auth uses express-session with SESSION_SECRET. Routes: POST `/api/auth/signup`, 
 
 ### Frontend (client/src/App.jsx)
 
-The frontend is a React application split into `App` (auth gate) and `Dashboard` (main content) components with inline styles, optimized for a maximum width of 780px. It features a bottom navigation bar with nine tabs: Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, and Account.
+The frontend is a React application split into `App` (auth gate) and `Dashboard` (main content) components with inline styles, optimized for a maximum width of 780px. It features a bottom navigation bar with ten tabs: Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, About, and Account.
 
 -   **Radar**: A command center with active alerts, live news, macro event countdowns, volume spike detection, funding rate flip alerts, and a liquidation heatmap.
 -   **Markets**: Displays real-time data for Crypto (spot/perp), Equities, Metals, and Forex.
@@ -34,7 +34,8 @@ The frontend is a React application split into `App` (auth gate) and `Dashboard`
 -   **Signals**: Offers quantifiable trading signals with filtering options.
 -   **Alerts**: Allows users to set custom price and funding alerts with browser notifications.
 -   **Wallet**: Integrates with Phantom wallet for Solana operations, including a Perps PnL calculator.
--   **AI**: Provides Claude-powered market analysis and trade ideas, leveraging the QuantBrain engine for confluence scoring, Kelly Criterion, and regime detection.
+-   **AI**: Provides Claude-powered market analysis and trade ideas, leveraging the QuantBrain engine for confluence scoring, Kelly Criterion, and regime detection. Includes a timeframe toggle (Today/Mid-Term/Long-Term) for tailored trade ideas.
+-   **About**: Story behind CLVRQuant, why users need it daily, and a comprehensive glossary of technical terms (QuantBrain Score, Alpha Signals, Kelly Criterion, Funding Rate, Open Interest, etc.). Accessible to all users including guests.
 -   **Account** (client/src/AccountPage.jsx): User account management with Subscription, Emails, Billing, and Legal tabs. Only visible to authenticated users (not guests).
 
 Key components include `AlertBanner` for notifications, `Countdown` for macro events, and `LiqHeatmap` for liquidation clusters (using real OI data from Hyperliquid + leverage distribution). News intelligence is sourced from CryptoCompare and Twitter/X, and feeds into the AI system. Both AI and Brief tabs include live macro event context in their prompts.
@@ -63,8 +64,8 @@ Stripe is integrated for subscription management, handling product definitions, 
 -   **Binance**: Crypto spot prices.
 -   **Hyperliquid**: Crypto perpetual prices, funding rates, open interest, and volume.
 -   **CryptoCompare**: Crypto news feed.
--   **Finnhub**: Stock quotes and commodity futures (requires `FINNHUB_KEY`).
--   **gold-api.com**: Precious metals spot prices.
+-   **Finnhub**: Stock quotes and ETF proxies for energy commodities — USO (WTI), BNO (Brent), UNG (NatGas). SQ maps to XYZ (Block Inc) via EQUITY_FH_MAP. Requires `FINNHUB_KEY`.
+-   **gold-api.com**: Precious metals (XAU, XAG, XPT) and base metals (HG/Copper) spot prices.
 -   **ExchangeRate API**: Forex pairs.
 -   **FairEconomy**: Macroeconomic calendar.
 -   **Polymarket**: Prediction market odds.

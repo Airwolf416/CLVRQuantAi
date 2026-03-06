@@ -18,9 +18,17 @@ const HL_TO_APP: Record<string, string> = {kPEPE:"PEPE"};
 const APP_TO_HL: Record<string, string> = {PEPE:"kPEPE"};
 
 const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"];
-const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:72,SHOP:95,CRM:290,NFLX:850,DIS:105};
+const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:66,SHOP:95,CRM:290,NFLX:850,DIS:105};
+const EQUITY_FH_MAP: Record<string, string> = { SQ: "XYZ" };
 
-const METALS_BASE: Record<string, number> = {XAU:5280,XAG:94,WTI:99,BRENT:16,NATGAS:13,COPPER:31.5,PLATINUM:2370};
+const METALS_BASE: Record<string, number> = {XAU:5160,XAG:84,WTI:68,BRENT:72,NATGAS:4,COPPER:5.8,PLATINUM:2150};
+const metalsRef: Record<string, {price:number,ts:number}> = {};
+
+const ENERGY_ETF_MAP: Record<string, {etfSym: string, factor: number}> = {
+  WTI: { etfSym: "USO", factor: 0.625 },
+  BRENT: { etfSym: "BNO", factor: 1.62 },
+  NATGAS: { etfSym: "UNG", factor: 0.32 },
+};
 const FOREX_BASE: Record<string, number> = {EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
 
 const cache: Record<string, { data: any; ts: number }> = {};
@@ -248,7 +256,10 @@ async function startStockRefreshLoop() {
     try {
       const stocks: Record<string, any> = {};
       for (const sym of EQUITY_SYMS) {
-        stocks[sym] = await fhQuoteSafe(sym);
+        const fhSym = EQUITY_FH_MAP[sym] || sym;
+        const q = await fhQuoteSafe(fhSym);
+        if (!q.live) q.price = EQUITY_BASE[sym] || q.price;
+        stocks[sym] = q;
         await delay(1500);
       }
 
@@ -320,8 +331,9 @@ async function fetchForex(): Promise<Record<string, any>> {
 
 async function fetchMetals(): Promise<Record<string, any>> {
   const metals: Record<string, any> = {};
-  for (const sym of ["XAU", "XAG", "XPT"] as const) {
-    const appSym = sym === "XPT" ? "PLATINUM" : sym;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  for (const sym of ["XAU", "XAG", "XPT", "HG"] as const) {
+    const appSym = sym === "XPT" ? "PLATINUM" : sym === "HG" ? "COPPER" : sym;
     try {
       const r = await fetch(
         `https://api.gold-api.com/price/${sym}`,
@@ -330,20 +342,25 @@ async function fetchMetals(): Promise<Record<string, any>> {
       if (r.ok) {
         const d: any = await r.json();
         if (d?.price && d.price > 0) {
-          const base = METALS_BASE[appSym];
-          metals[appSym] = { price: d.price, chg: base ? +((d.price - base) / base * 100).toFixed(2) : 0, live: true };
+          const now = Date.now();
+          if (!metalsRef[appSym] || now - metalsRef[appSym].ts > DAY_MS) {
+            metalsRef[appSym] = { price: d.price, ts: now };
+          }
+          const ref = metalsRef[appSym].price;
+          const chg = ref ? +((d.price - ref) / ref * 100).toFixed(2) : 0;
+          metals[appSym] = { price: d.price, chg, live: true };
           continue;
         }
       }
     } catch {}
     metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
   }
-  const fhCommodities: Record<string, string> = { WTI: "CL", BRENT: "BZ", NATGAS: "NG", COPPER: "HG" };
-  for (const [appSym, fhSym] of Object.entries(fhCommodities)) {
+  for (const [appSym, cfg] of Object.entries(ENERGY_ETF_MAP)) {
     try {
-      const q = await fhQuoteSafe(fhSym);
+      const q = await fhQuoteSafe(cfg.etfSym);
       if (q.live && q.price > 0) {
-        metals[appSym] = { price: q.price, chg: q.chg, live: true };
+        const commodityPrice = +(q.price * cfg.factor).toFixed(2);
+        metals[appSym] = { price: commodityPrice, chg: q.chg, live: true };
       } else {
         metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
       }
@@ -621,6 +638,20 @@ export async function registerRoutes(
     if (cached) {
       return res.json(cached.data);
     }
+    if (!finnhubFetchLock) {
+      finnhubFetchLock = (async () => {
+        try {
+          const [metals, forex] = await Promise.all([fetchMetals(), fetchForex()]);
+          const stocks: Record<string, any> = {};
+          EQUITY_SYMS.forEach(sym => { stocks[sym] = { price: EQUITY_BASE[sym], chg: 0, live: false }; });
+          const result = { stocks, metals, forex };
+          cache["finnhub"] = { data: result, ts: Date.now() };
+          return result;
+        } catch { return null; } finally { finnhubFetchLock = null; }
+      })();
+    }
+    const earlyResult = await finnhubFetchLock;
+    if (earlyResult) return res.json(earlyResult);
     const stocks: Record<string, any> = {};
     EQUITY_SYMS.forEach(sym => { stocks[sym] = { price: EQUITY_BASE[sym], chg: 0, live: false }; });
     const metals: Record<string, any> = {};
