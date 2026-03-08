@@ -1,0 +1,811 @@
+import { useState, useEffect, useRef } from “react”;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TECHNICAL INDICATORS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── RSI (14) ──────────────────────────────────────────────────────────────
+function calcRSI(closes, period = 14) {
+if (closes.length < period + 1) return null;
+let gains = 0, losses = 0;
+for (let i = 1; i <= period; i++) {
+const d = closes[i] - closes[i - 1];
+if (d >= 0) gains += d; else losses -= d;
+}
+let avgGain = gains / period;
+let avgLoss = losses / period;
+for (let i = period + 1; i < closes.length; i++) {
+const d = closes[i] - closes[i - 1];
+avgGain = (avgGain * (period - 1) + Math.max(d, 0))  / period;
+avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
+}
+if (avgLoss === 0) return 100;
+return parseFloat((100 - 100 / (1 + avgGain / avgLoss)).toFixed(2));
+}
+
+// ─── EMA (internal) ────────────────────────────────────────────────────────
+function calcEMA(closes, period) {
+if (closes.length < period) return null;
+const k  = 2 / (period + 1);
+let ema   = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
+return parseFloat(ema.toFixed(6));
+}
+
+// ─── MACD (12,26,9) ────────────────────────────────────────────────────────
+function calcMACD(closes, fast = 12, slow = 26, signal = 9) {
+if (closes.length < slow + signal) return null;
+const kf = 2 / (fast   + 1);
+const ks = 2 / (slow   + 1);
+const kg = 2 / (signal + 1);
+let ef = closes.slice(0, fast).reduce((a, b) => a + b, 0) / fast;
+let es = closes.slice(0, slow).reduce((a, b) => a + b, 0) / slow;
+for (let i = fast; i < slow; i++) ef = closes[i] * kf + ef * (1 - kf);
+const macdArr = [];
+for (let i = slow; i < closes.length; i++) {
+ef = closes[i] * kf + ef * (1 - kf);
+es = closes[i] * ks + es * (1 - ks);
+macdArr.push(ef - es);
+}
+if (macdArr.length < signal) return null;
+let sig = macdArr.slice(0, signal).reduce((a, b) => a + b, 0) / signal;
+for (let i = signal; i < macdArr.length; i++) sig = macdArr[i] * kg + sig * (1 - kg);
+const cur  = macdArr[macdArr.length - 1];
+const prev = macdArr[macdArr.length - 2] ?? cur;
+const hist = cur - sig;
+const phist = prev - sig;
+let trend = “neutral”;
+if      (cur > sig && hist > 0 && hist > phist) trend = “bullish_strong”;
+else if (cur > sig && hist > 0)                 trend = “bullish”;
+else if (cur < sig && hist < 0 && hist < phist) trend = “bearish_strong”;
+else if (cur < sig && hist < 0)                 trend = “bearish”;
+else if (cur > sig && hist < phist)             trend = “bullish_weakening”;
+else if (cur < sig && hist > phist)             trend = “bearish_weakening”;
+const crossover = prev < sig && cur > sig ? “bullish_cross”
+: prev > sig && cur < sig ? “bearish_cross” : null;
+return { macd: parseFloat(cur.toFixed(6)), signal: parseFloat(sig.toFixed(6)),
+histogram: parseFloat(hist.toFixed(6)), trend, crossover };
+}
+
+// ─── VWAP ──────────────────────────────────────────────────────────────────
+// candles = [{ high, low, close, volume }]  (oldest → newest)
+function calcVWAP(candles) {
+if (!candles || candles.length === 0) return null;
+let cumTPV = 0, cumVol = 0;
+for (const c of candles) {
+const tp  = (c.high + c.low + c.close) / 3;
+cumTPV   += tp * c.volume;
+cumVol   += c.volume;
+}
+if (cumVol === 0) return null;
+return parseFloat((cumTPV / cumVol).toFixed(4));
+}
+
+// ─── VWAP signal ───────────────────────────────────────────────────────────
+function interpretVWAP(price, vwap, direction) {
+if (!vwap) return null;
+const pct  = ((price - vwap) / vwap) * 100;
+const above = price > vwap;
+const far   = Math.abs(pct) > 1.5; // stretched > 1.5% from VWAP = mean-reversion risk
+let score = 0, note = “”, color = “#888”, label = “”;
+
+if (direction === “long”) {
+if (above && !far)      { score = 20; label = “✅ Price above VWAP”;     color = “#4ade80”; note = `+${pct.toFixed(2)}% above VWAP — bullish institutional bias`; }
+else if (above && far)  { score = 5;  label = “⚠️ Extended above VWAP”; color = “#f59e0b”; note = `+${pct.toFixed(2)}% — stretched, mean-reversion risk`; }
+else if (!above && far) { score = 15; label = “⚠️ Below VWAP — bounce?”; color = “#f59e0b”; note = `${pct.toFixed(2)}% below VWAP — oversold relative to institutions`; }
+else                    { score = 0;  label = “❌ Price below VWAP”;     color = “#f87171”; note = `${pct.toFixed(2)}% below VWAP — bearish institutional bias for long`; }
+} else {
+if (!above && !far)     { score = 20; label = “✅ Price below VWAP”;     color = “#4ade80”; note = `${pct.toFixed(2)}% below VWAP — bearish institutional bias`; }
+else if (!above && far) { score = 5;  label = “⚠️ Extended below VWAP”; color = “#f59e0b”; note = `${pct.toFixed(2)}% — stretched, mean-reversion risk`; }
+else if (above && far)  { score = 15; label = “⚠️ Above VWAP — fade?”;  color = “#f59e0b”; note = `+${pct.toFixed(2)}% above VWAP — overbought relative to institutions`; }
+else                    { score = 0;  label = “❌ Price above VWAP”;     color = “#f87171”; note = `+${pct.toFixed(2)}% above VWAP — bullish bias fights your short`; }
+}
+return { score, label, color, note, vwap, pct, above };
+}
+
+// ─── Full indicator interpreter (RSI + MACD + VWAP) ──────────────────────
+function interpretIndicators(rsi, macd, vwapResult, direction) {
+let score = 0;
+const signals = [];
+
+// RSI
+if (rsi !== null) {
+if (rsi < 30) {
+const pts = direction === “long” ? 25 : -15;
+score += pts;
+signals.push({ label: `RSI Oversold (${rsi})`, color: direction === “long” ? “#4ade80” : “#f87171”,
+note: direction === “long” ? “Strong long signal — oversold bounce” : “Fighting oversold bounce”, pts });
+} else if (rsi > 70) {
+const pts = direction === “short” ? 25 : -15;
+score += pts;
+signals.push({ label: `RSI Overbought (${rsi})`, color: direction === “short” ? “#4ade80” : “#f87171”,
+note: direction === “short” ? “Strong short signal — overbought” : “Buying into exhaustion”, pts });
+} else if (rsi > 55 && rsi <= 70) {
+const pts = direction === “long” ? 15 : 5;
+score += pts;
+signals.push({ label: `RSI Bullish (${rsi})`, color: “#4ade80”, note: “Bullish momentum zone”, pts });
+} else if (rsi >= 30 && rsi < 45) {
+const pts = direction === “short” ? 15 : 5;
+score += pts;
+signals.push({ label: `RSI Bearish (${rsi})`, color: “#f87171”, note: “Bearish momentum zone”, pts });
+} else {
+signals.push({ label: `RSI Neutral (${rsi})`, color: “#888”, note: “No clear RSI momentum”, pts: 0 });
+}
+if (rsi > 65 && direction === “long”)  signals.push({ label: “RSI Warning”, color: “#f59e0b”, note: “Approaching overbought — watch for reversal”, pts: 0 });
+if (rsi < 35 && direction === “short”) signals.push({ label: “RSI Warning”, color: “#f59e0b”, note: “Approaching oversold — bounce risk”, pts: 0 });
+}
+
+// MACD
+if (macd) {
+const { trend, crossover, histogram } = macd;
+if (crossover === “bullish_cross”) {
+const pts = direction === “long” ? 30 : -20;
+score += pts;
+signals.push({ label: “MACD Bullish Cross ⚡”, color: direction === “long” ? “#4ade80” : “#f87171”,
+note: direction === “long” ? “Fresh bullish crossover — strong long trigger” : “Fighting fresh bullish cross”, pts });
+} else if (crossover === “bearish_cross”) {
+const pts = direction === “short” ? 30 : -20;
+score += pts;
+signals.push({ label: “MACD Bearish Cross ⚡”, color: direction === “short” ? “#4ade80” : “#f87171”,
+note: direction === “short” ? “Fresh bearish crossover — strong short trigger” : “Fighting fresh bearish cross”, pts });
+} else if (trend === “bullish_strong”) {
+const pts = direction === “long” ? 20 : -10;
+score += pts;
+signals.push({ label: “MACD Strong Bull”, color: direction === “long” ? “#4ade80” : “#f87171”,
+note: `Histogram +${histogram} expanding upward`, pts });
+} else if (trend === “bearish_strong”) {
+const pts = direction === “short” ? 20 : -10;
+score += pts;
+signals.push({ label: “MACD Strong Bear”, color: direction === “short” ? “#4ade80” : “#f87171”,
+note: `Histogram ${histogram} expanding downward`, pts });
+} else if (trend === “bullish_weakening”) {
+signals.push({ label: “MACD Weakening Bull”, color: “#f59e0b”, note: “Momentum fading — histogram shrinking”, pts: 0 });
+} else if (trend === “bearish_weakening”) {
+signals.push({ label: “MACD Weakening Bear”, color: “#f59e0b”, note: “Bear momentum fading — possible reversal”, pts: 0 });
+}
+}
+
+// VWAP
+if (vwapResult) {
+score += vwapResult.score;
+signals.push({ label: vwapResult.label, color: vwapResult.color, note: vwapResult.note, pts: vwapResult.score });
+}
+
+// RSI + MACD + VWAP triple confluence bonus
+if (rsi !== null && macd && vwapResult) {
+const rsiOk  = direction === “long”  ? rsi < 55  : rsi > 45;
+const macdOk = direction === “long”  ? macd.trend?.startsWith(“bull”) || macd.crossover === “bullish_cross”
+: macd.trend?.startsWith(“bear”) || macd.crossover === “bearish_cross”;
+const vwapOk = vwapResult.score >= 15;
+if (rsiOk && macdOk && vwapOk) {
+score += 15;
+signals.push({ label: “RSI + MACD + VWAP Triple ✓”, color: “#4ade80”,
+note: “All 3 indicators aligned — highest confluence”, pts: 15 });
+} else if ([rsiOk, macdOk, vwapOk].filter(Boolean).length === 2) {
+score += 5;
+signals.push({ label: “2/3 Indicators Aligned”, color: “#f59e0b”,
+note: “Good confluence but one indicator disagrees”, pts: 5 });
+}
+const allAgainst = !rsiOk && !macdOk && !vwapOk;
+if (allAgainst) {
+score -= 20;
+signals.push({ label: “All 3 Indicators Against ✗”, color: “#f87171”,
+note: “RSI + MACD + VWAP all conflict with direction — abort”, pts: -20 });
+}
+}
+
+const clamped = Math.max(0, Math.min(score, 100));
+const verdict = clamped >= 75 ? { label: “STRONG SIGNAL”,   color: “#4ade80” }
+: clamped >= 50 ? { label: “MODERATE SIGNAL”, color: “#f59e0b” }
+: clamped >= 25 ? { label: “WEAK SIGNAL”,     color: “#f87171” }
+:                 { label: “COUNTER SIGNAL”,  color: “#f87171” };
+return { score: clamped, signals, verdict };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MOCK DATA (replace with live Hyperliquid candles)
+// ═══════════════════════════════════════════════════════════════════════════
+function mockCandles(basePrice, n = 60, vol = 0.012) {
+const candles = [];
+let price = basePrice;
+for (let i = 0; i < n; i++) {
+const change = (Math.random() - 0.49) * vol * price;
+const open   = price;
+const close  = price + change;
+const high   = Math.max(open, close) * (1 + Math.random() * 0.003);
+const low    = Math.min(open, close) * (1 - Math.random() * 0.003);
+const volume = 500 + Math.random() * 4500;
+candles.push({ open, high, low, close, volume });
+price = close;
+}
+return candles;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5-QUESTION PRE-TRADE SCORING
+// ═══════════════════════════════════════════════════════════════════════════
+function scorePreTrade({ priceMoveAbs, direction, fundingRate, oiM, volumeMultiplier, liqImbalance }) {
+let score = 0;
+const factors = [], questions = [];
+
+// Q1 — HTF Bias
+const htfAligned = (direction === “long”  && fundingRate < -0.005 && oiM > 100)
+|| (direction === “short” && fundingRate >  0.005 && oiM > 100);
+const htfNeutral  = Math.abs(fundingRate) <= 0.005;
+const htfPts      = htfAligned ? 20 : htfNeutral ? 10 : 0;
+score += htfPts;
+factors.push({ label: “Q1 · HTF Bias”, pts: htfPts, note: htfAligned ? “WITH HTF ✓” : htfNeutral ? “Unclear” : “AGAINST HTF ✗” });
+questions.push({ q: “1. HTF Bias aligned?”,
+answer: htfAligned ? “✅ YES — with trend” : htfNeutral ? “⚠️ UNCLEAR” : “❌ AGAINST”,
+color:  htfAligned ? “#4ade80” : htfNeutral ? “#f59e0b” : “#f87171”,
+detail: htfAligned ? “Funding & OI confirm direction.”
+: htfNeutral ? “No strong institutional bias — caution.”
+: “Fighting dominant bias — high risk.” });
+
+// Q2 — Liquidity
+const liqDone = (direction === “long”  && liqImbalance < -0.3)
+|| (direction === “short” && liqImbalance >  0.3);
+const liqRisk = (direction === “long”  && liqImbalance >  0.3)
+|| (direction === “short” && liqImbalance < -0.3);
+const liqPts  = liqDone ? 20 : liqRisk ? 0 : 8;
+score += liqPts;
+factors.push({ label: “Q2 · Liquidity”, pts: liqPts, note: liqDone ? “Grab done ✓” : liqRisk ? “Stops pending ✗” : “Balanced” });
+questions.push({ q: “2. Liquidity grabbed?”,
+answer: liqDone ? “✅ YES — safe to enter” : liqRisk ? “❌ NO — hunt pending” : “⚠️ UNCLEAR”,
+color:  liqDone ? “#4ade80” : liqRisk ? “#f87171” : “#f59e0b”,
+detail: liqDone ? “Liq clusters swept — cleaner entry.”
+: liqRisk ? “Market may hunt those stops first. Wait.”
+: “Balanced — monitor closely.” });
+
+// Q3 — Timing
+const isLate   = priceMoveAbs > 3.5 || volumeMultiplier > 3.5;
+const isEarly  = priceMoveAbs < 1.2 && volumeMultiplier < 1.5;
+const timingPts = !isLate && !isEarly ? 20 : isEarly ? 12 : 0;
+score += timingPts;
+factors.push({ label: “Q3 · Timing”, pts: timingPts, note: isLate ? “TOO LATE ✗” : isEarly ? “Early” : “On time ✓” });
+questions.push({ q: “3. Entry timing?”,
+answer: isLate ? “❌ TOO LATE” : isEarly ? “⚠️ EARLY” : “✅ ON TIME”,
+color:  isLate ? “#f87171” : isEarly ? “#f59e0b” : “#4ade80”,
+detail: isLate  ? `${priceMoveAbs.toFixed(1)}% already moved — wait for pullback.`
+: isEarly ? “Wait for confirmation candle close.”
+: “Fresh signal — good timing window.” });
+
+// Q4 — Invalidation
+const invClear   = oiM > 200 && Math.abs(fundingRate) > 0.003;
+const invUnclear = oiM < 50;
+const invPts     = invClear ? 20 : invUnclear ? 5 : 12;
+score += invPts;
+factors.push({ label: “Q4 · Invalidation”, pts: invPts, note: invClear ? “Clear ✓” : invUnclear ? “Unclear ✗” : “Moderate” });
+questions.push({ q: “4. Invalidation clear?”,
+answer: invClear ? “✅ CLEAR” : invUnclear ? “❌ UNCLEAR” : “⚠️ MODERATE”,
+color:  invClear ? “#4ade80” : invUnclear ? “#f87171” : “#f59e0b”,
+detail: invClear ? `OI $${oiM}M — place stop past last major swing.`
+: invUnclear ? `Low OI $${oiM}M — wide stops or skip.`
+: “Use last swing high/low. Confirm on 15min.” });
+
+// Q5 — R/R
+const rrEst = volumeMultiplier >= 2.5 ? 2.8 : volumeMultiplier >= 1.5 ? 2.0 : 1.4;
+const rrPts = rrEst >= 2.5 ? 20 : rrEst >= 2.0 ? 15 : 0;
+score += rrPts;
+factors.push({ label: “Q5 · R/R”, pts: rrPts, note: `~${rrEst.toFixed(1)}:1 ${rrEst >= 2 ? "✓" : "✗"}` });
+questions.push({ q: “5. R/R ≥ 2:1?”,
+answer: rrEst >= 2.5 ? `✅ EXCELLENT ~${rrEst.toFixed(1)}:1` : rrEst >= 2 ? `✅ OK ~${rrEst.toFixed(1)}:1` : `❌ TOO LOW ~${rrEst.toFixed(1)}:1`,
+color:  rrEst >= 2 ? “#4ade80” : “#f87171”,
+detail: rrEst >= 2 ? “Volume supports reward potential. Use 2x stop as target.”
+: “Low vol limits upside. Skip or wait for better setup.” });
+
+return { score: Math.min(Math.round(score), 100), factors, questions, rrEst };
+}
+
+// ─── Verdict ───────────────────────────────────────────────────────────────
+function getVerdict(preTrade, indicators) {
+const combined = Math.round(preTrade.score * 0.55 + indicators.score * 0.45);
+const redFlags  = preTrade.questions.filter(q => q.color === “#f87171”).length;
+const timing    = preTrade.questions[2];
+const rr        = preTrade.questions[4];
+if (timing.color === “#f87171”) return { label: “⏸ HOLD — Too Late”,        color: “#f59e0b”, bg: “#1a1400”, combined, sub: “Wait for pullback” };
+if (rr.color     === “#f87171”) return { label: “⛔ NO TRADE — R/R < 2:1”,  color: “#f87171”, bg: “#2a1010”, combined, sub: “R/R too low — skip” };
+if (redFlags >= 3)              return { label: “⛔ NO TRADE”,               color: “#f87171”, bg: “#2a1010”, combined, sub: “Too many red flags” };
+if (combined >= 75 && redFlags === 0) return { label: “🟢 BUY / SELL NOW”,  color: “#4ade80”, bg: “#0a1f0a”, combined, sub: “All conditions met — high conviction” };
+if (combined >= 60 && redFlags <= 1)  return { label: “🟡 CONDITIONAL”,     color: “#f59e0b”, bg: “#1a1400”, combined, sub: “Enter at reduced size” };
+if (combined >= 45)                   return { label: “⏸ HOLD — Watch”,     color: “#f59e0b”, bg: “#1a1400”, combined, sub: “Setup developing” };
+return { label: “⛔ NO TRADE”, color: “#f87171”, bg: “#2a1010”, combined, sub: “Doesn’t meet criteria” };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ASSETS + SIGNAL GENERATOR
+// ═══════════════════════════════════════════════════════════════════════════
+const ASSETS     = [
+{ sym: “BTC”,     cat: “CRYPTO”,   price: 95420  },
+{ sym: “ETH”,     cat: “CRYPTO”,   price: 3214   },
+{ sym: “SOL”,     cat: “CRYPTO”,   price: 182.4  },
+{ sym: “UNI”,     cat: “CRYPTO”,   price: 4.13   },
+{ sym: “HYPE”,    cat: “CRYPTO”,   price: 30.67  },
+{ sym: “HBAR”,    cat: “CRYPTO”,   price: 0.1006 },
+{ sym: “XAU”,     cat: “METALS”,   price: 2341   },
+{ sym: “XAG”,     cat: “METALS”,   price: 27.4   },
+{ sym: “EUR/USD”, cat: “FOREX”,    price: 1.0821 },
+{ sym: “GBP/USD”, cat: “FOREX”,    price: 1.2634 },
+{ sym: “SPX”,     cat: “EQUITIES”, price: 5280   },
+{ sym: “AAPL”,    cat: “EQUITIES”, price: 188.5  },
+];
+const MOVE_TYPES = [“BREAKOUT”, “REVERSAL”, “MOMENTUM”, “FADE”, “SQUEEZE”];
+
+function generateSignal(id) {
+const asset            = ASSETS[Math.floor(Math.random() * ASSETS.length)];
+const direction        = Math.random() > 0.5 ? “long” : “short”;
+const priceMoveAbs     = 0.8 + Math.random() * 4.5;
+const priceMovePct     = direction === “long” ? priceMoveAbs : -priceMoveAbs;
+const fundingRate      = (Math.random() - 0.5) * 0.002;
+const oiM              = Math.round(10 + Math.random() * 800);
+const volumeMultiplier = 0.5 + Math.random() * 4;
+const liqImbalance     = (Math.random() - 0.5) * 0.8;
+const minutesAgo       = Math.floor(Math.random() * 45);
+const moveType         = MOVE_TYPES[Math.floor(Math.random() * MOVE_TYPES.length)];
+const maxLev           = [2, 3, 5, 10][Math.floor(Math.random() * 4)];
+const prevPrice        = asset.price / (1 + priceMovePct / 100);
+
+// Technical indicators
+const candles    = mockCandles(asset.price, 60);
+const closes     = candles.map(c => c.close);
+const rsi        = calcRSI(closes);
+const macd       = calcMACD(closes);
+const vwap       = calcVWAP(candles);
+const vwapResult = interpretVWAP(asset.price, vwap, direction);
+const indicators = interpretIndicators(rsi, macd, vwapResult, direction);
+
+// Pre-trade 5Q
+const preTrade = scorePreTrade({ priceMoveAbs, direction, fundingRate, oiM, volumeMultiplier, liqImbalance });
+const verdict  = getVerdict(preTrade, indicators);
+
+return {
+id, asset, direction, priceMoveAbs, priceMovePct, fundingRate, oiM,
+volumeMultiplier, liqImbalance, minutesAgo, moveType, maxLev, prevPrice,
+rsi, macd, vwap, vwapResult, indicators, preTrade, verdict,
+isLive: minutesAgo < 5,
+};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UI COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Score Ring ────────────────────────────────────────────────────────────
+function ScoreRing({ score, size = 52 }) {
+const color = score >= 75 ? “#4ade80” : score >= 50 ? “#f59e0b” : “#f87171”;
+const r = size / 2 - 6, circ = 2 * Math.PI * r, dash = (score / 100) * circ;
+return (
+<div style={{ position: “relative”, width: size, height: size, flexShrink: 0 }}>
+<svg width={size} height={size} style={{ transform: “rotate(-90deg)” }}>
+<circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#1a1a1a" strokeWidth="4" />
+<circle cx={size/2} cy={size/2} r={r} fill=“none” stroke={color} strokeWidth=“4”
+strokeDasharray={`${dash} ${circ}`} strokeLinecap=“round”
+style={{ transition: “stroke-dasharray 1s ease” }} />
+</svg>
+<div style={{ position: “absolute”, inset: 0, display: “flex”, alignItems: “center”,
+justifyContent: “center”, fontSize: size > 48 ? 13 : 11, fontWeight: 800, color }}>
+{score}
+</div>
+</div>
+);
+}
+
+// ─── RSI Gauge ─────────────────────────────────────────────────────────────
+function RSIGauge({ rsi }) {
+if (rsi === null) return <div style={{ color: “#444”, fontSize: 11 }}>RSI: —</div>;
+const color = rsi < 30 ? “#4ade80” : rsi > 70 ? “#f87171” : rsi > 55 ? “#f59e0b” : rsi < 45 ? “#f59e0b” : “#888”;
+const zone  = rsi < 30 ? “OVERSOLD” : rsi > 70 ? “OVERBOUGHT” : rsi > 55 ? “BULLISH” : rsi < 45 ? “BEARISH” : “NEUTRAL”;
+return (
+<div style={{ background: “#0d0d0d”, border: “1px solid #1a1a1a”, borderRadius: 10, padding: “10px 12px” }}>
+<div style={{ display: “flex”, justifyContent: “space-between”, marginBottom: 6 }}>
+<span style={{ fontSize: 10, color: “#555”, fontWeight: 700 }}>RSI (14)</span>
+<span style={{ fontSize: 13, fontWeight: 900, color }}>{rsi}</span>
+</div>
+<div style={{ position: “relative”, height: 6, borderRadius: 99, overflow: “hidden”,
+background: “linear-gradient(90deg,#4ade80 0%,#4ade80 15%,#888 15%,#888 70%,#f87171 70%,#f87171 100%)” }}>
+<div style={{ position: “absolute”, left: `calc(${rsi}% - 5px)`, top: -1,
+width: 8, height: 8, borderRadius: “50%”, background: color, border: “2px solid #0d0d0d” }} />
+</div>
+<div style={{ display: “flex”, justifyContent: “space-between”, fontSize: 9, color: “#444”, marginTop: 3 }}>
+<span style={{ color: “#4ade80” }}>30</span>
+<span style={{ color, fontWeight: 700 }}>{zone}</span>
+<span style={{ color: “#f87171” }}>70</span>
+</div>
+</div>
+);
+}
+
+// ─── MACD Badge ────────────────────────────────────────────────────────────
+function MACDBadge({ macd }) {
+if (!macd) return <div style={{ color: “#444”, fontSize: 11 }}>MACD: —</div>;
+const { trend, crossover, histogram: h } = macd;
+const trendMap = {
+bullish_strong:    { label: “Strong Bull ↑”, color: “#4ade80” },
+bullish:           { label: “Bullish →”,     color: “#86efac” },
+bullish_weakening: { label: “Fading Bull ↗”, color: “#f59e0b” },
+bearish_strong:    { label: “Strong Bear ↓”, color: “#f87171” },
+bearish:           { label: “Bearish →”,     color: “#fca5a5” },
+bearish_weakening: { label: “Fading Bear ↘”, color: “#f59e0b” },
+neutral:           { label: “Neutral —”,     color: “#888”    },
+};
+const tl = trendMap[trend] || trendMap.neutral;
+return (
+<div style={{ background: “#0d0d0d”, border: “1px solid #1a1a1a”, borderRadius: 10, padding: “10px 12px” }}>
+<div style={{ display: “flex”, justifyContent: “space-between”, marginBottom: 6 }}>
+<span style={{ fontSize: 10, color: “#555”, fontWeight: 700 }}>MACD</span>
+<span style={{ fontSize: 11, fontWeight: 700, color: tl.color }}>{tl.label}</span>
+</div>
+{crossover && (
+<div style={{ fontSize: 10, fontWeight: 800, color: crossover === “bullish_cross” ? “#4ade80” : “#f87171”,
+background: crossover === “bullish_cross” ? “#0a1f0a” : “#2a1010”,
+borderRadius: 5, padding: “2px 8px”, marginBottom: 4, animation: “pulse 2s infinite” }}>
+⚡ {crossover === “bullish_cross” ? “BULL CROSS” : “BEAR CROSS”}
+</div>
+)}
+<div style={{ background: “#111”, borderRadius: 99, height: 5, overflow: “hidden” }}>
+<div style={{ width: `${Math.min(Math.abs(h) * 2000, 100)}%`, height: “100%”,
+background: h > 0 ? “#4ade80” : “#f87171”, borderRadius: 99 }} />
+</div>
+<div style={{ fontSize: 9, color: “#444”, marginTop: 3 }}>
+Hist: <span style={{ color: h > 0 ? “#4ade80” : “#f87171” }}>{h > 0 ? “+” : “”}{h}</span>
+</div>
+</div>
+);
+}
+
+// ─── VWAP Badge ────────────────────────────────────────────────────────────
+function VWAPBadge({ vwapResult, price }) {
+if (!vwapResult) return <div style={{ color: “#444”, fontSize: 11 }}>VWAP: —</div>;
+const { color, label, vwap, pct, above } = vwapResult;
+return (
+<div style={{ background: “#0d0d0d”, border: `1px solid ${color}22`, borderRadius: 10, padding: “10px 12px” }}>
+<div style={{ display: “flex”, justifyContent: “space-between”, marginBottom: 4 }}>
+<span style={{ fontSize: 10, color: “#555”, fontWeight: 700 }}>VWAP</span>
+<span style={{ fontSize: 11, fontWeight: 700, color }}>{above ? “▲ Above” : “▼ Below”}</span>
+</div>
+<div style={{ fontSize: 12, fontWeight: 800, color }}>
+${vwap?.toFixed(2)}
+<span style={{ fontSize: 10, color: “#444”, fontWeight: 400, marginLeft: 4 }}>
+({pct > 0 ? “+” : “”}{pct?.toFixed(2)}%)
+</span>
+</div>
+<div style={{ fontSize: 9, color: color + “88”, marginTop: 3, lineHeight: 1.4 }}>{label}</div>
+</div>
+);
+}
+
+// ─── Signal Card ───────────────────────────────────────────────────────────
+function SignalCard({ sig, watchlist, onWatch }) {
+const [tab, setTab] = useState(“checklist”); // checklist | indicators
+const [expanded, setExpanded] = useState(false);
+const isLong = sig.direction === “long”;
+const color  = isLong ? “#4ade80” : “#f87171”;
+const bg     = isLong ? “#0a1f0a” : “#1f0a0a”;
+const { verdict, preTrade, indicators, rsi, macd, vwapResult } = sig;
+const fmt = (n) => n >= 1000 ? `$${n.toLocaleString()}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(6)}`;
+
+return (
+<div style={{ background: “#0d0d0d”, border: `2px solid ${verdict.color}55`,
+borderRadius: 14, marginBottom: 12, overflow: “hidden” }}>
+
+```
+  {/* ── VERDICT BANNER ── */}
+  <div style={{ background: verdict.bg, borderBottom: `1px solid ${verdict.color}22`,
+    padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div>
+      <div style={{ fontSize: 15, fontWeight: 900, color: verdict.color }}>{verdict.label}</div>
+      <div style={{ fontSize: 11, color: verdict.color + "88", marginTop: 1 }}>{verdict.sub}</div>
+    </div>
+    <div style={{ textAlign: "right" }}>
+      <div style={{ fontSize: 22, fontWeight: 900, color: verdict.color }}>{verdict.combined}</div>
+      <div style={{ fontSize: 9, color: "#444" }}>COMBINED</div>
+    </div>
+  </div>
+
+  {/* ── MAIN ROW ── */}
+  <div style={{ padding: "12px 16px", cursor: "pointer" }} onClick={() => setExpanded(e => !e)}>
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <div style={{ width: 28, height: 28, background: bg, border: `1px solid ${color}44`,
+        borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 14, fontWeight: 900, color, flexShrink: 0 }}>
+        {isLong ? "+" : "−"}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 14, fontWeight: 800 }}>{sig.asset.sym}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+            background: bg, color, border: `1px solid ${color}44` }}>{isLong ? "LONG" : "SHORT"}</span>
+          {sig.isLive && <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4,
+            background: "#0a1f0a", color: "#4ade80", border: "1px solid #4ade8044",
+            animation: "pulse 2s infinite" }}>LIVE</span>}
+          <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4,
+            background: "#1a1400", color: "#f59e0b", border: "1px solid #f59e0b44" }}>ALPHA</span>
+          <span style={{ fontSize: 10, color, fontWeight: 700 }}>
+            {sig.priceMovePct > 0 ? "+" : ""}{sig.priceMovePct.toFixed(2)}%
+          </span>
+          <span style={{ fontSize: 10, color: "#444" }}>{sig.minutesAgo}m ago</span>
+        </div>
+        <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>
+          {fmt(sig.prevPrice)} → {fmt(sig.asset.price)} · OI ${sig.oiM}M ·
+          Vol {sig.volumeMultiplier.toFixed(1)}x · Funding {sig.fundingRate > 0 ? "+" : ""}
+          {(sig.fundingRate * 100).toFixed(4)}%/h
+        </div>
+
+        {/* Indicator pills */}
+        <div style={{ display: "flex", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
+          {/* Q1-Q5 pills */}
+          {preTrade.questions.map((q, i) => (
+            <div key={i} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5,
+              background: "#111", border: `1px solid ${q.color}44`, color: q.color, fontWeight: 700 }}>
+              Q{i+1}{q.color === "#4ade80" ? "✓" : q.color === "#f87171" ? "✗" : "~"}
+            </div>
+          ))}
+          {/* RSI pill */}
+          {rsi !== null && (
+            <div style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, background: "#111",
+              border: `1px solid ${rsi < 30 ? "#4ade8044" : rsi > 70 ? "#f8717144" : "#88888844"}`,
+              color: rsi < 30 ? "#4ade80" : rsi > 70 ? "#f87171" : "#888", fontWeight: 700 }}>
+              RSI {rsi}
+            </div>
+          )}
+          {/* MACD pill */}
+          {macd?.crossover && (
+            <div style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, background: "#111",
+              border: `1px solid ${macd.crossover === "bullish_cross" ? "#4ade8044" : "#f8717144"}`,
+              color: macd.crossover === "bullish_cross" ? "#4ade80" : "#f87171", fontWeight: 700,
+              animation: "pulse 2s infinite" }}>
+              ⚡ MACD {macd.crossover === "bullish_cross" ? "BULL✓" : "BEAR✓"}
+            </div>
+          )}
+          {/* VWAP pill */}
+          {vwapResult && (
+            <div style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, background: "#111",
+              border: `1px solid ${vwapResult.color}44`, color: vwapResult.color, fontWeight: 700 }}>
+              VWAP {vwapResult.above ? "▲" : "▼"}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+        <ScoreRing score={verdict.combined} />
+        <button onClick={e => { e.stopPropagation(); onWatch(sig.asset.sym); }}
+          style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5,
+            border: `1px solid ${watchlist.includes(sig.asset.sym) ? "#f59e0b44" : "#222"}`,
+            background: watchlist.includes(sig.asset.sym) ? "#1a1400" : "#111",
+            color: watchlist.includes(sig.asset.sym) ? "#f59e0b" : "#555", cursor: "pointer" }}>
+          {watchlist.includes(sig.asset.sym) ? "★" : "☆"}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  {/* ── EXPANDED ── */}
+  {expanded && (
+    <div style={{ padding: "0 14px 14px", borderTop: "1px solid #111" }}>
+
+      {/* Sub-tabs */}
+      <div style={{ display: "flex", gap: 6, margin: "12px 0 10px" }}>
+        {["checklist", "indicators"].map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{ padding: "5px 14px", borderRadius: 7, cursor: "pointer", fontSize: 11,
+              background: tab === t ? "#7c3aed" : "#111",
+              border: `1px solid ${tab === t ? "#7c3aed" : "#222"}`,
+              color: tab === t ? "#fff" : "#555", textTransform: "capitalize" }}>
+            {t === "checklist" ? "🎯 Pre-Trade (5Q)" : "📈 RSI · MACD · VWAP"}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Pre-Trade Checklist ── */}
+      {tab === "checklist" && (
+        <div>
+          {preTrade.questions.map((q, i) => (
+            <div key={i} style={{ background: "#0a0a0a", border: `1px solid ${q.color}22`,
+              borderRadius: 9, padding: "9px 12px", marginBottom: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: "#444", marginBottom: 2 }}>{q.q}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: q.color }}>{q.answer}</div>
+                  <div style={{ fontSize: 11, color: "#444", marginTop: 3, lineHeight: 1.5 }}>{q.detail}</div>
+                </div>
+                <div style={{ fontSize: 16 }}>
+                  {q.color === "#4ade80" ? "✅" : q.color === "#f87171" ? "❌" : "⚠️"}
+                </div>
+              </div>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11,
+            color: "#555", margin: "8px 0 4px" }}>
+            <span>Pre-Trade Score</span>
+            <span style={{ color: "#a78bfa", fontWeight: 700 }}>{preTrade.score}/100</span>
+          </div>
+          <div style={{ background: "#111", borderRadius: 99, height: 5 }}>
+            <div style={{ width: `${preTrade.score}%`, height: "100%", borderRadius: 99,
+              background: "linear-gradient(90deg,#7c3aed88,#a855f7)" }} />
+          </div>
+        </div>
+      )}
+
+      {/* ── Indicators ── */}
+      {tab === "indicators" && (
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+            <RSIGauge rsi={rsi} />
+            <MACDBadge macd={macd} />
+            <VWAPBadge vwapResult={vwapResult} price={sig.asset.price} />
+          </div>
+
+          {indicators.signals.map((s, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between",
+              alignItems: "center", background: "#0a0a0a", border: `1px solid ${s.color}22`,
+              borderRadius: 8, padding: "8px 12px", marginBottom: 5 }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: s.color }}>{s.label}</div>
+                <div style={{ fontSize: 11, color: "#444", marginTop: 1 }}>{s.note}</div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 800, flexShrink: 0,
+                color: s.pts > 0 ? "#4ade80" : s.pts < 0 ? "#f87171" : "#555" }}>
+                {s.pts > 0 ? `+${s.pts}` : s.pts === 0 ? "—" : s.pts}
+              </div>
+            </div>
+          ))}
+
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11,
+            color: "#555", margin: "8px 0 4px" }}>
+            <span>Indicator Score</span>
+            <span style={{ color: indicators.verdict.color, fontWeight: 700 }}>{indicators.score}/100</span>
+          </div>
+          <div style={{ background: "#111", borderRadius: 99, height: 5 }}>
+            <div style={{ width: `${indicators.score}%`, height: "100%", borderRadius: 99,
+              background: `linear-gradient(90deg,${indicators.verdict.color}88,${indicators.verdict.color})` }} />
+          </div>
+        </div>
+      )}
+
+      {/* Final verdict */}
+      <div style={{ background: verdict.bg, border: `1px solid ${verdict.color}44`,
+        borderRadius: 10, padding: "12px 14px", textAlign: "center", marginTop: 12 }}>
+        <div style={{ fontSize: 16, fontWeight: 900, color: verdict.color }}>{verdict.label}</div>
+        <div style={{ fontSize: 11, color: verdict.color + "88", marginTop: 2 }}>{verdict.sub}</div>
+        <div style={{ fontSize: 10, color: "#444", marginTop: 6 }}>
+          Pre-Trade {preTrade.score}/100 · Indicators {indicators.score}/100 · Combined {verdict.combined}/100
+        </div>
+      </div>
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════
+export default function AlphaSignals() {
+const [signals,      setSignals]      = useState(() => Array.from({ length: 18 }, (_, i) => generateSignal(i)));
+const [filter,       setFilter]       = useState(“ALL”);
+const [sortBy,       setSortBy]       = useState(“verdict”);
+const [watchlist,    setWatchlist]    = useState([]);
+const [newCount,     setNewCount]     = useState(0);
+const nextId = useRef(100);
+
+useEffect(() => {
+const t = setInterval(() => {
+const s = generateSignal(nextId.current++);
+setSignals(prev => [s, …prev.slice(0, 29)]);
+setNewCount(n => n + 1);
+setTimeout(() => setNewCount(n => Math.max(0, n - 1)), 5000);
+}, 8000);
+return () => clearInterval(t);
+}, []);
+
+const onWatch = (sym) => setWatchlist(w => w.includes(sym) ? w.filter(s => s !== sym) : […w, sym]);
+
+const CATS = [“ALL”, “+WATCH”, “CRYPTO”, “EQUITIES”, “METALS”, “FOREX”];
+const verdictOrder = { “🟢 BUY / SELL NOW”: 0, “🟡 CONDITIONAL”: 1, “⏸ HOLD — Watch”: 2, “⏸ HOLD — Too Late”: 3, “⛔ NO TRADE — R/R < 2:1”: 4, “⛔ NO TRADE”: 5 };
+
+const filtered = signals
+.filter(s => filter === “+WATCH” ? watchlist.includes(s.asset.sym) : filter === “ALL” || s.asset.cat === filter)
+.sort((a, b) =>
+sortBy === “verdict” ? (verdictOrder[a.verdict.label] ?? 9) - (verdictOrder[b.verdict.label] ?? 9) :
+sortBy === “score”   ? b.verdict.combined - a.verdict.combined :
+a.minutesAgo - b.minutesAgo);
+
+const buyNow  = signals.filter(s => s.verdict.label.includes(“NOW”)).length;
+const live    = signals.filter(s => s.isLive).length;
+const noTrade = signals.filter(s => s.verdict.label.includes(“NO TRADE”)).length;
+
+return (
+<div style={{ fontFamily: “‘Inter’,sans-serif”, background: “#080810”,
+color: “#e8e8e8”, minHeight: “100vh”, padding: 16 }}>
+<style>{`@keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:0.4} } @keyframes slidein{ from{transform:translateY(-10px);opacity:0} to{transform:translateY(0);opacity:1} } * { box-sizing: border-box; }`}</style>
+
+```
+  {/* Header */}
+  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+    <div>
+      <div style={{ fontSize: 10, color: "#7c3aed", letterSpacing: 3, marginBottom: 2 }}>CLVRQUANT v5</div>
+      <div style={{ fontSize: 18, fontWeight: 800 }}>⚡ ALPHA SIGNALS</div>
+      <div style={{ fontSize: 11, color: "#555", marginTop: 1 }}>
+        5Q Pre-Trade · RSI · MACD · VWAP · Combined Score
+      </div>
+    </div>
+    <div style={{ display: "flex", gap: 6 }}>
+      {[
+        { val: buyNow,  label: "BUY",     color: "#4ade80", bg: "#0a1f0a" },
+        { val: live,    label: "LIVE",    color: "#f59e0b", bg: "#1a1400" },
+        { val: noTrade, label: "SKIP",    color: "#f87171", bg: "#2a1010" },
+      ].map(({ val, label, color, bg }) => (
+        <div key={label} style={{ background: bg, border: `1px solid ${color}33`,
+          borderRadius: 8, padding: "5px 10px", textAlign: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color }}>{val}</div>
+          <div style={{ fontSize: 9, color: color + "88" }}>{label}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+
+  {/* New signal flash */}
+  {newCount > 0 && (
+    <div style={{ background: "#0a1a2e", border: "1px solid #38bdf844", borderRadius: 10,
+      padding: "7px 14px", marginBottom: 10, fontSize: 12, color: "#38bdf8",
+      animation: "slidein 0.3s ease", display: "flex", gap: 8, alignItems: "center" }}>
+      <span style={{ animation: "pulse 1s infinite" }}>●</span>
+      New signal — scored on 5Q + RSI + MACD + VWAP
+    </div>
+  )}
+
+  {/* Filters */}
+  <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+    {CATS.map(c => (
+      <button key={c} onClick={() => setFilter(c)}
+        style={{ padding: "5px 12px", borderRadius: 7, cursor: "pointer", fontSize: 11,
+          background: filter === c ? "#7c3aed" : "#111",
+          border: `1px solid ${filter === c ? "#7c3aed" : "#222"}`,
+          color: filter === c ? "#fff" : "#555" }}>
+        {c}{c === "+WATCH" && watchlist.length > 0 ? ` (${watchlist.length})` : ""}
+      </button>
+    ))}
+  </div>
+
+  {/* Sort */}
+  <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+    <span style={{ fontSize: 10, color: "#444" }}>Sort:</span>
+    {[{ k: "verdict", l: "🎯 Verdict" }, { k: "score", l: "🏆 Score" }, { k: "recent", l: "🕐 Recent" }].map(s => (
+      <button key={s.k} onClick={() => setSortBy(s.k)}
+        style={{ padding: "4px 12px", borderRadius: 6, cursor: "pointer", fontSize: 11,
+          background: sortBy === s.k ? "#7c3aed" : "#111",
+          border: `1px solid ${sortBy === s.k ? "#7c3aed" : "#222"}`,
+          color: sortBy === s.k ? "#fff" : "#555" }}>
+        {s.l}
+      </button>
+    ))}
+  </div>
+
+  {/* Legend */}
+  <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", fontSize: 10 }}>
+    {[{ l: "BUY/SELL NOW", c: "#4ade80", bg: "#0a1f0a" },
+      { l: "CONDITIONAL",  c: "#f59e0b", bg: "#1a1400" },
+      { l: "NO TRADE",     c: "#f87171", bg: "#2a1010" }].map(({ l, c, bg }) => (
+      <div key={l} style={{ background: bg, border: `1px solid ${c}33`, borderRadius: 5,
+        padding: "2px 9px", color: c, fontWeight: 700 }}>● {l}</div>
+    ))}
+    <span style={{ color: "#333", padding: "2px 0" }}>· Tap card → Pre-Trade + RSI/MACD/VWAP</span>
+  </div>
+
+  {/* Feed */}
+  {filtered.length === 0
+    ? <div style={{ textAlign: "center", padding: 40, color: "#333" }}>No signals match filters.</div>
+    : filtered.map(s => <SignalCard key={s.id} sig={s} watchlist={watchlist} onWatch={onWatch} />)
+  }
+
+  <div style={{ marginTop: 12, fontSize: 10, color: "#2a2a2a", textAlign: "center" }}>
+    ⚠️ Informational only. Not financial advice. © 2025 CLVRQuant · Mike Claver™
+  </div>
+</div>
+```
+
+);
+}

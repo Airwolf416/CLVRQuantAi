@@ -26,6 +26,26 @@ const MONO  = "'IBM Plex Mono', monospace";
 const SANS  = "'Barlow', system-ui, sans-serif";
 
 const pct=(v,d=2)=>{const n=Number(v);if(isNaN(n))return"—";return(n>=0?"+":"")+n.toFixed(d)+"%";};
+
+function isNYSEOpen(){
+  const now=new Date();
+  const et=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));
+  const day=et.getDay();
+  if(day===0||day===6)return false;
+  const h=et.getHours(),m=et.getMinutes();
+  const mins=h*60+m;
+  return mins>=570&&mins<960;
+}
+function isForexOpen(){
+  const now=new Date();
+  const et=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));
+  const day=et.getDay();
+  const h=et.getHours();
+  if(day===6)return false;
+  if(day===0&&h<17)return false;
+  if(day===5&&h>=17)return false;
+  return true;
+}
 const FOREX_4D=["EURUSD","GBPUSD","AUDUSD","USDCHF","USDCAD","NZDUSD","EURGBP","USDSGD"];
 const FOREX_2D=["USDJPY","EURJPY","GBPJPY","USDMXN","USDZAR","USDTRY"];
 const fmt=(p,sym)=>{
@@ -1479,8 +1499,8 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             </>}
           </div>}
           {priceTab==="equity"&&<div style={panel}>
-            <div style={ph}><PTitle>Equities · Finnhub</PTitle><Badge label={fhLive?`${Object.values(equityPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time trades · NYSE/NASDAQ</div>
+            <div style={ph}><PTitle>Equities · Finnhub</PTitle><div style={{display:"flex",gap:6,alignItems:"center"}}>{isNYSEOpen()?<Badge label="LIVE" color="green"/>:<Badge label="CLOSED" color="muted"/>}<Badge label={fhLive?`${Object.values(equityPrices).filter(p=>p.live).length} Streaming`:"Offline"} color={fhLive?"green":"gold"}/></div></div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time trades · NYSE 9:30a–4p ET</div>
             {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
           </div>}
           {priceTab==="metals"&&<div style={panel}>
@@ -1490,8 +1510,8 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             <div style={{padding:"10px 14px",fontFamily:MONO,fontSize:9,color:C.muted2}}>Gold/Silver Ratio: <span style={{color:C.gold2,fontWeight:600}}>{metalPrices.XAU?.price&&metalPrices.XAG?.price?(metalPrices.XAU.price/metalPrices.XAG.price).toFixed(0):"—"}:1</span>{metalPrices.XAU?.price&&metalPrices.XAG?.price&&(metalPrices.XAU.price/metalPrices.XAG.price)>=90&&<span style={{color:C.green}}> · bullish for silver</span>}</div>
           </div>}
           {priceTab==="forex"&&<div style={panel}>
-            <div style={ph}><PTitle>Forex</PTitle><Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time · 24/5</div>
+            <div style={ph}><PTitle>Forex</PTitle><div style={{display:"flex",gap:6,alignItems:"center"}}>{isForexOpen()?<Badge label="LIVE" color="green"/>:<Badge label="CLOSED" color="muted"/>}<Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Streaming`:"Offline"} color={fhLive?"green":"gold"}/></div></div>
+            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time · Sun 5pm–Fri 5pm ET</div>
             {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
           </div>}
         </>}

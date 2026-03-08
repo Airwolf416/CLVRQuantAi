@@ -22,6 +22,16 @@ const KNOWN_MINTS = {
 
 const SOL_RPC = "https://api.mainnet-beta.solana.com";
 const SOL_PROXY = "/api/solana-rpc";
+const HL_API = "https://api.hyperliquid.xyz/info";
+const HL_ASSETS = ["SOL", "BTC", "ETH", "WIF", "BONK", "JTO", "PYTH", "W", "ARB", "DOGE", "HYPE", "SUI", "AVAX", "LINK"];
+
+const SIGNAL_COLORS = {
+  STRONG_LONG: "#00c787",
+  LONG: "#4ade80",
+  NEUTRAL: "#f59e0b",
+  SHORT: "#f87171",
+  STRONG_SHORT: "#ff4060",
+};
 
 async function solRpc(method, params) {
   try {
@@ -41,6 +51,95 @@ async function solRpc(method, params) {
   }
 }
 
+async function fetchHLAccountState(evmAddress) {
+  const res = await fetch(HL_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "clearinghouseState", user: evmAddress }),
+  });
+  if (!res.ok) throw new Error("HL fetch failed");
+  return await res.json();
+}
+
+async function fetchHLOpenOrders(evmAddress) {
+  try {
+    const res = await fetch(HL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "openOrders", user: evmAddress }),
+    });
+    return await res.json();
+  } catch { return []; }
+}
+
+async function fetchAllMids() {
+  try {
+    const res = await fetch(HL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "allMids" }),
+    });
+    return await res.json() || {};
+  } catch { return {}; }
+}
+
+async function fetchFundingRates() {
+  try {
+    const res = await fetch(HL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+    });
+    const data = await res.json();
+    const universe = data?.[0]?.universe || [];
+    const ctxs = data?.[1] || [];
+    const rates = {};
+    universe.forEach((asset, i) => {
+      rates[asset.name] = {
+        funding: parseFloat(ctxs[i]?.funding || 0),
+        openInterest: parseFloat(ctxs[i]?.openInterest || 0),
+        markPx: parseFloat(ctxs[i]?.markPx || 0),
+      };
+    });
+    return rates;
+  } catch { return {}; }
+}
+
+function parseHLState(raw) {
+  if (!raw) return null;
+  const margin = raw.marginSummary || {};
+  const positions = (raw.assetPositions || [])
+    .map((ap) => {
+      const pos = ap.position;
+      if (!pos || parseFloat(pos.szi) === 0) return null;
+      const size = parseFloat(pos.szi);
+      const entryPx = parseFloat(pos.entryPx || 0);
+      const unrealizedPnl = parseFloat(pos.unrealizedPnl || 0);
+      const leverage = parseFloat(pos.leverage?.value || pos.leverage || 1);
+      const liqPx = parseFloat(pos.liquidationPx || 0);
+      const marginUsed = parseFloat(pos.marginUsed || 0);
+      return {
+        asset: pos.coin,
+        size,
+        side: size > 0 ? "LONG" : "SHORT",
+        entryPx,
+        unrealizedPnl,
+        leverage,
+        liqPx,
+        marginUsed,
+        roe: marginUsed > 0 ? (unrealizedPnl / marginUsed) * 100 : 0,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    accountValue: parseFloat(margin.accountValue || 0),
+    totalMarginUsed: parseFloat(margin.totalMarginUsed || 0),
+    totalUnrealizedPnl: parseFloat(margin.totalUnrealizedPnl || 0),
+    withdrawable: parseFloat(raw.withdrawable || 0),
+    positions,
+  };
+}
 
 const C = {
   bg:"#050709", panel:"#0c1220", border:"#141e35", border2:"#1c2b4a",
@@ -223,6 +322,63 @@ function Badge({label, color="gold"}) {
   return <span style={{fontSize:9,padding:"3px 8px",borderRadius:2,background:t.bg,color:t.color,border:`1px solid ${t.border}`,fontFamily:MONO,letterSpacing:"0.12em",textTransform:"uppercase",fontWeight:600}}>{label}</span>;
 }
 
+function HLStatBox({ label, value, color = C.text }) {
+  return (
+    <div style={{background:"rgba(201,168,76,.03)",border:`1px solid ${C.border}`,borderRadius:2,padding:"10px 12px"}}>
+      <div style={{fontSize:8,color:C.muted,letterSpacing:"0.12em",marginBottom:4,fontFamily:MONO}}>{label}</div>
+      <div style={{fontSize:14,fontWeight:800,color,fontFamily:MONO}}>{value}</div>
+    </div>
+  );
+}
+
+function PositionRow({ pos, markPrices }) {
+  const mark = parseFloat(markPrices[pos.asset] || pos.entryPx);
+  const pnlColor = pos.unrealizedPnl >= 0 ? C.green : C.red;
+  const sideColor = pos.side === "LONG" ? C.green : C.red;
+  return (
+    <div data-testid={`hl-position-${pos.asset}`} style={{
+      background: pos.side === "LONG"
+        ? "rgba(0,199,135,.03)"
+        : "rgba(255,64,96,.03)",
+      border: `1px solid ${pos.side === "LONG" ? "rgba(0,199,135,.15)" : "rgba(255,64,96,.15)"}`,
+      borderRadius:2, padding:"11px 13px", marginBottom:8,
+    }}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{
+            background: pos.side === "LONG" ? "rgba(0,199,135,.12)" : "rgba(255,64,96,.12)",
+            color: sideColor, fontSize:8, fontWeight:800,
+            padding:"2px 7px", borderRadius:2, letterSpacing:"0.1em", fontFamily:MONO,
+          }}>{pos.side === "LONG" ? "▲ LONG" : "▼ SHORT"}</span>
+          <span style={{fontSize:14,fontWeight:800,color:C.white,fontFamily:MONO}}>{pos.asset}</span>
+          <span style={{fontSize:9,color:C.muted,fontFamily:MONO}}>{pos.leverage}x</span>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:14,fontWeight:800,color:pnlColor,fontFamily:MONO}}>
+            {pos.unrealizedPnl >= 0 ? "+" : ""}${pos.unrealizedPnl.toFixed(2)}
+          </div>
+          <div style={{fontSize:9,color:pnlColor,fontFamily:MONO}}>
+            {pos.roe >= 0 ? "+" : ""}{pos.roe.toFixed(1)}% ROE
+          </div>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:6,fontSize:10}}>
+        {[
+          { l:"SIZE", v:`${Math.abs(pos.size).toFixed(4)} ${pos.asset}` },
+          { l:"ENTRY", v:`$${pos.entryPx.toFixed(pos.entryPx > 100 ? 2 : 4)}` },
+          { l:"MARK", v:`$${mark.toFixed(mark > 100 ? 2 : 4)}` },
+          { l:"LIQ", v: pos.liqPx > 0 ? `$${pos.liqPx.toFixed(pos.liqPx > 100 ? 2 : 4)}` : "—", warn: true },
+        ].map(({ l, v, warn }) => (
+          <div key={l}>
+            <div style={{color:C.muted,fontSize:8,marginBottom:2,fontFamily:MONO,letterSpacing:"0.08em"}}>{l}</div>
+            <div style={{color: warn ? C.orange : C.text,fontWeight:600,fontFamily:MONO}}>{v}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function PerpsPnlCalculator() {
   const [form, setForm] = useState({
     direction: "long",
@@ -338,7 +494,188 @@ export default function PhantomWalletPanel() {
   const [sendAmt, setSendAmt] = useState("");
   const [sendStatus, setSendStatus] = useState(null);
 
+  const [evmAddress, setEvmAddress] = useState(() => {
+    try { return localStorage.getItem("clvr_hl_evm") || ""; } catch { return ""; }
+  });
+  const [evmInput, setEvmInput] = useState("");
+  const [showEvmModal, setShowEvmModal] = useState(false);
+
+  const [hlAccount, setHlAccount] = useState(null);
+  const [hlOrders, setHlOrders] = useState([]);
+  const [hlLoading, setHlLoading] = useState(false);
+  const [hlError, setHlError] = useState(null);
+
+  const [hlPrices, setHlPrices] = useState({});
+  const [fundingRates, setFundingRates] = useState({});
+
+  const [selectedAsset, setSelectedAsset] = useState("SOL");
+  const [tradeSize, setTradeSize] = useState("");
+  const [leverage, setLeverage] = useState(5);
+
+  const [aiSignal, setAiSignal] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+
+  const [confirmTrade, setConfirmTrade] = useState(null);
+  const [tradeStatus, setTradeStatus] = useState(null);
+
   const short = pubkey ? pubkey.slice(0, 4) + "..." + pubkey.slice(-4) : "";
+
+  useEffect(() => {
+    async function loadMarketData() {
+      const [p, f] = await Promise.all([fetchAllMids(), fetchFundingRates()]);
+      setHlPrices(p);
+      setFundingRates(f);
+    }
+    loadMarketData();
+    const iv = setInterval(loadMarketData, 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  useEffect(() => {
+    if (!evmAddress) return;
+    let cancelled = false;
+    async function loadHL() {
+      setHlLoading(true);
+      setHlError(null);
+      try {
+        const [state, orders] = await Promise.all([
+          fetchHLAccountState(evmAddress),
+          fetchHLOpenOrders(evmAddress),
+        ]);
+        if (!cancelled) {
+          setHlAccount(parseHLState(state));
+          setHlOrders(orders || []);
+        }
+      } catch {
+        if (!cancelled) setHlError("Could not load Hyperliquid account. Check your EVM address.");
+      } finally {
+        if (!cancelled) setHlLoading(false);
+      }
+    }
+    loadHL();
+    const iv = setInterval(loadHL, 8000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [evmAddress]);
+
+  const saveEvmAddress = useCallback(() => {
+    const t = evmInput.trim();
+    if (!t.startsWith("0x") || t.length !== 42) {
+      alert("Enter a valid EVM address: 0x… (42 characters)");
+      return;
+    }
+    try { localStorage.setItem("clvr_hl_evm", t); } catch {}
+    setEvmAddress(t);
+    setShowEvmModal(false);
+    setEvmInput("");
+  }, [evmInput]);
+
+  const getAISignal = useCallback(async () => {
+    setAiLoading(true);
+    setAiError(null);
+    setAiSignal(null);
+
+    const price = parseFloat(hlPrices[selectedAsset] || 0);
+    const funding = fundingRates[selectedAsset] || { funding: 0, openInterest: 0 };
+    const positionLines = hlAccount?.positions?.length
+      ? hlAccount.positions.map(p =>
+          `  • ${p.side} ${Math.abs(p.size)} ${p.asset} @ $${p.entryPx.toFixed(4)} | ${p.leverage}x lev | uPnL: ${p.unrealizedPnl >= 0 ? "+" : ""}$${p.unrealizedPnl.toFixed(2)} (${p.roe.toFixed(1)}% ROE) | Liq: $${p.liqPx > 0 ? p.liqPx.toFixed(4) : "N/A"}`
+        ).join("\n")
+      : "  None";
+    const orderLines = hlOrders?.length
+      ? hlOrders.map(o => `  • ${o.side === "B" ? "BUY" : "SELL"} ${o.sz} ${o.coin} @ $${parseFloat(o.limitPx || 0).toFixed(4)}`).join("\n")
+      : "  None";
+
+    const systemPrompt = `You are CLVRQuant AI — an elite quantitative crypto trading analyst with full visibility of the trader's live Hyperliquid perp account.
+You see their exact open positions, unrealized PnL, margin usage, available cash, and open orders.
+Give a PERSONALIZED long/short signal that accounts for their current portfolio exposure and risk.
+Respond ONLY with a valid JSON object. No markdown, no backticks, no explanation outside JSON.
+
+JSON schema:
+{
+"signal": "STRONG_LONG" | "LONG" | "NEUTRAL" | "SHORT" | "STRONG_SHORT",
+"confidence": 0-100,
+"entry": number,
+"stopLoss": number,
+"takeProfit": number,
+"rationale": "2-3 sentences referencing their actual positions and market conditions",
+"portfolioNote": "1 sentence on portfolio-level risk or concentration given current positions",
+"keyRisks": ["risk1", "risk2"],
+"timeframe": "scalp (mins)" | "intraday (hours)" | "swing (days)"
+}`;
+
+    const userPrompt = `Signal request: ${selectedAsset}/USD perpetual
+
+═══ LIVE HYPERLIQUID ACCOUNT ═══
+Account Value:        $${hlAccount?.accountValue?.toFixed(2) ?? "N/A"}
+Withdrawable Cash:    $${hlAccount?.withdrawable?.toFixed(2) ?? "N/A"}
+Total Margin Used:    $${hlAccount?.totalMarginUsed?.toFixed(2) ?? "N/A"}
+Total Unrealized PnL: ${hlAccount ? (hlAccount.totalUnrealizedPnl >= 0 ? "+" : "") + "$" + hlAccount.totalUnrealizedPnl.toFixed(2) : "N/A"}
+
+Open Perp Positions:
+${positionLines}
+
+Open Orders:
+${orderLines}
+
+═══ MARKET — ${selectedAsset} ═══
+Mark Price:   $${price.toFixed(price > 100 ? 2 : 4)}
+Funding/1H:   ${(funding.funding * 100).toFixed(4)}% (${funding.funding > 0 ? "longs paying shorts — bearish pressure" : "shorts paying longs — bullish pressure"})
+Open Interest: $${(funding.openInterest || 0).toFixed(2)}M
+
+═══ PROPOSED TRADE ═══
+Asset:    ${selectedAsset}
+Size:     ${tradeSize || "not specified"}
+Leverage: ${leverage}x
+Wallet:   ${pubkey ? pubkey.slice(0, 6) + "…" + pubkey.slice(-4) : "demo"}
+
+Consider: existing ${selectedAsset} exposure, portfolio margin health, liquidation proximity on current positions, and whether this trade improves or worsens risk-adjusted returns.`;
+
+    try {
+      const response = await fetch("/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system: systemPrompt,
+          userMessage: userPrompt,
+        }),
+      });
+      const data = await response.json();
+      if (data.error) {
+        setAiError(data.error);
+      } else {
+        const raw = data.text || data.response || "";
+        const clean = raw.replace(/```json|```/g, "").trim();
+        try {
+          const parsed = JSON.parse(clean);
+          if (!parsed.signal || typeof parsed.confidence !== "number") {
+            setAiError("AI returned invalid signal format. Retry.");
+          } else {
+            setAiSignal(parsed);
+            setWalletTab("ai signal");
+          }
+        } catch {
+          setAiError("Failed to parse AI response. Retry.");
+        }
+      }
+    } catch {
+      setAiError("Signal generation failed. Check connection and retry.");
+    } finally {
+      setAiLoading(false);
+    }
+  }, [selectedAsset, hlPrices, fundingRates, hlAccount, hlOrders, tradeSize, leverage, pubkey]);
+
+  const executeTrade = useCallback(async (direction) => {
+    setConfirmTrade(null);
+    setTradeStatus({ status: "signing", direction });
+    await new Promise(r => setTimeout(r, 1400));
+    setTradeStatus({
+      status: "submitted", direction,
+      asset: selectedAsset, size: tradeSize, leverage,
+      price: parseFloat(hlPrices[selectedAsset] || 0).toFixed(2),
+      txHash: "HLTx_" + Math.random().toString(36).slice(2, 10).toUpperCase(),
+    });
+  }, [selectedAsset, tradeSize, leverage, hlPrices]);
 
   const handleSign = async () => {
     try {
@@ -357,19 +694,92 @@ export default function PhantomWalletPanel() {
     } catch (e) { setSendStatus("Error: " + e.message); }
   };
 
-  const tabs = ["overview", "tokens", "send", "sign", "history", "pnl calc"];
+  const tabs = ["overview", "hl account", "positions", "ai signal", "orders", "tokens", "send", "sign", "history", "pnl calc"];
   const panel = {background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,overflow:"hidden",marginBottom:10};
   const ph = {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",borderBottom:`1px solid ${C.border}`,background:"rgba(201,168,76,.03)"};
   const inputStyle = {width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"11px 14px",color:C.text,fontSize:13,fontFamily:MONO,boxSizing:"border-box",outline:"none"};
 
+  const hlPrice = parseFloat(hlPrices[selectedAsset] || 0);
+  const signalColor = aiSignal ? SIGNAL_COLORS[aiSignal.signal] || C.orange : C.orange;
+  const solBal = parseFloat(balance || 0);
+
   return (
     <div>
+      {showEvmModal && (
+        <div style={{
+          position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          zIndex:2000,padding:24,
+        }}>
+          <div style={{
+            background:C.panel,border:`1px solid rgba(201,168,76,.4)`,
+            borderRadius:2,padding:28,maxWidth:380,width:"100%",
+          }}>
+            <div style={{fontSize:9,color:C.gold,letterSpacing:"0.15em",marginBottom:8,fontFamily:MONO}}>
+              ONE-TIME SETUP
+            </div>
+            <div style={{fontSize:18,fontWeight:900,color:C.white,marginBottom:14,fontFamily:SERIF}}>
+              Link Hyperliquid Account
+            </div>
+            <div style={{
+              background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.15)`,
+              borderRadius:2,padding:"12px 14px",marginBottom:18,
+              fontSize:11,color:C.muted2,lineHeight:1.8,fontFamily:SANS,
+            }}>
+              Hyperliquid uses your <span style={{color:C.gold2}}>EVM (0x) address</span> — not your Solana address. To find it:
+              <br /><br />
+              <strong style={{color:C.white}}>1.</strong> Go to <span style={{color:C.gold2}}>app.hyperliquid.xyz</span><br />
+              <strong style={{color:C.white}}>2.</strong> Connect your Phantom wallet<br />
+              <strong style={{color:C.white}}>3.</strong> Copy the <strong style={{color:C.white}}>0x address</strong> shown top-right<br />
+              <strong style={{color:C.white}}>4.</strong> Paste it below — saved for future sessions
+            </div>
+            <input
+              data-testid="input-evm-address"
+              type="text"
+              value={evmInput}
+              onChange={e => setEvmInput(e.target.value)}
+              placeholder="0x1234...abcd (42 characters)"
+              style={{
+                width:"100%",background:C.inputBg,
+                border:`1px solid rgba(201,168,76,.3)`,
+                borderRadius:2,padding:"10px 14px",
+                color:C.text,fontSize:12,
+                fontFamily:MONO,
+                outline:"none",marginBottom:16,boxSizing:"border-box",
+              }}
+            />
+            <div style={{display:"flex",gap:10}}>
+              <button data-testid="btn-evm-skip" onClick={() => setShowEvmModal(false)} style={{
+                flex:1,padding:11,background:"transparent",
+                border:`1px solid ${C.border}`,borderRadius:2,
+                color:C.muted2,fontSize:11,cursor:"pointer",fontFamily:MONO,
+              }}>SKIP</button>
+              <button data-testid="btn-evm-save" onClick={saveEvmAddress} style={{
+                flex:2,padding:11,
+                background:"rgba(201,168,76,.15)",
+                border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,
+                color:C.gold2,fontSize:12,fontWeight:800,cursor:"pointer",
+                fontFamily:MONO,letterSpacing:"0.08em",
+              }}>LINK & SAVE</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {status === "connected" && (
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,padding:"10px 14px",background:C.panel,border:`1px solid ${C.border}`,borderRadius:2}}>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <div style={{width:8,height:8,borderRadius:"50%",background:C.green,boxShadow:`0 0 8px ${C.green}`}}/>
             <span style={{fontFamily:MONO,fontSize:12,color:C.gold2,letterSpacing:"0.05em"}}>{short}</span>
             <Badge label="MAINNET" color="green"/>
+            {evmAddress ? (
+              <Badge label="HL LINKED" color="green"/>
+            ) : (
+              <button data-testid="btn-link-hl" onClick={() => setShowEvmModal(true)}
+                style={{background:"rgba(255,140,0,.08)",border:`1px solid rgba(255,140,0,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:9,color:C.orange,cursor:"pointer",letterSpacing:"0.08em"}}>
+                LINK HL
+              </button>
+            )}
           </div>
           <button data-testid="btn-disconnect-wallet" onClick={disconnect}
             style={{background:"rgba(255,64,96,.08)",border:`1px solid rgba(255,64,96,.25)`,borderRadius:2,padding:"5px 12px",fontFamily:MONO,fontSize:10,color:C.red,cursor:"pointer",letterSpacing:"0.08em"}}>
@@ -393,7 +803,7 @@ export default function PhantomWalletPanel() {
           <div style={{fontFamily:SERIF,fontSize:42,color:C.gold2,marginBottom:14}}>&#9670;</div>
           <div style={{fontFamily:SERIF,fontWeight:900,fontSize:18,color:C.white,marginBottom:8}}>Connect Phantom Wallet</div>
           <div style={{color:C.muted2,fontSize:13,fontFamily:SANS,marginBottom:24,lineHeight:1.7}}>
-            Link your Solana wallet for live portfolio tracking, trade signing, and AI-powered analysis.
+            Link your Solana wallet for live portfolio tracking, Hyperliquid account integration, and AI-powered trade signals.
           </div>
           <button data-testid="btn-connect-phantom" onClick={connect} disabled={status === "connecting"}
             style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.35)`,color:C.gold2,borderRadius:2,padding:"13px 32px",cursor:status==="connecting"?"wait":"pointer",fontFamily:SERIF,fontWeight:700,fontStyle:"italic",fontSize:16,marginBottom:12}}>
@@ -409,7 +819,7 @@ export default function PhantomWalletPanel() {
             </div>
           )}
           <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:32}}>
-            {["Portfolio Tracking","SOL & SPL Tokens","Sign Transactions","AI Trade Context","Perps PnL"].map(f => (
+            {["Portfolio Tracking","Hyperliquid Perps","AI Trade Signals","SOL & SPL Tokens","Perps PnL"].map(f => (
               <div key={f} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 12px",fontSize:11,color:C.gold,fontFamily:MONO,letterSpacing:"0.06em"}}>{f}</div>
             ))}
           </div>
@@ -423,12 +833,63 @@ export default function PhantomWalletPanel() {
             <div style={{fontFamily:MONO,fontSize:10,color:C.muted,marginTop:8,wordBreak:"break-all",lineHeight:1.6}}>{pubkey}</div>
           </div>
 
+          {hlAccount && (
+            <div style={{background:`linear-gradient(135deg,rgba(201,168,76,.04),${C.panel})`,border:`1px solid rgba(201,168,76,.18)`,borderRadius:2,padding:"14px 16px",marginBottom:14}}>
+              <div style={{
+                fontSize:9,color:C.gold,letterSpacing:"0.15em",marginBottom:10,fontFamily:MONO,
+                display:"flex",justifyContent:"space-between",alignItems:"center",
+              }}>
+                <span>HYPERLIQUID ACCOUNT</span>
+                {hlLoading && <span style={{color:C.muted,fontSize:8}}>refreshing...</span>}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <HLStatBox label="ACCT VALUE" value={`$${hlAccount.accountValue.toFixed(2)}`} color={C.gold2} />
+                <HLStatBox label="FREE CASH" value={`$${hlAccount.withdrawable.toFixed(2)}`} color={C.text} />
+                <HLStatBox label="MARGIN USED" value={`$${hlAccount.totalMarginUsed.toFixed(2)}`} color={C.orange} />
+                <HLStatBox
+                  label="TOTAL uPnL"
+                  value={`${hlAccount.totalUnrealizedPnl >= 0 ? "+" : ""}$${hlAccount.totalUnrealizedPnl.toFixed(2)}`}
+                  color={hlAccount.totalUnrealizedPnl >= 0 ? C.green : C.red}
+                />
+              </div>
+              <div style={{
+                marginTop:10,paddingTop:10,
+                borderTop:`1px solid ${C.border}`,
+                display:"flex",justifyContent:"space-between",
+                fontSize:10,color:C.muted,fontFamily:MONO,
+              }}>
+                <span>Phantom: <span style={{color:C.purple}}>{solBal.toFixed(4)} SOL</span></span>
+                <span>Positions: <span style={{color:C.gold2}}>{hlAccount.positions.length}</span></span>
+              </div>
+            </div>
+          )}
+
+          {status === "connected" && !evmAddress && !hlAccount && (
+            <div style={{
+              background:"rgba(255,140,0,.06)",
+              border:`1px solid rgba(255,140,0,.22)`,
+              borderRadius:2,padding:16,marginBottom:14,textAlign:"center",
+            }}>
+              <div style={{fontSize:14,color:C.orange,marginBottom:6,fontFamily:SERIF,fontWeight:700}}>Link your Hyperliquid account</div>
+              <div style={{fontSize:10,color:C.muted2,marginBottom:14,lineHeight:1.7,fontFamily:SANS}}>
+                The AI needs to see your perp positions, PnL, and available cash to give you a personalized signal.
+              </div>
+              <button data-testid="btn-link-hl-prompt" onClick={() => setShowEvmModal(true)} style={{
+                background:"rgba(201,168,76,.1)",
+                border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"9px 22px",
+                color:C.gold2,fontSize:11,fontWeight:800,cursor:"pointer",
+                fontFamily:MONO,letterSpacing:"0.08em",
+              }}>LINK HL ACCOUNT</button>
+            </div>
+          )}
+
           <div style={{display:"flex",gap:4,marginBottom:14,overflowX:"auto",paddingBottom:2}}>
             {tabs.map(t => (
               <button key={t} data-testid={`wallet-tab-${t}`} onClick={() => setWalletTab(t)}
-                style={{padding:"6px 12px",borderRadius:2,whiteSpace:"nowrap",cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.1em",textTransform:"uppercase",
+                style={{padding:"6px 10px",borderRadius:2,whiteSpace:"nowrap",cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.08em",textTransform:"uppercase",
                   border:`1px solid ${walletTab===t?C.gold:C.border}`,background:walletTab===t?"rgba(201,168,76,.07)":C.panel,color:walletTab===t?C.gold:C.muted2}}>
-                {t}
+                {t === "positions" && hlAccount?.positions?.length ? `positions (${hlAccount.positions.length})` :
+                 t === "orders" && hlOrders?.length ? `orders (${hlOrders.length})` : t}
               </button>
             ))}
           </div>
@@ -448,11 +909,297 @@ export default function PhantomWalletPanel() {
                 </div>
               ))}
               <div style={{gridColumn:"1/-1",background:C.panel,border:`1px solid rgba(201,168,76,.12)`,borderRadius:2,padding:"14px 12px"}}>
-                <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.1em",marginBottom:6}}>AI TRADE CONTEXT ACTIVE</div>
+                <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.1em",marginBottom:6}}>
+                  {evmAddress ? "HYPERLIQUID + AI CONTEXT ACTIVE" : "AI TRADE CONTEXT ACTIVE"}
+                </div>
                 <div style={{fontSize:12,color:C.muted2,lineHeight:1.7,fontFamily:SANS}}>
-                  Your wallet balance and token holdings feed into the AI Analyst. Ask "should I hold SOL?" for a context-aware answer.
+                  {evmAddress
+                    ? "Your Phantom wallet, Hyperliquid positions, and PnL feed into the AI Analyst for personalized trade signals."
+                    : "Your wallet balance and token holdings feed into the AI Analyst. Link Hyperliquid for full perp context."}
                 </div>
               </div>
+            </div>
+          )}
+
+          {walletTab === "hl account" && (
+            <div>
+              {!evmAddress ? (
+                <div style={{textAlign:"center",padding:"40px 20px"}}>
+                  <div style={{fontSize:14,color:C.muted2,marginBottom:14,fontFamily:SANS}}>No Hyperliquid account linked</div>
+                  <button data-testid="btn-link-hl-tab" onClick={() => setShowEvmModal(true)}
+                    style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"10px 24px",color:C.gold2,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>
+                    LINK EVM ADDRESS
+                  </button>
+                </div>
+              ) : hlLoading && !hlAccount ? (
+                <div style={{textAlign:"center",color:C.muted,fontSize:11,padding:40,fontFamily:MONO}}>Loading Hyperliquid account...</div>
+              ) : hlError ? (
+                <div style={{background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.22)`,borderRadius:2,padding:14,color:C.red,fontSize:11,fontFamily:MONO}}>
+                  {hlError}
+                </div>
+              ) : hlAccount ? (
+                <div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+                    <HLStatBox label="ACCOUNT VALUE" value={`$${hlAccount.accountValue.toFixed(2)}`} color={C.gold2} />
+                    <HLStatBox label="WITHDRAWABLE" value={`$${hlAccount.withdrawable.toFixed(2)}`} color={C.text} />
+                    <HLStatBox label="MARGIN USED" value={`$${hlAccount.totalMarginUsed.toFixed(2)}`} color={C.orange} />
+                    <HLStatBox label="UNREALIZED PNL" value={`${hlAccount.totalUnrealizedPnl >= 0 ? "+" : ""}$${hlAccount.totalUnrealizedPnl.toFixed(2)}`} color={hlAccount.totalUnrealizedPnl >= 0 ? C.green : C.red} />
+                  </div>
+                  <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,padding:"10px 14px",marginBottom:12}}>
+                    <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em",marginBottom:4}}>EVM ADDRESS</div>
+                    <div style={{fontFamily:MONO,fontSize:11,color:C.gold2,wordBreak:"break-all"}}>{evmAddress}</div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={() => setShowEvmModal(true)} style={{flex:1,padding:10,background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,color:C.muted2,fontSize:10,cursor:"pointer",fontFamily:MONO}}>
+                      CHANGE ADDRESS
+                    </button>
+                    <button onClick={() => { localStorage.removeItem("clvr_hl_evm"); setEvmAddress(""); setHlAccount(null); setHlOrders([]); }} style={{flex:1,padding:10,background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:2,color:C.red,fontSize:10,cursor:"pointer",fontFamily:MONO}}>
+                      UNLINK
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {walletTab === "positions" && (
+            <div>
+              {hlLoading && !hlAccount && (
+                <div style={{textAlign:"center",color:C.muted,fontSize:11,padding:40,fontFamily:MONO}}>Loading Hyperliquid positions...</div>
+              )}
+              {hlError && (
+                <div style={{background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.22)`,borderRadius:2,padding:14,color:C.red,fontSize:11,marginBottom:12,fontFamily:MONO}}>
+                  {hlError}
+                </div>
+              )}
+              {hlAccount && hlAccount.positions.length === 0 && (
+                <div style={{textAlign:"center",color:C.muted,fontSize:11,padding:"40px 0",border:`1px dashed ${C.border}`,borderRadius:2,fontFamily:MONO}}>
+                  No open perp positions
+                </div>
+              )}
+              {hlAccount?.positions.map(pos => (
+                <PositionRow key={pos.asset} pos={pos} markPrices={hlPrices} />
+              ))}
+              {!evmAddress && (
+                <div style={{textAlign:"center",color:C.muted,fontSize:11,padding:"50px 20px",lineHeight:1.8,fontFamily:SANS}}>
+                  Link your Hyperliquid account to see positions.
+                  <br />
+                  <button data-testid="btn-link-hl-positions" onClick={() => setShowEvmModal(true)}
+                    style={{marginTop:12,background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"8px 20px",color:C.gold2,fontSize:11,cursor:"pointer",fontFamily:MONO}}>
+                    LINK HL ACCOUNT
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {walletTab === "ai signal" && (
+            <div>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:"0.12em",marginBottom:8,fontFamily:MONO}}>SELECT ASSET</div>
+                <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                  {HL_ASSETS.map(a => (
+                    <button key={a} data-testid={`hl-asset-${a}`} onClick={() => { setSelectedAsset(a); setAiSignal(null); }} style={{
+                      background: selectedAsset === a ? "rgba(201,168,76,.12)" : C.panel,
+                      border: `1px solid ${selectedAsset === a ? "rgba(201,168,76,.35)" : C.border}`,
+                      borderRadius:2,padding:"5px 11px",
+                      color: selectedAsset === a ? C.gold2 : C.muted2,
+                      fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:MONO,
+                    }}>{a}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{
+                display:"flex",justifyContent:"space-between",alignItems:"center",
+                background:C.panel,border:`1px solid ${C.border}`,
+                borderRadius:2,padding:"9px 13px",marginBottom:12,
+              }}>
+                <div>
+                  <div style={{fontSize:8,color:C.muted,marginBottom:2,fontFamily:MONO,letterSpacing:"0.1em"}}>MARK PRICE</div>
+                  <div style={{fontSize:17,fontWeight:800,fontFamily:MONO,color:C.white}}>
+                    ${hlPrice > 0 ? hlPrice.toFixed(hlPrice > 100 ? 2 : 4) : "—"}
+                  </div>
+                </div>
+                {fundingRates[selectedAsset] && (
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:8,color:C.muted,marginBottom:2,fontFamily:MONO,letterSpacing:"0.1em"}}>FUNDING / 1H</div>
+                    <div style={{
+                      fontSize:13,fontWeight:700,fontFamily:MONO,
+                      color: fundingRates[selectedAsset].funding > 0 ? C.red : C.green,
+                    }}>
+                      {(fundingRates[selectedAsset].funding * 100).toFixed(4)}%
+                    </div>
+                    <div style={{fontSize:8,color:C.muted,fontFamily:MONO}}>
+                      {fundingRates[selectedAsset].funding > 0 ? "longs paying" : "shorts paying"}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{display:"flex",gap:10,marginBottom:12}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:8,color:C.muted,marginBottom:4,fontFamily:MONO,letterSpacing:"0.1em"}}>SIZE ({selectedAsset})</div>
+                  <input
+                    data-testid="input-hl-trade-size"
+                    type="number"
+                    value={tradeSize}
+                    onChange={e => setTradeSize(e.target.value)}
+                    placeholder="0.00"
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:8,color:C.muted,marginBottom:4,fontFamily:MONO,letterSpacing:"0.1em"}}>LEVERAGE</div>
+                  <select
+                    data-testid="select-hl-leverage"
+                    value={leverage}
+                    onChange={e => setLeverage(Number(e.target.value))}
+                    style={{...inputStyle,appearance:"auto"}}
+                  >
+                    {[1,2,3,5,10,20,50].map(l => <option key={l} value={l}>{l}x</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <button
+                data-testid="btn-get-ai-signal"
+                onClick={getAISignal}
+                disabled={aiLoading}
+                style={{
+                  width:"100%",padding:"13px",
+                  background: aiLoading ? "rgba(201,168,76,.08)" : "rgba(201,168,76,.12)",
+                  border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,
+                  color:C.gold2,
+                  fontSize:12,fontWeight:800,
+                  fontFamily:SERIF,fontStyle:"italic",
+                  cursor: aiLoading ? "not-allowed" : "pointer",
+                  letterSpacing:"0.05em",marginBottom:14,
+                }}
+              >
+                {aiLoading ? "Analyzing your positions..." : `Get AI Signal — ${selectedAsset}`}
+              </button>
+
+              {aiError && (
+                <div style={{background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.22)`,borderRadius:2,padding:13,color:C.red,fontSize:11,marginBottom:12,fontFamily:MONO}}>
+                  {aiError}
+                </div>
+              )}
+
+              {aiSignal && (
+                <div style={{
+                  background:C.panel,
+                  border:`1px solid ${signalColor}44`,
+                  borderRadius:2,padding:16,
+                }}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                    <div>
+                      <div style={{fontSize:9,color:C.muted,letterSpacing:"0.12em",marginBottom:4,fontFamily:MONO}}>AI SIGNAL</div>
+                      <div style={{fontSize:22,fontWeight:900,color:signalColor,letterSpacing:"0.05em",lineHeight:1,fontFamily:SERIF}}>
+                        {aiSignal.signal.replace("_", " ")}
+                      </div>
+                      <div style={{fontSize:9,color:C.muted,marginTop:4,fontFamily:MONO}}>{aiSignal.timeframe}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:9,color:C.muted,marginBottom:4,fontFamily:MONO,letterSpacing:"0.1em"}}>CONFIDENCE</div>
+                      <div style={{fontSize:28,fontWeight:900,color:signalColor,fontFamily:MONO}}>{aiSignal.confidence}%</div>
+                    </div>
+                  </div>
+
+                  <div style={{height:3,background:C.border,borderRadius:2,marginBottom:14,overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${aiSignal.confidence}%`,background:signalColor,borderRadius:2,transition:"width 1s ease"}} />
+                  </div>
+
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
+                    {[
+                      { l:"ENTRY", v:aiSignal.entry, c:C.text },
+                      { l:"STOP LOSS", v:aiSignal.stopLoss, c:C.red },
+                      { l:"TAKE PROFIT", v:aiSignal.takeProfit, c:C.green },
+                    ].map(({ l, v, c }) => (
+                      <div key={l} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:2,padding:8,textAlign:"center"}}>
+                        <div style={{fontSize:7,color:C.muted,marginBottom:3,letterSpacing:"0.1em",fontFamily:MONO}}>{l}</div>
+                        <div style={{fontSize:12,fontWeight:700,color:c,fontFamily:MONO}}>
+                          ${typeof v === "number" ? v.toFixed(v > 100 ? 2 : 4) : "—"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{background:C.bg,borderRadius:2,padding:"10px 12px",marginBottom:10,fontSize:11,color:C.muted2,lineHeight:1.65,fontFamily:SANS}}>
+                    {aiSignal.rationale}
+                  </div>
+
+                  {aiSignal.portfolioNote && (
+                    <div style={{background:"rgba(201,168,76,.05)",border:`1px solid rgba(201,168,76,.12)`,borderRadius:2,padding:"9px 12px",marginBottom:10,fontSize:10,color:C.gold2,lineHeight:1.6,fontFamily:SANS}}>
+                      {aiSignal.portfolioNote}
+                    </div>
+                  )}
+
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+                    {aiSignal.keyRisks?.map((r, i) => (
+                      <div key={i} style={{background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.18)`,borderRadius:2,padding:"3px 8px",fontSize:9,color:C.red,fontFamily:MONO}}>
+                        {r}
+                      </div>
+                    ))}
+                  </div>
+
+                  {pubkey ? (
+                    <div style={{display:"flex",gap:8}}>
+                      <button data-testid="btn-hl-long" onClick={() => setConfirmTrade("LONG")} style={{
+                        flex:1,padding:"11px",
+                        background:"rgba(0,199,135,.08)",
+                        border:`1px solid rgba(0,199,135,.3)`,
+                        borderRadius:2,color:C.green,
+                        fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.06em",
+                      }}>LONG {selectedAsset}</button>
+                      <button data-testid="btn-hl-short" onClick={() => setConfirmTrade("SHORT")} style={{
+                        flex:1,padding:"11px",
+                        background:"rgba(255,64,96,.08)",
+                        border:`1px solid rgba(255,64,96,.3)`,
+                        borderRadius:2,color:C.red,
+                        fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.06em",
+                      }}>SHORT {selectedAsset}</button>
+                    </div>
+                  ) : (
+                    <div style={{textAlign:"center",fontSize:10,color:C.muted,padding:10,border:`1px dashed ${C.border}`,borderRadius:2,fontFamily:MONO}}>
+                      Connect Phantom to execute trades
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {walletTab === "orders" && (
+            <div>
+              {!evmAddress ? (
+                <div style={{textAlign:"center",color:C.muted,fontSize:11,padding:"40px 0",fontFamily:SANS}}>
+                  Link your Hyperliquid account to see open orders.
+                </div>
+              ) : hlOrders.length === 0 ? (
+                <div style={{textAlign:"center",color:C.muted,fontSize:11,padding:"40px 0",border:`1px dashed ${C.border}`,borderRadius:2,fontFamily:MONO}}>
+                  No open orders
+                </div>
+              ) : hlOrders.map((o, i) => (
+                <div key={i} data-testid={`hl-order-${i}`} style={{
+                  background:C.panel,border:`1px solid ${C.border}`,
+                  borderRadius:2,padding:"11px 13px",marginBottom:8,
+                  display:"flex",justifyContent:"space-between",alignItems:"center",
+                }}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:700,fontFamily:MONO,color:C.text}}>
+                      {o.coin} <span style={{color: o.side === "B" ? C.green : C.red,fontSize:10}}>
+                        {o.side === "B" ? "BUY" : "SELL"}
+                      </span>
+                    </div>
+                    <div style={{fontSize:9,color:C.muted,fontFamily:MONO}}>Size: {o.sz}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:12,color:C.gold2,fontFamily:MONO}}>${parseFloat(o.limitPx || 0).toFixed(2)}</div>
+                    <div style={{fontSize:9,color:C.muted,fontFamily:MONO}}>limit</div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -535,8 +1282,82 @@ export default function PhantomWalletPanel() {
         </>
       )}
 
+      {confirmTrade && (
+        <div style={{
+          position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          zIndex:1000,padding:20,
+        }}>
+          <div style={{
+            background:C.panel,
+            border:`1px solid ${confirmTrade === "LONG" ? "rgba(0,199,135,.35)" : "rgba(255,64,96,.35)"}`,
+            borderRadius:2,padding:24,maxWidth:340,width:"100%",
+          }}>
+            <div style={{fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:8,fontFamily:MONO}}>CONFIRM ORDER</div>
+            <div style={{
+              fontSize:22,fontWeight:900,fontFamily:SERIF,
+              color: confirmTrade === "LONG" ? C.green : C.red,
+              marginBottom:16,
+            }}>
+              {confirmTrade === "LONG" ? "LONG" : "SHORT"} {selectedAsset}
+            </div>
+            <div style={{fontSize:11,color:C.muted2,lineHeight:2,marginBottom:16,fontFamily:SANS}}>
+              Size: <span style={{color:C.text}}>{tradeSize || "—"} {selectedAsset}</span><br />
+              Leverage: <span style={{color:C.text}}>{leverage}x</span><br />
+              Mark Price: <span style={{color:C.text}}>${hlPrice.toFixed(2)}</span><br />
+              Notional: <span style={{color:C.gold2}}>${tradeSize ? (parseFloat(tradeSize) * hlPrice * leverage).toFixed(2) : "—"}</span>
+            </div>
+            <div style={{fontSize:9,color:C.orange,marginBottom:16,lineHeight:1.5,fontFamily:MONO}}>
+              Simulated in this build. Wire Hyperliquid order API for live execution.
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button data-testid="btn-confirm-cancel" onClick={() => setConfirmTrade(null)} style={{
+                flex:1,padding:10,background:"transparent",
+                border:`1px solid ${C.border}`,borderRadius:2,
+                color:C.muted2,fontSize:11,cursor:"pointer",fontFamily:MONO,
+              }}>CANCEL</button>
+              <button data-testid="btn-confirm-execute" onClick={() => executeTrade(confirmTrade)} style={{
+                flex:2,padding:10,
+                background: confirmTrade === "LONG" ? "rgba(0,199,135,.15)" : "rgba(255,64,96,.15)",
+                border:`1px solid ${confirmTrade === "LONG" ? "rgba(0,199,135,.4)" : "rgba(255,64,96,.4)"}`,
+                borderRadius:2,
+                color: confirmTrade === "LONG" ? C.green : C.red,
+                fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.06em",
+              }}>SIGN & EXECUTE</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tradeStatus && (
+        <div style={{
+          position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",
+          background:C.panel,
+          border:`1px solid ${tradeStatus.status === "submitted" ? "rgba(0,199,135,.3)" : "rgba(255,64,96,.3)"}`,
+          borderRadius:2,padding:"13px 18px",zIndex:500,
+          minWidth:280,boxShadow:"0 8px 40px rgba(0,0,0,0.7)",
+        }}>
+          {tradeStatus.status === "signing" && (
+            <div style={{fontSize:11,color:C.gold2,fontFamily:MONO}}>Waiting for Phantom signature...</div>
+          )}
+          {tradeStatus.status === "submitted" && (
+            <div>
+              <div style={{fontSize:11,color:C.green,marginBottom:4,fontFamily:MONO}}>Order submitted</div>
+              <div style={{fontSize:9,color:C.muted,fontFamily:MONO}}>
+                {tradeStatus.direction} {tradeStatus.asset} @ ${tradeStatus.price} · {tradeStatus.leverage}x<br />
+                Tx: <span style={{color:C.gold2}}>{tradeStatus.txHash}</span>
+              </div>
+            </div>
+          )}
+          <button data-testid="btn-dismiss-trade" onClick={() => setTradeStatus(null)} style={{
+            marginTop:8,background:"transparent",border:"none",
+            color:C.muted,fontSize:9,cursor:"pointer",fontFamily:MONO,
+          }}>dismiss</button>
+        </div>
+      )}
+
       <div style={{marginTop:16,fontFamily:MONO,fontSize:8,color:C.muted,textAlign:"center",letterSpacing:"0.12em"}}>
-        PHANTOM WALLET + PERPS PNL . SOLANA MAINNET
+        PHANTOM WALLET + HYPERLIQUID + AI SIGNALS . SOLANA MAINNET
       </div>
     </div>
   );
