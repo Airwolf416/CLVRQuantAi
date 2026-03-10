@@ -48,12 +48,68 @@ const MOVE_WINDOW = 5 * 60 * 1000;
 const SIGNAL_COOLDOWN = 10 * 60 * 1000;
 const lastSignalTime: Record<string, number> = {};
 
+const whaleAlerts: { sym: string; ts: number; type: string; amount: string }[] = [];
+
 function recordPrice(sym: string, price: number) {
   if (!price || price <= 0) return;
   const now = Date.now();
   if (!priceHistory[sym]) priceHistory[sym] = [];
   priceHistory[sym].push({ price, ts: now });
   priceHistory[sym] = priceHistory[sym].filter(p => now - p.ts < 15 * 60 * 1000);
+}
+
+function calcATR(sym: string): number {
+  const hist = priceHistory[sym];
+  if (!hist || hist.length < 10) return 0;
+  const recent = hist.slice(-60);
+  const intervals: number[] = [];
+  for (let i = 1; i < recent.length; i++) {
+    intervals.push(Math.abs(recent[i].price - recent[i - 1].price));
+  }
+  if (intervals.length === 0) return 0;
+  return intervals.reduce((a, b) => a + b, 0) / intervals.length;
+}
+
+function calcMasterScore(sym: string, dir: string): { score: number; riskOn: number; reasoning: string[] } {
+  const hl = hlData[sym];
+  const hist = priceHistory[sym];
+  let score = 50;
+  const reasoning: string[] = [];
+  const funding = hl?.funding || 0;
+  const oiM = hl?.oi ? Math.round(hl.oi / 1e6) : 0;
+  const fundingAligned = (dir === "LONG" && funding < 0) || (dir === "SHORT" && funding > 0);
+  if (fundingAligned) { score += 12; reasoning.push("Funding rate aligned with direction (+12)"); }
+  else if (Math.abs(funding) > 0.03) { score -= 8; reasoning.push("Funding rate opposing direction (-8)"); }
+  else reasoning.push("Funding neutral (0)");
+  if (oiM > 500) { score += 10; reasoning.push(`High OI $${oiM}M — institutional interest (+10)`); }
+  else if (oiM > 100) { score += 5; reasoning.push(`Moderate OI $${oiM}M (+5)`); }
+  if (hist && hist.length >= 10) {
+    const prices = hist.slice(-20).map(p => p.price);
+    const min = Math.min(...prices), max = Math.max(...prices);
+    const range = max - min;
+    const current = prices[prices.length - 1];
+    const rsiPos = range > 0 ? (current - min) / range : 0.5;
+    if (dir === "LONG" && rsiPos < 0.3) { score += 15; reasoning.push("RSI oversold zone — contrarian bullish (+15)"); }
+    else if (dir === "SHORT" && rsiPos > 0.7) { score += 15; reasoning.push("RSI overbought zone — contrarian bearish (+15)"); }
+    else if (dir === "LONG" && rsiPos > 0.8) { score -= 5; reasoning.push("RSI extended — late entry risk (-5)"); }
+    else if (dir === "SHORT" && rsiPos < 0.2) { score -= 5; reasoning.push("RSI compressed — late entry risk (-5)"); }
+  }
+  const recentWhale = whaleAlerts.filter(w => w.sym === sym && Date.now() - w.ts < 300000);
+  if (recentWhale.length > 0) { score += 8; reasoning.push(`Whale activity detected within 5min — smart money alignment (+8)`); }
+  let riskOn = 50;
+  const allSyms = Object.keys(priceHistory);
+  let upCount = 0, totalCount = 0;
+  for (const s of allSyms) {
+    const h = priceHistory[s];
+    if (!h || h.length < 5) continue;
+    totalCount++;
+    if (h[h.length - 1].price > h[Math.max(0, h.length - 5)].price) upCount++;
+  }
+  if (totalCount > 0) riskOn = Math.round((upCount / totalCount) * 100);
+  if (riskOn > 60) { score += 5; reasoning.push(`Global Risk-On score ${riskOn}% (+5)`); }
+  else if (riskOn < 40) { score -= 5; reasoning.push(`Global Risk-Off score ${riskOn}% (-5)`); }
+  score = Math.max(5, Math.min(98, score));
+  return { score, riskOn, reasoning };
 }
 
 function detectMoves() {
@@ -80,6 +136,13 @@ function detectMoves() {
     const fundingStr = hl?.funding ? ` Funding: ${hl.funding >= 0 ? "+" : ""}${(hl.funding).toFixed(4)}%/8h.` : "";
     const oiStr = hl?.oi ? ` OI: $${(hl.oi / 1e6).toFixed(0)}M.` : "";
 
+    const atr = calcATR(sym);
+    const entry = current.price;
+    const target = dir === "LONG" ? +(entry + atr * 3).toFixed(6) : +(entry - atr * 3).toFixed(6);
+    const stopLoss = dir === "LONG" ? +(entry - atr * 1.5).toFixed(6) : +(entry + atr * 1.5).toFixed(6);
+
+    const master = calcMasterScore(sym, dir);
+
     const desc = pctMove > 0
       ? `${sym} pumped +${absPct}% in ${elapsed}min. Price moved from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}`
       : `${sym} dumped ${absPct}% in ${elapsed}min. Price dropped from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}`;
@@ -90,6 +153,8 @@ function detectMoves() {
       { l: Math.abs(pctMove) >= 3 ? "MAJOR MOVE" : "BREAKOUT", c: Math.abs(pctMove) >= 3 ? "red" : "orange" },
     ];
     if (hl?.funding && Math.abs(hl.funding) > 0.01) tags.push({ l: hl.funding > 0 ? "HIGH FUND" : "NEG FUND", c: hl.funding > 0 ? "orange" : "green" });
+    const recentWhale = whaleAlerts.filter(w => w.sym === sym && now - w.ts < 300000);
+    if (recentWhale.length > 0) tags.push({ l: "WHALE ALIGNED", c: "cyan" });
 
     const signal = {
       id: signalIdCounter++,
@@ -104,12 +169,20 @@ function detectMoves() {
       ts: now,
       real: true,
       pctMove: +pctMove.toFixed(2),
+      entry,
+      target,
+      stopLoss,
+      atr: +atr.toFixed(6),
+      masterScore: master.score,
+      riskOn: master.riskOn,
+      reasoning: master.reasoning,
+      whaleAligned: recentWhale.length > 0,
     };
 
     liveSignals.unshift(signal);
     if (liveSignals.length > 50) liveSignals.length = 50;
     lastSignalTime[sym] = now;
-    console.log(`[SIGNAL] ${sym} ${dir} ${absPct}% in ${elapsed}min — price $${fmt2(current.price, sym)}`);
+    console.log(`[SIGNAL] ${sym} ${dir} ${absPct}% in ${elapsed}min — price $${fmt2(current.price, sym)} | MasterScore: ${master.score}`);
   }
 }
 
@@ -601,11 +674,27 @@ export async function registerRoutes(
   app.get("/api/signals", (_req, res) => {
     const since = parseInt(_req.query.since as string) || 0;
     const filtered = since ? liveSignals.filter(s => s.ts > since) : liveSignals;
+    let globalRiskOn = 50;
+    const allSyms = Object.keys(priceHistory);
+    let upCount = 0, totalCount = 0;
+    for (const s of allSyms) {
+      const h = priceHistory[s];
+      if (!h || h.length < 5) continue;
+      totalCount++;
+      if (h[h.length - 1].price > h[Math.max(0, h.length - 5)].price) upCount++;
+    }
+    if (totalCount > 0) globalRiskOn = Math.round((upCount / totalCount) * 100);
     res.json({
       signals: filtered,
       tracking: Object.keys(priceHistory).length,
       historyDepth: Object.values(priceHistory).reduce((sum, h) => sum + h.length, 0),
+      globalRiskOn,
+      whaleAlerts: whaleAlerts.filter(w => Date.now() - w.ts < 600000),
     });
+  });
+
+  app.get("/api/whales", (_req, res) => {
+    res.json({ whales: whaleAlerts.filter(w => Date.now() - w.ts < 600000) });
   });
 
   app.get("/api/news", async (_req, res) => {
@@ -674,6 +763,18 @@ export async function registerRoutes(
               const pos = (votes.positive || 0) + (votes.important || 0) + (votes.liked || 0);
               const neg = (votes.negative || 0) + (votes.disliked || 0) + (votes.toxic || 0);
               const sentiment = pos + neg > 0 ? (pos - neg) / (pos + neg) : 0;
+              const titleLower = (p.title || "").toLowerCase();
+              const isWhale = titleLower.includes("whale") || titleLower.includes("transferred") || titleLower.includes("moved") && (titleLower.includes("million") || titleLower.includes("$"));
+              const newsAssets = currencies.length > 0 ? currencies : matchAssets(p.title);
+              if (isWhale && newsAssets.length > 0) {
+                for (const a of newsAssets) {
+                  if (CRYPTO_SYMS.includes(a) && !whaleAlerts.find(w => w.sym === a && Date.now() - w.ts < 300000)) {
+                    whaleAlerts.push({ sym: a, ts: Date.now(), type: "transfer", amount: p.title.match(/\$[\d,.]+[MBK]?/)?.[0] || "large" });
+                    if (whaleAlerts.length > 100) whaleAlerts.splice(0, whaleAlerts.length - 50);
+                    console.log(`[WHALE] ${a} whale activity detected: ${p.title.substring(0, 80)}`);
+                  }
+                }
+              }
               results.push({
                 id: "cp-" + p.id,
                 source: p.source?.title || "CryptoPanic",
@@ -683,7 +784,7 @@ export async function registerRoutes(
                 body: "",
                 sentiment,
                 score: Math.min(10, Math.max(1, pos + 3)),
-                assets: currencies.length > 0 ? currencies : matchAssets(p.title),
+                assets: newsAssets,
                 categories: [p.kind || "news"],
                 ts: new Date(p.published_at || Date.now()).getTime(),
                 url: p.url || "#",

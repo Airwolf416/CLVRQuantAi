@@ -153,6 +153,98 @@ function sendPush(title,body,tag="clvrquant"){
   if(typeof Notification!=="undefined"&&Notification.permission==="granted"){try{new Notification(title,{body,tag});}catch(e){}}
 }
 
+// ─── NOTIFICATION MANAGER (Anti-Duplication) ─────────────
+function createNotifHash(ts,asset,type){return`${Math.floor(ts/1000)}_${asset}_${type}`;}
+
+// ─── FRENCH i18n LABELS ──────────────────────────────────
+const i18n={stopLoss:"Arrêt des Pertes",target:"Objectif",entry:"Entrée",approve:"Approuver",cancel:"Annuler",riskTooHigh:"Risque Trop Élevé",capitalProtection:"Protection du Capital",whaleAligned:"Alignement Smart Money",masterScore:"Score Maître",tradeNow:"Trader Maintenant"};
+
+// ─── BULL PROBABILITY / STRENGTH METER ────────────────────
+function bullProbability({priceMoveAbs,fundingRate,oiM,volumeMultiplier,dir,masterScore}){
+  let prob=50;
+  prob+=Math.min(priceMoveAbs*3,15);
+  const fundingAligned=(dir==="LONG"&&fundingRate<0)||(dir==="SHORT"&&fundingRate>0);
+  if(fundingAligned)prob+=10;else if(Math.abs(fundingRate)>0.03)prob-=8;
+  if(oiM>500)prob+=8;else if(oiM>100)prob+=4;
+  if(volumeMultiplier>2)prob+=7;else if(volumeMultiplier>1.5)prob+=3;
+  if(masterScore)prob=(prob+masterScore)/2;
+  return Math.max(5,Math.min(98,Math.round(prob)));
+}
+
+// ─── STRENGTH METER COMPONENT ─────────────────────────────
+function StrengthMeter({value,C:_C}){
+  const pct=Math.max(0,Math.min(100,value));
+  const col=pct>=75?_C.green:pct>=55?_C.orange:_C.red;
+  return(
+    <div data-testid="strength-meter" style={{width:"100%",height:6,background:"rgba(255,255,255,.06)",borderRadius:1,overflow:"hidden",position:"relative"}}>
+      <div style={{height:"100%",width:`${pct}%`,background:`linear-gradient(90deg,${col}88,${col})`,borderRadius:1,transition:"width .8s ease"}}/>
+      <div style={{position:"absolute",right:4,top:-12,fontFamily:MONO,fontSize:8,color:col,fontWeight:700}}>{pct}%</div>
+    </div>
+  );
+}
+
+// ─── TRADE CONFIRMATION MODAL ─────────────────────────────
+function TradeConfirmationModal({sig,currentPrice,masterScore,riskOn,onApprove,onCancel,C:_C}){
+  if(!sig)return null;
+  const isLong=sig.dir==="LONG";
+  const dirColor=isLong?_C.green:_C.red;
+  const capitalProtected=masterScore<35;
+  const slippage=currentPrice?(currentPrice*0.001).toFixed(sig.token==="BTC"?0:sig.token==="ETH"?1:4):"—";
+  return(
+    <div data-testid="trade-modal" style={{position:"fixed",inset:0,zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={onCancel}>
+      <div style={{position:"absolute",inset:0,background:"rgba(5,7,9,.75)",backdropFilter:"blur(20px)"}}/>
+      <div data-testid="trade-modal-content" onClick={e=>e.stopPropagation()} style={{position:"relative",background:"linear-gradient(135deg,rgba(12,18,32,.95),rgba(8,13,24,.98))",border:`1px solid ${_C.border2}`,borderRadius:6,maxWidth:400,width:"100%",overflow:"hidden",boxShadow:`0 24px 80px rgba(0,0,0,.6), 0 0 1px ${_C.gold}44`}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,transparent,${_C.gold},transparent)`}}/>
+        <div style={{padding:"20px 18px"}}>
+          <div style={{fontFamily:MONO,fontSize:8,color:_C.gold,letterSpacing:"0.25em",marginBottom:8}}>TRADE CONFIRMATION</div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+            <div style={{width:36,height:36,background:isLong?"rgba(0,199,135,.1)":"rgba(255,64,96,.1)",border:`1px solid ${dirColor}44`,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:MONO,fontWeight:900,fontSize:18,color:dirColor}}>{isLong?"+":"−"}</div>
+            <div>
+              <div style={{fontFamily:MONO,fontSize:18,fontWeight:800,color:_C.white}}>{sig.token}</div>
+              <div style={{fontFamily:MONO,fontSize:10,color:dirColor,letterSpacing:"0.1em"}}>{sig.dir} · {sig.lev||"3x"}</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+            {[
+              {l:i18n.entry,v:currentPrice?fmt(currentPrice,sig.token):"—",c:_C.white},
+              {l:i18n.target+" (3× ATR)",v:sig.target?fmt(sig.target,sig.token):"—",c:_C.green},
+              {l:i18n.stopLoss+" (1.5× ATR)",v:sig.stopLoss?fmt(sig.stopLoss,sig.token):"—",c:_C.red},
+              {l:"Slippage Est.",v:slippage!=="—"?"~$"+slippage:"—",c:_C.muted2},
+            ].map(({l,v,c})=>(
+              <div key={l} style={{background:"rgba(0,0,0,.3)",border:`1px solid ${_C.border}`,borderRadius:2,padding:"8px 10px"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:_C.muted,letterSpacing:"0.12em",marginBottom:3}}>{l}</div>
+                <div style={{fontFamily:MONO,fontSize:13,fontWeight:700,color:c}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${_C.border}`,borderRadius:2,padding:"10px 12px",marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <span style={{fontFamily:MONO,fontSize:8,color:_C.gold,letterSpacing:"0.12em"}}>{i18n.capitalProtection}</span>
+              <span style={{fontFamily:MONO,fontSize:10,color:capitalProtected?_C.red:_C.green,fontWeight:700}}>{capitalProtected?"⚠ "+i18n.riskTooHigh:"✓ SAFE"}</span>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div><span style={{fontFamily:MONO,fontSize:8,color:_C.muted}}>{i18n.masterScore}: </span><span style={{fontFamily:MONO,fontSize:12,fontWeight:700,color:masterScore>=60?_C.green:masterScore>=40?_C.orange:_C.red}}>{masterScore||"—"}</span></div>
+              <div><span style={{fontFamily:MONO,fontSize:8,color:_C.muted}}>Risk-On: </span><span style={{fontFamily:MONO,fontSize:12,fontWeight:700,color:riskOn>=60?_C.green:riskOn>=40?_C.orange:_C.red}}>{riskOn||50}%</span></div>
+            </div>
+          </div>
+          {capitalProtected&&<div className="capital-protection-pulse" style={{padding:"8px 12px",borderRadius:2,marginBottom:14,textAlign:"center"}}>
+            <span style={{fontFamily:MONO,fontSize:9,color:"#fff",fontWeight:700,letterSpacing:"0.1em"}}>{i18n.riskTooHigh} — {i18n.masterScore} &lt; 35%</span>
+          </div>}
+          <div style={{display:"flex",gap:8}}>
+            <button data-testid="trade-approve" onClick={onApprove} disabled={capitalProtected}
+              title={capitalProtected?i18n.riskTooHigh:""}
+              style={{flex:1,padding:"12px",background:capitalProtected?"rgba(74,93,128,.1)":"rgba(201,168,76,.1)",border:`1px solid ${capitalProtected?_C.muted+"44":_C.gold+"55"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,color:capitalProtected?_C.muted:_C.gold2,cursor:capitalProtected?"not-allowed":"pointer",opacity:capitalProtected?.5:1}}>
+              {capitalProtected?i18n.riskTooHigh:"Approve in Wallet →"}
+            </button>
+            <button data-testid="trade-cancel" onClick={onCancel}
+              style={{padding:"12px 20px",background:_C.bg,border:`1px solid ${_C.border}`,borderRadius:2,fontFamily:MONO,fontSize:10,color:_C.muted2,cursor:"pointer",letterSpacing:"0.08em"}}>{i18n.cancel}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── ALERT BANNER ────────────────────────────────────────
 function AlertBanner({alerts,onDismiss,C:_C}){
   if(!alerts||alerts.length===0)return null;
@@ -329,7 +421,7 @@ function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched}){
 }
 
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
-function SignalCard({sig,marketData,onShare,onAiAnalyze}){
+function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts}){
   const[expanded,setExpanded]=useState(false);
   const isLong=sig.dir==="LONG";
   const dirColor=isLong?C.green:C.red;
@@ -345,8 +437,11 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze}){
   const convColor=qScore>=75?C.green:qScore>=55?C.orange:C.red;
   const moveType=priceMoveAbs>=3?"MAJOR MOVE":priceMoveAbs>=2?"BREAKOUT":"MOMENTUM";
   const minutesAgo=sig.ts?Math.floor((Date.now()-sig.ts)/60000):0;
+  const strength=bullProbability({priceMoveAbs,fundingRate,oiM,volumeMultiplier,dir:sig.dir,masterScore:sig.masterScore});
+  const whaleMatch=wAlerts&&wAlerts.some(w=>w.sym===sig.token&&Math.abs(w.ts-sig.ts)<300000);
+  const isHighConf=qScore>=75;
   return(
-    <div data-testid={`signal-card-${sig.id}`} style={{background:C.panel,border:`1px solid ${qScore>=75?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
+    <div data-testid={`signal-card-${sig.id}`} className={whaleMatch?"high-confidence-glow":""} style={{background:C.panel,border:`1px solid ${whaleMatch?C.gold+"88":isHighConf?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
       <div style={{padding:"14px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:28,height:28,background:dirBg,border:`1px solid ${dirColor}44`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:900,fontFamily:MONO,color:dirColor,flexShrink:0}}>
@@ -358,10 +453,28 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze}){
               <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:dirBg,color:dirColor,border:`1px solid ${dirColor}44`,fontFamily:MONO,letterSpacing:"0.1em"}}>{sig.dir}</span>
               {sig.real&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,199,135,.06)",color:C.green,border:"1px solid rgba(0,199,135,.25)",fontFamily:MONO,letterSpacing:"0.1em",animation:"pulse 2s infinite"}}>LIVE</span>}
               <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.06)",color:C.gold,border:"1px solid rgba(201,168,76,.25)",fontFamily:MONO,letterSpacing:"0.1em"}}>ALPHA-DETECT</span>
+              {whaleMatch&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,212,255,.08)",color:C.cyan,border:"1px solid rgba(0,212,255,.3)",fontFamily:MONO,letterSpacing:"0.08em",animation:"gold-pulse 2s infinite"}}>🐋 {i18n.whaleAligned}</span>}
               <span style={{fontFamily:MONO,fontSize:9,color:sig.pctMove>0?C.green:C.red,fontWeight:700}}>{sig.pctMove>0?"+":""}{sig.pctMove}%</span>
               <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
             </div>
             <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,marginTop:5,lineHeight:1.55}}>{sig.desc}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:8,marginBottom:6}}>
+              <div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.1em"}}>{i18n.entry}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):fmt(md.price,sig.token)}</div>
+              </div>
+              <div style={{background:"rgba(0,199,135,.04)",border:`1px solid rgba(0,199,135,.2)`,borderRadius:2,padding:"5px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.green+"88",letterSpacing:"0.1em"}}>{i18n.target} 3×ATR</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green}}>{sig.target?fmt(sig.target,sig.token):"—"}</div>
+              </div>
+              <div style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:2,padding:"5px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.red+"88",letterSpacing:"0.1em"}}>{i18n.stopLoss} 1.5×ATR</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div>
+              </div>
+            </div>
+            <div style={{marginTop:4,marginBottom:6,paddingRight:56}}>
+              <StrengthMeter value={strength} C={C}/>
+            </div>
             <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap",alignItems:"center"}}>
               {sig.tags.map((tg,j)=><Badge key={j} label={tg.l} color={tg.c}/>)}
               <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.purple,fontFamily:MONO,letterSpacing:"0.08em"}}>{moveType}</span>
@@ -374,6 +487,11 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze}){
         </div>
       </div>
       {expanded&&<div style={{padding:"0 14px 14px"}}>
+        {sig.reasoning&&sig.reasoning.length>0&&<div style={{background:"rgba(201,168,76,.04)",border:`1px solid ${C.gold}22`,borderRadius:2,padding:"10px 12px",marginBottom:10}}>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:6}}>AI TRADE REASONING</div>
+          {sig.reasoning.map((r,i)=><div key={i} style={{fontFamily:MONO,fontSize:10,color:C.muted2,lineHeight:1.7,display:"flex",gap:6,marginBottom:2}}><span style={{color:C.gold,flexShrink:0}}>•</span><span>{r}</span></div>)}
+          {sig.masterScore&&<div style={{marginTop:6,fontFamily:MONO,fontSize:9,color:sig.masterScore>=60?C.green:sig.masterScore>=40?C.orange:C.red,fontWeight:700}}>{i18n.masterScore}: {sig.masterScore}/100 · Risk-On: {sig.riskOn||50}%</div>}
+        </div>}
         <FactorBreakdown factors={factors} score={qScore} C={C}/>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:10}}>
           {[
@@ -388,6 +506,8 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze}){
           ))}
         </div>
         <div style={{display:"flex",gap:8,marginTop:10}}>
+          <button data-testid={`trade-now-${sig.id}`} onClick={e=>{e.stopPropagation();onTrade&&onTrade(sig);}}
+            style={{flex:1,padding:"8px 0",background:"rgba(0,199,135,.08)",border:"1px solid rgba(0,199,135,.3)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.green,cursor:"pointer"}}>{i18n.tradeNow} →</button>
           <button data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();onAiAnalyze(sig);}}
             style={{flex:1,padding:"8px 0",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.25)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer"}}>Analyze with AI</button>
           <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
@@ -523,6 +643,10 @@ function Dashboard({user,setUser}){
   const [priceTab,setPriceTab]=useState("crypto");
   const [sigSubTab,setSigSubTab]=useState("all");
   const [sigSort,setSigSort]=useState("recent");
+  const [highConfOnly,setHighConfOnly]=useState(false);
+  const [tradeModalSig,setTradeModalSig]=useState(null);
+  const [whaleAlerts,setWhaleAlerts]=useState([]);
+  const notifHashesRef=useRef(new Set());
   const [macroFilter,setMacroFilter]=useState("ALL");
 
   const [cryptoSubTab,setCryptoSubTab]=useState("spot");
@@ -742,6 +866,7 @@ function Dashboard({user,setUser}){
     const doSigFetch=async()=>{
       try{
         const data=await fetchLiveSignals(lastSigTs.current);
+        if(data.whaleAlerts)setWhaleAlerts(data.whaleAlerts);
         if(data.signals&&data.signals.length>0){
           const newSigs=data.signals.filter(s=>!seenSigIds.current.has(s.id));
           if(newSigs.length>0){
@@ -750,8 +875,15 @@ function Dashboard({user,setUser}){
             setSigCount(c=>c+newSigs.length);
             setFlashSigId(newSigs[0].id);
             setTimeout(()=>setFlashSigId(null),3000);
-            try{if(typeof Notification!=="undefined"&&Notification.permission==="granted"){const s=newSigs[0];new Notification(`CLVRQuant · ${s.token} ${s.dir}`,{body:s.desc});}}catch(e){}
-            addAlert({type:"price",title:`CLVRQuant · ${newSigs[0].token} ${newSigs[0].dir}`,body:newSigs[0].desc,assets:[newSigs[0].token],id:`sig-${newSigs[0].id}`});
+            for(const s0 of newSigs){
+              const nHash=createNotifHash(s0.ts,s0.token,s0.dir);
+              if(!notifHashesRef.current.has(nHash)){
+                notifHashesRef.current.add(nHash);
+                if(notifHashesRef.current.size>50){const arr=[...notifHashesRef.current];notifHashesRef.current=new Set(arr.slice(-50));}
+                try{if(typeof Notification!=="undefined"&&Notification.permission==="granted"){new Notification(`CLVRQuant · ${s0.token} ${s0.dir}`,{body:s0.desc});}}catch(e){}
+                addAlert({type:"price",title:`CLVRQuant · ${s0.token} ${s0.dir}`,body:s0.desc,assets:[s0.token],id:`sig-${s0.id}`});
+              }
+            }
           }
           lastSigTs.current=Math.max(...data.signals.map(s=>s.ts));
         }
@@ -1120,6 +1252,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const onShareSig=useCallback((sig)=>shareSignal(sig),[shareSignal]);
   const onAiSig=useCallback((sig)=>{setAiInput(`Analyze: ${sig.token} ${sig.dir} — ${sig.desc}`);setTab("ai");},[]);
   const onAiChange=useCallback((v)=>setAiInput(v),[]);
+  const openTradeModal=useCallback((sig)=>setTradeModalSig(sig),[]);
 
   const hlLive=hlStatus==="live",fhLive=fhStatus==="live";
   const allSignals=[...liveSignals].sort((a,b)=>(b.ts||0)-(a.ts||0));
@@ -1256,10 +1389,15 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         @keyframes slideUp{from{transform:translateX(-50%) translateY(16px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
         @keyframes slideDown{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+        @keyframes gold-pulse{0%,100%{box-shadow:0 0 4px rgba(245,158,11,.2)}50%{box-shadow:0 0 16px rgba(245,158,11,.4),0 0 32px rgba(245,158,11,.15)}}
+        .high-confidence-glow{border:1px solid #F59E0B !important;animation:gold-pulse 2s infinite;}
+        .capital-protection-pulse{background:linear-gradient(90deg,rgba(255,45,85,.15),rgba(245,158,11,.15));animation:cap-pulse 1.5s infinite;}
+        @keyframes cap-pulse{0%,100%{opacity:.7}50%{opacity:1}}
       `}</style>
 
       {activeAlerts.length>0&&<div style={{animation:"slideDown .3s ease"}}><AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} C={C}/></div>}
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
+      {tradeModalSig&&<TradeConfirmationModal sig={tradeModalSig} currentPrice={(cryptoPrices[tradeModalSig.token]||{}).price} masterScore={tradeModalSig.masterScore||50} riskOn={tradeModalSig.riskOn||50} onApprove={()=>{setToast(`Trade approved: ${tradeModalSig.token} ${tradeModalSig.dir}`);setTradeModalSig(null);}} onCancel={()=>setTradeModalSig(null)} C={C}/>}
 
       {showUpgrade&&<div style={{position:"fixed",inset:0,zIndex:300,background:"rgba(0,0,0,.85)",backdropFilter:"blur(12px)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowUpgrade(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,maxWidth:420,width:"100%",maxHeight:"90vh",overflowY:"auto",position:"relative"}}>
@@ -1754,6 +1892,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                 <button key={s.k} data-testid={`sort-${s.k}`} onClick={()=>setSigSort(s.k)} style={{padding:"5px 12px",borderRadius:2,border:`1px solid ${sigSort===s.k?C.gold:C.border}`,background:sigSort===s.k?"rgba(201,168,76,.08)":C.panel,color:sigSort===s.k?C.gold:C.muted,cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.08em"}}>{s.l}</button>
               ))}
             </div>
+            <button data-testid="filter-high-conf" onClick={()=>setHighConfOnly(v=>!v)} style={{padding:"5px 12px",borderRadius:2,border:`1px solid ${highConfOnly?C.green:C.border}`,background:highConfOnly?"rgba(0,199,135,.08)":C.panel,color:highConfOnly?C.green:C.muted,cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.08em"}}>{highConfOnly?"✓ ":""}High Conf &gt;75%</button>
             <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.08em"}}>tracking {sigTracking} tokens · 0.8% threshold · 5min window</div>
           </div>
 
@@ -1767,20 +1906,24 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
           {/* Signal feed */}
           {(()=>{
-            const sorted=sigSort==="score"?[...filtSigs].sort((a,b)=>{
+            let pool=highConfOnly?filtSigs.filter(s=>{
+              const sc=scoreSignal({priceMoveAbs:Math.abs(s.pctMove||0),direction:s.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[s.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[s.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
+              return sc>=75;
+            }):filtSigs;
+            const sorted=sigSort==="score"?[...pool].sort((a,b)=>{
               const scoreA=scoreSignal({priceMoveAbs:Math.abs(a.pctMove||0),direction:a.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[a.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[a.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
               const scoreB=scoreSignal({priceMoveAbs:Math.abs(b.pctMove||0),direction:b.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[b.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[b.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
               return scoreB-scoreA;
-            }):filtSigs;
+            }):pool;
             return sorted.length===0?<div style={{padding:32,textAlign:"center"}}>
               <div style={{color:C.muted,fontFamily:MONO,fontSize:10,marginBottom:8}}>
-                {liveSignals.length===0?"Monitoring markets for significant moves...":"No signals for this filter."}
+                {liveSignals.length===0?"Monitoring markets for significant moves...":(highConfOnly?"No high-confidence signals currently.":"No signals for this filter.")}
               </div>
               {liveSignals.length===0&&<div style={{color:C.muted2,fontFamily:MONO,fontSize:8,lineHeight:"1.6"}}>
                 Signals appear when any tracked token moves &gt;0.8% within a 5-minute window.<br/>
                 Tracking {sigTracking} tokens in real-time. Detector is armed.
               </div>}
-            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig}/>);
+            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts}/>);
           })()}
         </>}
 
@@ -1904,6 +2047,29 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                 {aiLoading?"QuantBrain Analyzing...":`Get ${aiTimeframe==="today"?"Today's":aiTimeframe==="midterm"?"Mid-Term":"Long-Term"} Trade Ideas ✦`}
               </button>
               {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>}
+              {liveSignals.length>0&&<div style={{marginTop:16}}>
+                <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.18em",marginBottom:10}}>AI TRADE REASONINGS · {i18n.masterScore}</div>
+                {liveSignals.filter(s=>s.reasoning&&s.reasoning.length>0).slice(0,5).map(sig=>(
+                  <div key={sig.id} data-testid={`ai-reasoning-${sig.id}`} style={{background:"rgba(201,168,76,.03)",border:`1px solid ${C.gold}18`,borderRadius:2,padding:"10px 12px",marginBottom:8}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:C.white}}>{sig.token}</span>
+                        <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:sig.dir==="LONG"?"rgba(0,199,135,.06)":"rgba(255,64,96,.06)",color:sig.dir==="LONG"?C.green:C.red,border:`1px solid ${sig.dir==="LONG"?"rgba(0,199,135,.25)":"rgba(255,64,96,.25)"}`,fontFamily:MONO}}>{sig.dir}</span>
+                        {sig.masterScore&&<span style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:sig.masterScore>=60?C.green:sig.masterScore>=40?C.orange:C.red}}>{i18n.masterScore}: {sig.masterScore}</span>}
+                        {sig.whaleAligned&&<span style={{fontSize:8,padding:"2px 6px",borderRadius:2,background:"rgba(0,212,255,.08)",color:C.cyan,border:"1px solid rgba(0,212,255,.2)",fontFamily:MONO}}>🐋</span>}
+                      </div>
+                      <button data-testid={`ai-trade-${sig.id}`} onClick={()=>openTradeModal(sig)} style={{padding:"5px 12px",borderRadius:2,background:"rgba(0,199,135,.08)",border:"1px solid rgba(0,199,135,.3)",fontFamily:MONO,fontSize:9,color:C.green,cursor:"pointer",letterSpacing:"0.06em"}}>{i18n.tradeNow}</button>
+                    </div>
+                    {sig.reasoning.map((r,i)=><div key={i} style={{fontFamily:MONO,fontSize:9,color:C.muted2,lineHeight:1.7,display:"flex",gap:5}}><span style={{color:C.gold,flexShrink:0}}>▸</span><span>{r}</span></div>)}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:8}}>
+                      <div style={{textAlign:"center",padding:"4px 0"}}><div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{i18n.entry}</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):"—"}</div></div>
+                      <div style={{textAlign:"center",padding:"4px 0"}}><div style={{fontFamily:MONO,fontSize:7,color:C.green+"88"}}>{i18n.target}</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.green}}>{sig.target?fmt(sig.target,sig.token):"—"}</div></div>
+                      <div style={{textAlign:"center",padding:"4px 0"}}><div style={{fontFamily:MONO,fontSize:7,color:C.red+"88"}}>{i18n.stopLoss}</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div></div>
+                    </div>
+                  </div>
+                ))}
+                {liveSignals.filter(s=>s.reasoning&&s.reasoning.length>0).length===0&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,padding:12,textAlign:"center"}}>Waiting for signals with AI reasoning data...</div>}
+              </div>}
             </div>
           </div>
           </ProGate>
