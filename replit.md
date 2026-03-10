@@ -31,10 +31,10 @@ The frontend is a React application split into `App` (auth gate) and `Dashboard`
 -   **Markets**: Displays real-time data for Crypto (spot via Binance WebSocket ~16ms, perp via Hyperliquid), Equities, Metals, and Forex. Bloomberg-style tick animations: prices flash green/red with ↑↓ arrows on every tick direction change. Market status badges: Equities show LIVE/CLOSED based on NYSE hours (9:30am–4pm ET, Mon–Fri), Forex shows LIVE/CLOSED based on forex hours (Sun 5pm–Fri 5pm ET).
 -   **Macro**: Enhanced macro calendar with live ForexFactory data (60s refresh). Features expandable EventCards with actual/forecast/previous values, BEAT/MISS surprise indicators, market impact analysis (NFP, GDP, CPI, retail sales, wages), QuantBrain AI analysis per event, region filters (US/EU/UK/CA/JP/AU), impact filters (HIGH/MED/LOW), Today/Week toggle, Next Release banner, and Add to Calendar. Central bank schedule (MACRO_2026) provides fallback for FOMC/ECB/BOJ/BOC/BOE/RBA dates.
 -   **Brief**: Presents an AI-generated daily market commentary with asset analysis and a subscription form.
--   **Signals**: Offers quantifiable trading signals with filtering options.
+-   **Signals**: QuantBrain-scored trading signals with Entry/Target(3×ATR)/StopLoss(1.5×ATR) levels, Strength Meter (bullProbability), High Confidence filter (>75%), whale-aligned glow animation (gold-pulse CSS), MasterScore/riskOn display, AI Trade Reasonings, and "Trade Now" button opening glassmorphism TradeConfirmationModal with capital protection (disabled at MasterScore<35). NotificationManager prevents duplicate alerts via hash-based deduplication. French i18n labels: Entrée, Objectif, Arrêt des Pertes.
 -   **Alerts**: Allows users to set custom price and funding alerts with browser notifications.
 -   **Wallet**: Integrates with Phantom wallet for Solana operations, including a Perps PnL calculator. Now includes full Hyperliquid account integration: EVM address linking (localStorage), live clearinghouseState (account value, withdrawable, margin used, unrealized PnL), open perp positions with mark PnL, open orders, and AI-powered personalized trade signals using Claude that factor in the trader's live portfolio exposure. Tabs: Overview, HL Account, Positions, AI Signal, Orders, Tokens, Send, Sign, History, PnL Calc.
--   **AI**: Provides Claude-powered market analysis and trade ideas, leveraging the QuantBrain engine for confluence scoring, Kelly Criterion, and regime detection. Includes a timeframe toggle (Today/Mid-Term/Long-Term) for tailored trade ideas.
+-   **AI**: Provides Claude-powered market analysis and trade ideas, leveraging the QuantBrain engine for confluence scoring, Kelly Criterion, and regime detection. Includes a timeframe toggle (Today/Mid-Term/Long-Term) for tailored trade ideas. Now features AI Trade Reasonings section showing MasterScore-enriched signals with Entry/Target/StopLoss and "Trade Now" buttons.
 -   **About**: Story behind CLVRQuant, why users need it daily, and a comprehensive glossary of technical terms (QuantBrain Score, Alpha Signals, Kelly Criterion, Funding Rate, Open Interest, etc.). Accessible to all users including guests.
 -   **Account** (client/src/AccountPage.jsx): User account management with Subscription, Emails, Billing, and Legal tabs. Only visible to authenticated users (not guests).
 
@@ -44,7 +44,7 @@ Key components include `AlertBanner` for notifications, `Countdown` for macro ev
 
 The backend provides API routes for all data and AI interactions. It acts as a proxy for external APIs, caching responses to manage rate limits and improve performance.
 
--   **Data Routes**: `/api/crypto` (Binance, Hyperliquid), `/api/perps` (Hyperliquid), `/api/finnhub` (stocks, metals, forex), `/api/signals`, `/api/macro` (FairEconomy calendar), `/api/polymarket`.
+-   **Data Routes**: `/api/crypto` (Binance, Hyperliquid), `/api/perps` (Hyperliquid), `/api/finnhub` (stocks, metals, forex), `/api/signals` (with globalRiskOn, whaleAlerts), `/api/whales`, `/api/macro` (FairEconomy calendar), `/api/polymarket`.
 -   **AI Routes**: `/api/ai/analyze` (Anthropic Claude proxy).
 -   **Subscription Routes**: `/api/subscribe`.
 Background loops are used for refreshing Hyperliquid, Finnhub, and news data at regular intervals. Signal detection identifies significant price movements.
