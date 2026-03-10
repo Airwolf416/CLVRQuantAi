@@ -809,11 +809,54 @@ function startFinnhubWebSocket() {
   connect();
 }
 
+async function seedAccessCodes() {
+  const ffCodes = [
+    { code: "CLVR-FF-MIKE01", label: "Friends & Family — Mike #1" },
+    { code: "CLVR-FF-MIKE02", label: "Friends & Family — Mike #2" },
+    { code: "CLVR-FF-MIKE03", label: "Friends & Family — Mike #3" },
+    { code: "CLVR-FF-MIKE04", label: "Friends & Family — Mike #4" },
+    { code: "CLVR-FF-MIKE05", label: "Friends & Family — Mike #5" },
+    { code: "CLVR-FF-GIFT01", label: "Friends & Family — Gift #1" },
+    { code: "CLVR-FF-GIFT02", label: "Friends & Family — Gift #2" },
+    { code: "CLVR-FF-GIFT03", label: "Friends & Family — Gift #3" },
+    { code: "CLVR-FF-GIFT04", label: "Friends & Family — Gift #4" },
+    { code: "CLVR-FF-GIFT05", label: "Friends & Family — Gift #5" },
+    { code: "CLVR-VIP-FAMILY1", label: "Family VIP #1" },
+    { code: "CLVR-VIP-FAMILY2", label: "Family VIP #2" },
+    { code: "CLVR-VIP-FAMILY3", label: "Family VIP #3" },
+    { code: "CLVR-VIP-FRIEND1", label: "Friend VIP #1" },
+    { code: "CLVR-VIP-FRIEND2", label: "Friend VIP #2" },
+    { code: "CLVR-VIP-FRIEND3", label: "Friend VIP #3" },
+    { code: "CLVR-VIP-FRIEND4", label: "Friend VIP #4" },
+    { code: "CLVR-VIP-FRIEND5", label: "Friend VIP #5" },
+    { code: "CLVR-VIP-YANN", label: "VIP — Yann" },
+    { code: "CLVR-VIP-DAHLYN", label: "VIP — Dahlyn" },
+    { code: "CLVR-VIP-NANCY", label: "VIP — Nancy" },
+  ];
+  try {
+    for (const c of ffCodes) {
+      const isFF = c.code.startsWith("CLVR-FF-");
+      const expiresAt = new Date();
+      expiresAt.setMonth(expiresAt.getMonth() + (isFF ? 1 : 3));
+      await pool.query(
+        `INSERT INTO access_codes (code, label, type, active, expires_at)
+         VALUES ($1, $2, 'vip', true, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [c.code, c.label, expiresAt]
+      );
+    }
+    console.log(`[seed] Access codes seeded (${ffCodes.length} codes)`);
+  } catch (err: any) {
+    console.error("[seed] Access code seeding failed:", err.message);
+  }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
 
+  await seedAccessCodes();
   startStockRefreshLoop();
   startHyperliquidRefreshLoop();
   startFinnhubWebSocket();
