@@ -1573,9 +1573,10 @@ export async function registerRoutes(
   }
 
   app.post("/api/verify-code", async (req, res) => {
-    const { code } = req.body;
+    const rawCode = req.body.code;
     const userId = (req.session as any)?.userId || null;
-    if (!code) return res.status(400).json({ error: "Code required" });
+    if (!rawCode) return res.status(400).json({ error: "Code required" });
+    const code = rawCode.trim().toUpperCase();
 
     if (code === OWNER_CODE) {
       if (!userId || !(await isOwner(userId))) {
@@ -1585,13 +1586,15 @@ export async function registerRoutes(
     }
 
     if (!userId) {
+      console.log(`[verify-code] No session userId for code=${code}`);
       return res.json({ valid: false, error: "You must be signed in to use an access code" });
     }
 
     try {
       const ac = await storage.getAccessCode(code);
       if (!ac || !ac.active) {
-        return res.json({ valid: false });
+        console.log(`[verify-code] Code not found or inactive: ${code}`);
+        return res.json({ valid: false, error: "Code not found" });
       }
       if (ac.expiresAt && new Date(ac.expiresAt) < new Date()) {
         return res.json({ valid: false, error: "This code has expired" });
@@ -1609,9 +1612,11 @@ export async function registerRoutes(
       await storage.updateUserPromoCode(userId, code, promoExpiry ? new Date(promoExpiry) : null);
       await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [userId]);
       checkAndGrantReferralReward(userId).catch(() => {});
+      console.log(`[verify-code] SUCCESS: ${code} redeemed by user ${userId}, expires ${promoExpiry}`);
       return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label, expiresAt: promoExpiry });
-    } catch {
-      res.json({ valid: false });
+    } catch (err: any) {
+      console.error(`[verify-code] ERROR for code=${code}:`, err.message);
+      res.json({ valid: false, error: "Verification failed — please try again" });
     }
   });
 
@@ -1723,8 +1728,9 @@ export async function registerRoutes(
             </div>
           </div>`,
         });
+        console.log(`[signup] Welcome email sent to ${email.toLowerCase().trim()}`);
       } catch (emailErr: any) {
-        console.error("Welcome email failed:", emailErr.message);
+        console.error(`[signup] Welcome email FAILED for ${email.toLowerCase().trim()}:`, emailErr.message, emailErr.statusCode || "");
       }
       (req.session as any).userId = user.id;
       res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
