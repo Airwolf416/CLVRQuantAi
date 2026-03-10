@@ -112,6 +112,266 @@ function calcMasterScore(sym: string, dir: string): { score: number; riskOn: num
   return { score, riskOn, reasoning };
 }
 
+// ─── MARKET REGIME ENGINE ────────────────────────────
+function calcRSI(sym: string, period = 14): number {
+  const h = priceHistory[sym];
+  if (!h || h.length < period + 1) return 50;
+  const prices = h.slice(-(period + 1)).map(p => p.price);
+  let gains = 0, losses = 0;
+  for (let i = 1; i < prices.length; i++) {
+    const diff = prices[i] - prices[i - 1];
+    if (diff > 0) gains += diff; else losses -= diff;
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+function calcMomentum(sym: string): number {
+  const h = priceHistory[sym];
+  if (!h || h.length < 5) return 0;
+  const recent = h[h.length - 1].price;
+  const older = h[Math.max(0, h.length - Math.min(h.length, 30))].price;
+  return older > 0 ? ((recent - older) / older) * 100 : 0;
+}
+
+function calc50MA(sym: string): number {
+  const h = priceHistory[sym];
+  if (!h || h.length < 10) return h?.[h.length - 1]?.price || 0;
+  const pts = h.slice(-Math.min(h.length, 50));
+  return pts.reduce((s, p) => s + p.price, 0) / pts.length;
+}
+
+let regimeCache: { data: any; ts: number } | null = null;
+
+async function checkAndGrantReferralReward(userId: string) {
+  try {
+    const user = await storage.getUser(userId);
+    if (!user?.referredBy) return;
+    const referrer = await storage.getUserByReferralCode(user.referredBy);
+    if (!referrer) return;
+    const referral = await storage.getReferralByReferred(userId);
+    if (!referral || referral.rewardGranted) return;
+    await storage.grantReferralReward(referral.id);
+    const rewardExpiry = new Date(Date.now() + 7 * 86400000);
+    if (referrer.tier !== "pro") {
+      await pool.query("UPDATE users SET tier = 'pro', promo_expires_at = $1 WHERE id = $2", [rewardExpiry, referrer.id]);
+    }
+    try {
+      const { client: resend, fromEmail } = await getUncachableResendClient();
+      const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
+      await resend.emails.send({
+        from: senderAddress, to: referrer.email,
+        subject: "CLVRQuant — You earned 1 week of Pro!",
+        html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+          <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+          <div style="border-top:1px solid #141e35;padding-top:20px">
+            <p style="font-size:14px;color:#f0f4ff">Congratulations, ${referrer.name}!</p>
+            <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your referral just subscribed to CLVRQuant Pro. You've earned <strong style="color:#e8c96d">1 week of free Pro access</strong> as a thank you!</p>
+            <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver</p>
+          </div></div>`,
+      });
+    } catch {}
+    console.log(`[referral] Granted 1-week Pro reward to ${referrer.email} for referral of user ${userId}`);
+  } catch (e: any) {
+    console.error("[referral] Reward check error:", e.message);
+  }
+}
+
+async function checkPromoExpiryReminders() {
+  try {
+    const users14 = await storage.getUsersWithExpiringPromos(14);
+    for (const u of users14) {
+      try {
+        const { client: resend, fromEmail } = await getUncachableResendClient();
+        const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
+        const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
+        await resend.emails.send({
+          from: senderAddress, to: u.email,
+          subject: "CLVRQuant — Your Pro access expires in 2 weeks",
+          html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+            <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+            <div style="border-top:1px solid #141e35;padding-top:20px">
+              <p style="font-size:14px;color:#f0f4ff">Hey ${u.name},</p>
+              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant Pro access via promotion code <strong style="color:#e8c96d">${u.promoCode}</strong> expires on <strong style="color:#f0f4ff">${expiryDate}</strong>.</p>
+              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">To keep uninterrupted access to AI analysis, signals, and all Pro features, consider subscribing before it expires.</p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver</p>
+            </div></div>`,
+        });
+        console.log(`[promo-reminder] Sent expiry reminder to ${u.email}`);
+      } catch {}
+    }
+  } catch (e: any) {
+    console.error("[promo-reminder] Error:", e.message);
+  }
+}
+
+function calcMarketRegime() {
+  const btcMom = calcMomentum("BTC");
+  const btcRsi = calcRSI("BTC");
+  const btcFunding = hlData["BTC"]?.funding || 0;
+
+  let cryptoScore = 50;
+  if (btcMom > 2) cryptoScore += 20; else if (btcMom > 0.5) cryptoScore += 10;
+  else if (btcMom < -2) cryptoScore -= 20; else if (btcMom < -0.5) cryptoScore -= 10;
+  if (btcRsi > 60) cryptoScore += 10; else if (btcRsi < 40) cryptoScore -= 10;
+  if (btcFunding > 0.01) cryptoScore -= 5; else if (btcFunding < -0.01) cryptoScore += 5;
+  cryptoScore = Math.max(0, Math.min(100, cryptoScore));
+
+  const qqq = priceHistory["QQQ"] || priceHistory["NVDA"];
+  const nasdaqMom = qqq ? calcMomentum("NVDA") : 0;
+  const vixPrice = priceHistory["VIX"]?.[priceHistory["VIX"]?.length - 1]?.price || 0;
+  let equityScore = 50;
+  if (nasdaqMom > 1) equityScore += 15; else if (nasdaqMom > 0) equityScore += 5;
+  else if (nasdaqMom < -1) equityScore -= 15; else if (nasdaqMom < 0) equityScore -= 5;
+  if (vixPrice > 30) equityScore -= 25; else if (vixPrice > 25) equityScore -= 15;
+  else if (vixPrice > 20) equityScore -= 5; else if (vixPrice < 15) equityScore += 10;
+  equityScore = Math.max(0, Math.min(100, equityScore));
+
+  const goldMom = calcMomentum("XAU");
+  let metalsScore = 50;
+  if (goldMom > 1) metalsScore -= 10; else if (goldMom < -1) metalsScore += 10;
+  metalsScore = Math.max(0, Math.min(100, metalsScore));
+
+  const eurUsdPrice = priceHistory["EURUSD"]?.[priceHistory["EURUSD"]?.length - 1]?.price || 0;
+  const usdJpyPrice = priceHistory["USDJPY"]?.[priceHistory["USDJPY"]?.length - 1]?.price || 0;
+  const eurMom = calcMomentum("EURUSD");
+  const jpyMom = calcMomentum("USDJPY");
+  let forexScore = 50;
+  const usdStrength = (-eurMom + jpyMom) / 2;
+  if (usdStrength > 0.5) forexScore -= 10; else if (usdStrength < -0.5) forexScore += 10;
+  forexScore = Math.max(0, Math.min(100, forexScore));
+
+  const compositeScore = Math.round(
+    cryptoScore * 0.35 + equityScore * 0.35 + metalsScore * 0.15 + forexScore * 0.15
+  );
+
+  const regime = compositeScore >= 60 ? "RISK_ON" : compositeScore <= 40 ? "RISK_OFF" : "NEUTRAL";
+
+  return {
+    regime, score: compositeScore,
+    components: {
+      crypto: { score: cryptoScore, btcMom: +btcMom.toFixed(2), btcRsi: +btcRsi.toFixed(1), btcFunding: +btcFunding.toFixed(4), weight: "35%" },
+      equities: { score: equityScore, nasdaqMom: +nasdaqMom.toFixed(2), vix: +vixPrice.toFixed(1), weight: "35%" },
+      metals: { score: metalsScore, goldMom: +goldMom.toFixed(2), weight: "15%" },
+      forex: { score: forexScore, usdStrength: +usdStrength.toFixed(2), eurUsd: +eurUsdPrice.toFixed(4), usdJpy: +usdJpyPrice.toFixed(2), weight: "15%" },
+    },
+  };
+}
+
+// ─── CLVR CRASH DETECTOR ─────────────────────────────
+function calcCrashProbability() {
+  const vixPrice = priceHistory["VIX"]?.[priceHistory["VIX"]?.length - 1]?.price || 0;
+  let volatilityScore = 0;
+  if (vixPrice > 35) volatilityScore = 95;
+  else if (vixPrice > 30) volatilityScore = 80;
+  else if (vixPrice > 25) volatilityScore = 60;
+  else if (vixPrice > 20) volatilityScore = 35;
+  else volatilityScore = 10;
+
+  const eurMom = calcMomentum("EURUSD");
+  const dxyRising = eurMom < -0.3;
+  let liquidityScore = 0;
+  const avgFunding = Object.values(hlData).reduce((s, d) => s + Math.abs(d.funding || 0), 0) / Math.max(1, Object.keys(hlData).length);
+  if (dxyRising) liquidityScore += 40;
+  if (avgFunding > 0.03) liquidityScore += 30;
+  else if (avgFunding > 0.01) liquidityScore += 15;
+  liquidityScore = Math.min(100, liquidityScore);
+
+  const nasdaqMom = calcMomentum("NVDA");
+  let equityTrendScore = 0;
+  if (nasdaqMom < -3) equityTrendScore = 90;
+  else if (nasdaqMom < -1) equityTrendScore = 60;
+  else if (nasdaqMom < 0) equityTrendScore = 30;
+  else equityTrendScore = 10;
+
+  const btcMom = calcMomentum("BTC");
+  const btcMA = calc50MA("BTC");
+  const btcCurrent = priceHistory["BTC"]?.[priceHistory["BTC"]?.length - 1]?.price || 0;
+  let cryptoStressScore = 0;
+  if (btcCurrent < btcMA && btcMom < 0) cryptoStressScore = 70;
+  else if (btcMom < -2) cryptoStressScore = 50;
+  else if (btcMom < 0) cryptoStressScore = 25;
+  else cryptoStressScore = 5;
+
+  const probability = Math.round(
+    volatilityScore * 0.40 + liquidityScore * 0.30 + equityTrendScore * 0.20 + cryptoStressScore * 0.10
+  );
+
+  const signals: string[] = [];
+  if (vixPrice > 25) signals.push(`VIX spike detected (${vixPrice.toFixed(1)})`);
+  if (dxyRising) signals.push("Dollar strengthening — global liquidity tightening");
+  if (nasdaqMom < 0) signals.push("Nasdaq momentum negative");
+  if (btcCurrent < btcMA) signals.push(`BTC below moving average ($${btcMA.toFixed(0)})`);
+  if (avgFunding > 0.02) signals.push("High funding rates — overleveraged market");
+
+  const status = probability >= 80 ? "CRASH_WARNING" : probability >= 60 ? "HIGH_RISK" : probability >= 40 ? "CAUTION" : "NORMAL";
+
+  return {
+    probability, status, signals,
+    components: {
+      volatility: { score: volatilityScore, vix: +vixPrice.toFixed(1), weight: "40%" },
+      liquidity: { score: liquidityScore, dxyRising, avgFunding: +avgFunding.toFixed(4), weight: "30%" },
+      equityTrend: { score: equityTrendScore, nasdaqMom: +nasdaqMom.toFixed(2), weight: "20%" },
+      cryptoStress: { score: cryptoStressScore, btcMom: +btcMom.toFixed(2), btcVsMA: btcCurrent > 0 ? +((btcCurrent / btcMA - 1) * 100).toFixed(2) : 0, weight: "10%" },
+    },
+  };
+}
+
+// ─── CLVR GLOBAL LIQUIDITY INDEX ─────────────────────
+function calcLiquidityIndex() {
+  const eurMom = calcMomentum("EURUSD");
+  const usdStrength = -eurMom;
+  let currencyScore = 50;
+  if (usdStrength > 1) currencyScore = 25;
+  else if (usdStrength > 0.3) currencyScore = 35;
+  else if (usdStrength < -1) currencyScore = 80;
+  else if (usdStrength < -0.3) currencyScore = 65;
+
+  const avgFunding = Object.values(hlData).reduce((s, d) => s + (d.funding || 0), 0) / Math.max(1, Object.keys(hlData).length);
+  let creditScore = 50;
+  if (avgFunding > 0.03) creditScore = 30;
+  else if (avgFunding > 0.01) creditScore = 40;
+  else if (avgFunding < -0.01) creditScore = 65;
+  else if (avgFunding < -0.03) creditScore = 80;
+
+  const allSyms = Object.keys(priceHistory);
+  let upCount = 0, totalCount = 0;
+  for (const s of allSyms) {
+    const h = priceHistory[s];
+    if (!h || h.length < 5) continue;
+    totalCount++;
+    if (h[h.length - 1].price > h[Math.max(0, h.length - 5)].price) upCount++;
+  }
+  const breadthScore = totalCount > 0 ? Math.round((upCount / totalCount) * 100) : 50;
+
+  const totalOI = Object.values(hlData).reduce((s, d) => s + (d.oi || 0), 0);
+  let oiScore = 50;
+  if (totalOI > 50e9) oiScore = 75;
+  else if (totalOI > 20e9) oiScore = 60;
+  else if (totalOI < 5e9) oiScore = 30;
+
+  const score = Math.round(currencyScore * 0.30 + creditScore * 0.25 + breadthScore * 0.25 + oiScore * 0.20);
+  const mode = score >= 60 ? "LIQUIDITY_EXPANSION" : score <= 40 ? "LIQUIDITY_CONTRACTION" : "NEUTRAL";
+
+  const implications: string[] = [];
+  if (score >= 60) { implications.push("Bullish for BTC"); implications.push("Bullish for tech stocks"); }
+  else if (score <= 40) { implications.push("Bearish for BTC"); implications.push("Caution on tech stocks"); }
+  else { implications.push("Neutral stance recommended"); }
+
+  return {
+    score, mode, implications,
+    components: {
+      currency: { score: currencyScore, usdStrength: +usdStrength.toFixed(2), weight: "30%" },
+      credit: { score: creditScore, avgFunding: +avgFunding.toFixed(4), weight: "25%" },
+      breadth: { score: breadthScore, upRatio: totalCount > 0 ? `${upCount}/${totalCount}` : "0/0", weight: "25%" },
+      openInterest: { score: oiScore, totalOI: `$${(totalOI / 1e9).toFixed(1)}B`, weight: "20%" },
+    },
+  };
+}
+
 function detectMoves() {
   const now = Date.now();
   for (const sym of CRYPTO_SYMS) {
@@ -338,6 +598,14 @@ async function startStockRefreshLoop() {
         stocks[sym] = q;
         await delay(1500);
       }
+
+      try {
+        const vixQ = await fhQuoteSafe("UVXY");
+        if (vixQ.live && vixQ.price > 0) {
+          const approxVIX = vixQ.price * 0.65 + 12;
+          recordPrice("VIX", approxVIX);
+        }
+      } catch {}
 
       const [metals, forex] = await Promise.all([fetchMetals(), fetchForex()]);
       const result = { stocks, metals, forex };
@@ -695,6 +963,18 @@ export async function registerRoutes(
 
   app.get("/api/whales", (_req, res) => {
     res.json({ whales: whaleAlerts.filter(w => Date.now() - w.ts < 600000) });
+  });
+
+  app.get("/api/regime", (_req, res) => {
+    if (regimeCache && Date.now() - regimeCache.ts < 30000) {
+      return res.json(regimeCache.data);
+    }
+    const regime = calcMarketRegime();
+    const crash = calcCrashProbability();
+    const liquidity = calcLiquidityIndex();
+    const data = { regime, crash, liquidity, ts: Date.now() };
+    regimeCache = { data, ts: Date.now() };
+    res.json(data);
   });
 
   app.get("/api/news", async (_req, res) => {
@@ -1325,7 +1605,11 @@ export async function registerRoutes(
           [userId, code]
         );
       }
-      return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label });
+      const promoExpiry = ac.expiresAt || null;
+      await storage.updateUserPromoCode(userId, code, promoExpiry ? new Date(promoExpiry) : null);
+      await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [userId]);
+      checkAndGrantReferralReward(userId).catch(() => {});
+      return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label, expiresAt: promoExpiry });
     } catch {
       res.json({ valid: false });
     }
@@ -1369,7 +1653,7 @@ export async function registerRoutes(
   });
 
   app.post("/api/auth/signup", async (req, res) => {
-    const { name, email, password, dailyEmail } = req.body;
+    const { name, email, password, dailyEmail, referralCode: refCode } = req.body;
     if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
     if (!password || password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
     if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
@@ -1384,6 +1668,16 @@ export async function registerRoutes(
         name: name.trim(),
         subscribeToBrief: !!dailyEmail,
       });
+      const crypto = await import("crypto");
+      const myRefCode = "CLVR-REF-" + crypto.randomBytes(3).toString("hex").toUpperCase();
+      await storage.updateUserReferralCode(user.id, myRefCode);
+      if (refCode && refCode.startsWith("CLVR-REF-")) {
+        const referrer = await storage.getUserByReferralCode(refCode);
+        if (referrer) {
+          await storage.updateUserReferredBy(user.id, refCode);
+          await storage.createReferral({ referrerUserId: referrer.id, referredUserId: user.id });
+        }
+      }
       if (dailyEmail) {
         await pool.query(
           `INSERT INTO subscribers (id, email, name, active) VALUES (gen_random_uuid(), $1, $2, true) ON CONFLICT (email) DO UPDATE SET active = true, name = COALESCE($2, subscribers.name)`,
@@ -1482,6 +1776,78 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  app.post("/api/auth/forgot-password", async (req, res) => {
+    const { email } = req.body;
+    if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
+    try {
+      const user = await storage.getUserByEmail(email.toLowerCase().trim());
+      if (!user) return res.json({ ok: true });
+      const crypto = await import("crypto");
+      const tempPassword = "CLVR-" + crypto.randomBytes(4).toString("hex").toUpperCase();
+      const token = crypto.randomBytes(32).toString("hex");
+      const expiry = new Date(Date.now() + 3600000);
+      const hashedTemp = await bcrypt.hash(tempPassword, 12);
+      await storage.updateUserResetToken(user.id, token, expiry);
+      const APP_URL = process.env.APP_URL || "https://clvrquant.replit.app";
+      const resetLink = `${APP_URL}?reset=${token}`;
+      try {
+        const { client: resend, fromEmail } = await getUncachableResendClient();
+        const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
+        await resend.emails.send({
+          from: senderAddress,
+          to: email.toLowerCase().trim(),
+          subject: "CLVRQuant — Password Reset",
+          html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
+              <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">PASSWORD RESET</div>
+            </div>
+            <div style="border-top:1px solid #141e35;padding-top:20px">
+              <p style="font-size:14px;color:#f0f4ff">Hello ${user.name},</p>
+              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">You requested a password reset. Here is your temporary password:</p>
+              <div style="background:#0c1220;border:1px solid #c9a84c;border-radius:4px;padding:16px;margin:16px 0;text-align:center">
+                <div style="font-family:monospace;font-size:22px;color:#e8c96d;letter-spacing:0.15em;font-weight:900">${tempPassword}</div>
+              </div>
+              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Use this temporary password to sign in, then set a new password. Or click the link below:</p>
+              <div style="text-align:center;margin:20px 0">
+                <a href="${resetLink}" style="background:rgba(201,168,76,0.15);color:#e8c96d;padding:12px 32px;border-radius:4px;text-decoration:none;font-family:Georgia,serif;font-weight:700;font-size:14px;border:1px solid rgba(201,168,76,0.3)">Reset Password →</a>
+              </div>
+              <p style="font-size:11px;color:#4a5d80;margin-top:20px">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver</p>
+            </div>
+          </div>`,
+        });
+        await storage.updateUserPassword(user.id, hashedTemp);
+      } catch (emailErr: any) {
+        console.error("Reset email failed:", emailErr.message);
+        await storage.clearResetToken(user.id);
+      }
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Forgot password error:", e.message);
+      res.status(500).json({ error: "Failed to process request" });
+    }
+  });
+
+  app.post("/api/auth/reset-password", async (req, res) => {
+    const { token, newPassword } = req.body;
+    if (!token) return res.status(400).json({ error: "Reset token required" });
+    if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
+    try {
+      const user = await storage.getUserByResetToken(token);
+      if (!user) return res.status(400).json({ error: "Invalid or expired reset link" });
+      if (user.resetTokenExpiry && new Date(user.resetTokenExpiry) < new Date()) {
+        return res.status(400).json({ error: "Reset link has expired. Please request a new one." });
+      }
+      const hashed = await bcrypt.hash(newPassword, 12);
+      await storage.updateUserPassword(user.id, hashed);
+      await storage.clearResetToken(user.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to reset password" });
+    }
+  });
+
   app.get("/api/account", async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
@@ -1526,6 +1892,9 @@ export async function registerRoutes(
         stripeSubscriptionId: user.stripeSubscriptionId || null,
         subscription: stripeInfo,
         invoices,
+        referralCode: user.referralCode || null,
+        promoCode: user.promoCode || null,
+        promoExpiresAt: user.promoExpiresAt ? new Date(user.promoExpiresAt).toISOString() : null,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1587,6 +1956,9 @@ export async function registerRoutes(
       res.status(500).json({ error: e.message });
     }
   });
+
+  setInterval(() => { checkPromoExpiryReminders().catch(() => {}); }, 86400000);
+  setTimeout(() => { checkPromoExpiryReminders().catch(() => {}); }, 60000);
 
   return httpServer;
 }

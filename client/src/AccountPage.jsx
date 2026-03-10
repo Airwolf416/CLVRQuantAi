@@ -117,6 +117,12 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
     setModal(null);
   };
 
+  const copyReferralCode = () => {
+    if (acct?.referralCode) {
+      navigator.clipboard.writeText(acct.referralCode).then(() => showToast("Referral code copied!")).catch(() => showToast("Copy failed"));
+    }
+  };
+
   const S = {
     card: { background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:18, marginBottom:12 },
     dangerBtn: { background:"rgba(255,64,96,.06)", border:`1px solid rgba(255,64,96,.25)`, color:C.red, borderRadius:4, padding:"8px 16px", cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:MONO },
@@ -124,7 +130,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
     goldBtn: { background:`linear-gradient(135deg,${C.gold},${C.gold2})`, border:"none", color:C.bg, borderRadius:4, padding:"8px 16px", cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:MONO },
   };
 
-  const tabs = ["subscription", "emails", "billing", "legal"];
+  const tabs = ["subscription", "referral", "emails", "billing", "legal"];
 
   if (loading) {
     return (
@@ -141,6 +147,9 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
       </div>
     );
   }
+
+  const promoExpiry = acct.promoExpiresAt ? new Date(acct.promoExpiresAt) : null;
+  const promoDaysLeft = promoExpiry ? Math.max(0, Math.ceil((promoExpiry - Date.now()) / 86400000)) : null;
 
   return (
     <div style={{ fontFamily:SANS, paddingBottom:20 }}>
@@ -169,7 +178,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
         {tabs.map(t => (
           <button key={t} data-testid={`tab-${t}`} onClick={() => setTab(t)}
             style={{ background:tab === t ? C.gold : "transparent", border:`1px solid ${tab === t ? C.gold : C.border}`, color:tab === t ? C.bg : C.muted2, borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
-            {t === "subscription" ? "Subscription" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : "Legal"}
+            {t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : "Legal"}
           </button>
         ))}
       </div>
@@ -201,6 +210,26 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
             </div>
           </div>
 
+          {acct.promoCode && (
+            <div style={{ ...S.card, borderColor:"rgba(201,168,76,.25)" }}>
+              <div style={{ fontFamily:MONO, fontSize:9, color:C.gold, letterSpacing:"0.2em", marginBottom:10 }}>PROMO / ACCESS CODE</div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div>
+                  <div style={{ fontFamily:MONO, fontSize:14, fontWeight:700, color:C.gold2, letterSpacing:"0.1em" }}>{acct.promoCode}</div>
+                  {promoExpiry && (
+                    <div style={{ fontSize:11, color:promoDaysLeft <= 14 ? C.orange : C.muted2, marginTop:4, fontFamily:MONO }}>
+                      {promoDaysLeft > 0
+                        ? `Expires ${promoExpiry.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} · ${promoDaysLeft} day${promoDaysLeft !== 1 ? "s" : ""} left`
+                        : "Expired"}
+                    </div>
+                  )}
+                  {!promoExpiry && <div style={{ fontSize:11, color:C.green, marginTop:4, fontFamily:MONO }}>No expiration</div>}
+                </div>
+                <div style={{ fontSize:16, color:promoExpiry && promoDaysLeft <= 0 ? C.red : C.green }}>{promoExpiry && promoDaysLeft <= 0 ? "✕" : "✓"}</div>
+              </div>
+            </div>
+          )}
+
           {acct.tier === "free" && (
             <div style={S.card}>
               <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, letterSpacing:"0.2em", marginBottom:12 }}>UPGRADE</div>
@@ -225,6 +254,47 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "referral" && (
+        <div>
+          <div style={{ ...S.card, borderColor:"rgba(201,168,76,.25)" }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:C.gold, letterSpacing:"0.2em", marginBottom:14 }}>YOUR REFERRAL CODE</div>
+            <div style={{ fontFamily:SANS, fontSize:12, color:C.muted2, lineHeight:1.7, marginBottom:14 }}>
+              Share your referral code with friends. When they sign up and subscribe to Pro, you earn <strong style={{ color:C.gold2 }}>1 week of free Pro access</strong>.
+            </div>
+            {acct.referralCode ? (
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <div style={{ flex:1, background:C.bg, border:`1px solid ${C.gold}44`, borderRadius:4, padding:"14px 16px", fontFamily:MONO, fontSize:16, fontWeight:700, color:C.gold2, letterSpacing:"0.12em", textAlign:"center" }}>
+                  {acct.referralCode}
+                </div>
+                <button data-testid="btn-copy-referral" onClick={copyReferralCode}
+                  style={{ background:"rgba(201,168,76,.1)", border:`1px solid ${C.gold}44`, borderRadius:4, padding:"14px 16px", cursor:"pointer", fontFamily:MONO, fontSize:11, color:C.gold, fontWeight:700, letterSpacing:"0.08em", whiteSpace:"nowrap" }}>
+                  COPY
+                </button>
+              </div>
+            ) : (
+              <div style={{ fontFamily:MONO, fontSize:11, color:C.muted, textAlign:"center", padding:14 }}>
+                No referral code yet. It will be generated automatically.
+              </div>
+            )}
+          </div>
+
+          <div style={{ ...S.card, borderColor:"rgba(0,212,255,.12)" }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:C.cyan, letterSpacing:"0.2em", marginBottom:10 }}>HOW IT WORKS</div>
+            {[
+              ["1. Share", "Send your referral code to friends or colleagues interested in market intelligence."],
+              ["2. They Sign Up", "Your friend creates a CLVRQuant account and enters your referral code during signup."],
+              ["3. They Subscribe", "When your referral upgrades to Pro (via Stripe or access code), you get rewarded."],
+              ["4. You Earn", "You receive 1 week of free Pro access per successful referral. No limit on referrals."],
+            ].map(([title, body]) => (
+              <div key={title} style={{ marginBottom:10 }}>
+                <div style={{ fontFamily:MONO, fontSize:10, fontWeight:700, color:C.white, marginBottom:2 }}>{title}</div>
+                <div style={{ fontFamily:SANS, fontSize:11, color:C.muted2, lineHeight:1.6 }}>{body}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
