@@ -37,21 +37,31 @@ function Particles() {
 
 export default function WelcomePage({ onEnter }) {
   const [mode, setMode] = useState("welcome");
-  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false });
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false, referralCode: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [showLegal, setShowLegal] = useState(false);
   const [showSpam, setShowSpam] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [resetToken, setResetToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("reset");
+    if (token) {
+      setResetToken(token);
+      setMode("reset-password");
+    }
     fetch("/api/auth/me").then(r => r.json()).then(data => {
       if (data.user) onEnter(data.user);
       else setCheckingSession(false);
     }).catch(() => setCheckingSession(false));
   }, []);
 
-  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setError(""); };
+  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setError(""); setSuccess(""); };
 
   const handleSignUp = async () => {
     if (!form.name.trim()) return setError("Please enter your name.");
@@ -65,7 +75,7 @@ export default function WelcomePage({ onEnter }) {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.name, email: form.email, password: form.password, dailyEmail: form.dailyEmail }),
+        body: JSON.stringify({ name: form.name, email: form.email, password: form.password, dailyEmail: form.dailyEmail, referralCode: form.referralCode || undefined }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Signup failed"); setLoading(false); return; }
@@ -92,6 +102,49 @@ export default function WelcomePage({ onEnter }) {
       if (!res.ok) { setError(data.error || "Sign in failed"); setLoading(false); return; }
       setLoading(false);
       if (onEnter) onEnter(data.user);
+    } catch (e) {
+      setError("Network error. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!form.email.includes("@")) return setError("Please enter a valid email address.");
+    setLoading(true);
+    setError("");
+    setSuccess("");
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: form.email }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Request failed"); setLoading(false); return; }
+      setSuccess("If an account exists with this email, a password reset has been sent. Check your inbox (and spam folder).");
+      setLoading(false);
+    } catch (e) {
+      setError("Network error. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!newPassword || newPassword.length < 6) return setError("Password must be at least 6 characters.");
+    if (newPassword !== newPasswordConfirm) return setError("Passwords do not match.");
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Reset failed"); setLoading(false); return; }
+      setSuccess("Password reset successfully! You can now sign in.");
+      setLoading(false);
+      setTimeout(() => { setMode("signin"); setSuccess(""); window.history.replaceState({}, "", window.location.pathname); }, 2500);
     } catch (e) {
       setError("Network error. Please try again.");
       setLoading(false);
@@ -211,6 +264,10 @@ export default function WelcomePage({ onEnter }) {
               <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>CONFIRM PASSWORD</label>
               <input data-testid="input-signup-confirm" type="password" value={form.confirm} onChange={e => set("confirm", e.target.value)} placeholder="Repeat password" style={inputStyle} />
             </div>
+            <div>
+              <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>REFERRAL CODE <span style={{ color: C.muted, fontWeight: 400 }}>(optional)</span></label>
+              <input data-testid="input-signup-referral" value={form.referralCode} onChange={e => set("referralCode", e.target.value.toUpperCase())} placeholder="CLVR-REF-XXXXXX" style={{ ...inputStyle, fontFamily: MONO, fontSize: 12, letterSpacing: "0.08em" }} />
+            </div>
 
             <div style={{ background: C.bg, border: `1px solid rgba(201,168,76,.15)`, borderRadius: 6, padding: "12px 14px" }}>
               <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
@@ -274,10 +331,16 @@ export default function WelcomePage({ onEnter }) {
             </div>
 
             {error && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
+            {success && <div data-testid="text-auth-success" style={{ fontFamily: MONO, fontSize: 11, color: C.green, padding: "8px 12px", background: "rgba(0,199,135,.06)", border: `1px solid rgba(0,199,135,.2)`, borderRadius: 4 }}>{success}</div>}
 
             <button data-testid="btn-submit-signin" onClick={handleSignIn} disabled={loading}
               style={{ ...btnGold, opacity: loading ? 0.5 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
               {loading ? "Signing In..." : "Sign In →"}
+            </button>
+
+            <button data-testid="btn-forgot-password" onClick={() => { setMode("forgot"); setError(""); setSuccess(""); }}
+              style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 10, color: C.gold, letterSpacing: "0.06em", padding: "4px 0" }}>
+              Forgot Password?
             </button>
 
             <button data-testid="btn-back-signup" onClick={() => { setMode("signup"); setError(""); }}
@@ -288,6 +351,74 @@ export default function WelcomePage({ onEnter }) {
             <button data-testid="btn-guest-signin" onClick={() => onEnter && onEnter({ guest: true, tier: "free" })}
               style={{ ...btnGhost, fontSize: 10, color: C.muted, borderColor: C.border }}>
               Continue as Guest
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === "forgot" && (
+        <div data-testid="forgot-screen" style={{ background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: "28px 24px", width: "100%", maxWidth: 420, margin: "0 auto", position: "relative", zIndex: 1, animation: "goldPulse 4s ease-in-out infinite" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: `linear-gradient(90deg,transparent,${C.gold},transparent)` }} />
+          <div style={{ textAlign: "center", marginBottom: 24 }}>
+            <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 900, marginBottom: 4, color: C.gold2 }}>CLVRQuant</div>
+            <div style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 700, color: C.white }}>Reset Password</div>
+            <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 4, letterSpacing: "0.12em" }}>We'll send a temporary password to your email</div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>EMAIL ADDRESS</label>
+              <input data-testid="input-forgot-email" type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="you@email.com"
+                style={inputStyle} onKeyDown={e => e.key === "Enter" && handleForgotPassword()} />
+            </div>
+
+            {error && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
+            {success && <div data-testid="text-auth-success" style={{ fontFamily: MONO, fontSize: 11, color: C.green, padding: "8px 12px", background: "rgba(0,199,135,.06)", border: `1px solid rgba(0,199,135,.2)`, borderRadius: 4, lineHeight: 1.6 }}>{success}</div>}
+
+            <button data-testid="btn-submit-forgot" onClick={handleForgotPassword} disabled={loading}
+              style={{ ...btnGold, opacity: loading ? 0.5 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
+              {loading ? "Sending..." : "Send Reset Email →"}
+            </button>
+
+            <button data-testid="btn-back-signin-forgot" onClick={() => { setMode("signin"); setError(""); setSuccess(""); }}
+              style={{ ...btnGhost, fontSize: 11 }}>
+              ← Back to Sign In
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === "reset-password" && (
+        <div data-testid="reset-password-screen" style={{ background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: "28px 24px", width: "100%", maxWidth: 420, margin: "0 auto", position: "relative", zIndex: 1, animation: "goldPulse 4s ease-in-out infinite" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: `linear-gradient(90deg,transparent,${C.gold},transparent)` }} />
+          <div style={{ textAlign: "center", marginBottom: 24 }}>
+            <div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 900, marginBottom: 4, color: C.gold2 }}>CLVRQuant</div>
+            <div style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 700, color: C.white }}>Set New Password</div>
+            <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 4, letterSpacing: "0.12em" }}>Choose a new password for your account</div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>NEW PASSWORD</label>
+              <input data-testid="input-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} placeholder="Min 6 characters" style={inputStyle} />
+            </div>
+            <div>
+              <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>CONFIRM NEW PASSWORD</label>
+              <input data-testid="input-confirm-new-password" type="password" value={newPasswordConfirm} onChange={e => { setNewPasswordConfirm(e.target.value); setError(""); }} placeholder="Repeat new password"
+                style={inputStyle} onKeyDown={e => e.key === "Enter" && handleResetPassword()} />
+            </div>
+
+            {error && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
+            {success && <div data-testid="text-auth-success" style={{ fontFamily: MONO, fontSize: 11, color: C.green, padding: "8px 12px", background: "rgba(0,199,135,.06)", border: `1px solid rgba(0,199,135,.2)`, borderRadius: 4 }}>{success}</div>}
+
+            <button data-testid="btn-submit-reset" onClick={handleResetPassword} disabled={loading}
+              style={{ ...btnGold, opacity: loading ? 0.5 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
+              {loading ? "Resetting..." : "Set New Password →"}
+            </button>
+
+            <button data-testid="btn-back-signin-reset" onClick={() => { setMode("signin"); setError(""); setSuccess(""); window.history.replaceState({}, "", window.location.pathname); }}
+              style={{ ...btnGhost, fontSize: 11 }}>
+              ← Back to Sign In
             </button>
           </div>
         </div>

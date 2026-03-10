@@ -17,17 +17,19 @@ The application exclusively uses a dark mode theme (`bg:#050709`, `panel:#0c1220
 ### Authentication (client/src/WelcomePage.jsx)
 
 The app is gated by a WelcomePage that shows before the main dashboard. Users can:
-- **Create Account**: Name, email, password, optional daily brief opt-in, terms agreement. Sends welcome email via Resend.
-- **Sign In**: Email + password authentication with bcrypt.
+- **Create Account**: Name, email, password, optional daily brief opt-in, terms agreement, optional referral code field. Sends welcome email via Resend. Auto-generates CLVR-REF-XXXXXX referral code.
+- **Sign In**: Email + password authentication with bcrypt. "Forgot Password?" link opens email form.
+- **Forgot Password**: Sends temporary password + reset link via Resend email. Token expires in 1 hour.
+- **Reset Password**: Via URL token (?reset=TOKEN) — allows setting new password.
 - **Continue as Guest**: Limited access without an account.
 
-Auth uses express-session with SESSION_SECRET. Routes: POST `/api/auth/signup`, POST `/api/auth/signin`, GET `/api/auth/me`, POST `/api/auth/signout`. The WelcomePage checks `/api/auth/me` on mount for session persistence.
+Auth uses express-session with SESSION_SECRET. Routes: POST `/api/auth/signup`, POST `/api/auth/signin`, GET `/api/auth/me`, POST `/api/auth/signout`, POST `/api/auth/forgot-password`, POST `/api/auth/reset-password`. The WelcomePage checks `/api/auth/me` on mount for session persistence and URL for reset tokens.
 
 ### Frontend (client/src/App.jsx)
 
 The frontend is a React application split into `App` (auth gate) and `Dashboard` (main content) components with inline styles, optimized for a maximum width of 780px. It features a bottom navigation bar with ten tabs: Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, About, and Account.
 
--   **Radar**: A command center with active alerts, live news, macro event countdowns, volume spike detection, funding rate flip alerts, and a liquidation heatmap.
+-   **Radar**: A command center with Market Regime panel (RISK_ON/NEUTRAL/RISK_OFF with score bar + component breakdown), CLVR Crash Detector (probability gauge + status badge), Global Liquidity Index (score + expansion/contraction mode), active alerts, live news, macro event countdowns, volume spike detection, funding rate flip alerts, and a liquidation heatmap. All regime data from `/api/regime` (30s polling).
 -   **Markets**: Displays real-time data for Crypto (spot via Binance WebSocket ~16ms, perp via Hyperliquid), Equities, Metals, and Forex. Bloomberg-style tick animations: prices flash green/red with ↑↓ arrows on every tick direction change. Market status badges: Equities show LIVE/CLOSED based on NYSE hours (9:30am–4pm ET, Mon–Fri), Forex shows LIVE/CLOSED based on forex hours (Sun 5pm–Fri 5pm ET).
 -   **Macro**: Enhanced macro calendar with live ForexFactory data (60s refresh). Features expandable EventCards with actual/forecast/previous values, BEAT/MISS surprise indicators, market impact analysis (NFP, GDP, CPI, retail sales, wages), QuantBrain AI analysis per event, region filters (US/EU/UK/CA/JP/AU), impact filters (HIGH/MED/LOW), Today/Week toggle, Next Release banner, and Add to Calendar. Central bank schedule (MACRO_2026) provides fallback for FOMC/ECB/BOJ/BOC/BOE/RBA dates.
 -   **Brief**: Presents an AI-generated daily market commentary with asset analysis and a subscription form.
@@ -36,17 +38,22 @@ The frontend is a React application split into `App` (auth gate) and `Dashboard`
 -   **Wallet**: Integrates with Phantom wallet for Solana operations, including a Perps PnL calculator. Now includes full Hyperliquid account integration: EVM address linking (localStorage), live clearinghouseState (account value, withdrawable, margin used, unrealized PnL), open perp positions with mark PnL, open orders, and AI-powered personalized trade signals using Claude that factor in the trader's live portfolio exposure. Tabs: Overview, HL Account, Positions, AI Signal, Orders, Tokens, Send, Sign, History, PnL Calc.
 -   **AI**: Provides Claude-powered market analysis and trade ideas, leveraging the QuantBrain engine for confluence scoring, Kelly Criterion, and regime detection. Includes a timeframe toggle (Today/Mid-Term/Long-Term) for tailored trade ideas. Now features AI Trade Reasonings section showing MasterScore-enriched signals with Entry/Target/StopLoss and "Trade Now" buttons.
 -   **About**: Story behind CLVRQuant, why users need it daily, and a comprehensive glossary of technical terms (QuantBrain Score, Alpha Signals, Kelly Criterion, Funding Rate, Open Interest, etc.). Accessible to all users including guests.
--   **Account** (client/src/AccountPage.jsx): User account management with Subscription, Emails, Billing, and Legal tabs. Only visible to authenticated users (not guests).
+-   **Account** (client/src/AccountPage.jsx): User account management with Plan (subscription + promo code status with expiry countdown), Referral (referral code display + copy button + how-it-works guide), Emails, Billing, and Legal tabs. Only visible to authenticated users (not guests).
 
 Key components include `AlertBanner` for notifications, `Countdown` for macro events, and `LiqHeatmap` for liquidation clusters (using real OI data from Hyperliquid + leverage distribution). News intelligence is sourced from CryptoCompare and Twitter/X, and feeds into the AI system. Both AI and Brief tabs include live macro event context in their prompts.
+
+**i18n / Language Toggle**: EN/FR toggle button in header (between PRO badge and OUT button). Stored in localStorage (`clvr_lang`). Full LANG_EN/LANG_FR dictionaries cover all Radar labels, signal fields, tab names, regime/crash/liquidity terms. Module-level `i18n` variable is updated on toggle via `getI18n(lang)`. Note: `let i18n` is mutable at module scope — toggling updates it and triggers re-render via `setLang`.
 
 ### Backend (server/routes.ts)
 
 The backend provides API routes for all data and AI interactions. It acts as a proxy for external APIs, caching responses to manage rate limits and improve performance.
 
--   **Data Routes**: `/api/crypto` (Binance, Hyperliquid), `/api/perps` (Hyperliquid), `/api/finnhub` (stocks, metals, forex), `/api/signals` (with globalRiskOn, whaleAlerts), `/api/whales`, `/api/macro` (FairEconomy calendar), `/api/polymarket`.
+-   **Data Routes**: `/api/crypto` (Binance, Hyperliquid), `/api/perps` (Hyperliquid), `/api/finnhub` (stocks, metals, forex), `/api/signals` (with globalRiskOn, whaleAlerts), `/api/whales`, `/api/macro` (FairEconomy calendar), `/api/polymarket`, `/api/regime` (Market Regime + Crash Detector + Liquidity Index).
 -   **AI Routes**: `/api/ai/analyze` (Anthropic Claude proxy).
 -   **Subscription Routes**: `/api/subscribe`.
+-   **Regime Engine**: `calcMarketRegime()` (Crypto 35%/Equities 35%/Metals 15%/Forex 15%), `calcCrashProbability()` (Volatility 40%/Liquidity 30%/EquityTrend 20%/CryptoStress 10%), `calcLiquidityIndex()` (credit/bond/breadth scoring). VIX approximated via UVXY ETF proxy. 30s cache TTL.
+-   **Referral System**: Auto-generates CLVR-REF-XXXXXX on signup, `checkAndGrantReferralReward()` grants 1 week Pro when referred user upgrades.
+-   **Promo Expiry Reminder**: `checkPromoExpiryReminders()` runs daily, emails users 14 days before promo expiration.
 Background loops are used for refreshing Hyperliquid, Finnhub, and news data at regular intervals. Signal detection identifies significant price movements.
 
 ### Monetization System (Stripe + Access Codes)

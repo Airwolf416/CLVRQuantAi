@@ -156,8 +156,12 @@ function sendPush(title,body,tag="clvrquant"){
 // ─── NOTIFICATION MANAGER (Anti-Duplication) ─────────────
 function createNotifHash(ts,asset,type){return`${Math.floor(ts/1000)}_${asset}_${type}`;}
 
-// ─── FRENCH i18n LABELS ──────────────────────────────────
-const i18n={stopLoss:"Arrêt des Pertes",target:"Objectif",entry:"Entrée",approve:"Approuver",cancel:"Annuler",riskTooHigh:"Risque Trop Élevé",capitalProtection:"Protection du Capital",whaleAligned:"Alignement Smart Money",masterScore:"Score Maître",tradeNow:"Trader Maintenant"};
+// ─── i18n LABELS (EN/FR toggle) ──────────────────────────
+const LANG_EN={stopLoss:"Stop Loss",target:"Target",entry:"Entry",approve:"Approve",cancel:"Cancel",riskTooHigh:"Risk Too High",capitalProtection:"Capital Protection",whaleAligned:"Whale Aligned",masterScore:"Master Score",tradeNow:"Trade Now",radar:"Radar",markets:"Markets",macro:"Macro",brief:"Brief",signals:"Signals",alerts:"Alerts",wallet:"Wallet",ai:"AI",about:"About",account:"Account",commandCenter:"Command Center",liveAlerts:"LIVE ALERTS",newsIntel:"LIVE NEWS INTELLIGENCE",nextMacro:"NEXT MACRO EVENT",upcoming:"UPCOMING EVENTS",volumeMonitor:"VOLUME MONITOR",fundingRates:"FUNDING RATES",liqHeatmap:"LIQUIDATION HEATMAP",allDataLive:"CLVRQuant v2 RADAR — ALL DATA LIVE",marketRegime:"MARKET REGIME",crashDetector:"CRASH DETECTOR",liquidityIndex:"GLOBAL LIQUIDITY INDEX",riskOn:"RISK ON",neutral:"NEUTRAL",riskOff:"RISK OFF",normal:"Normal",caution:"Caution",highRisk:"High Risk",crashWarning:"Crash Warning",expansion:"Expansion",contraction:"Contraction",score:"Score",probability:"Probability",mode:"Mode",lang:"EN"};
+const LANG_FR={stopLoss:"Arrêt des Pertes",target:"Objectif",entry:"Entrée",approve:"Approuver",cancel:"Annuler",riskTooHigh:"Risque Trop Élevé",capitalProtection:"Protection du Capital",whaleAligned:"Alignement Smart Money",masterScore:"Score Maître",tradeNow:"Trader Maintenant",radar:"Radar",markets:"Marchés",macro:"Macro",brief:"Résumé",signals:"Signaux",alerts:"Alertes",wallet:"Portefeuille",ai:"IA",about:"À Propos",account:"Compte",commandCenter:"Centre de Commande",liveAlerts:"ALERTES EN DIRECT",newsIntel:"INTELLIGENCE NOUVELLES EN DIRECT",nextMacro:"PROCHAIN ÉVÉNEMENT MACRO",upcoming:"ÉVÉNEMENTS À VENIR",volumeMonitor:"MONITEUR DE VOLUME",fundingRates:"TAUX DE FINANCEMENT",liqHeatmap:"CARTE DE LIQUIDATION",allDataLive:"CLVRQuant v2 RADAR — DONNÉES EN DIRECT",marketRegime:"RÉGIME DE MARCHÉ",crashDetector:"DÉTECTEUR DE CRASH",liquidityIndex:"INDICE DE LIQUIDITÉ MONDIAL",riskOn:"RISQUE ON",neutral:"NEUTRE",riskOff:"RISQUE OFF",normal:"Normal",caution:"Prudence",highRisk:"Risque Élevé",crashWarning:"Alerte Crash",expansion:"Expansion",contraction:"Contraction",score:"Score",probability:"Probabilité",mode:"Mode",lang:"FR"};
+function getLang(){try{return localStorage.getItem("clvr_lang")||"EN";}catch{return"EN";}}
+function getI18n(lang){return lang==="FR"?LANG_FR:LANG_EN;}
+let i18n=getI18n(getLang());
 
 // ─── BULL PROBABILITY / STRENGTH METER ────────────────────
 function bullProbability({priceMoveAbs,fundingRate,oiM,volumeMultiplier,dir,masterScore}){
@@ -715,6 +719,12 @@ function Dashboard({user,setUser}){
   const [macroImpactFilter,setMacroImpactFilter]=useState("ALL");
   const [macroRegionFilter,setMacroRegionFilter]=useState("ALL");
 
+  const [lang,setLang]=useState(getLang);
+  const [regimeData,setRegimeData]=useState(null);
+  const toggleLang=useCallback(()=>{
+    setLang(prev=>{const nv=prev==="EN"?"FR":"EN";try{localStorage.setItem("clvr_lang",nv);}catch{}i18n=getI18n(nv);return nv;});
+  },[]);
+
   // ── flash helper ─────────────────────────────────────
   const triggerFlashes=useCallback((updates)=>{
     const nF={};
@@ -1003,6 +1013,11 @@ function Dashboard({user,setUser}){
     }).catch(()=>setMacroLoading(false));
   },[]);
   useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,60000);return()=>clearInterval(iv);},[fetchMacro]);
+
+  const fetchRegime=useCallback(async()=>{
+    try{const r=await fetch("/api/regime");if(r.ok){const d=await r.json();setRegimeData(d);}}catch{}
+  },[]);
+  useEffect(()=>{fetchRegime();const iv=setInterval(fetchRegime,30000);return()=>clearInterval(iv);},[fetchRegime]);
 
   const askMacroAI=async(evt)=>{
     setMacroAiEvent(evt);setMacroAiResp(null);setMacroAiLoading(true);
@@ -1362,16 +1377,16 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const isGuest=!!user?.guest;
   const GUEST_TABS=["radar","prices","macro","about"];
   const NAV_ALL=[
-    {k:"radar",icon:"📡",label:"Radar"},
-    {k:"prices",icon:"💹",label:"Markets"},
-    {k:"macro",icon:"🏦",label:"Macro"},
-    {k:"brief",icon:"📰",label:"Brief"},
-    {k:"signals",icon:"⚡",label:"Signals"},
-    {k:"alerts",icon:"🔔",label:"Alerts"},
-    {k:"wallet",icon:"👛",label:"Wallet"},
-    {k:"ai",icon:"✦",label:"AI"},
-    {k:"about",icon:"📖",label:"About"},
-    {k:"account",icon:"⚙",label:"Account"},
+    {k:"radar",icon:"📡",label:i18n.radar},
+    {k:"prices",icon:"💹",label:i18n.markets},
+    {k:"macro",icon:"🏦",label:i18n.macro},
+    {k:"brief",icon:"📰",label:i18n.brief},
+    {k:"signals",icon:"⚡",label:i18n.signals},
+    {k:"alerts",icon:"🔔",label:i18n.alerts},
+    {k:"wallet",icon:"👛",label:i18n.wallet},
+    {k:"ai",icon:"✦",label:i18n.ai},
+    {k:"about",icon:"📖",label:i18n.about},
+    {k:"account",icon:"⚙",label:i18n.account},
   ];
   const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
 
@@ -1455,6 +1470,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             <button data-testid="btn-push-notif" onClick={requestPush} style={{background:"none",border:`1px solid ${notifPerm==="granted"?C.gold:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.muted2}}>{notifPerm==="granted"?"🔔":"🔕"}</button>
             {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
             :<button data-testid="btn-upgrade-header" onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
+            <button data-testid="btn-lang-toggle" onClick={toggleLang} style={{background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"3px 7px",fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer",letterSpacing:"0.1em",fontWeight:700}}>{lang==="EN"?"FR":"EN"}</button>
             <button data-testid="btn-signout" onClick={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"3px 6px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>OUT</button>
             <div style={{textAlign:"right"}}>
               <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
@@ -1487,12 +1503,73 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
-          <div style={{marginBottom:14}}><SLabel>Command Center</SLabel></div>
+          <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
+
+          {regimeData&&<>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div data-testid="panel-regime" style={{background:C.panel,border:`1px solid ${regimeData.regime?.regime==="RISK_ON"?C.green+"44":regimeData.regime?.regime==="RISK_OFF"?C.red+"44":C.border}`,borderRadius:4,padding:"12px",gridColumn:"1 / -1"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.15em"}}>{i18n.marketRegime}</div>
+                <div data-testid="badge-regime" style={{fontFamily:MONO,fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:2,
+                  background:regimeData.regime?.regime==="RISK_ON"?"rgba(0,199,135,.12)":regimeData.regime?.regime==="RISK_OFF"?"rgba(255,64,96,.12)":"rgba(201,168,76,.12)",
+                  color:regimeData.regime?.regime==="RISK_ON"?C.green:regimeData.regime?.regime==="RISK_OFF"?C.red:C.gold,
+                  border:`1px solid ${regimeData.regime?.regime==="RISK_ON"?C.green+"44":regimeData.regime?.regime==="RISK_OFF"?C.red+"44":C.gold+"44"}`,
+                  letterSpacing:"0.1em"}}>{regimeData.regime?.regime==="RISK_ON"?i18n.riskOn:regimeData.regime?.regime==="RISK_OFF"?i18n.riskOff:i18n.neutral}</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{i18n.score}</div>
+                <div style={{flex:1,height:6,background:"rgba(20,30,53,.8)",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${regimeData.regime?.score||50}%`,borderRadius:3,
+                    background:regimeData.regime?.regime==="RISK_ON"?C.green:regimeData.regime?.regime==="RISK_OFF"?C.red:C.gold,
+                    transition:"width .5s"}}/>
+                </div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white,minWidth:28,textAlign:"right"}}>{regimeData.regime?.score||50}</div>
+              </div>
+              {regimeData.regime?.components&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
+                {Object.entries(regimeData.regime.components).map(([k,v])=>{
+                  const sc=typeof v==="object"&&v!==null?v.score:v;
+                  const w=typeof v==="object"&&v!==null?v.weight:"";
+                  return(
+                  <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0"}}>
+                    <span style={{fontFamily:MONO,fontSize:8,color:C.muted,textTransform:"uppercase"}}>{k} {w&&<span style={{color:C.muted+"88",fontSize:7}}>{w}</span>}</span>
+                    <span style={{fontFamily:MONO,fontSize:9,color:sc>60?C.green:sc<40?C.red:C.gold,fontWeight:600}}>{typeof sc==="number"?sc.toFixed(0):sc}</span>
+                  </div>);
+                })}
+              </div>}
+            </div>
+
+            <div data-testid="panel-crash" style={{background:C.panel,border:`1px solid ${(regimeData.crash?.probability||0)>60?C.red+"44":C.border}`,borderRadius:4,padding:"12px"}}>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.red,letterSpacing:"0.15em",marginBottom:8}}>{i18n.crashDetector}</div>
+              <div style={{fontFamily:MONO,fontSize:22,fontWeight:900,color:(regimeData.crash?.probability||0)>60?C.red:(regimeData.crash?.probability||0)>40?C.orange:C.green,marginBottom:4,textAlign:"center"}}>
+                {(regimeData.crash?.probability||0).toFixed(0)}%
+              </div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.muted,textAlign:"center",marginBottom:6}}>{i18n.probability}</div>
+              <div data-testid="badge-crash-status" style={{textAlign:"center",fontFamily:MONO,fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:2,display:"inline-block",width:"100%",
+                background:(regimeData.crash?.probability||0)>80?"rgba(255,64,96,.15)":(regimeData.crash?.probability||0)>60?"rgba(255,140,0,.12)":(regimeData.crash?.probability||0)>40?"rgba(201,168,76,.12)":"rgba(0,199,135,.12)",
+                color:(regimeData.crash?.probability||0)>80?C.red:(regimeData.crash?.probability||0)>60?C.orange:(regimeData.crash?.probability||0)>40?C.gold:C.green}}>
+                {(regimeData.crash?.probability||0)>80?i18n.crashWarning:(regimeData.crash?.probability||0)>60?i18n.highRisk:(regimeData.crash?.probability||0)>40?i18n.caution:i18n.normal}
+              </div>
+            </div>
+
+            <div data-testid="panel-liquidity" style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"12px"}}>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>{i18n.liquidityIndex}</div>
+              <div style={{fontFamily:MONO,fontSize:22,fontWeight:900,color:C.white,marginBottom:4,textAlign:"center"}}>
+                {(regimeData.liquidity?.score||50).toFixed(0)}
+              </div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.muted,textAlign:"center",marginBottom:6}}>{i18n.score} / 100</div>
+              <div data-testid="badge-liquidity-mode" style={{textAlign:"center",fontFamily:MONO,fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:2,width:"100%",
+                background:regimeData.liquidity?.mode==="LIQUIDITY_EXPANSION"?"rgba(0,199,135,.12)":regimeData.liquidity?.mode==="LIQUIDITY_CONTRACTION"?"rgba(255,64,96,.12)":"rgba(201,168,76,.12)",
+                color:regimeData.liquidity?.mode==="LIQUIDITY_EXPANSION"?C.green:regimeData.liquidity?.mode==="LIQUIDITY_CONTRACTION"?C.red:C.gold}}>
+                {regimeData.liquidity?.mode==="LIQUIDITY_EXPANSION"?i18n.expansion:regimeData.liquidity?.mode==="LIQUIDITY_CONTRACTION"?i18n.contraction:i18n.neutral}
+              </div>
+            </div>
+          </div>
+          </>}
 
           {notifPerm!=="granted"&&<div data-testid="push-prompt" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontFamily:MONO,fontSize:20,color:C.gold}}>!</span>
             <div style={{flex:1}}>
-              <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>LIVE ALERTS</div>
+              <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>{i18n.liveAlerts}</div>
               <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.5}}>Enable in-app alerts for macro events, volume spikes, funding flips, and price targets.</div>
             </div>
             <button data-testid="btn-enable-push" onClick={requestPush} style={{background:C.gold,border:"none",borderRadius:2,padding:"6px 14px",fontFamily:MONO,fontSize:9,color:C.bg,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>ENABLE</button>
@@ -1513,7 +1590,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
           {newsFeed.length>0&&<div style={{marginBottom:12}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-              <div style={{fontFamily:MONO,fontSize:10,color:C.blue,letterSpacing:"0.15em"}}>LIVE NEWS INTELLIGENCE</div>
+              <div style={{fontFamily:MONO,fontSize:10,color:C.blue,letterSpacing:"0.15em"}}>{i18n.newsIntel}</div>
               <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{newsFeed.length} STORIES</div>
             </div>
             <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto"}}>
@@ -1546,7 +1623,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           </div>}
 
           {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
-            <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:10}}>NEXT MACRO EVENT</div>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:10}}>{i18n.nextMacro}</div>
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.text,marginBottom:3}}>{nextEvents[0].bank}: {nextEvents[0].name}</div>
             <div style={{fontFamily:MONO,fontSize:11,color:C.muted2,marginBottom:10}}>{nextEvents[0].date} {nextEvents[0].timeET} ET — Forecast: {nextEvents[0].forecast}</div>
             <Countdown dateStr={nextEvents[0].date} timeET={nextEvents[0].timeET}/>
@@ -1555,7 +1632,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           </div>}
 
           {nextEvents.length>1&&<div style={{marginBottom:12}}>
-            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>UPCOMING EVENTS</div>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>{i18n.upcoming}</div>
             {nextEvents.slice(1,6).map(evt=>{const bc=macroBankColor[evt.bank]||C.gold;return(
               <div key={evt.id} data-testid={`upcoming-${evt.id}`} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div style={{width:36,textAlign:"center"}}><span style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:bc}}>{evt.bank}</span></div>
@@ -1571,7 +1648,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           <ProGate feature="volume-funding-monitors" isPro={isPro} onUpgrade={onUpgrade}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
-              <div style={{fontFamily:MONO,fontSize:9,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>VOLUME MONITOR</div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>{i18n.volumeMonitor}</div>
               {["BTC","ETH","SOL","DOGE","XRP","AVAX"].map(sym=>{const d=cryptoPrices[sym];const vh=d?.volHistory||[];const last=vh[vh.length-1]||0;const avg=vh.length>=3?vh.slice(-5).reduce((a,b)=>a+b,0)/Math.min(vh.length,5):0;const ratio=avg>0?last/avg:0;const hot=ratio>3;return(
                 <div key={sym} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
                   <span style={{fontFamily:MONO,fontSize:10,color:hot?C.cyan:C.muted2}}>{sym}</span>
@@ -1584,7 +1661,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             </div>
 
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
-              <div style={{fontFamily:MONO,fontSize:9,color:C.green,letterSpacing:"0.15em",marginBottom:8}}>FUNDING RATES</div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.green,letterSpacing:"0.15em",marginBottom:8}}>{i18n.fundingRates}</div>
               {["BTC","ETH","SOL","DOGE","XRP","AVAX"].map(sym=>{const d=cryptoPrices[sym];const f=d?.funding||0;const fh=d?.fundHistory||[];const wasNeg=fh.length>=3&&fh.slice(-3).every(x=>x<0);const wasPos=fh.length>=3&&fh.slice(-3).every(x=>x>0);const flipped=(wasNeg&&f>0)||(wasPos&&f<0);return(
                 <div key={sym} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
                   <span style={{fontFamily:MONO,fontSize:10,color:flipped?C.orange:C.muted2}}>{sym}</span>
@@ -1599,7 +1676,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
           <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"12px 14px",marginBottom:12}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-              <div style={{fontFamily:MONO,fontSize:10,color:C.red,letterSpacing:"0.15em"}}>LIQUIDATION HEATMAP</div>
+              <div style={{fontFamily:MONO,fontSize:10,color:C.red,letterSpacing:"0.15em"}}>{i18n.liqHeatmap}</div>
               <div style={{display:"flex",gap:4}}>
                 {["BTC","ETH","SOL","XAU"].map(s=>(
                   <button key={s} data-testid={`liq-btn-${s}`} onClick={()=>setLiqSym(s)} style={{background:liqSym===s?"rgba(255,64,96,.15)":"transparent",border:`1px solid ${liqSym===s?C.red:C.border}`,borderRadius:2,padding:"4px 10px",fontFamily:MONO,fontSize:9,color:liqSym===s?C.red:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>{s}</button>
@@ -1610,7 +1687,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           </div>
           </ProGate>
 
-          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",letterSpacing:"0.1em"}}>CLVRQuant v2 RADAR — ALL DATA LIVE</div>
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",letterSpacing:"0.1em"}}>{i18n.allDataLive}</div>
         </>}
 
         {/* ══ PRICES ══ */}
