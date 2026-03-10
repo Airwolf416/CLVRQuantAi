@@ -990,7 +990,7 @@ function Dashboard({user,setUser}){
       const r=await fetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:accessCodeInput.trim()})});
       const data=await r.json();
       if(data.valid){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");localStorage.setItem("clvr_code",accessCodeInput.trim());}catch{}setAccessCodeMsg(`✦ ${data.label} — Pro access activated`);setToast("✦ Pro access activated!");}
-      else{setAccessCodeMsg("Invalid or expired code");}
+      else{setAccessCodeMsg(data.error||"Invalid or expired code");}
     }catch{setAccessCodeMsg("Verification failed");}
   };
 
