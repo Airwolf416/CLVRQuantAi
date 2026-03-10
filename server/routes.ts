@@ -218,8 +218,10 @@ async function startHyperliquidRefreshLoop() {
             volume: parseFloat(ctxs[i]?.dayNtlVlm || 0),
             dayChg,
           };
+          if (markPx > 0) recordPrice(appName, markPx);
         }
       });
+      detectMoves();
     } catch (e: any) {
       console.error("Hyperliquid refresh error:", e.message);
     }
