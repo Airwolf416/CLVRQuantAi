@@ -1704,7 +1704,10 @@ export async function registerRoutes(
     const { ownerCode } = req.body;
     if (ownerCode !== OWNER_CODE) return res.status(403).json({ error: "Unauthorized" });
     try {
-      const allUsers = await pool.query("SELECT id, name, email, tier, subscribe_to_brief FROM users WHERE email LIKE '%@%' ORDER BY email");
+      const { targets } = req.body;
+      const allUsers = targets && Array.isArray(targets) && targets.length > 0
+        ? { rows: targets }
+        : await pool.query("SELECT id, name, email, tier, subscribe_to_brief FROM users WHERE email LIKE '%@%' ORDER BY email");
       const { client: resend } = await getUncachableResendClient();
       const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
       const results: any[] = [];
