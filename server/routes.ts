@@ -161,7 +161,7 @@ async function checkAndGrantReferralReward(userId: string) {
     }
     try {
       const { client: resend, fromEmail } = await getUncachableResendClient();
-      const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
+      const senderAddress = fromEmail ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
       await resend.emails.send({
         from: senderAddress, to: referrer.email,
         subject: "CLVRQuant — You earned 1 week of Pro!",
@@ -186,7 +186,7 @@ async function checkPromoExpiryReminders() {
     for (const u of users14) {
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
-        const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
+        const senderAddress = (fromEmail && !fromEmail.endsWith("@gmail.com") && !fromEmail.endsWith("@yahoo.com") && !fromEmail.endsWith("@hotmail.com")) ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
         const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
         await resend.emails.send({
           from: senderAddress, to: u.email,
@@ -1734,9 +1734,12 @@ export async function registerRoutes(
       }
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
-        const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
-        await resend.emails.send({
+        console.log(`[signup] Resend fromEmail configured as: "${fromEmail}"`);
+        const senderAddress = (fromEmail && !fromEmail.endsWith("@gmail.com") && !fromEmail.endsWith("@yahoo.com") && !fromEmail.endsWith("@hotmail.com")) ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
+        console.log(`[signup] Sending welcome email to ${email.toLowerCase().trim()} from ${senderAddress}`);
+        const emailResult = await resend.emails.send({
           from: senderAddress,
+          reply_to: "mikeclaver@gmail.com",
           to: email.toLowerCase().trim(),
           subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
@@ -1771,9 +1774,13 @@ export async function registerRoutes(
             </div>
           </div>`,
         });
-        console.log(`[signup] Welcome email sent to ${email.toLowerCase().trim()}`);
+        if (emailResult?.error) {
+          console.error(`[signup] Resend returned error for ${email.toLowerCase().trim()}:`, JSON.stringify(emailResult.error));
+        } else {
+          console.log(`[signup] Welcome email delivered to ${email.toLowerCase().trim()}, id=${emailResult?.data?.id || emailResult?.id || "ok"}`);
+        }
       } catch (emailErr: any) {
-        console.error(`[signup] Welcome email FAILED for ${email.toLowerCase().trim()}:`, emailErr.message, emailErr.statusCode || "");
+        console.error(`[signup] Welcome email FAILED for ${email.toLowerCase().trim()}:`, JSON.stringify(emailErr));
       }
       (req.session as any).userId = user.id;
       res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
@@ -1841,7 +1848,7 @@ export async function registerRoutes(
       const resetLink = `${APP_URL}?reset=${token}`;
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
-        const senderAddress = fromEmail && !fromEmail.endsWith("@gmail.com") ? fromEmail : "CLVRQuant <onboarding@resend.dev>";
+        const senderAddress = (fromEmail && !fromEmail.endsWith("@gmail.com") && !fromEmail.endsWith("@yahoo.com") && !fromEmail.endsWith("@hotmail.com")) ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
         await resend.emails.send({
           from: senderAddress,
           to: email.toLowerCase().trim(),
