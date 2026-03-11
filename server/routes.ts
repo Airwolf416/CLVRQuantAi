@@ -1700,6 +1700,65 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/send-welcome-blast", async (req, res) => {
+    const { ownerCode } = req.body;
+    if (ownerCode !== OWNER_CODE) return res.status(403).json({ error: "Unauthorized" });
+    try {
+      const allUsers = await pool.query("SELECT id, name, email, tier, subscribe_to_brief FROM users WHERE email LIKE '%@%' ORDER BY email");
+      const { client: resend } = await getUncachableResendClient();
+      const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
+      const results: any[] = [];
+      for (const u of allUsers.rows) {
+        try {
+          const dailyEmail = u.subscribe_to_brief;
+          const emailResult = await resend.emails.send({
+            from: senderAddress,
+            reply_to: "mikeclaver@gmail.com",
+            to: u.email,
+            subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
+            html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+              <div style="text-align:center;margin-bottom:24px">
+                <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
+                <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">AI · MARKET INTELLIGENCE</div>
+              </div>
+              <div style="border-top:1px solid #141e35;padding-top:20px">
+                <p style="font-size:16px;color:#f0f4ff;margin-bottom:4px">Welcome, <strong>${u.name}</strong></p>
+                <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant account is live. Here's what you have access to:</p>
+                <div style="background:#0c1220;border:1px solid #141e35;border-radius:4px;padding:16px;margin:16px 0">
+                  <div style="font-family:monospace;font-size:10px;color:#c9a84c;letter-spacing:0.15em;margin-bottom:10px">YOUR FEATURES</div>
+                  ${[
+                    "Real-time prices — 32 crypto, 16 equities, 7 commodities, 14 forex",
+                    "Live signal detection — QuantBrain AI scoring",
+                    "Macro calendar — Central bank decisions & economic events",
+                    "AI Market Analyst — Ask anything, get trade ideas",
+                    "Price alerts — Custom notifications",
+                    "Phantom Wallet — Solana integration",
+                    dailyEmail ? "📧 Daily 6AM Brief — Subscribed ✓" : "📧 Daily 6AM Brief — Not subscribed",
+                  ].map(f => `<div style="font-size:12px;color:#c8d4ee;padding:4px 0;display:flex;align-items:center;gap:8px"><span style="color:#c9a84c">✦</span> ${f}</div>`).join("")}
+                </div>
+                <div style="background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.15);border-radius:4px;padding:12px 16px;margin:16px 0">
+                  <div style="font-size:10px;color:#ff8c00;font-weight:700;letter-spacing:0.15em;margin-bottom:4px">IMPORTANT DISCLAIMER</div>
+                  <div style="font-size:10px;color:#6b7fa8;line-height:1.7">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss. CLVRQuant and Mike Claver bear no liability for any financial decisions.</div>
+                </div>
+                <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</p>
+              </div>
+            </div>`,
+          });
+          const id = emailResult?.data?.id || emailResult?.id || "ok";
+          const err = emailResult?.error;
+          results.push({ email: u.email, status: err ? "error" : "sent", id, error: err || null });
+          console.log(`[welcome-blast] ${err ? "FAILED" : "SENT"}: ${u.email} id=${id}`);
+        } catch (e: any) {
+          results.push({ email: u.email, status: "error", error: e.message });
+          console.error(`[welcome-blast] EXCEPTION: ${u.email}: ${e.message}`);
+        }
+      }
+      res.json({ total: allUsers.rows.length, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/auth/signup", async (req, res) => {
     const { name, email, password, dailyEmail, referralCode: refCode } = req.body;
     if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
