@@ -689,11 +689,18 @@ function Dashboard({user,setUser}){
   useEffect(()=>{
     if(!user||alertsLoaded.current)return;
     alertsLoaded.current=true;
-    fetch("/api/alerts",{credentials:"include"}).then(r=>r.ok?r.json():Promise.reject()).then(data=>{
-      const mapped=data.map(a=>({...a,threshold:Number(a.threshold)}));
-      setAlerts(mapped);
-      if(mapped.length>0)idRef.current=Math.max(...mapped.map(a=>a.id))+1;
-    }).catch(()=>{});
+    const loadAlerts=()=>{
+      fetch("/api/alerts").then(r=>{
+        if(r.status===401){setTimeout(loadAlerts,1000);return null;}
+        return r.ok?r.json():null;
+      }).then(data=>{
+        if(!data)return;
+        const mapped=data.map(a=>({...a,threshold:Number(a.threshold)}));
+        setAlerts(mapped);
+        if(mapped.length>0)idRef.current=Math.max(...mapped.map(a=>a.id))+1;
+      }).catch(()=>{});
+    };
+    setTimeout(loadAlerts,500);
   },[user]);
   const volRef=useRef({});
   const fundRef=useRef({});
