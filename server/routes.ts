@@ -161,7 +161,7 @@ async function checkAndGrantReferralReward(userId: string) {
     }
     try {
       const { client: resend, fromEmail } = await getUncachableResendClient();
-      const senderAddress = fromEmail ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
+      const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
       await resend.emails.send({
         from: senderAddress, to: referrer.email,
         subject: "CLVRQuant — You earned 1 week of Pro!",
@@ -186,7 +186,7 @@ async function checkPromoExpiryReminders() {
     for (const u of users14) {
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
-        const senderAddress = (fromEmail && !fromEmail.endsWith("@gmail.com") && !fromEmail.endsWith("@yahoo.com") && !fromEmail.endsWith("@hotmail.com")) ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
+        const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
         const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
         await resend.emails.send({
           from: senderAddress, to: u.email,
@@ -1735,7 +1735,7 @@ export async function registerRoutes(
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
         console.log(`[signup] Resend fromEmail configured as: "${fromEmail}"`);
-        const senderAddress = (fromEmail && !fromEmail.endsWith("@gmail.com") && !fromEmail.endsWith("@yahoo.com") && !fromEmail.endsWith("@hotmail.com")) ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
+        const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
         console.log(`[signup] Sending welcome email to ${email.toLowerCase().trim()} from ${senderAddress}`);
         const emailResult = await resend.emails.send({
           from: senderAddress,
@@ -1848,7 +1848,7 @@ export async function registerRoutes(
       const resetLink = `${APP_URL}?reset=${token}`;
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
-        const senderAddress = (fromEmail && !fromEmail.endsWith("@gmail.com") && !fromEmail.endsWith("@yahoo.com") && !fromEmail.endsWith("@hotmail.com")) ? `CLVRQuant <${fromEmail}>` : "CLVRQuant <onboarding@resend.dev>";
+        const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
         await resend.emails.send({
           from: senderAddress,
           to: email.toLowerCase().trim(),
