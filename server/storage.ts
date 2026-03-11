@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, users, accessCodes, referrals } from "@shared/schema";
+import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, users, accessCodes, referrals, userAlerts } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, and, gt, lt } from "drizzle-orm";
 
@@ -26,6 +26,11 @@ export interface IStorage {
   createReferral(data: InsertReferral): Promise<Referral>;
   getReferralByReferred(referredUserId: string): Promise<Referral | undefined>;
   grantReferralReward(referralId: number): Promise<void>;
+  getUserAlerts(userId: string): Promise<UserAlert[]>;
+  createUserAlert(data: InsertUserAlert): Promise<UserAlert>;
+  deleteUserAlert(id: number, userId: string): Promise<void>;
+  updateUserAlertTriggered(id: number, userId: string): Promise<void>;
+  deleteExpiredAlerts(): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -138,6 +143,29 @@ export class DatabaseStorage implements IStorage {
 
   async grantReferralReward(referralId: number): Promise<void> {
     await db.update(referrals).set({ rewardGranted: true, status: "completed" }).where(eq(referrals.id, referralId));
+  }
+
+  async getUserAlerts(userId: string): Promise<UserAlert[]> {
+    return db.select().from(userAlerts).where(eq(userAlerts.userId, userId));
+  }
+
+  async createUserAlert(data: InsertUserAlert): Promise<UserAlert> {
+    const [alert] = await db.insert(userAlerts).values(data).returning();
+    return alert;
+  }
+
+  async deleteUserAlert(id: number, userId: string): Promise<void> {
+    await db.delete(userAlerts).where(and(eq(userAlerts.id, id), eq(userAlerts.userId, userId)));
+  }
+
+  async updateUserAlertTriggered(id: number, userId: string): Promise<void> {
+    await db.update(userAlerts).set({ triggered: true }).where(and(eq(userAlerts.id, id), eq(userAlerts.userId, userId)));
+  }
+
+  async deleteExpiredAlerts(): Promise<number> {
+    const now = new Date();
+    const result = await db.delete(userAlerts).where(lt(userAlerts.expiresAt, now)).returning();
+    return result.length;
   }
 }
 

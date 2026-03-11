@@ -1586,10 +1586,14 @@ export async function registerRoutes(
   });
 
   app.post("/api/stripe/portal", async (req, res) => {
-    const { customerId } = req.body;
-    if (!customerId) return res.status(400).json({ error: "customerId required" });
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
 
     try {
+      const user = await storage.getUser(userId);
+      const customerId = user?.stripeCustomerId;
+      if (!customerId) return res.status(400).json({ error: "No Stripe customer found" });
+
       const stripe = await getUncachableStripeClient();
       const domains = process.env.REPLIT_DOMAINS?.split(',') || [];
       const baseUrl = domains.length > 0 ? `https://${domains[0]}` : 'http://localhost:5000';
@@ -1599,6 +1603,112 @@ export async function registerRoutes(
         return_url: baseUrl,
       });
       res.json({ url: portal.url });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/stripe/pause", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user?.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription" });
+      const stripe = await getUncachableStripeClient();
+      await stripe.subscriptions.update(user.stripeSubscriptionId, {
+        pause_collection: { behavior: "void" },
+      });
+      res.json({ ok: true, status: "paused" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/stripe/resume", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user?.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription" });
+      const stripe = await getUncachableStripeClient();
+      await stripe.subscriptions.update(user.stripeSubscriptionId, {
+        pause_collection: "",
+      } as any);
+      res.json({ ok: true, status: "active" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/stripe/cancel", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user?.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription" });
+      const stripe = await getUncachableStripeClient();
+      await stripe.subscriptions.update(user.stripeSubscriptionId, {
+        cancel_at_period_end: true,
+      });
+      res.json({ ok: true, status: "canceling" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/alerts", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const alerts = await storage.getUserAlerts(userId);
+      res.json(alerts);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/alerts", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    const { sym, field, condition, threshold, label } = req.body;
+    if (!sym || !field || !condition || threshold === undefined || !label) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    try {
+      const expiresAt = new Date();
+      expiresAt.setMonth(expiresAt.getMonth() + 1);
+      const alert = await storage.createUserAlert({
+        userId,
+        sym,
+        field,
+        condition,
+        threshold: String(threshold),
+        label,
+        expiresAt,
+      });
+      res.json(alert);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/alerts/:id", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      await storage.deleteUserAlert(Number(req.params.id), userId);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/alerts/:id/trigger", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      await storage.updateUserAlertTriggered(Number(req.params.id), userId);
+      res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1985,6 +2095,7 @@ export async function registerRoutes(
             status: sub.status,
             currentPeriodEnd: (sub as any).current_period_end ? new Date((sub as any).current_period_end * 1000).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : null,
             cancelAtPeriodEnd: (sub as any).cancel_at_period_end || false,
+            paused: !!(sub as any).pause_collection,
             interval: (sub as any).items?.data?.[0]?.price?.recurring?.interval || "month",
             amount: (sub as any).items?.data?.[0]?.price?.unit_amount ? "$" + ((sub as any).items.data[0].price.unit_amount / 100).toFixed(2) : null,
           };
@@ -2078,6 +2189,12 @@ export async function registerRoutes(
 
   setInterval(() => { checkPromoExpiryReminders().catch(() => {}); }, 86400000);
   setTimeout(() => { checkPromoExpiryReminders().catch(() => {}); }, 60000);
+  setInterval(async () => {
+    try { const n = await storage.deleteExpiredAlerts(); if (n > 0) console.log(`[cleanup] Deleted ${n} expired alerts`); } catch {}
+  }, 3600000);
+  setTimeout(async () => {
+    try { const n = await storage.deleteExpiredAlerts(); if (n > 0) console.log(`[cleanup] Deleted ${n} expired alerts`); } catch {}
+  }, 30000);
 
   return httpServer;
 }
