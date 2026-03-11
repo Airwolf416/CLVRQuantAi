@@ -1956,7 +1956,9 @@ export async function registerRoutes(
         console.error(`[signup] Welcome email FAILED for ${email.toLowerCase().trim()}:`, JSON.stringify(emailErr));
       }
       (req.session as any).userId = user.id;
-      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+      req.session.save(() => {
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+      });
     } catch (e: any) {
       console.error("Signup error:", e.message);
       if (e.message?.includes("unique") || e.message?.includes("duplicate")) {
@@ -1981,7 +1983,9 @@ export async function registerRoutes(
         await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [user.id]);
       }
       (req.session as any).userId = user.id;
-      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier } });
+      req.session.save(() => {
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier } });
+      });
     } catch (e: any) {
       res.status(500).json({ error: "Sign in failed" });
     }
