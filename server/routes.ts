@@ -1748,6 +1748,7 @@ export async function registerRoutes(
           const err = emailResult?.error;
           results.push({ email: u.email, status: err ? "error" : "sent", id, error: err || null });
           console.log(`[welcome-blast] ${err ? "FAILED" : "SENT"}: ${u.email} id=${id}`);
+          await new Promise(r => setTimeout(r, 600));
         } catch (e: any) {
           results.push({ email: u.email, status: "error", error: e.message });
           console.error(`[welcome-blast] EXCEPTION: ${u.email}: ${e.message}`);
