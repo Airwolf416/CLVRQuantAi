@@ -394,7 +394,7 @@ function Badge({label,color="gold",style={}}){
 }
 
 // ─── PRICE ROW (Bloomberg-style tick arrows + flash) ──
-function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched}){
+function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched,marketClosed}){
   if(!d)return null;
   const isUp=Number(d.chg)>=0;
   const tickUp=flash==="green";
@@ -410,7 +410,7 @@ function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched}){
         <div style={{display:"flex",alignItems:"center",gap:7}}>
           <span style={{fontFamily:MONO,fontWeight:600,fontSize:13,color:C.text,letterSpacing:"0.05em"}}>{sym}</span>
           {label&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>{label}</span>}
-          <button onClick={()=>onToggleWatch(sym)} style={{background:"none",border:"none",cursor:"pointer",padding:0,fontSize:11,color:watched?C.gold:C.muted,opacity:watched?1:.3,transition:"all .2s"}}>✦</button>
+          <button onClick={()=>onToggleWatch(sym)} style={{background:"none",border:"none",cursor:"pointer",padding:"4px",fontSize:16,color:watched?C.gold:C.muted,opacity:watched?1:.3,transition:"all .2s",lineHeight:1}}>✦</button>
         </div>
         {extra&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>{extra}</div>}
       </div>
@@ -419,7 +419,7 @@ function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched}){
         {fmt(d.price,sym)}
       </div>
       <div style={{fontFamily:MONO,fontSize:11,color:isUp?C.green:C.red,minWidth:50,textAlign:"right"}}>{pct(d.chg)}</div>
-      {d.live?<Badge label="LIVE" color="green"/>:<Badge label="SIM" color="orange"/>}
+      {d.live?<Badge label="LIVE" color="green"/>:marketClosed?<Badge label="CLOSED" color="muted"/>:<Badge label="SIM" color="orange"/>}
     </div>
   );
 }
@@ -667,6 +667,7 @@ function Dashboard({user,setUser}){
   const prevRef=useRef({});
   const [watchlist,setWatchlist]=useState(["BTC","ETH","SOL","XAU","TSLA"]);
   const [alerts,setAlerts]=useState([]);
+  const alertsLoaded=useRef(false);
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [liveSignals,setLiveSignals]=useState([]);
@@ -685,6 +686,15 @@ function Dashboard({user,setUser}){
   const [aiLoading,setAiLoading]=useState(false);
   const [aiTimeframe,setAiTimeframe]=useState("today");
   const idRef=useRef(300);
+  useEffect(()=>{
+    if(!user||alertsLoaded.current)return;
+    alertsLoaded.current=true;
+    fetch("/api/alerts",{credentials:"include"}).then(r=>r.ok?r.json():Promise.reject()).then(data=>{
+      const mapped=data.map(a=>({...a,threshold:Number(a.threshold)}));
+      setAlerts(mapped);
+      if(mapped.length>0)idRef.current=Math.max(...mapped.map(a=>a.id))+1;
+    }).catch(()=>{});
+  },[user]);
   const volRef=useRef({});
   const fundRef=useRef({});
   const firedAlerts=useRef(new Set());
@@ -748,6 +758,7 @@ function Dashboard({user,setUser}){
     sendPush(alert.title,alert.body,dedupeKey);
     if(soundEnabledRef.current)playBloombergPing();
     setToast(alert.title);
+    setTimeout(()=>setActiveAlerts(prev=>prev.filter(a=>a.id!==key)),5000);
   },[]);
   const dismissAlert=(id)=>setActiveAlerts(prev=>prev.filter(a=>a.id!==id));
 
@@ -1046,6 +1057,7 @@ function Dashboard({user,setUser}){
       if(hit){
         setToast(`✦ ALERT: ${a.label}`);
         if(typeof Notification!=="undefined"&&Notification.permission==="granted")new Notification("CLVRQuant",{body:a.label});
+        if(user&&a.id)fetch(`/api/alerts/${a.id}/trigger`,{method:"POST",credentials:"include"}).catch(()=>{});
         return{...a,triggered:true};
       }
       return a;
@@ -1716,7 +1728,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           {priceTab==="equity"&&<div style={panel}>
             <div style={ph}><PTitle>Equities · Finnhub</PTitle><div style={{display:"flex",gap:6,alignItems:"center"}}>{isNYSEOpen()?<Badge label="LIVE" color="green"/>:<Badge label="CLOSED" color="muted"/>}<Badge label={fhLive?`${Object.values(equityPrices).filter(p=>p.live).length} Streaming`:"Offline"} color={fhLive?"green":"gold"}/></div></div>
             <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time trades · NYSE 9:30a–4p ET</div>
-            {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
+            {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)} marketClosed={!isNYSEOpen()}/>)}
           </div>}
           {priceTab==="metals"&&<div style={panel}>
             <div style={ph}><PTitle>Commodities</PTitle><Badge label={fhLive?`${Object.values(metalPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
@@ -1727,7 +1739,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
           {priceTab==="forex"&&<div style={panel}>
             <div style={ph}><PTitle>Forex</PTitle><div style={{display:"flex",gap:6,alignItems:"center"}}>{isForexOpen()?<Badge label="LIVE" color="green"/>:<Badge label="CLOSED" color="muted"/>}<Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Streaming`:"Offline"} color={fhLive?"green":"gold"}/></div></div>
             <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time · Sun 5pm–Fri 5pm ET</div>
-            {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
+            {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)} marketClosed={!isForexOpen()}/>)}
           </div>}
         </>}
 
@@ -2056,11 +2068,19 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                         style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"7px 8px",color:C.text,fontFamily:MONO,fontSize:10}}/>
                     </div>
                   </div>
-                  <button data-testid="button-create-alert" onClick={()=>{
+                  <button data-testid="button-create-alert" onClick={async()=>{
                     const t=Number(alertForm.threshold);
                     if(!t){setToast("Enter a threshold value");return;}
                     const label=`${alertForm.sym} ${alertForm.field} ${alertForm.condition} ${alertForm.field==="price"?fmt(t,alertForm.sym):t+"%"}`;
-                    setAlerts(prev=>[...prev,{id:idRef.current++,sym:alertForm.sym,field:alertForm.field,condition:alertForm.condition,threshold:t,triggered:false,label}]);
+                    if(user){
+                      try{
+                        const r=await fetch("/api/alerts",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",body:JSON.stringify({sym:alertForm.sym,field:alertForm.field,condition:alertForm.condition,threshold:t,label})});
+                        if(r.ok){const saved=await r.json();setAlerts(prev=>[...prev,{...saved,threshold:Number(saved.threshold)}]);}
+                        else{const err=await r.json().catch(()=>({}));setToast(err.error||"Failed to save alert");return;}
+                      }catch(e){setToast("Network error — could not save alert");return;}
+                    }else{
+                      setAlerts(prev=>[...prev,{id:idRef.current++,sym:alertForm.sym,field:alertForm.field,condition:alertForm.condition,threshold:t,triggered:false,label}]);
+                    }
                     setAlertForm({sym:"BTC",field:"price",condition:"above",threshold:""});
                     setShowAlertForm(false);
                     setToast(`Alert created: ${label} ✦`);
@@ -2082,7 +2102,10 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                     </div>
                     <div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>{a.label}</div>
                   </div>
-                  <button data-testid={`button-delete-alert-${a.id}`} onClick={()=>setAlerts(prev=>prev.filter(x=>x.id!==a.id))}
+                  <button data-testid={`button-delete-alert-${a.id}`} onClick={()=>{
+                    setAlerts(prev=>prev.filter(x=>x.id!==a.id));
+                    if(user)fetch(`/api/alerts/${a.id}`,{method:"DELETE",credentials:"include"}).catch(()=>{});
+                  }}
                     style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,color:C.muted2,cursor:"pointer",fontFamily:MONO,fontSize:9,padding:"3px 8px"}}>✕</button>
                 </div>
               ))

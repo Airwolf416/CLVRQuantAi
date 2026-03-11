@@ -90,20 +90,62 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
     setActionLoading(false);
   };
 
-  const handleCancelSubscription = async () => {
-    if (!acct?.stripeSubscriptionId) return;
+  const handleManageStripe = async () => {
     setActionLoading(true);
     try {
       const res = await fetch("/api/stripe/portal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customerId: acct.stripeCustomerId }),
+        credentials: "include",
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
     } catch (e) {}
     setActionLoading(false);
     setModal(null);
+  };
+
+  const handlePauseSubscription = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/stripe/pause", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (data.ok) {
+        setAcct(a => ({ ...a, subscription: { ...a.subscription, paused: true } }));
+        showToast("Subscription paused — you'll keep access until the current period ends");
+        setModal(null);
+      } else { showToast(data.error || "Failed to pause"); }
+    } catch (e) { showToast("Failed to pause subscription"); }
+    setActionLoading(false);
+  };
+
+  const handleResumeSubscription = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/stripe/resume", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (data.ok) {
+        setAcct(a => ({ ...a, subscription: { ...a.subscription, paused: false } }));
+        showToast("Subscription resumed!");
+        setModal(null);
+      } else { showToast(data.error || "Failed to resume"); }
+    } catch (e) { showToast("Failed to resume subscription"); }
+    setActionLoading(false);
+  };
+
+  const handleCancelSubscription = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/stripe/cancel", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (data.ok) {
+        setAcct(a => ({ ...a, subscription: { ...a.subscription, cancelAtPeriodEnd: true } }));
+        showToast("Subscription will cancel at period end — you keep access until then");
+        setModal(null);
+      } else { showToast(data.error || "Failed to cancel"); }
+    } catch (e) { showToast("Failed to cancel subscription"); }
+    setActionLoading(false);
   };
 
   const handleDelete = async () => {
@@ -243,15 +285,43 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
             </div>
           )}
 
-          {acct.tier !== "free" && acct.stripeSubscriptionId && !acct.subscription?.cancelAtPeriodEnd && (
+          {acct.tier !== "free" && acct.stripeSubscriptionId && (
             <div style={S.card}>
               <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, letterSpacing:"0.2em", marginBottom:8 }}>MANAGE SUBSCRIPTION</div>
-              <div style={{ fontSize:11, color:C.muted2, lineHeight:1.7, marginBottom:14 }}>
-                Manage your subscription, update payment method, or cancel through the Stripe customer portal.
+              {acct.subscription?.paused && (
+                <div style={{ background:"rgba(255,140,0,.06)", border:`1px solid rgba(255,140,0,.2)`, borderRadius:4, padding:"10px 12px", fontSize:11, color:C.orange, marginBottom:14, lineHeight:1.6, fontFamily:MONO }}>
+                  Your subscription is paused. You won't be billed until you resume.
+                </div>
+              )}
+              {acct.subscription?.cancelAtPeriodEnd && (
+                <div style={{ background:"rgba(255,64,96,.06)", border:`1px solid rgba(255,64,96,.2)`, borderRadius:4, padding:"10px 12px", fontSize:11, color:C.red, marginBottom:14, lineHeight:1.6, fontFamily:MONO }}>
+                  Cancelled — you keep Pro access until {acct.subscription.currentPeriodEnd}
+                </div>
+              )}
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {!acct.subscription?.cancelAtPeriodEnd && !acct.subscription?.paused && (
+                  <>
+                    <button data-testid="btn-pause-subscription" onClick={() => setModal("pause")} disabled={actionLoading}
+                      style={{ ...S.ghostBtn, width:"100%", borderColor:"rgba(255,140,0,.25)", color:C.orange }}>
+                      Pause Subscription
+                    </button>
+                    <button data-testid="btn-cancel-subscription" onClick={() => setModal("cancel")} disabled={actionLoading}
+                      style={{ ...S.ghostBtn, width:"100%", borderColor:"rgba(255,64,96,.25)", color:C.red }}>
+                      Cancel Subscription
+                    </button>
+                  </>
+                )}
+                {acct.subscription?.paused && (
+                  <button data-testid="btn-resume-subscription" onClick={handleResumeSubscription} disabled={actionLoading}
+                    style={{ ...S.ghostBtn, width:"100%", borderColor:"rgba(0,199,135,.25)", color:C.green }}>
+                    {actionLoading ? "Resuming..." : "Resume Subscription"}
+                  </button>
+                )}
+                <button data-testid="btn-manage-stripe" onClick={handleManageStripe} disabled={actionLoading}
+                  style={{ ...S.ghostBtn, width:"100%" }}>
+                  Manage via Stripe →
+                </button>
               </div>
-              <button data-testid="btn-manage-subscription" onClick={handleCancelSubscription} style={S.ghostBtn}>
-                Manage via Stripe →
-              </button>
             </div>
           )}
         </div>
@@ -346,6 +416,33 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
 
       {tab === "billing" && (
         <div>
+          {acct.subscription && acct.tier !== "free" && (
+            <div style={{ ...S.card, borderColor: acct.subscription.cancelAtPeriodEnd ? "rgba(255,64,96,.25)" : acct.subscription.paused ? "rgba(255,140,0,.25)" : "rgba(0,199,135,.25)" }}>
+              <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, letterSpacing:"0.2em", marginBottom:12 }}>BILLING STATUS</div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div>
+                  <div style={{ fontFamily:MONO, fontSize:12, fontWeight:700, color: acct.subscription.cancelAtPeriodEnd ? C.red : acct.subscription.paused ? C.orange : C.green }}>
+                    {acct.subscription.cancelAtPeriodEnd ? "Cancelling" : acct.subscription.paused ? "Paused" : "Active"}
+                  </div>
+                  <div style={{ fontFamily:MONO, fontSize:11, color:C.muted2, marginTop:4 }}>
+                    {acct.subscription.cancelAtPeriodEnd
+                      ? `Access ends ${acct.subscription.currentPeriodEnd}`
+                      : acct.subscription.paused
+                        ? "Billing paused — no upcoming charge"
+                        : `Next charge: ${acct.subscription.currentPeriodEnd}`}
+                  </div>
+                  {!acct.subscription.cancelAtPeriodEnd && !acct.subscription.paused && acct.subscription.amount && (
+                    <div style={{ fontFamily:MONO, fontSize:10, color:C.muted, marginTop:2 }}>
+                      {acct.subscription.amount}/{acct.subscription.interval === "year" ? "yr" : "mo"}
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize:22, color: acct.subscription.cancelAtPeriodEnd ? C.red : acct.subscription.paused ? C.orange : C.green }}>
+                  {acct.subscription.cancelAtPeriodEnd ? "✕" : acct.subscription.paused ? "⏸" : "✓"}
+                </div>
+              </div>
+            </div>
+          )}
           <div style={S.card}>
             <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, letterSpacing:"0.2em", marginBottom:14 }}>BILLING HISTORY</div>
             {acct.invoices && acct.invoices.length > 0 ? (
@@ -373,7 +470,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
               <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, letterSpacing:"0.2em", marginBottom:14 }}>PAYMENT METHOD</div>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                 <div style={{ fontSize:12, color:C.muted2 }}>Managed through Stripe</div>
-                <button data-testid="btn-update-payment" onClick={handleCancelSubscription} style={S.ghostBtn}>Manage →</button>
+                <button data-testid="btn-update-payment" onClick={handleManageStripe} style={S.ghostBtn}>Manage →</button>
               </div>
             </div>
           )}
@@ -431,6 +528,27 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
           confirmLabel={actionLoading ? "..." : "Unsubscribe"}
           confirmColor={C.red}
           onConfirm={() => handleToggleDailyEmail(false)}
+          onCancel={() => setModal(null)} />
+      )}
+
+      {modal === "pause" && (
+        <ConfirmModal
+          title="Pause Subscription?"
+          message="Your subscription will be paused. You won't be billed during the pause, but you'll keep Pro access until the current billing period ends. You can resume anytime."
+          confirmLabel={actionLoading ? "Pausing..." : "Pause Subscription"}
+          confirmColor={C.orange}
+          onConfirm={handlePauseSubscription}
+          onCancel={() => setModal(null)} />
+      )}
+
+      {modal === "cancel" && (
+        <ConfirmModal
+          title="Cancel Subscription?"
+          message="Your subscription will cancel at the end of the current billing period. You'll keep full Pro access until then."
+          warning="After cancellation, your account will revert to the Free plan with limited access (3 tabs only)."
+          confirmLabel={actionLoading ? "Cancelling..." : "Cancel Subscription"}
+          confirmColor={C.red}
+          onConfirm={handleCancelSubscription}
           onCancel={() => setModal(null)} />
       )}
 

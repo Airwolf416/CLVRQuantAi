@@ -51,6 +51,29 @@ export const referrals = pgTable("referrals", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const userAlerts = pgTable("user_alerts", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  sym: text("sym").notNull(),
+  field: text("field").notNull(),
+  condition: text("condition").notNull(),
+  threshold: text("threshold").notNull(),
+  label: text("label").notNull(),
+  triggered: boolean("triggered").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
+export const insertUserAlertSchema = createInsertSchema(userAlerts).pick({
+  userId: true,
+  sym: true,
+  field: true,
+  condition: true,
+  threshold: true,
+  label: true,
+  expiresAt: true,
+});
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   email: true,
@@ -76,3 +99,5 @@ export type AccessCode = typeof accessCodes.$inferSelect;
 export type InsertAccessCode = z.infer<typeof insertAccessCodeSchema>;
 export type Referral = typeof referrals.$inferSelect;
 export type InsertReferral = z.infer<typeof insertReferralSchema>;
+export type UserAlert = typeof userAlerts.$inferSelect;
+export type InsertUserAlert = z.infer<typeof insertUserAlertSchema>;
