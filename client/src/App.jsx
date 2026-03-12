@@ -10,6 +10,14 @@ import { useState, useEffect, useRef, useCallback, memo } from "react";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
+import QRScanner from "./QRScanner";
+
+// ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
+const WA_STORE_KEY = "clvr_wa_cred";
+function waSupported() { return !!(window.PublicKeyCredential && navigator.credentials?.create); }
+function getStoredWACred() { try { return JSON.parse(localStorage.getItem(WA_STORE_KEY) || "null"); } catch { return null; } }
+function storeWACred(credentialId, userId) { try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, registeredAt: Date.now() })); } catch {} }
+function uint8ToB64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 
 // ─── CLVRQuant Theme ──────────────────────────────────────
 const C = {
@@ -722,7 +730,10 @@ function Dashboard({user,setUser}){
   const [userTier,setUserTier]=useState(()=>{try{return user?.tier||localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
   const [accessCodeInput,setAccessCodeInput]=useState("");
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
+  const [showQRScanner,setShowQRScanner]=useState(false);
   const [showUpgrade,setShowUpgrade]=useState(false);
+  const [showBiometricSetup,setShowBiometricSetup]=useState(false);
+  const [biometricRegistering,setBiometricRegistering]=useState(false);
   const [stripePrices,setStripePrices]=useState([]);
   const [checkoutLoading,setCheckoutLoading]=useState(false);
   const isPro=userTier==="pro";
@@ -1002,15 +1013,53 @@ function Dashboard({user,setUser}){
     }).catch(()=>{});
   },[]);
 
-  const verifyAccessCode=async()=>{
-    if(!accessCodeInput.trim())return;
+  const verifyAccessCode=useCallback(async(codeOverride)=>{
+    const code=(codeOverride||accessCodeInput).trim();
+    if(!code)return;
+    if(codeOverride)setAccessCodeInput(codeOverride);
     try{
-      const r=await fetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:accessCodeInput.trim()})});
+      const r=await fetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
       const data=await r.json();
-      if(data.valid){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");localStorage.setItem("clvr_code",accessCodeInput.trim());}catch{}setAccessCodeMsg(`✦ ${data.label} — Pro access activated`);setToast("✦ Pro access activated!");}
+      if(data.valid){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");localStorage.setItem("clvr_code",code);}catch{}setAccessCodeMsg(`✦ ${data.label} — Pro access activated`);setToast("✦ Pro access activated!");}
       else{setAccessCodeMsg(data.error||"Invalid or expired code");}
     }catch{setAccessCodeMsg("Verification failed");}
-  };
+  },[accessCodeInput]);
+
+  // Show biometric setup prompt if WebAuthn is supported and no credential stored yet
+  useEffect(()=>{
+    if(!user||user?.guest)return;
+    if(!waSupported()||getStoredWACred())return;
+    const timer=setTimeout(()=>setShowBiometricSetup(true),2500);
+    return()=>clearTimeout(timer);
+  },[user]);
+
+  // Register Face ID / biometric credential
+  const registerBiometric=useCallback(async()=>{
+    if(!user?.id)return;
+    setBiometricRegistering(true);
+    try{
+      const challenge=new Uint8Array(32);
+      crypto.getRandomValues(challenge);
+      const userId=new TextEncoder().encode(user.id);
+      const cred=await navigator.credentials.create({publicKey:{
+        challenge,
+        rp:{name:"CLVRQuant",id:window.location.hostname},
+        user:{id:userId,name:user.email||user.username||"trader",displayName:user.name||"Trader"},
+        pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
+        authenticatorSelection:{userVerification:"preferred",residentKey:"discouraged"},
+        timeout:60000,
+        attestation:"none",
+      }});
+      if(!cred)throw new Error("Registration cancelled");
+      const credentialId=uint8ToB64(cred.rawId);
+      const r=await fetch("/api/auth/webauthn/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credentialId})});
+      if(r.ok){storeWACred(credentialId,user.id);setToast("✦ Face ID enabled — next login is one tap");}
+      else throw new Error("Server registration failed");
+    }catch(e){
+      const msg=e?.message||"";
+      if(!msg.includes("cancel")&&!msg.includes("NotAllowed"))setToast("Biometric setup failed. Try again later.");
+    }finally{setBiometricRegistering(false);setShowBiometricSetup(false);}
+  },[user]);
 
   const handleCheckout=async(priceId)=>{
     setCheckoutLoading(true);
@@ -1035,7 +1084,7 @@ function Dashboard({user,setUser}){
   const fetchRegime=useCallback(async()=>{
     try{const r=await fetch("/api/regime");if(r.ok){const d=await r.json();setRegimeData(d);}}catch{}
   },[]);
-  useEffect(()=>{fetchRegime();const iv=setInterval(fetchRegime,30000);return()=>clearInterval(iv);},[fetchRegime]);
+  useEffect(()=>{fetchRegime();const iv=setInterval(fetchRegime,60000);return()=>clearInterval(iv);},[fetchRegime]);
 
   const askMacroAI=async(evt)=>{
     setMacroAiEvent(evt);setMacroAiResp(null);setMacroAiLoading(true);
@@ -1429,6 +1478,29 @@ Also provide an overall market regime assessment and your best risk-adjusted set
         @keyframes cap-pulse{0%,100%{opacity:.7}50%{opacity:1}}
       `}</style>
 
+      {/* QR Scanner overlay */}
+      {showQRScanner&&<QRScanner onScan={async(raw)=>{setShowQRScanner(false);const code=raw.trim().toUpperCase();await verifyAccessCode(code);}} onClose={()=>setShowQRScanner(false)}/>}
+
+      {/* Face ID / Biometric setup prompt */}
+      {showBiometricSetup&&<div style={{position:"fixed",inset:0,zIndex:400,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0 0 40px"}}>
+        <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:12,maxWidth:380,width:"100%",padding:"24px 20px",margin:"0 16px",position:"relative"}}>
+          <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`,borderRadius:"12px 12px 0 0"}}/>
+          <div style={{textAlign:"center",marginBottom:18}}>
+            <div style={{fontSize:42,marginBottom:8}}>🔒</div>
+            <div style={{fontFamily:SERIF,fontWeight:900,fontSize:18,color:C.gold2,marginBottom:4}}>Enable Face ID</div>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,lineHeight:1.7,letterSpacing:"0.05em"}}>Sign in instantly on future visits.<br/>No password required.</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            <button data-testid="btn-enable-faceid" onClick={registerBiometric} disabled={biometricRegistering} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:8,padding:"13px 16px",fontFamily:MONO,fontSize:11,color:C.gold2,cursor:biometricRegistering?"not-allowed":"pointer",letterSpacing:"0.1em",opacity:biometricRegistering?0.6:1}}>
+              {biometricRegistering?"Setting up...":"Enable Face ID / Biometric →"}
+            </button>
+            <button data-testid="btn-skip-faceid" onClick={()=>setShowBiometricSetup(false)} style={{background:"none",border:"none",fontFamily:MONO,fontSize:9,color:C.muted,cursor:"pointer",letterSpacing:"0.08em",padding:"8px 0"}}>
+              Not now
+            </button>
+          </div>
+        </div>
+      </div>}
+
       {activeAlerts.length>0&&<div style={{animation:"slideDown .3s ease"}}><AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} C={C}/></div>}
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
       {tradeModalSig&&<TradeConfirmationModal sig={tradeModalSig} currentPrice={(cryptoPrices[tradeModalSig.token]||{}).price} masterScore={tradeModalSig.masterScore||50} riskOn={tradeModalSig.riskOn||50} onApprove={()=>{setToast(`Trade approved: ${tradeModalSig.token} ${tradeModalSig.dir}`);setTradeModalSig(null);}} onCancel={()=>setTradeModalSig(null)} C={C}/>}
@@ -1467,8 +1539,9 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             <div style={{borderTop:`1px solid ${C.border}`,paddingTop:14}}>
               <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>HAVE AN ACCESS CODE?</div>
               <div style={{display:"flex",gap:6}}>
-                <input data-testid="input-access-code" value={accessCodeInput} onChange={e=>setAccessCodeInput(e.target.value)} placeholder="Enter code" style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 10px",color:C.text,fontFamily:MONO,fontSize:11}}/>
-                <button data-testid="btn-verify-code" onClick={verifyAccessCode} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,padding:"8px 14px",fontFamily:MONO,fontSize:9,color:C.gold,cursor:"pointer",letterSpacing:"0.1em"}}>VERIFY</button>
+                <button data-testid="btn-scan-qr" onClick={()=>setShowQRScanner(true)} title="Scan QR code" style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"8px 10px",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center"}}>📷</button>
+                <input data-testid="input-access-code" value={accessCodeInput} onChange={e=>setAccessCodeInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&verifyAccessCode()} placeholder="CLVR-VIP-XXXX or CLVR-FF-XXXX" style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 10px",color:C.text,fontFamily:MONO,fontSize:10}}/>
+                <button data-testid="btn-verify-code" onClick={()=>verifyAccessCode()} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,padding:"8px 14px",fontFamily:MONO,fontSize:9,color:C.gold,cursor:"pointer",letterSpacing:"0.1em"}}>VERIFY</button>
               </div>
               {accessCodeMsg&&<div style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("✦")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
             </div>

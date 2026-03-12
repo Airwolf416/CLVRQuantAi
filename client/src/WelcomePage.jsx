@@ -1,4 +1,36 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+
+// ── WebAuthn / Face ID helpers ─────────────────────────────────────────────
+const WA_STORE_KEY = "clvr_wa_cred";
+
+function waSupported() {
+  return !!(window.PublicKeyCredential && navigator.credentials?.create);
+}
+
+function getStoredCredential() {
+  try { return JSON.parse(localStorage.getItem(WA_STORE_KEY) || "null"); } catch { return null; }
+}
+
+function storeCredential(credentialId, userId) {
+  try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, registeredAt: Date.now() })); } catch {}
+}
+
+function clearStoredCredential() {
+  try { localStorage.removeItem(WA_STORE_KEY); } catch {}
+}
+
+function strToUint8(str) {
+  return new TextEncoder().encode(str);
+}
+
+function b64ToUint8(b64) {
+  const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+  return new Uint8Array([...bin].map(c => c.charCodeAt(0)));
+}
+
+function uint8ToB64(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
 
 const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide financial advice, investment recommendations, or trading signals. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.`;
 
@@ -47,8 +79,11 @@ export default function WelcomePage({ onEnter }) {
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [waLoading, setWaLoading] = useState(false);
+  const [hasBiometric, setHasBiometric] = useState(false);
 
   useEffect(() => {
+    setHasBiometric(!!(waSupported() && getStoredCredential()));
     const params = new URLSearchParams(window.location.search);
     const token = params.get("reset");
     if (token) {
@@ -60,6 +95,49 @@ export default function WelcomePage({ onEnter }) {
       else setCheckingSession(false);
     }).catch(() => setCheckingSession(false));
   }, []);
+
+  // Face ID / WebAuthn sign-in
+  const handleBiometricSignIn = useCallback(async () => {
+    const stored = getStoredCredential();
+    if (!stored?.credentialId) { setError("No biometric credential found. Please sign in with your password first."); return; }
+    setWaLoading(true);
+    setError("");
+    try {
+      const challenge = new Uint8Array(32);
+      crypto.getRandomValues(challenge);
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge,
+          rpId: window.location.hostname,
+          allowCredentials: [{ type: "public-key", id: b64ToUint8(stored.credentialId) }],
+          userVerification: "preferred",
+          timeout: 60000,
+        },
+      });
+      if (!assertion) throw new Error("Biometric verification cancelled");
+      const res = await fetch("/api/auth/webauthn/authenticate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentialId: stored.credentialId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        clearStoredCredential();
+        setHasBiometric(false);
+        throw new Error(data.error || "Biometric auth failed");
+      }
+      setWaLoading(false);
+      if (onEnter) onEnter(data.user);
+    } catch (e) {
+      setWaLoading(false);
+      const msg = e?.message || "";
+      if (msg.includes("cancelled") || msg.includes("NotAllowedError") || msg.toLowerCase().includes("user")) {
+        setError("Biometric verification cancelled.");
+      } else {
+        setError(msg || "Biometric sign-in failed. Please use your password.");
+      }
+    }
+  }, [onEnter]);
 
   const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setError(""); setSuccess(""); };
 
@@ -218,9 +296,30 @@ export default function WelcomePage({ onEnter }) {
             <button data-testid="btn-create-account" onClick={() => setMode("signup")} style={btnGold}>
               Create Free Account →
             </button>
-            <button data-testid="btn-signin" onClick={() => setMode("signin")} style={btnGhost}>
-              Sign In
-            </button>
+            {hasBiometric ? (
+              <button
+                data-testid="btn-faceid-welcome"
+                onClick={handleBiometricSignIn}
+                disabled={waLoading}
+                style={{
+                  ...btnGhost, display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                  background: "rgba(255,255,255,0.03)",
+                  opacity: waLoading ? 0.6 : 1, cursor: waLoading ? "not-allowed" : "pointer",
+                }}
+              >
+                <span style={{ fontSize: 18 }}>🔒</span>
+                <span style={{ fontFamily: MONO, fontSize: 12 }}>{waLoading ? "Verifying..." : "Continue with Face ID"}</span>
+              </button>
+            ) : (
+              <button data-testid="btn-signin" onClick={() => setMode("signin")} style={btnGhost}>
+                Sign In
+              </button>
+            )}
+            {hasBiometric && (
+              <button data-testid="btn-signin" onClick={() => setMode("signin")} style={{ ...btnGhost, fontSize: 11, color: C.muted, borderColor: C.border }}>
+                Sign In with Password
+              </button>
+            )}
             <button data-testid="btn-guest" onClick={() => onEnter && onEnter({ guest: true, tier: "free" })}
               style={{ ...btnGhost, fontSize: 11, color: C.muted, borderColor: C.border }}>
               Continue as Guest (limited access)
@@ -337,6 +436,24 @@ export default function WelcomePage({ onEnter }) {
               style={{ ...btnGold, opacity: loading ? 0.5 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
               {loading ? "Signing In..." : "Sign In →"}
             </button>
+
+            {hasBiometric && (
+              <button
+                data-testid="btn-faceid-signin"
+                onClick={handleBiometricSignIn}
+                disabled={waLoading}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                  background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.12)`,
+                  borderRadius: 6, padding: "12px 16px", color: C.white, fontFamily: MONO,
+                  fontSize: 12, cursor: waLoading ? "not-allowed" : "pointer",
+                  opacity: waLoading ? 0.6 : 1, letterSpacing: "0.06em",
+                }}
+              >
+                <span style={{ fontSize: 20 }}>🔒</span>
+                <span>{waLoading ? "Verifying..." : "Continue with Face ID / Biometric"}</span>
+              </button>
+            )}
 
             <button data-testid="btn-forgot-password" onClick={() => { setMode("forgot"); setError(""); setSuccess(""); }}
               style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 10, color: C.gold, letterSpacing: "0.06em", padding: "4px 0" }}>

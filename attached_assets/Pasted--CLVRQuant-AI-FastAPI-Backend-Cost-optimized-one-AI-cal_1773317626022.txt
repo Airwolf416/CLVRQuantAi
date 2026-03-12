@@ -1,0 +1,431 @@
+“””
+CLVRQuant AI — FastAPI Backend
+Cost-optimized: one AI call per cycle, cached for all users
+“””
+
+from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from contextlib import asynccontextmanager
+from starlette.responses import JSONResponse
+import asyncio
+import time
+import os
+import jwt  # pip install pyjwt
+import anthropic
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SHARED SIGNAL CACHE
+
+# AI runs once every 60s server-side. Every user reads the same cached result.
+
+# Cost: 1 AI call per minute total, regardless of how many users are logged in.
+
+# Without this: 1 AI call per user per request = $$$
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SignalCache:
+def **init**(self, ttl_seconds: int = 60):
+self.ttl        = ttl_seconds
+self.data       = {}        # { asset: signal_dict }
+self.market     = {}        # latest market data snapshot
+self.generated_at = 0.0     # unix timestamp
+self.generating = False     # prevents concurrent AI calls
+self.call_count = 0         # track total AI calls made (cost monitoring)
+
+```
+def is_stale(self) -> bool:
+    return (time.time() - self.generated_at) > self.ttl
+
+def get(self, asset: str) -> dict | None:
+    return self.data.get(asset.upper())
+
+def get_all(self) -> dict:
+    return {
+        "signals":      self.data,
+        "market":       self.market,
+        "generated_at": self.generated_at,
+        "age_seconds":  round(time.time() - self.generated_at, 1),
+        "ttl_seconds":  self.ttl,
+        "ai_calls_made": self.call_count,
+    }
+
+def set_all(self, signals: dict, market: dict):
+    self.data         = signals
+    self.market       = market
+    self.generated_at = time.time()
+    self.call_count  += 1
+```
+
+# Single shared instance — all requests read from here
+
+cache = SignalCache(ttl_seconds=60)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# AI SIGNAL GENERATION — called once per cycle only
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+ai_client = anthropic.Anthropic(api_key=os.environ[“ANTHROPIC_API_KEY”])
+
+async def run_ai_model(market_data: dict) -> dict:
+“””
+Generates signals for all assets in one AI call.
+Returns { “BTC”: { signal, confidence, … }, “ETH”: {…}, … }
+One call per minute regardless of user count.
+“””
+prompt = f”””
+You are a quant trading signal engine. Given this market snapshot, generate signals.
+Respond ONLY with valid JSON. Be deterministic — same data = same output.
+
+Market data:
+{market_data}
+
+Return this exact schema:
+{{
+“BTC”:  {{ “signal”: “LONG|SHORT|NEUTRAL”, “confidence”: 0-100, “rationale”: “…” }},
+“ETH”:  {{ “signal”: “LONG|SHORT|NEUTRAL”, “confidence”: 0-100, “rationale”: “…” }},
+“SOL”:  {{ “signal”: “LONG|SHORT|NEUTRAL”, “confidence”: 0-100, “rationale”: “…” }},
+“NVDA”: {{ “signal”: “LONG|SHORT|NEUTRAL”, “confidence”: 0-100, “rationale”: “…” }},
+“XAU”:  {{ “signal”: “LONG|SHORT|NEUTRAL”, “confidence”: 0-100, “rationale”: “…” }},
+“OIL”:  {{ “signal”: “LONG|SHORT|NEUTRAL”, “confidence”: 0-100, “rationale”: “…” }}
+}}
+“””
+# Run blocking Anthropic call in thread pool — never blocks the event loop
+loop = asyncio.get_event_loop()
+response = await loop.run_in_executor(None, lambda: ai_client.messages.create(
+model=“claude-sonnet-4-20250514”,
+max_tokens=800,
+messages=[{“role”: “user”, “content”: prompt}],
+))
+
+```
+import json
+raw = response.content[0].text.strip().replace("```json","").replace("```","")
+return json.loads(raw)
+```
+
+async def fetch_market_data() -> dict:
+“”“Fetch live prices from Hyperliquid — fast, no AI cost.”””
+import httpx
+try:
+async with httpx.AsyncClient(timeout=8) as client:
+r = await client.post(
+“https://api.hyperliquid.xyz/info”,
+json={“type”: “metaAndAssetCtxs”},
+)
+data = r.json()
+universe = data[0].get(“universe”, [])
+ctxs     = data[1] if len(data) > 1 else []
+result   = {}
+for i, asset in enumerate(universe):
+ctx  = ctxs[i] if i < len(ctxs) else {}
+name = asset.get(“name”,””)
+result[name] = {
+“price”:   float(ctx.get(“markPx”, 0)),
+“funding”: float(ctx.get(“funding”, 0)),
+“change”:  0.0,  # compute from prevDayPx if needed
+}
+return result
+except Exception as e:
+return {“error”: str(e)}
+
+async def refresh_cache():
+“””
+Full refresh: fetch market data + run AI once.
+All users read the result — zero per-user AI cost.
+“””
+if cache.generating:
+return  # already running, skip
+cache.generating = True
+try:
+market  = await fetch_market_data()
+signals = await run_ai_model(market)
+cache.set_all(signals, market)
+print(f”[Cache] Refreshed — AI call #{cache.call_count} | {len(signals)} signals cached”)
+except Exception as e:
+print(f”[Cache] Refresh error: {e}”)
+finally:
+cache.generating = False
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# BACKGROUND SCHEDULER — runs inside the event loop, non-blocking
+
+# This replaces your while True / schedule pattern which blocked FastAPI
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def background_scheduler():
+“”“Runs forever in the background, refreshing cache when stale.”””
+await asyncio.sleep(2)          # small startup delay
+while True:
+if cache.is_stale():
+await refresh_cache()
+await asyncio.sleep(10)     # check every 10s, refresh if > 60s old
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# APP LIFESPAN — starts background task cleanly (replaces @app.on_event)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+# Start background cache refresh loop
+task = asyncio.create_task(background_scheduler())
+print(”[Startup] Background signal scheduler started”)
+yield
+# Shutdown: cancel the background task cleanly
+task.cancel()
+try:
+await task
+except asyncio.CancelledError:
+pass
+print(”[Shutdown] Scheduler stopped”)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# RATE LIMITER
+
+# Prevents any single IP from hammering the API
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+limiter = Limiter(key_func=get_remote_address)
+
+app = FastAPI(
+title=“CLVRQuant AI API”,
+version=“2.0.0”,
+lifespan=lifespan,
+)
+
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(
+CORSMiddleware,
+allow_origins=[”*”],   # tighten to your Replit domain in prod
+allow_methods=[”*”],
+allow_headers=[”*”],
+)
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+return JSONResponse(
+status_code=429,
+content={“error”: “Rate limit exceeded”, “detail”: str(exc.detail)},
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# AUTH — JWT bearer token
+
+# Cheap to verify (pure CPU, no DB hit per request)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+JWT_SECRET    = os.environ.get(“JWT_SECRET”, “change-this-in-prod”)
+JWT_ALGORITHM = “HS256”
+security      = HTTPBearer()
+
+def create_token(user_id: str, plan: str = “free”) -> str:
+payload = {
+“sub”:  user_id,
+“plan”: plan,
+“iat”:  int(time.time()),
+“exp”:  int(time.time()) + 86400 * 7,  # 7 days
+}
+return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+try:
+payload = jwt.decode(
+credentials.credentials,
+JWT_SECRET,
+algorithms=[JWT_ALGORITHM],
+)
+return payload
+except jwt.ExpiredSignatureError:
+raise HTTPException(status_code=401, detail=“Token expired”)
+except jwt.InvalidTokenError:
+raise HTTPException(status_code=401, detail=“Invalid token”)
+
+def require_pro(user: dict = Depends(verify_token)) -> dict:
+if user.get(“plan”) not in (“pro”, “elite”):
+raise HTTPException(status_code=403, detail=“Pro plan required”)
+return user
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ROUTES
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get(”/health”)
+async def health():
+return {
+“ok”:           True,
+“cache_age_s”:  round(time.time() - cache.generated_at, 1),
+“cache_stale”:  cache.is_stale(),
+“ai_calls”:     cache.call_count,
+}
+
+@app.get(”/api/signals”)
+@limiter.limit(“30/minute”)
+async def get_all_signals(request: Request, user: dict = Depends(verify_token)):
+“””
+Returns cached signals for all assets.
+Cost = $0 per request — reads from cache, no AI call.
+AI only runs once per 60s total (background scheduler).
+“””
+if cache.is_stale() and not cache.generating:
+# Trigger refresh but return stale data immediately (non-blocking)
+asyncio.create_task(refresh_cache())
+
+```
+if not cache.data:
+    return JSONResponse(status_code=503, content={"error": "Signals not ready yet, retry in 10s"})
+
+return cache.get_all()
+```
+
+@app.get(”/api/signals/{asset}”)
+@limiter.limit(“60/minute”)
+async def get_signal(request: Request, asset: str, user: dict = Depends(verify_token)):
+“”“Single asset signal — reads from cache, no AI cost.”””
+sig = cache.get(asset)
+if not sig:
+return JSONResponse(
+status_code=404,
+content={“error”: f”No signal for {asset.upper()} yet”},
+)
+return {“asset”: asset.upper(), **sig, “cache_age_s”: round(time.time() - cache.generated_at, 1)}
+
+@app.post(”/api/signals/advise”)
+@limiter.limit(“20/minute”)
+async def get_advice(request: Request, user: dict = Depends(verify_token)):
+“””
+Investment sizing on top of cached signal.
+Still no extra AI call — math only.
+“””
+import json as _json
+body   = await request.json()
+asset  = body.get(“asset”,“BTC”).upper()
+budget = float(body.get(“budget”, 0))
+
+```
+sig = cache.get(asset)
+if not sig:
+    raise HTTPException(status_code=404, detail=f"No cached signal for {asset}")
+
+confidence  = sig.get("confidence", 50)
+direction   = sig.get("signal", "NEUTRAL")
+
+# Deploy % based on confidence + direction
+if direction == "NEUTRAL":
+    deploy_pct = 0
+elif confidence >= 85:
+    deploy_pct = 75
+elif confidence >= 70:
+    deploy_pct = 55
+else:
+    deploy_pct = 35
+
+deploy  = round(budget * deploy_pct / 100, 2)
+reserve = round(budget - deploy, 2)
+
+return {
+    "asset":                 asset,
+    "signal":                direction,
+    "confidence":            confidence,
+    "budget":                budget,
+    "recommended_deploy":    deploy,
+    "reserve":               reserve,
+    "deploy_pct":            deploy_pct,
+    "rationale":             sig.get("rationale",""),
+    "cache_age_s":           round(time.time() - cache.generated_at, 1),
+}
+```
+
+@app.get(”/api/dashboard”)
+@limiter.limit(“60/minute”)
+async def dashboard(request: Request, user: dict = Depends(verify_token)):
+“”“Free tier — returns basic market snapshot from cache, no AI cost.”””
+return {
+“user”:    user.get(“sub”),
+“plan”:    user.get(“plan”),
+“market”:  cache.market,
+“summary”: {
+“signals_cached”: len(cache.data),
+“last_updated”:   cache.generated_at,
+},
+}
+
+@app.get(”/api/pro/analysis”)
+@limiter.limit(“20/minute”)
+async def pro_analysis(request: Request, user: dict = Depends(require_pro)):
+“”“Pro-only — full signal set with rationale.”””
+return {
+“user”:    user.get(“sub”),
+“plan”:    user.get(“plan”),
+**cache.get_all(),
+}
+
+@app.post(”/api/pro/activate”)
+@limiter.limit(“10/minute”)
+async def activate_pro(request: Request):
+“””
+Validate a Pro pass QR token and return a JWT with plan=pro.
+No auth required — this is the activation endpoint.
+“””
+VALID_TOKENS = {“CLVRPRO7DAY”, “CLVRPRO7DAY2”, “CLVRPRO7DAY3”}
+body  = await request.json()
+token = body.get(“token”,””).strip().upper()
+uid   = body.get(“device_id”,“anon”)
+
+```
+if not token or token not in VALID_TOKENS:
+    # Also accept any CLVR-prefixed token (future passes)
+    if not token.startswith("CLVR") or len(token) < 8:
+        raise HTTPException(status_code=403, detail="Invalid pass token")
+
+jwt_token = create_token(user_id=uid, plan="pro")
+return {
+    "success":    True,
+    "token":      jwt_token,
+    "plan":       "pro",
+    "expires_in": 86400 * 7,
+}
+```
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# DEV: issue a test token without a pass
+
+# Remove this endpoint in production
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post(”/dev/token”)
+async def dev_token(request: Request):
+if os.environ.get(“ENV”) == “production”:
+raise HTTPException(status_code=404)
+body = await request.json()
+return {“token”: create_token(body.get(“user_id”,“dev”), body.get(“plan”,“free”))}
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# RUN
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+if **name** == “**main**”:
+import uvicorn
+uvicorn.run(“main:app”, host=“0.0.0.0”, port=8000, reload=False)
