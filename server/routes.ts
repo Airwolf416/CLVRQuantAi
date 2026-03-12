@@ -1655,6 +1655,16 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/send-apology-brief", async (req, res) => {
+    try {
+      const { sendApologyBriefEmails } = await import("./dailyBrief");
+      sendApologyBriefEmails().catch((e: any) => console.log("[apology-brief] Error:", e.message));
+      res.json({ ok: true, message: "Apology brief sending started — check server logs" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/stripe/config", async (_req, res) => {
     try {
       const publishableKey = await getStripePublishableKey();
@@ -2243,7 +2253,7 @@ export async function registerRoutes(
       if (ownerMatch && user.tier !== "pro") {
         await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [user.id]);
       }
-      const mustChangePassword = !!(user as any).must_change_password;
+      const mustChangePassword = !!(user as any).mustChangePassword;
       (req.session as any).userId = user.id;
       req.session.save(() => {
         res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier }, mustChangePassword });

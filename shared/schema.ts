@@ -19,6 +19,7 @@ export const users = pgTable("users", {
   promoExpiresAt: timestamp("promo_expires_at"),
   referralCode: text("referral_code").unique(),
   referredBy: text("referred_by"),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

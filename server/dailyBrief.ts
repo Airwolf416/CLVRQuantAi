@@ -355,6 +355,72 @@ async function sendDailyBriefEmails() {
   }
 }
 
+async function sendApologyBriefEmails() {
+  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
+  console.log(`[daily-brief] Generating apology brief for ${today}...`);
+
+  const marketData = await fetchMarketData();
+  const briefText = await generateBriefContent(marketData);
+  if (!briefText) { console.log("[daily-brief] Failed to generate brief content"); return; }
+
+  let briefJson: any;
+  try {
+    const jsonMatch = briefText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found");
+    briefJson = JSON.parse(jsonMatch[0]);
+  } catch (e) { console.log("[daily-brief] Failed to parse brief JSON:", e); return; }
+
+  const briefHtml = buildEmailHtml(briefJson, today, marketData);
+
+  // Apology note injected right after the header banner
+  const apologyNote = `
+  <div style="margin:0 24px 16px;padding:14px 18px;background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.25);border-radius:6px">
+    <div style="font-family:monospace;font-size:10px;color:#c9a84c;letter-spacing:0.15em;margin-bottom:6px">⚡ NOTE FROM THE TEAM</div>
+    <div style="font-family:Georgia,serif;font-size:13px;color:#c5cfe0;line-height:1.7;font-style:italic">
+      We apologize for the delay in this morning's brief. We've been making improvements to CLVRQuant to give you faster, more accurate market intelligence. Thank you for your patience — today's full analysis is below.
+    </div>
+    <div style="font-family:monospace;font-size:10px;color:#5a6a8a;margin-top:6px">— Mike Claver, CLVRQuant</div>
+  </div>`;
+
+  // Insert apology after the first closing </div> of the header block
+  const apologyHtml = briefHtml.replace(
+    `<div style="padding:24px 24px 8px">`,
+    apologyNote + `<div style="padding:24px 24px 8px">`
+  );
+
+  // Get all active subscribers + always include owner
+  const subsResult = await pool.query("SELECT email, name FROM subscribers WHERE active = true");
+  const subs: {email:string;name:string}[] = subsResult.rows;
+  const ownerEmail = "mikeclaver@gmail.com";
+  if (!subs.find(s => s.email === ownerEmail)) {
+    subs.push({ email: ownerEmail, name: "Mike" });
+  }
+
+  console.log(`[daily-brief] Sending apology brief to ${subs.length} recipients...`);
+  try {
+    const { client } = await getUncachableResendClient();
+    for (const sub of subs) {
+      try {
+        await client.emails.send({
+          from: "CLVRQuant <noreply@clvrquantai.com>",
+          to: sub.email,
+          reply_to: "mikeclaver@gmail.com",
+          subject: `📊 CLVRQuant Morning Brief — ${today}`,
+          html: apologyHtml,
+        });
+        console.log(`[daily-brief] Apology brief sent to ${sub.email}`);
+      } catch (e: any) {
+        console.log(`[daily-brief] Failed to send apology to ${sub.email}:`, e.message);
+      }
+    }
+    console.log("[daily-brief] Apology brief complete");
+  } catch (e: any) {
+    console.log("[daily-brief] Resend client error:", e.message);
+  }
+}
+
+export { sendApologyBriefEmails };
+
 export function startDailyBriefScheduler() {
   console.log("[daily-brief] Scheduler started — briefs will be sent at 6:00 AM ET daily");
 
