@@ -729,7 +729,8 @@ function Dashboard({user,setUser}){
   const macroFired=useRef(new Set());
   const soundEnabledRef=useRef(soundEnabled);
   const toggleSound=useCallback(()=>{setSoundEnabled(v=>{const nv=!v;soundEnabledRef.current=nv;try{localStorage.setItem("clvr_sound",nv?"on":"off");}catch(e){}if(nv)playBloombergPing();return nv;});},[]);
-  const [activeAlerts,setActiveAlerts]=useState([]);
+  const [activeAlerts,setActiveAlerts]=useState([]); // floating banner — auto-dismisses after 5s
+  const [alertHistory,setAlertHistory]=useState(()=>{try{const s=localStorage.getItem("clvr_alert_history");return s?JSON.parse(s):[];}catch{return[];}});
 
   const [subEmail,setSubEmail]=useState("");
   const [subName,setSubName]=useState("");
@@ -790,12 +791,21 @@ function Dashboard({user,setUser}){
     const dedupeKey=alert.id||alert.title;
     if(firedAlerts.current.has(dedupeKey))return;
     firedAlerts.current.add(dedupeKey);
-    setActiveAlerts(prev=>[{...alert,id:key,ts:Date.now()},...prev.slice(0,4)]);
+    const entry={...alert,id:key,ts:Date.now()};
+    // Banner: shows briefly then auto-hides (5s)
+    setActiveAlerts(prev=>[entry,...prev.slice(0,4)]);
+    setTimeout(()=>setActiveAlerts(prev=>prev.filter(a=>a.id!==key)),5000);
+    // History: persists in ALERTS tab until user manually clears
+    setAlertHistory(prev=>{const next=[entry,...prev.slice(0,49)];try{localStorage.setItem("clvr_alert_history",JSON.stringify(next));}catch(e){}return next;});
     sendPush(alert.title,alert.body,dedupeKey);
     if(soundEnabledRef.current)playBloombergPing();
     setToast(alert.title);
   },[]);
-  const dismissAlert=(id)=>setActiveAlerts(prev=>prev.filter(a=>a.id!==id));
+  const dismissAlert=(id)=>{
+    setActiveAlerts(prev=>prev.filter(a=>a.id!==id));
+    setAlertHistory(prev=>{const next=prev.filter(a=>a.id!==id);try{localStorage.setItem("clvr_alert_history",JSON.stringify(next));}catch(e){}return next;});
+  };
+  const clearAllAlertHistory=()=>{setAlertHistory([]);try{localStorage.removeItem("clvr_alert_history");}catch(e){}firedAlerts.current.clear();};
 
   const checkVolumeSpike=useCallback((sym,vol)=>{
     const hist=volRef.current[sym]||[];
@@ -1751,15 +1761,24 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             <button data-testid="btn-enable-push" onClick={requestPush} style={{background:C.gold,border:"none",borderRadius:2,padding:"6px 14px",fontFamily:MONO,fontSize:9,color:C.bg,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>ENABLE</button>
           </div>}
 
-          {activeAlerts.length>0&&<div style={{marginBottom:12}}>
-            <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:8}}>ACTIVE ALERTS ({activeAlerts.length})</div>
-            {activeAlerts.map(a=>{const tc={macro:C.orange,volume:C.cyan,funding:C.green,liq:C.red,price:C.gold}[a.type]||C.gold;return(
-              <div key={a.id} data-testid={`alert-${a.id}`} style={{background:"rgba(12,18,32,.8)",border:`1px solid ${C.border}`,borderLeft:`2px solid ${tc}`,borderRadius:2,padding:"10px 12px",marginBottom:4,display:"flex",gap:8,alignItems:"flex-start"}}>
+          {/* QR Scanner button — scan an access code */}
+          <button data-testid="btn-qr-scan-alerts" onClick={()=>setShowQRScanner(true)} style={{width:"100%",marginBottom:12,padding:"10px 14px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:6,fontFamily:MONO,fontSize:11,color:C.gold2,cursor:"pointer",letterSpacing:"0.1em",display:"flex",alignItems:"center",gap:8,justifyContent:"center"}}>
+            <span style={{fontSize:16}}>📷</span> SCAN ACCESS CODE
+          </button>
+
+          {alertHistory.length>0&&<div style={{marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em"}}>ALERT HISTORY ({alertHistory.length})</div>
+              <button onClick={clearAllAlertHistory} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"2px 8px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>CLEAR ALL</button>
+            </div>
+            {alertHistory.map(a=>{const tc={macro:C.orange,volume:C.cyan,funding:C.green,liq:C.red,price:C.gold}[a.type]||C.gold;return(
+              <div key={a.id} data-testid={`alert-history-${a.id}`} style={{background:"rgba(12,18,32,.8)",border:`1px solid ${C.border}`,borderLeft:`2px solid ${tc}`,borderRadius:2,padding:"10px 12px",marginBottom:4,display:"flex",gap:8,alignItems:"flex-start"}}>
                 <div style={{flex:1}}>
                   <div style={{fontFamily:MONO,fontSize:10,color:tc,fontWeight:700,letterSpacing:"0.1em",marginBottom:2}}>{a.title}</div>
                   <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.5}}>{a.body}</div>
+                  {a.ts&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:4}}>{new Date(a.ts).toLocaleTimeString()}</div>}
                 </div>
-                <button onClick={()=>dismissAlert(a.id)} style={{background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",padding:0}}>x</button>
+                <button onClick={()=>dismissAlert(a.id)} style={{background:"none",border:"none",color:C.muted,fontSize:14,cursor:"pointer",padding:0}}>×</button>
               </div>
             );})}
           </div>}
