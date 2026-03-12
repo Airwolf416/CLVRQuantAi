@@ -1239,12 +1239,31 @@ Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
     const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual} ${e.released?"RELEASED":""}`:""}`).join(" | ")}`:"";
-    const sys=`You are CLVRQuant, elite multi-market trading AI. All data below is REAL and LIVE from exchanges — use it for analysis. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
+    const sys=`You are CLVRQuant — elite institutional-grade trading AI powered by Claude Sonnet. All data below is REAL and LIVE. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
+
+LIVE MARKET DATA:
 CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${macroAiSnap}
-When the user asks about a specific asset, reference its exact live price and change%. For trade setups: DIRECTION / ENTRY / STOP / TP1 / TP2 / LEVERAGE / CONVICTION / 2-line REASON. Be precise with numbers from the live data above. No disclaimers.`;
+
+RESPONSE RULES:
+- Always reference the exact live price from the data above.
+- When asked about a trade or setup, ALWAYS use this format:
+
+ASSET: [NAME] | DIRECTION: [LONG / SHORT]
+Current Price: $X
+Entry: $X
+Stop Loss: $X  (risk = X%)
+TP1: $X  (+X% / R:R X:1)
+TP2: $X  (+X% / R:R X:1)
+Leverage: Xх (spot if no leverage)
+Confidence: XX%
+Reason: [2 precise lines using live data, funding rates, OI, news]
+
+- Confidence = your probability estimate this trade hits TP1 before stop.
+- If not a trade question, give sharp analytical answer using live prices and change%.
+- Never add disclaimers or hedging language. Be precise and direct.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
       const data=await res.json();
@@ -1314,34 +1333,35 @@ Always structure your response with these EXACT sections:
 1. REGIME ASSESSMENT
 2. SIGNAL ANALYSIS (what the data is actually saying)
 3. BAYESIAN PROBABILITY ESTIMATE (with reasoning)
-4. TOP 3 TRADE IDEAS (derived from signals, not assumptions — consider all asset classes including commodities/oil)
+4. TOP 4 TRADE IDEAS (consider all asset classes: crypto, equities, commodities, forex)
 5. CROSS-ASSET REASONING (which related assets are worth watching and WHY)
 6. KELLY POSITION SIZING
-7. RISK WARNING
-8. VERDICT
+7. VERDICT
 
-For each trade idea use this format:
-TRADE: [ASSET] [LONG/SHORT]
-Entry: $X | Target: $X | Stop: $X
-R/R: X:1 | Probability: X% | Kelly: X%
-Rationale: [derive from current signals]
-Related assets to watch: [reasoned from today's data]
+For each of the 4 trade ideas use EXACTLY this format:
 
-Be precise, numerical, and ruthlessly honest. Use the EXACT live prices above.`;
+━━━ TRADE #N ━━━
+ASSET: [NAME] | DIRECTION: LONG / SHORT
+Current Price: $X
+Entry: $X
+Stop Loss: $X  (risk = X%)
+TP1: $X  (+X% / R:R X:1)
+TP2: $X  (+X% / R:R X:1)
+Leverage: Xх (spot if no leverage)
+Confidence: XX%
+Kelly Size: X% of portfolio
+Rationale: [2–3 lines derived from live data, funding, OI, macro, news]
+Watch: [1 correlated asset to monitor]
+
+Be precise, numerical, and direct. Use EXACT live prices from the data above.`;
     const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week horizon)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month horizon)":"TODAY'S (intraday/swing)";
     const tfHint=aiTimeframe==="midterm"?"Focus on weekly chart setups, sector rotation, macro trends. Entries can be scaled in. Use wider stops and targets appropriate for multi-week holds.":aiTimeframe==="longterm"?"Focus on monthly chart structures, macro regime shifts, secular trends, yield curves, commodity supercycles. Position sizing for multi-month conviction holds with wide stops.":"Focus on intraday and short-term swing setups. Use tight entries and stops based on current price action.";
-    const userMsg=`Give me ${tfLabel} TOP 3 TRADE IDEAS with full quantitative analysis.
+    const userMsg=`Give me ${tfLabel} TOP 4 TRADE IDEAS with full quantitative analysis.
 
 ${tfHint}
 
-Use the live market data and QuantBrain confluence score above. For each trade:
-1. Specific entry, target, and stop loss based on current prices
-2. Risk/reward ratio and probability estimate
-3. Kelly-sized position recommendation
-4. Cross-asset correlations worth monitoring
-5. Key risk factors
-
-Also provide an overall market regime assessment and your best risk-adjusted setup.`;
+For EACH of the 4 trades provide the EXACT format from your instructions: Entry, Stop Loss, TP1, TP2, Confidence %, Kelly Size, Rationale.
+Use live prices from the data provided. Scan all asset classes (crypto, equities, commodities, forex) to find the 4 highest-conviction setups right now.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg})});
       const data=await res.json();
@@ -2327,7 +2347,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
                 ))}
               </div>
               <button data-testid="button-trade-ideas" onClick={runTradeIdeas} disabled={aiLoading} style={{width:"100%",height:48,background:aiLoading?"rgba(0,199,135,.03)":"rgba(0,199,135,.08)",color:aiLoading?C.muted:C.green,border:`1px solid ${aiLoading?"rgba(0,199,135,.12)":"rgba(0,199,135,.3)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer",letterSpacing:"0.02em"}}>
-                {aiLoading?"QuantBrain Analyzing...":`Get ${aiTimeframe==="today"?"Today's":aiTimeframe==="midterm"?"Mid-Term":"Long-Term"} Trade Ideas ✦`}
+                {aiLoading?"QuantBrain Analyzing...":`Get Top 4 ${aiTimeframe==="today"?"Today's":aiTimeframe==="midterm"?"Mid-Term":"Long-Term"} Trade Ideas ✦`}
               </button>
               {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>}
               {liveSignals.length>0&&<div style={{marginTop:16}}>
