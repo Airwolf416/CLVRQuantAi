@@ -179,7 +179,7 @@ export default function WelcomePage({ onEnter }) {
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Sign in failed"); setLoading(false); return; }
       setLoading(false);
-      if (onEnter) onEnter(data.user);
+      if (onEnter) onEnter(data.mustChangePassword ? { ...data.user, mustChangePassword: true } : data.user);
     } catch (e) {
       setError("Network error. Please try again.");
       setLoading(false);

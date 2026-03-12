@@ -1442,6 +1442,9 @@ export async function registerRoutes(
   ].map((e, i) => ({ ...e, id: i + 1, current: "—", forecast: "—" }));
 
   let macroCache: { data: any[]; ts: number } = { data: [], ts: 0 };
+  // Keeps released events for today so they're never lost when the API stops returning them
+  const releasedEventsMemory: Map<string, any> = new Map();
+  let releasedMemoryDate = ""; // track which calendar date the memory belongs to
   const MACRO_CACHE_MS = 90000; // 90 seconds — fast enough to catch data released at :00/:30 marks
 
   // Returns true if any event is past its scheduled release time but still has no actual value
@@ -1462,9 +1465,9 @@ export async function registerRoutes(
   }
 
   function getDateRange() {
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
+    // Use ET date to match client-side macroTodayStr
+    const todayETStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const todayStart = new Date(todayETStr + "T00:00:00");
     const endDate = new Date(todayStart);
     endDate.setDate(todayStart.getDate() + 14);
     endDate.setHours(23, 59, 59, 999);
@@ -1554,9 +1557,17 @@ export async function registerRoutes(
 
   app.get("/api/macro", async (_req, res) => {
     try {
+      // Today's date in ET timezone — matches client's macroTodayStr
+      const todayETStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+
+      // Clear released memory if date changed (new calendar day in ET)
+      if (releasedMemoryDate !== todayETStr) {
+        releasedEventsMemory.clear();
+        releasedMemoryDate = todayETStr;
+      }
+
       let liveEvents: any[] = [];
       const cacheExpired = Date.now() - macroCache.ts > MACRO_CACHE_MS;
-      // Also bypass cache if events are past their scheduled release time but show no actual value yet
       const pastDue = !cacheExpired && macroCache.data.length > 0 && hasPastDueEvents(macroCache.data);
       if (cacheExpired || pastDue) {
         const fetched = await fetchLiveCalendar();
@@ -1572,6 +1583,19 @@ export async function registerRoutes(
       } else {
         liveEvents = macroCache.data;
       }
+
+      // Update released events memory: accumulate any released events from today
+      liveEvents.forEach((e: any) => {
+        if (e.released && e.date === todayETStr) {
+          releasedEventsMemory.set(`${e.date}-${e.name}`, e);
+        }
+      });
+
+      // Merge in any released events from memory that fresh data may have dropped
+      const liveKeys = new Set(liveEvents.map((e: any) => `${e.date}-${e.name}`));
+      const memoryEvents = Array.from(releasedEventsMemory.values()).filter((e: any) => !liveKeys.has(`${e.date}-${e.name}`));
+      liveEvents = [...liveEvents, ...memoryEvents];
+
       const { todayStart, endDate } = getDateRange();
       const existingDates = new Set(liveEvents.map((e: any) => `${e.date}-${e.name}`));
       const combined = [
@@ -2219,12 +2243,31 @@ export async function registerRoutes(
       if (ownerMatch && user.tier !== "pro") {
         await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [user.id]);
       }
+      const mustChangePassword = !!(user as any).must_change_password;
       (req.session as any).userId = user.id;
       req.session.save(() => {
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier } });
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier }, mustChangePassword });
       });
     } catch (e: any) {
       res.status(500).json({ error: "Sign in failed" });
+    }
+  });
+
+  app.post("/api/auth/change-password", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    // Enforce strong password: at least 1 uppercase, 1 lowercase, 1 number
+    if (!/[A-Z]/.test(newPassword) || !/[a-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+      return res.status(400).json({ error: "Password must include uppercase, lowercase, and a number" });
+    }
+    try {
+      const hashed = await bcrypt.hash(newPassword, 12);
+      await pool.query("UPDATE users SET password = $1, must_change_password = false WHERE id = $2", [hashed, userId]);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to change password" });
     }
   });
 
@@ -2345,6 +2388,7 @@ export async function registerRoutes(
           </div>`,
         });
         await storage.updateUserPassword(user.id, hashedTemp);
+        await pool.query("UPDATE users SET must_change_password = true WHERE id = $1", [user.id]);
       } catch (emailErr: any) {
         console.error("Reset email failed:", emailErr.message);
         await storage.clearResetToken(user.id);
