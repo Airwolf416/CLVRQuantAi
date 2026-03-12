@@ -1327,16 +1327,18 @@ export async function registerRoutes(
     if (!userMessage) return res.status(400).json({ error: "userMessage is required" });
 
     // Auth check — AI is Pro-only
-    const sessionUser = (req.session as any)?.user;
-    const isPro = sessionUser?.tier === "pro";
-    if (!sessionUser) {
+    const userId = (req.session as any)?.userId;
+    if (!userId) {
       return res.status(401).json({ error: "Sign in required to use AI." });
     }
+    const dbUser = await storage.getUser(userId);
+    if (!dbUser) {
+      return res.status(401).json({ error: "Sign in required to use AI." });
+    }
+    const isPro = dbUser.tier === "pro" || dbUser.email === "mikeclaver@gmail.com";
     if (!isPro) {
       return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock Claude-powered analysis." });
     }
-
-    const userId = sessionUser.id;
 
     if (!checkAiRateLimit(userId, true)) {
       return res.status(429).json({
