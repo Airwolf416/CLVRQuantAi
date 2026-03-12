@@ -6,6 +6,29 @@ import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import WebSocket from "ws";
+import webpush from "web-push";
+
+// ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
+const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
+const VAPID_PRIVATE_KEY = "JYSHjiS26v9DWkwQ-kc-fdoBjn2sBlaTyJOo8JPttoI";
+webpush.setVapidDetails("mailto:noreply@clvrquantai.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
+// Helper: send a web push to all subscriptions of a user
+async function sendWebPushToUser(userId: string, title: string, body: string, tag = "clvrquant") {
+  try {
+    const subs = await pool.query("SELECT subscription FROM push_subscriptions WHERE user_id = $1", [userId]);
+    for (const row of subs.rows) {
+      try {
+        await webpush.sendNotification(row.subscription, JSON.stringify({ title, body, tag, icon: "/icons/icon-192.png" }));
+      } catch (e: any) {
+        if (e.statusCode === 410 || e.statusCode === 404) {
+          // Subscription gone — remove it
+          await pool.query("DELETE FROM push_subscriptions WHERE user_id = $1 AND subscription = $2", [userId, row.subscription]);
+        }
+      }
+    }
+  } catch {}
+}
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
@@ -846,6 +869,36 @@ function startFinnhubWebSocket() {
   connect();
 }
 
+// ── Generate rotating 7-day trial code for the owner ─────────────────────────
+async function generateTrialCode(): Promise<string> {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const rand = Array.from({length:8}, () => chars[Math.floor(Math.random()*chars.length)]).join("");
+  const code = `CLVR-TRIAL-${rand}`;
+  const expires = new Date(); expires.setDate(expires.getDate() + 7);
+  await pool.query(
+    `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses)
+     VALUES ($1, 'Owner Trial — 7 Days Free Pro', 'trial', true, $2, 1)
+     ON CONFLICT (code) DO NOTHING`,
+    [code, expires]
+  );
+  return code;
+}
+
+async function getCurrentTrialCode(): Promise<{code:string, expiresAt:string}|null> {
+  try {
+    const res = await pool.query(
+      `SELECT code, expires_at FROM access_codes
+       WHERE type='trial' AND active=true AND expires_at > NOW()
+       AND (max_uses IS NULL OR use_count < max_uses OR use_count IS NULL)
+       AND used_by IS NULL
+       ORDER BY created_at DESC LIMIT 1`
+    );
+    if (res.rows.length > 0) return { code: res.rows[0].code, expiresAt: res.rows[0].expires_at };
+    const code = await generateTrialCode();
+    return { code, expiresAt: new Date(Date.now() + 7*86400000).toISOString() };
+  } catch { return null; }
+}
+
 async function seedAccessCodes() {
   const ffCodes = [
     { code: "CLVR-FF-MIKE01", label: "Friends & Family — Mike #1" },
@@ -882,7 +935,18 @@ async function seedAccessCodes() {
         [c.code, c.label, expiresAt]
       );
     }
-    console.log(`[seed] Access codes seeded (${ffCodes.length} codes)`);
+    // VIP group code — unlimited uses, shared by a group (max_uses = -1 means unlimited)
+    const groupExpiry = new Date();
+    groupExpiry.setMonth(groupExpiry.getMonth() + 1);
+    await pool.query(
+      `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses)
+       VALUES ('CLVR-VIP-GROUP2026', 'Group VIP — Shared Code (1 month)', 'vip', true, $1, -1)
+       ON CONFLICT (code) DO UPDATE SET active = true, expires_at = $1`,
+      [groupExpiry]
+    );
+    // Ensure an initial trial code exists
+    await getCurrentTrialCode();
+    console.log(`[seed] Access codes seeded (${ffCodes.length + 1} codes + group VIP + trial)`);
   } catch (err: any) {
     console.error("[seed] Access code seeding failed:", err.message);
   }
@@ -1784,7 +1848,13 @@ export async function registerRoutes(
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     try {
-      await storage.updateUserAlertTriggered(Number(req.params.id), userId);
+      const alertId = Number(req.params.id);
+      await storage.updateUserAlertTriggered(alertId, userId);
+      // Send locked-screen web push notification
+      const { label, sym, threshold, condition } = req.body || {};
+      const pushTitle = `🔔 Alert: ${label || sym || "Price Alert"}`;
+      const pushBody  = `${sym || ""} ${condition || ""} $${threshold || ""} — tap to view`.trim();
+      sendWebPushToUser(userId, pushTitle, pushBody, `alert-${alertId}`).catch(() => {});
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1821,27 +1891,44 @@ export async function registerRoutes(
     }
 
     try {
-      const ac = await storage.getAccessCode(code);
+      const acRes = await pool.query("SELECT * FROM access_codes WHERE code = $1", [code]);
+      const ac = acRes.rows[0];
       if (!ac || !ac.active) {
         console.log(`[verify-code] Code not found or inactive: ${code}`);
         return res.json({ valid: false, error: "Code not found" });
       }
-      if (ac.expiresAt && new Date(ac.expiresAt) < new Date()) {
+      if (ac.expires_at && new Date(ac.expires_at) < new Date()) {
         return res.json({ valid: false, error: "This code has expired" });
       }
-      if (ac.usedBy && ac.usedBy !== userId) {
+      const maxUses = ac.max_uses; // null = single use, -1 = unlimited, N = up to N uses
+      const useCount = ac.use_count || 0;
+      const isMultiUse = maxUses !== null;
+      // For single-use codes: block if claimed by someone else
+      if (!isMultiUse && ac.used_by && ac.used_by !== userId) {
         return res.json({ valid: false, error: "This code has already been claimed by another user" });
       }
-      if (!ac.usedBy) {
-        await pool.query(
-          "UPDATE access_codes SET used_by = $1, used_at = NOW() WHERE code = $2",
-          [userId, code]
-        );
+      // For multi-use codes with a limit: check if limit reached
+      if (isMultiUse && maxUses > 0 && useCount >= maxUses) {
+        return res.json({ valid: false, error: "This code has reached its maximum number of uses" });
       }
-      const promoExpiry = ac.expiresAt || null;
+      // Mark usage
+      if (!isMultiUse) {
+        // Single-use: mark the used_by field
+        if (!ac.used_by) {
+          await pool.query("UPDATE access_codes SET used_by = $1, used_at = NOW(), use_count = COALESCE(use_count,0)+1 WHERE code = $2", [userId, code]);
+        }
+      } else {
+        // Multi-use: only increment count (unlimited or limited)
+        await pool.query("UPDATE access_codes SET use_count = COALESCE(use_count,0)+1 WHERE code = $1", [code]);
+      }
+      const promoExpiry = ac.expires_at || null;
       await storage.updateUserPromoCode(userId, code, promoExpiry ? new Date(promoExpiry) : null);
       await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [userId]);
       checkAndGrantReferralReward(userId).catch(() => {});
+      // If it was a trial code, auto-generate a new one for the owner
+      if (ac.type === "trial") {
+        getCurrentTrialCode().catch(() => {}); // ensure next trial code exists
+      }
       console.log(`[verify-code] SUCCESS: ${code} redeemed by user ${userId}, expires ${promoExpiry}`);
       return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label, expiresAt: promoExpiry });
     } catch (err: any) {
@@ -1885,6 +1972,79 @@ export async function registerRoutes(
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ── Web Push subscription endpoints ──────────────────────────────────────────
+  app.get("/api/push/public-key", (_req, res) => {
+    res.json({ publicKey: VAPID_PUBLIC_KEY });
+  });
+
+  app.post("/api/push/subscribe", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    const { subscription } = req.body;
+    if (!subscription?.endpoint) return res.status(400).json({ error: "Invalid subscription" });
+    try {
+      await pool.query(
+        `INSERT INTO push_subscriptions (user_id, subscription) VALUES ($1, $2)
+         ON CONFLICT (user_id, subscription) DO NOTHING`,
+        [userId, JSON.stringify(subscription)]
+      );
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/push/unsubscribe", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      await pool.query("DELETE FROM push_subscriptions WHERE user_id = $1", [userId]);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Owner: current trial code + generate new one ──────────────────────────
+  app.get("/api/admin/current-trial-code", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId || !(await isOwner(userId))) return res.status(403).json({ error: "Unauthorized" });
+    const trial = await getCurrentTrialCode();
+    if (!trial) return res.status(500).json({ error: "Could not get trial code" });
+    res.json(trial);
+  });
+
+  app.post("/api/admin/generate-trial-code", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId || !(await isOwner(userId))) return res.status(403).json({ error: "Unauthorized" });
+    // Deactivate old unused trial codes
+    await pool.query("UPDATE access_codes SET active = false WHERE type = 'trial' AND used_by IS NULL AND use_count = 0");
+    const code = await generateTrialCode();
+    const expiresAt = new Date(Date.now() + 7*86400000).toISOString();
+    res.json({ code, expiresAt });
+  });
+
+  // ── Downgrade to free (cancel Stripe sub + clear promo tier) ─────────────
+  app.post("/api/stripe/downgrade", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(400).json({ error: "User not found" });
+      // Cancel Stripe subscription if one exists
+      if (user.stripeSubscriptionId) {
+        try {
+          const stripe = await getUncachableStripeClient();
+          await stripe.subscriptions.cancel(user.stripeSubscriptionId);
+        } catch {}
+      }
+      // Clear tier and promo code
+      await pool.query(
+        "UPDATE users SET tier = 'free', promo_code = NULL, promo_expires_at = NULL, stripe_subscription_id = NULL WHERE id = $1",
+        [userId]
+      );
+      // Remove any active access code claim
+      await pool.query("UPDATE access_codes SET used_by = NULL, used_at = NULL WHERE used_by = $1", [userId]);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/admin/send-welcome-blast", async (req, res) => {
@@ -2263,6 +2423,7 @@ export async function registerRoutes(
         referralCode: user.referralCode || null,
         promoCode: user.promoCode || null,
         promoExpiresAt: user.promoExpiresAt ? new Date(user.promoExpiresAt).toISOString() : null,
+        isOwner: user.email === OWNER_EMAIL,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
