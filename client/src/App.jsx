@@ -746,6 +746,11 @@ function Dashboard({user,setUser}){
   const [showQRScanner,setShowQRScanner]=useState(false);
   const [showUpgrade,setShowUpgrade]=useState(false);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
+  const [mustChangePassword,setMustChangePassword]=useState(()=>!!(user?.mustChangePassword));
+  const [newPwInput,setNewPwInput]=useState("");
+  const [newPwInput2,setNewPwInput2]=useState("");
+  const [changePwLoading,setChangePwLoading]=useState(false);
+  const [changePwError,setChangePwError]=useState("");
   const [biometricRegistering,setBiometricRegistering]=useState(false);
   const [stripePrices,setStripePrices]=useState([]);
   const [checkoutLoading,setCheckoutLoading]=useState(false);
@@ -789,7 +794,6 @@ function Dashboard({user,setUser}){
     sendPush(alert.title,alert.body,dedupeKey);
     if(soundEnabledRef.current)playBloombergPing();
     setToast(alert.title);
-    setTimeout(()=>setActiveAlerts(prev=>prev.filter(a=>a.id!==key)),5000);
   },[]);
   const dismissAlert=(id)=>setActiveAlerts(prev=>prev.filter(a=>a.id!==id));
 
@@ -1526,6 +1530,40 @@ Also provide an overall market regime assessment and your best risk-adjusted set
       {/* QR Scanner overlay */}
       {showQRScanner&&<QRScanner onScan={async(raw)=>{setShowQRScanner(false);const code=raw.trim().toUpperCase();await verifyAccessCode(code);}} onClose={()=>setShowQRScanner(false)}/>}
 
+      {/* Force-change-password modal — cannot be dismissed */}
+      {mustChangePassword&&<div style={{position:"fixed",inset:0,zIndex:600,background:"rgba(0,0,0,.95)",backdropFilter:"blur(20px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+        <div style={{background:C.panel,border:`1px solid rgba(201,168,76,.4)`,borderRadius:14,maxWidth:400,width:"100%",padding:"28px 24px",position:"relative"}}>
+          <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`,borderRadius:"14px 14px 0 0"}}/>
+          <div style={{textAlign:"center",marginBottom:22}}>
+            <div style={{fontSize:40,marginBottom:10}}>🔐</div>
+            <div style={{fontFamily:SERIF,fontWeight:900,fontSize:20,color:C.gold2,marginBottom:6}}>Create New Password</div>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,lineHeight:1.7,letterSpacing:"0.04em"}}>A temporary password was issued.<br/>Please create a secure password to continue.</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <input data-testid="input-new-password" type="password" placeholder="New password" value={newPwInput} onChange={e=>setNewPwInput(e.target.value)} style={{background:"rgba(255,255,255,.04)",border:`1px solid ${C.border2}`,borderRadius:8,padding:"11px 14px",fontFamily:MONO,fontSize:12,color:C.text,outline:"none",width:"100%",boxSizing:"border-box"}}/>
+            <input data-testid="input-confirm-password" type="password" placeholder="Confirm new password" value={newPwInput2} onChange={e=>setNewPwInput2(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")document.getElementById("btn-set-password")?.click();}} style={{background:"rgba(255,255,255,.04)",border:`1px solid ${C.border2}`,borderRadius:8,padding:"11px 14px",fontFamily:MONO,fontSize:12,color:C.text,outline:"none",width:"100%",boxSizing:"border-box"}}/>
+            {changePwError&&<div style={{fontFamily:MONO,fontSize:10,color:C.red,textAlign:"center"}}>{changePwError}</div>}
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.04em"}}>Must be 8+ chars with uppercase, lowercase, and a number.</div>
+            <button id="btn-set-password" data-testid="btn-set-password" disabled={changePwLoading} onClick={async()=>{
+              setChangePwError("");
+              if(newPwInput.length<8)return setChangePwError("At least 8 characters required.");
+              if(newPwInput!==newPwInput2)return setChangePwError("Passwords don't match.");
+              setChangePwLoading(true);
+              try{
+                const r=await fetch("/api/auth/change-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({newPassword:newPwInput})});
+                const d=await r.json();
+                if(!r.ok)return setChangePwError(d.error||"Failed to update password.");
+                setMustChangePassword(false);
+                setNewPwInput("");setNewPwInput2("");
+              }catch(e){setChangePwError("Network error. Please try again.");}
+              finally{setChangePwLoading(false);}
+            }} style={{background:`linear-gradient(135deg,rgba(201,168,76,.18),rgba(232,201,109,.12))`,border:`1px solid rgba(201,168,76,.4)`,borderRadius:8,padding:"13px 16px",fontFamily:MONO,fontSize:12,color:C.gold2,cursor:changePwLoading?"not-allowed":"pointer",letterSpacing:"0.08em",fontWeight:700,opacity:changePwLoading?0.6:1}}>
+              {changePwLoading?"Saving...":"Set New Password →"}
+            </button>
+          </div>
+        </div>
+      </div>}
+
       {/* Face ID / Biometric setup prompt */}
       {showBiometricSetup&&<div style={{position:"fixed",inset:0,zIndex:400,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0 0 40px"}}>
         <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:12,maxWidth:380,width:"100%",padding:"24px 20px",margin:"0 16px",position:"relative"}}>
@@ -1603,6 +1641,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.25em",marginTop:2}}>TRADE SMARTER WITH AI · v2</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2}}>📷</button>
             <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound alerts ON":"Sound alerts OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
             <button data-testid="btn-push-notif" onClick={requestPush} style={{background:"none",border:`1px solid ${notifPerm==="granted"?C.gold:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.muted2}}>{notifPerm==="granted"?"🔔":"🔕"}</button>
             {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
