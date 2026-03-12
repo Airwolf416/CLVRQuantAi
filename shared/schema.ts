@@ -64,6 +64,15 @@ export const userAlerts = pgTable("user_alerts", {
   expiresAt: timestamp("expires_at").notNull(),
 });
 
+export const webauthnCredentials = pgTable("webauthn_credentials", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  credentialId: text("credential_id").notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type WebAuthnCredential = typeof webauthnCredentials.$inferSelect;
+
 export const insertUserAlertSchema = createInsertSchema(userAlerts).pick({
   userId: true,
   sym: true,

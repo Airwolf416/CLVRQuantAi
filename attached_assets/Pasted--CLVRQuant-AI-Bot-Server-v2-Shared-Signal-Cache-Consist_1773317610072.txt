@@ -1,0 +1,605 @@
+/**
+
+- CLVRQuant AI — Bot Server v2
+- Shared Signal Cache · Consistent signals for ALL users simultaneously
+- 
+- Replit Secrets required:
+- HL_EVM_ADDRESS      — Hyperliquid EVM (0x) address
+- HL_PRIVATE_KEY      — EVM private key for signing orders
+- ANTHROPIC_API_KEY   — Claude API key
+- FINNHUB_KEY         — Finnhub market data
+- CRYPTOPANIC_KEY     — CryptoPanic news (optional)
+- 
+- Install: npm i express cors ethers @anthropic-ai/sdk node-fetch
+- Run:     node bot-server.js
+- 
+- KEY ARCHITECTURE: One signal generated per asset per cycle → cached →
+- ALL users read the same cache. No more contradictory signals.
+  */
+
+const express   = require(“express”);
+const cors      = require(“cors”);
+const { ethers } = require(“ethers”);
+const Anthropic  = require(”@anthropic-ai/sdk”);
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+const EVM_ADDRESS    = process.env.HL_EVM_ADDRESS;
+const PRIVATE_KEY    = process.env.HL_PRIVATE_KEY;
+const FINNHUB_KEY    = process.env.FINNHUB_KEY    || “”;
+const CRYPTOPANIC_KEY= process.env.CRYPTOPANIC_KEY|| “”;
+
+const HL_API      = “https://api.hyperliquid.xyz/info”;
+const HL_EXCHANGE = “https://api.hyperliquid.xyz/exchange”;
+const FINNHUB     = “https://finnhub.io/api/v1”;
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED SIGNAL CACHE
+// Generated once per cycle, served to ALL users identically
+// This is the fix for the “two users getting opposite signals” problem
+// ─────────────────────────────────────────────────────────────────────────────
+const SIGNAL_CACHE = {
+// { [asset]: { signal, direction, confidence, entry, stopLoss, takeProfit,
+//              rationale, newsImpact, keyRisks, timeframe, generatedAt } }
+signals:      {},
+marketMode:   null,   // { regime, score, crypto, equities, metals, forex }
+news:         null,   // { headlines, score, label }
+generatedAt:  null,
+generating:   false,
+TTL_MS:       60000,  // 60 seconds
+
+isStale() {
+return !this.generatedAt || (Date.now() - this.generatedAt > this.TTL_MS);
+},
+
+get(asset) {
+return this.signals[asset] || null;
+},
+
+set(asset, signal) {
+this.signals[asset] = { …signal, generatedAt: Date.now() };
+},
+
+getAll() {
+return {
+signals:     this.signals,
+marketMode:  this.marketMode,
+news:        this.news,
+generatedAt: this.generatedAt,
+};
+},
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRO PASS VALIDATION
+// ─────────────────────────────────────────────────────────────────────────────
+const PRO_PASSES = new Map(); // token → { activations: [{deviceId, activatedAt, expiresAt}] }
+
+// Seed with your issued passes
+[“CLVRPRO7DAY”, “CLVRPRO7DAY2”, “CLVRPRO7DAY3”].forEach(t => {
+PRO_PASSES.set(t, { activations: [], maxActivations: Infinity }); // shared = unlimited
+});
+
+function validateProPass(token, deviceId) {
+const clean = token.trim().toUpperCase().replace(/\s+/g,””);
+const pass  = PRO_PASSES.get(clean);
+
+if (!pass) {
+// Also accept any CLVR-prefixed token for future passes
+if (/^CLVR[A-Z0-9_-]{4,}$/.test(clean)) {
+PRO_PASSES.set(clean, { activations: [], maxActivations: Infinity });
+return activatePass(clean, deviceId);
+}
+return { valid: false, error: “Unknown pass token” };
+}
+return activatePass(clean, deviceId);
+}
+
+function activatePass(token, deviceId) {
+const pass       = PRO_PASSES.get(token);
+const now        = Date.now();
+const expiresAt  = now + 7 * 24 * 60 * 60 * 1000;
+
+// Check if this device already has an active activation
+const existing = pass.activations.find(a => a.deviceId === deviceId && a.expiresAt > now);
+if (existing) {
+return { valid: true, expiresAt: existing.expiresAt, daysLeft: Math.ceil((existing.expiresAt - now) / 86400000), existing: true };
+}
+
+// New activation for this device
+pass.activations.push({ deviceId, activatedAt: now, expiresAt });
+return { valid: true, expiresAt, daysLeft: 7, existing: false };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA FETCHERS
+// ─────────────────────────────────────────────────────────────────────────────
+async function hlPost(body) {
+const r = await fetch(HL_API, { method:“POST”, headers:{“Content-Type”:“application/json”}, body:JSON.stringify(body) });
+return r.json();
+}
+
+async function finnhubQuote(symbol) {
+try {
+const r = await fetch(`${FINNHUB}/quote?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_KEY}`);
+const d = await r.json();
+return d.c ? { price:d.c, change:d.dp } : null;
+} catch { return null; }
+}
+
+async function fetchNews() {
+const headlines = [];
+let bullish = 0, total = 0;
+try {
+// CryptoPanic
+if (CRYPTOPANIC_KEY) {
+const r = await fetch(`https://cryptopanic.com/api/v1/posts/?auth_token=${CRYPTOPANIC_KEY}&public=true&kind=news&currencies=BTC,ETH,SOL`);
+const d = await r.json();
+(d?.results||[]).slice(0,8).forEach(p => {
+const pos = p.votes?.positive||0, neg = p.votes?.negative||0;
+headlines.push({ title:p.title, source:p.source?.title, sentiment: pos>neg?“bullish”:neg>pos?“bearish”:“neutral” });
+if (pos>neg) bullish++; total++;
+});
+}
+// Finnhub crypto news
+const r2 = await fetch(`${FINNHUB}/news?category=crypto&token=${FINNHUB_KEY}`);
+const d2 = await r2.json();
+(d2||[]).slice(0,5).forEach(n => headlines.push({ title:n.headline, source:n.source, sentiment:“neutral” }));
+} catch {}
+const score = total > 0 ? Math.round((bullish/total)*100) : 50;
+return { headlines:headlines.slice(0,10), score, label: score>60?“BULLISH”:score<40?“BEARISH”:“MIXED” };
+}
+
+async function fetchAllMarketData() {
+const [mids, meta, spy, qqq, nvda, gold, eurusd, usdjpy, vix, news] = await Promise.all([
+hlPost({ type:“allMids” }),
+hlPost({ type:“metaAndAssetCtxs” }),
+finnhubQuote(“SPY”),
+finnhubQuote(“QQQ”),
+finnhubQuote(“NVDA”),
+finnhubQuote(“OANDA:XAU_USD”),
+finnhubQuote(“OANDA:EUR_USD”),
+finnhubQuote(“OANDA:USD_JPY”),
+finnhubQuote(“CBOE:VIX”),
+fetchNews(),
+]);
+
+const universe = meta?.[0]?.universe || [];
+const ctxs     = meta?.[1] || [];
+const funding  = {};
+universe.forEach((a,i) => {
+funding[a.name] = {
+funding:      parseFloat(ctxs[i]?.funding      || 0),
+openInterest: parseFloat(ctxs[i]?.openInterest || 0),
+markPx:       parseFloat(ctxs[i]?.markPx       || 0),
+index: i,
+};
+});
+
+return { prices:mids||{}, funding, spy, qqq, nvda, gold, eurusd, usdjpy, vix, news };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARKET MODE COMPUTATION (deterministic — same inputs = same output always)
+// ─────────────────────────────────────────────────────────────────────────────
+function computeMarketMode(market) {
+const { funding, spy, qqq, vix, gold, eurusd, usdjpy, news } = market;
+const vixPx   = vix?.price || 20;
+const btcF    = funding?.BTC?.funding || 0;
+const usdStrong = (usdjpy?.change||0) > 0.5;
+
+const cryptoBull = Math.round(
+(btcF < -0.0005 ? 75 : btcF > 0.001 ? 30 : 50) * 0.5 +
+(news.score) * 0.5
+);
+const equitiesBull = Math.round(
+((spy?.change||0) > 1 ? 72 : (spy?.change||0) < -1 ? 30 : 50) * 0.4 +
+((qqq?.change||0) > 1 ? 72 : (qqq?.change||0) < -1 ? 30 : 50) * 0.4 +
+(vixPx < 16 ? 75 : vixPx < 22 ? 50 : vixPx < 30 ? 35 : 20) * 0.2
+);
+const metalsBull = Math.round((gold?.change||0) > 1 ? 65 : (gold?.change||0) < -1 ? 35 : 50);
+const forexBull  = Math.round(usdStrong ? 35 : 65);
+
+const master = Math.round(cryptoBull*0.35 + equitiesBull*0.35 + metalsBull*0.15 + forexBull*0.15);
+
+return {
+score:     master,
+regime:    master >= 60 ? “RISK-ON” : master <= 40 ? “RISK-OFF” : “NEUTRAL”,
+crypto:    { bull:cryptoBull,   bear:100-cryptoBull,   regime:cryptoBull>=60?“BULLISH”:cryptoBull<=40?“BEARISH”:“NEUTRAL” },
+equities:  { bull:equitiesBull, bear:100-equitiesBull, regime:equitiesBull>=60?“BULLISH”:equitiesBull<=40?“BEARISH”:“NEUTRAL” },
+metals:    { bull:metalsBull,   bear:100-metalsBull,   regime:metalsBull>=60?“BULLISH”:metalsBull<=40?“BEARISH”:“NEUTRAL” },
+forex:     { bull:forexBull,    bear:100-forexBull,    regime:forexBull>=60?“BULLISH”:forexBull<=40?“BEARISH”:“NEUTRAL” },
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI SIGNAL GENERATION — news-aware, deterministic prompt
+// temperature=0 removed (not supported) but prompt is highly deterministic
+// ─────────────────────────────────────────────────────────────────────────────
+async function generateSignalForAsset(asset, market, marketMode, account) {
+const price   = parseFloat(market.prices?.[asset] || 0);
+const funding = market.funding?.[asset] || {};
+
+const newsBlock = market.news?.headlines?.slice(0,5)
+.map(h => `  • [${h.sentiment?.toUpperCase()}] ${h.title} (${h.source})`)
+.join(”\n”) || “  No news available”;
+
+const posLines = account?.positions?.length
+? account.positions.map(p => `  • ${p.side} ${Math.abs(p.size)} ${p.asset} @ $${p.entryPx?.toFixed(2)} | uPnL: ${p.unrealizedPnl>=0?"+":""}$${p.unrealizedPnl?.toFixed(2)}`).join(”\n”)
+: “  None”;
+
+// DETERMINISTIC system prompt — instructs Claude to be consistent
+const system = `You are CLVRQuant AI — quantitative trading signal engine.
+CRITICAL CONSISTENCY RULE: Given identical market data, ALWAYS produce the same signal direction.
+Do not be creative or vary your output. Be mechanical and data-driven.
+Base direction purely on: funding rate sign, news sentiment score, market regime score, and momentum.
+Use this exact decision logic:
+
+- If funding < -0.0005 AND news > 55 AND regime = RISK-ON → LONG
+- If funding > 0.001  AND news < 45 AND regime = RISK-OFF → SHORT
+- If funding > 0.001  AND news > 60 → NEUTRAL (overheated but bullish sentiment)
+- Otherwise → weight the factors and pick the majority direction
+  Respond ONLY with valid JSON. No markdown. No variation.
+
+Schema:
+{
+“signal”: “STRONG_LONG”|“LONG”|“NEUTRAL”|“SHORT”|“STRONG_SHORT”,
+“direction”: “LONG”|“SHORT”|“NONE”,
+“confidence”: 0-100,
+“entry”: number,
+“stopLoss”: number,
+“takeProfit”: number,
+“recommendedInvestmentPct”: 0-100,
+“rationale”: “2-3 sentences citing specific data points”,
+“newsImpact”: “how top news affects this signal”,
+“keyRisks”: [“risk1”,“risk2”],
+“timeframe”: “scalp (mins)”|“intraday (hours)”|“swing (days)”
+}`;
+
+const user = `Generate signal: ${asset}/USD perpetual
+
+CLVR MARKET MODE: ${marketMode.regime} (${marketMode.score}% Risk-On)
+Crypto Regime:    ${marketMode.crypto.regime} (${marketMode.crypto.bull}% bull)
+Equities:         ${marketMode.equities.regime}
+VIX Context:      ${market.vix?.price?.toFixed(1)||“N/A”}
+
+NEWS (scanned live):
+${newsBlock}
+News Sentiment: ${market.news?.score}% bullish — ${market.news?.label}
+
+ASSET DATA — ${asset}:
+Mark Price:     $${price.toFixed(price>100?2:4)}
+Funding/1H:     ${(funding.funding*100).toFixed(4)}% (${funding.funding>0?“longs paying”:“shorts paying”})
+Open Interest:  $${(funding.openInterest||0).toFixed(2)}M
+
+SPY: ${market.spy?.change?.toFixed(2)||”—”}% | QQQ: ${market.qqq?.change?.toFixed(2)||”—”}%
+
+ACCOUNT POSITIONS:
+${posLines}
+
+Account Value: $${account?.accountValue?.toFixed(2)||“N/A”}`;
+
+const response = await anthropic.messages.create({
+model:      “claude-sonnet-4-20250514”,
+max_tokens: 800,
+system,
+messages:   [{ role:“user”, content:user }],
+});
+
+const raw   = response.content.map(b => b.text||””).join(””);
+const clean = raw.replace(/`json|`/g,””).trim();
+const parsed = JSON.parse(clean);
+parsed.asset        = asset;
+parsed.price        = price;
+parsed.fundingRate  = funding.funding;
+parsed.generatedAt  = Date.now();
+return parsed;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOT STATE
+// ─────────────────────────────────────────────────────────────────────────────
+let botState = {
+status:   “idle”,
+config:   { assets:[“SOL”,“BTC”,“ETH”], leverage:5, positionSizeUsd:200, scanIntervalSeconds:60 },
+risk:     { minConfidence:75, dailyLossLimit:200, maxPositions:3, maxLeverage:10, maxFundingRate:0.001, cooldownMinutes:5, consecutiveLossLimit:3, circuitBreakerActive:false, pauseOnRiskOff:true },
+stats:    { trades:0, wins:0, losses:0, pnl:0, consecutiveLosses:0 },
+logs:     [],
+lastTradeTime: 0,
+scanInterval:  null,
+};
+
+function log(msg, type=“info”) {
+const entry = { time:new Date().toISOString(), msg, type };
+botState.logs = […botState.logs.slice(-299), entry];
+console.log(`[${type.toUpperCase()}] ${msg}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MASTER SCAN CYCLE
+// 1. Fetch all market data once
+// 2. Compute market mode (deterministic)
+// 3. Fetch news once
+// 4. Generate signals for each asset → store in shared cache
+// 5. All API users read from cache — same signal for everyone
+// ─────────────────────────────────────────────────────────────────────────────
+async function runScanCycle() {
+if (SIGNAL_CACHE.generating) return;
+SIGNAL_CACHE.generating = true;
+
+try {
+log(“🔄 Starting scan cycle — fetching market data + news…”);
+
+```
+const market = await fetchAllMarketData();
+const marketMode = computeMarketMode(market);
+SIGNAL_CACHE.marketMode = marketMode;
+SIGNAL_CACHE.news = market.news;
+
+log(`🌐 Market Mode: ${marketMode.regime} (${marketMode.score}%) | News: ${market.news.label} (${market.news.score}%)`);
+
+// Fetch account state
+const rawAccount = EVM_ADDRESS ? await hlPost({ type:"clearinghouseState", user:EVM_ADDRESS }) : null;
+const account    = parseAccount(rawAccount);
+
+// Kill switch checks
+if (account && account.totalUnrealizedPnl < -botState.risk.dailyLossLimit) {
+  log(`🛑 Drawdown $${Math.abs(account.totalUnrealizedPnl).toFixed(0)} > limit — stopping`,"error");
+  stopBot(); botState.risk.circuitBreakerActive = true;
+  SIGNAL_CACHE.generating = false; return;
+}
+if (botState.stats.consecutiveLosses >= botState.risk.consecutiveLossLimit) {
+  log(`🛑 ${botState.risk.consecutiveLossLimit} consecutive losses — circuit breaker`,"error");
+  stopBot(); botState.risk.circuitBreakerActive = true;
+  SIGNAL_CACHE.generating = false; return;
+}
+
+// Generate signals for each asset — stored in shared cache
+const assetsToScan = [...new Set([...botState.config.assets, "BTC","ETH","SOL"])];
+
+for (const asset of assetsToScan) {
+  try {
+    log(`📡 Generating signal for ${asset}...`);
+    const signal = await generateSignalForAsset(asset, market, marketMode, account);
+    SIGNAL_CACHE.set(asset, signal);
+    log(`✓ ${asset}: ${signal.signal} (${signal.confidence}%) | ${signal.rationale?.slice(0,60)}...`,"info");
+
+    // Small delay between AI calls to avoid rate limits
+    await new Promise(r => setTimeout(r, 1500));
+  } catch (e) {
+    log(`✗ ${asset} signal error: ${e.message}`,"error");
+  }
+}
+
+SIGNAL_CACHE.generatedAt = Date.now();
+log(`✅ Scan cycle complete — ${assetsToScan.length} signals cached for all users`,"success");
+
+// Auto-trade if bot is running
+if (botState.status === "running") {
+  await executeFromCache(market, account, marketMode);
+}
+```
+
+} catch (e) {
+log(`✗ Scan cycle error: ${e.message}`,“error”);
+} finally {
+SIGNAL_CACHE.generating = false;
+}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-EXECUTION from cached signals
+// ─────────────────────────────────────────────────────────────────────────────
+async function executeFromCache(market, account, marketMode) {
+const now = Date.now();
+const cd  = botState.risk.cooldownMinutes * 60000;
+if (now - botState.lastTradeTime < cd) {
+log(`⏱ Cooldown: ${Math.ceil((cd-(now-botState.lastTradeTime))/1000)}s`);
+return;
+}
+
+for (const asset of botState.config.assets) {
+const signal = SIGNAL_CACHE.get(asset);
+if (!signal) continue;
+
+```
+// Risk checks
+if (signal.confidence < botState.risk.minConfidence) { log(`⚠ ${asset}: confidence ${signal.confidence}% < min`,"warn"); continue; }
+if (signal.direction === "NONE" || signal.signal === "NEUTRAL") continue;
+if (botState.risk.pauseOnRiskOff && marketMode.regime === "RISK-OFF" && signal.direction === "LONG") { log(`⚠ RISK-OFF: ${asset} LONG blocked`,"warn"); continue; }
+if (account && account.positions.length >= botState.risk.maxPositions) { log(`⚠ Max positions reached`,"warn"); break; }
+
+const price = parseFloat(market.prices?.[asset] || 0);
+if (!price) continue;
+const size      = parseFloat((botState.config.positionSizeUsd / price).toFixed(4));
+const assetIdx  = market.funding?.[asset]?.index;
+if (assetIdx === undefined) continue;
+
+log(`⚡ Executing ${signal.direction} ${size} ${asset} @ ~$${price.toFixed(2)} | ${botState.config.leverage}x`);
+
+try {
+  await submitHLOrder({ assetIndex:assetIdx, isBuy:signal.direction==="LONG", size, leverage:botState.config.leverage });
+  botState.lastTradeTime = Date.now();
+  botState.stats.trades++;
+  botState.stats.consecutiveLosses = 0;
+  log(`✓ FILLED: ${signal.direction} ${size} ${asset}`,"success");
+} catch (err) {
+  botState.stats.losses++;
+  botState.stats.consecutiveLosses++;
+  log(`✗ Order failed: ${err.message}`,"error");
+}
+await new Promise(r => setTimeout(r, 2000));
+```
+
+}
+}
+
+function parseAccount(raw) {
+if (!raw) return null;
+const margin = raw.marginSummary || {};
+const positions = (raw.assetPositions||[]).map(ap => {
+const pos = ap.position;
+if (!pos || parseFloat(pos.szi)===0) return null;
+const size = parseFloat(pos.szi);
+const mu   = parseFloat(pos.marginUsed||0);
+const upnl = parseFloat(pos.unrealizedPnl||0);
+return { asset:pos.coin, size, side:size>0?“LONG”:“SHORT”, entryPx:parseFloat(pos.entryPx||0), unrealizedPnl:upnl, leverage:parseFloat(pos.leverage?.value||pos.leverage||1), liqPx:parseFloat(pos.liquidationPx||0), marginUsed:mu, roe:mu>0?(upnl/mu)*100:0 };
+}).filter(Boolean);
+return { accountValue:parseFloat(margin.accountValue||0), totalMarginUsed:parseFloat(margin.totalMarginUsed||0), totalUnrealizedPnl:parseFloat(margin.totalUnrealizedPnl||0), withdrawable:parseFloat(raw.withdrawable||0), positions };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDER SIGNING
+// ─────────────────────────────────────────────────────────────────────────────
+async function submitHLOrder({ assetIndex, isBuy, size, price=0, leverage }) {
+if (!PRIVATE_KEY) throw new Error(“HL_PRIVATE_KEY not set”);
+const wallet    = new ethers.Wallet(PRIVATE_KEY);
+const timestamp = Date.now();
+const order     = { a:assetIndex, b:isBuy, p:price===0?“0”:price.toString(), s:size.toString(), r:false, t:price===0?{market:{tpsl:””,limitPx:“0”}}:{limit:{tif:“Gtc”}} };
+const action    = { type:“order”, orders:[order], grouping:“na” };
+const actionBytes = ethers.utils.toUtf8Bytes(JSON.stringify(action));
+const actionHash  = ethers.utils.keccak256(actionBytes);
+const nonceBytes  = ethers.utils.arrayify(ethers.utils.hexZeroPad(ethers.BigNumber.from(timestamp).toHexString(),8));
+const vaultBytes  = ethers.utils.arrayify(“0x0000000000000000000000000000000000000000”);
+const msgHash     = ethers.utils.solidityKeccak256([“bytes32”,“bytes8”,“address”],[actionHash,nonceBytes,vaultBytes]);
+const sig         = await wallet.signMessage(ethers.utils.arrayify(msgHash));
+const { r, s, v } = ethers.utils.splitSignature(sig);
+const payload = { action, nonce:timestamp, signature:{r,s,v}, vaultAddress:null };
+const res = await fetch(HL_EXCHANGE, { method:“POST”, headers:{“Content-Type”:“application/json”}, body:JSON.stringify(payload) });
+const result = await res.json();
+if (result.status !== “ok”) throw new Error(result.response||JSON.stringify(result));
+return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOT CONTROLS
+// ─────────────────────────────────────────────────────────────────────────────
+function startBot(config, risk) {
+if (config) botState.config = { …botState.config, …config };
+if (risk)   botState.risk   = { …botState.risk,   …risk   };
+if (botState.risk.circuitBreakerActive) return { error:“Reset circuit breaker first” };
+botState.status = “running”;
+log(`🤖 Bot STARTED — ${botState.config.assets.join(",")} | ${botState.config.leverage}x | $${botState.config.positionSizeUsd}/trade`,“success”);
+runScanCycle();
+botState.scanInterval = setInterval(runScanCycle, botState.config.scanIntervalSeconds*1000);
+return { success:true };
+}
+
+function stopBot() {
+clearInterval(botState.scanInterval); botState.scanInterval = null;
+botState.status = “idle”;
+log(“🛑 Bot stopped”,“warn”);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REST API
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get(”/health”, (req,res) => res.json({
+ok:true, botStatus:botState.status,
+evmSet:!!EVM_ADDRESS, keySet:!!PRIVATE_KEY,
+cacheAge: SIGNAL_CACHE.generatedAt ? Math.round((Date.now()-SIGNAL_CACHE.generatedAt)/1000)+“s” : “never”,
+uptime:process.uptime(),
+}));
+
+// Get all cached signals — same for every user
+app.get(”/signals”, (req,res) => res.json(SIGNAL_CACHE.getAll()));
+
+// Get signal for specific asset
+app.get(”/signals/:asset”, (req,res) => {
+const sig = SIGNAL_CACHE.get(req.params.asset.toUpperCase());
+if (!sig) return res.status(404).json({ error:“No signal cached yet. Trigger /scan first.” });
+res.json(sig);
+});
+
+// Get signal with investment sizing
+app.post(”/signals/advise”, async (req,res) => {
+const { asset, budget } = req.body;
+if (!asset||!budget) return res.status(400).json({ error:“asset and budget required” });
+const sig = SIGNAL_CACHE.get(asset.toUpperCase());
+if (!sig) return res.status(404).json({ error:“No cached signal. Run /scan first.” });
+const deployPct = sig.recommendedInvestmentPct || (sig.direction===“NONE”?0:sig.confidence>80?70:sig.confidence>65?50:35);
+const deploy    = Math.round(budget * deployPct / 100);
+const reserve   = budget - deploy;
+res.json({ …sig, budget, recommendedInvestment:deploy, reserveAmount:reserve, deployPct });
+});
+
+// Force a new scan cycle
+app.post(”/scan”, async (req,res) => {
+await runScanCycle();
+res.json({ success:true, cached:SIGNAL_CACHE.getAll() });
+});
+
+// Market mode
+app.get(”/market-mode”, (req,res) => res.json(SIGNAL_CACHE.marketMode || { error:“Not computed yet” }));
+
+// News
+app.get(”/news”, (req,res) => res.json(SIGNAL_CACHE.news || { error:“Not fetched yet” }));
+
+// Bot controls
+app.post(”/bot/start”,  (req,res) => res.json(startBot(req.body.config, req.body.risk)));
+app.post(”/bot/stop”,   (req,res) => { stopBot(); res.json({ success:true }); });
+app.post(”/bot/pause”,  (req,res) => { clearInterval(botState.scanInterval); botState.status=“paused”; res.json({ success:true }); });
+app.get( “/bot/status”, (req,res) => res.json({ status:botState.status, config:botState.config, risk:botState.risk, stats:botState.stats, logs:botState.logs.slice(-50) }));
+app.post(”/bot/config”, (req,res) => { botState.config={…botState.config,…req.body}; res.json({ success:true, config:botState.config }); });
+app.post(”/bot/risk”,   (req,res) => { botState.risk={…botState.risk,…req.body}; res.json({ success:true, risk:botState.risk }); });
+app.post(”/bot/reset-cb”, (req,res) => { botState.risk.circuitBreakerActive=false; botState.stats.consecutiveLosses=0; log(“Circuit breaker reset”); res.json({ success:true }); });
+app.get( “/bot/logs”,   (req,res) => res.json(botState.logs.slice(-(req.query.limit||100))));
+app.get( “/account”,    async (req,res) => {
+try { const raw=await hlPost({type:“clearinghouseState”,user:EVM_ADDRESS}); res.json(parseAccount(raw)); }
+catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Pro pass validation
+app.post(”/pro/validate”, (req,res) => {
+const { token, deviceId } = req.body;
+if (!token||!deviceId) return res.status(400).json({ error:“token and deviceId required” });
+res.json(validateProPass(token, deviceId));
+});
+
+// Add new pass token (admin)
+app.post(”/pro/add-token”, (req,res) => {
+const { token, adminKey } = req.body;
+if (adminKey !== process.env.ADMIN_KEY) return res.status(403).json({ error:“Forbidden” });
+const clean = token.trim().toUpperCase();
+PRO_PASSES.set(clean, { activations:[], maxActivations:Infinity });
+res.json({ success:true, token:clean });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STARTUP
+// ─────────────────────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+console.log(`\n╔═══════════════════════════════════════════════╗`);
+console.log(`║   CLVRQuant AI — Bot Server v2.0              ║`);
+console.log(`║   Shared Signal Cache · Consistent Signals    ║`);
+console.log(`║   © 2025 CLVRQuant · Mike Claver™             ║`);
+console.log(`╚═══════════════════════════════════════════════╝\n`);
+console.log(`Port:        ${PORT}`);
+console.log(`EVM Address: ${EVM_ADDRESS?EVM_ADDRESS.slice(0,8)+"...":"⚠ NOT SET"}`);
+console.log(`Private Key: ${PRIVATE_KEY?"✓ SET":"⚠ NOT SET"}`);
+console.log(`Finnhub:     ${FINNHUB_KEY?"✓ SET":"⚠ NOT SET"}`);
+console.log(`\nKey endpoints:`);
+console.log(`  GET  /signals         — all cached signals (same for all users)`);
+console.log(`  GET  /signals/:asset  — single asset signal`);
+console.log(`  POST /signals/advise  — signal + investment sizing`);
+console.log(`  POST /scan            — force new scan cycle`);
+console.log(`  GET  /market-mode     — CLVR Market Mode`);
+console.log(`  POST /pro/validate    — validate Pro pass QR token\n`);
+
+// Run initial scan on startup
+setTimeout(runScanCycle, 2000);
+
+// Auto-refresh cache every 60s regardless of bot state
+setInterval(() => {
+if (SIGNAL_CACHE.isStale()) runScanCycle();
+}, 30000);
+});

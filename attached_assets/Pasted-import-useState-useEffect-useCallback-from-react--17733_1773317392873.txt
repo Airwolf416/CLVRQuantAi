@@ -1,0 +1,788 @@
+import { useState, useEffect, useCallback } from “react”;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALL PRICES SOURCED FROM HYPERLIQUID PERPETUALS ONLY
+//
+// Hyperliquid dex routing:
+//   (no dex param)  → Crypto perps: BTC, ETH, SOL, WIF, DOGE, etc.
+//   dex: “xyz”      → Equity perps: NVDA, TSLA, AAPL, MSFT, META, AMZN, GOOGL, COIN, AMD
+//   dex: “flx”      → Commodity perps: OIL (WTI), BRENT, XAU (Gold), XAG (Silver)
+//
+// This ensures prices match Bloomberg/TradingView exactly since HL
+// marks perps to their oracle (real spot/futures reference price)
+// ─────────────────────────────────────────────────────────────────────────────
+const HL_API = “https://api.hyperliquid.xyz/info”;
+
+// Optional: CryptoPanic for news sentiment only (not price data)
+const CP_KEY = typeof window !== “undefined”
+? (window?.CLVR_CONFIG?.CRYPTOPANIC_KEY || “”)
+: “”;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODULE-LEVEL SHARED CACHE
+// One refresh → all users see identical data (fixes divergent signals)
+// ─────────────────────────────────────────────────────────────────────────────
+const CACHE = {
+data:        null,
+generating:  false,
+subscribers: new Set(),
+TTL_MS:      15000,
+isStale()    { return !this.data || Date.now() - (this.data.ts || 0) > this.TTL_MS; },
+subscribe(fn){ this.subscribers.add(fn); return () => this.subscribers.delete(fn); },
+broadcast(d) { this.data = d; this.subscribers.forEach(fn => fn(d)); },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HYPERLIQUID FETCHERS
+// ─────────────────────────────────────────────────────────────────────────────
+async function hlPost(body) {
+try {
+const r = await fetch(HL_API, {
+method:  “POST”,
+headers: { “Content-Type”: “application/json” },
+body:    JSON.stringify(body),
+});
+return await r.json();
+} catch { return null; }
+}
+
+// Returns map: { TICKER: { price, change24h, funding, openInterest, volume24h, oraclePx } }
+async function fetchHLDex(dex) {
+const body = dex ? { type: “metaAndAssetCtxs”, dex } : { type: “metaAndAssetCtxs” };
+const data = await hlPost(body);
+if (!data || !Array.isArray(data) || data.length < 2) return {};
+
+const universe = data[0]?.universe || [];
+const ctxs     = data[1] || [];
+const result   = {};
+
+universe.forEach((asset, i) => {
+const ctx     = ctxs[i] || {};
+const markPx  = parseFloat(ctx.markPx   || ctx.midPx || 0);
+const prevDay = parseFloat(ctx.prevDayPx || 0);
+const change  = prevDay > 0 ? ((markPx - prevDay) / prevDay) * 100 : 0;
+// Strip dex prefix: “xyz:NVDA” → “NVDA”, “flx:OIL” → “OIL”
+const rawName   = asset.name || “”;
+const cleanName = rawName.includes(”:”) ? rawName.split(”:”)[1] : rawName;
+
+```
+result[cleanName] = {
+  rawName,
+  price:        markPx,
+  prevDayPx:    prevDay,
+  change24h:    parseFloat(change.toFixed(3)),
+  funding:      parseFloat(ctx.funding       || 0),
+  openInterest: parseFloat(ctx.openInterest  || 0),
+  oraclePx:     parseFloat(ctx.oraclePx      || 0),
+  volume24h:    parseFloat(ctx.dayNtlVlm      || 0),
+};
+```
+
+});
+
+return result;
+}
+
+// Fetch all three dexes in parallel — one round-trip
+async function fetchAllHL() {
+const [crypto, equities, commodities] = await Promise.all([
+fetchHLDex(null),    // crypto
+fetchHLDex(“xyz”),   // equities
+fetchHLDex(“flx”),   // commodities
+]);
+return { crypto, equities, commodities };
+}
+
+// News sentiment only — prices still come from HL
+async function fetchSentiment() {
+try {
+const url = `https://cryptopanic.com/api/v1/posts/?auth_token=${CP_KEY}&public=true&kind=news&currencies=BTC,ETH,SOL`;
+const r   = await fetch(url);
+const d   = await r.json();
+const posts   = d?.results?.slice(0, 10) || [];
+const bullish = posts.filter(p => (p.votes?.positive || 0) > (p.votes?.negative || 0)).length;
+const score   = posts.length ? Math.round((bullish / posts.length) * 100) : 50;
+return {
+score,
+label:     score > 60 ? “BULLISH” : score < 40 ? “BEARISH” : “MIXED”,
+headlines: posts.slice(0, 5).map(p => ({
+title:     p.title,
+sentiment: (p.votes?.positive||0) > (p.votes?.negative||0) ? “bullish”
+: (p.votes?.negative||0) > (p.votes?.positive||0) ? “bearish”
+: “neutral”,
+})),
+};
+} catch {
+return { score: 50, label: “MIXED”, headlines: [] };
+}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIGNAL COMPUTATION — deterministic given same market data
+// ─────────────────────────────────────────────────────────────────────────────
+function momentumSig(chg) {
+if (chg == null) return “NEUTRAL”;
+if (chg >  2.5) return “BULLISH”;
+if (chg >  0.5) return “MILD BULLISH”;
+if (chg < -2.5) return “BEARISH”;
+if (chg < -0.5) return “MILD BEARISH”;
+return “NEUTRAL”;
+}
+
+const SIG_SCORE = {
+“BULLISH”: 80, “MILD BULLISH”: 63, “NEUTRAL”: 50,
+“MILD BEARISH”: 37, “BEARISH”: 20,
+};
+
+function bullProb(…sigs) {
+const flat = sigs.flat().filter(Boolean);
+const vals = flat.map(s => SIG_SCORE[s] ?? 50);
+return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 50;
+}
+
+function regime(bull) {
+return bull >= 60 ? “BULLISH” : bull <= 40 ? “BEARISH” : “NEUTRAL”;
+}
+
+// Build the full data tree
+function computeAll(hl, sentiment) {
+const { crypto, equities, commodities } = hl;
+
+// ── CRYPTO ──────────────────────────────────────────────────
+const btcF   = crypto?.BTC?.funding  || 0;
+const ethF   = crypto?.ETH?.funding  || 0;
+const solF   = crypto?.SOL?.funding  || 0;
+const btcCh  = crypto?.BTC?.change24h || 0;
+const ethCh  = crypto?.ETH?.change24h || 0;
+const solCh  = crypto?.SOL?.change24h || 0;
+const wifCh  = crypto?.WIF?.change24h || 0;
+const dogeCh = crypto?.DOGE?.change24h|| 0;
+
+const fundSig = btcF > 0.001 ? “BEARISH” : btcF < -0.0005 ? “BULLISH” : “NEUTRAL”;
+const sentSig = sentiment.label === “BULLISH” ? “BULLISH”
+: sentiment.label === “BEARISH” ? “BEARISH” : “NEUTRAL”;
+
+const cryptoBull = bullProb(
+momentumSig(btcCh), momentumSig(ethCh), momentumSig(solCh),
+fundSig, sentSig
+);
+
+const cryptoData = {
+bull: cryptoBull, bear: 100 - cryptoBull, regime: regime(cryptoBull),
+signals: {
+“BTC 24h”:     momentumSig(btcCh),
+“ETH 24h”:     momentumSig(ethCh),
+“SOL 24h”:     momentumSig(solCh),
+“BTC Funding”: fundSig,
+“ETH Funding”: ethF > 0.001 ? “BEARISH” : ethF < -0.0005 ? “BULLISH” : “NEUTRAL”,
+“Social Mood”: sentSig,
+},
+assets: [
+{ symbol:“BTC”,  label:“Bitcoin”,  price:crypto?.BTC?.price,  change:btcCh,  funding:btcF },
+{ symbol:“ETH”,  label:“Ethereum”, price:crypto?.ETH?.price,  change:ethCh,  funding:ethF },
+{ symbol:“SOL”,  label:“Solana”,   price:crypto?.SOL?.price,  change:solCh,  funding:solF },
+{ symbol:“WIF”,  label:“WIF”,      price:crypto?.WIF?.price,  change:wifCh,  funding:crypto?.WIF?.funding  || 0 },
+{ symbol:“DOGE”, label:“Dogecoin”, price:crypto?.DOGE?.price, change:dogeCh, funding:crypto?.DOGE?.funding || 0 },
+{ symbol:“AVAX”, label:“Avalanche”,price:crypto?.AVAX?.price, change:crypto?.AVAX?.change24h||0, funding:crypto?.AVAX?.funding||0 },
+],
+};
+
+// ── EQUITIES (xyz dex) ────────────────────────────────────
+const getEq = t => ({
+price:   equities?.[t]?.price     || null,
+change:  equities?.[t]?.change24h || 0,
+funding: equities?.[t]?.funding   || 0,
+oi:      equities?.[t]?.openInterest || 0,
+});
+
+const nvda = getEq(“NVDA”), tsla = getEq(“TSLA”), aapl = getEq(“AAPL”);
+const msft = getEq(“MSFT”), meta = getEq(“META”), amzn = getEq(“AMZN”);
+const googl= getEq(“GOOGL”),coin = getEq(“COIN”), amd  = getEq(“AMD”);
+
+const equBull = bullProb(
+momentumSig(nvda.change), momentumSig(tsla.change), momentumSig(aapl.change),
+momentumSig(msft.change), momentumSig(meta.change), momentumSig(amzn.change)
+);
+
+const equitiesData = {
+bull: equBull, bear: 100 - equBull, regime: regime(equBull),
+signals: {
+“NVDA”:  momentumSig(nvda.change),
+“TSLA”:  momentumSig(tsla.change),
+“AAPL”:  momentumSig(aapl.change),
+“MSFT”:  momentumSig(msft.change),
+“META”:  momentumSig(meta.change),
+“AMZN”:  momentumSig(amzn.change),
+},
+assets: [
+{ symbol:“NVDA”,  label:“Nvidia”,    …nvda  },
+{ symbol:“TSLA”,  label:“Tesla”,     …tsla  },
+{ symbol:“AAPL”,  label:“Apple”,     …aapl  },
+{ symbol:“MSFT”,  label:“Microsoft”, …msft  },
+{ symbol:“META”,  label:“Meta”,      …meta  },
+{ symbol:“AMZN”,  label:“Amazon”,    …amzn  },
+{ symbol:“GOOGL”, label:“Alphabet”,  …googl },
+{ symbol:“COIN”,  label:“Coinbase”,  …coin  },
+{ symbol:“AMD”,   label:“AMD”,       …amd   },
+],
+};
+
+// ── COMMODITIES (flx dex) ─────────────────────────────────
+const getComm = t => ({
+price:   commodities?.[t]?.price     || null,
+change:  commodities?.[t]?.change24h || 0,
+funding: commodities?.[t]?.funding   || 0,
+oi:      commodities?.[t]?.openInterest || 0,
+});
+
+const xau   = getComm(“XAU”),  xag   = getComm(“XAG”);
+const oil   = getComm(“OIL”),  brent = getComm(“BRENT”);
+
+const gsRatio = (xau.price && xag.price && xag.price > 0)
+? xau.price / xag.price : null;
+
+const commBull = bullProb(
+momentumSig(xau.change), momentumSig(xag.change),
+momentumSig(oil.change), momentumSig(brent.change)
+);
+
+const commoditiesData = {
+bull: commBull, bear: 100 - commBull, regime: regime(commBull),
+gsRatio,
+signals: {
+“Gold (XAU)”:   momentumSig(xau.change),
+“Silver (XAG)”: momentumSig(xag.change),
+“WTI Crude”:    momentumSig(oil.change),
+“Brent Crude”:  momentumSig(brent.change),
+“G/S Ratio”:    gsRatio
+? (gsRatio > 85 ? “RISK-OFF” : gsRatio < 70 ? “RISK-ON” : “NEUTRAL”)
+: “NEUTRAL”,
+},
+assets: [
+{ symbol:“XAU”,   label:“Gold (XAU)”,    …xau   },
+{ symbol:“XAG”,   label:“Silver (XAG)”,  …xag   },
+{ symbol:“OIL”,   label:“WTI Crude”,     …oil   },
+{ symbol:“BRENT”, label:“Brent Crude”,   …brent },
+],
+};
+
+// ── FOREX — HL doesn’t carry FX perps yet; USD proxy from funding ─────────
+const usdBull = btcF > 0.0005 ? 35 : btcF < -0.0005 ? 65 : 50;
+const forexData = {
+bull: usdBull, bear: 100 - usdBull, regime: regime(usdBull),
+signals: {
+“USD Proxy”:     btcF > 0.0005 ? “USD STRONG” : btcF < -0.0005 ? “USD WEAK” : “NEUTRAL”,
+“Risk Appetite”: cryptoBull > 60 ? “RISK-ON” : cryptoBull < 40 ? “RISK-OFF” : “NEUTRAL”,
+},
+assets: [],
+note: “HL does not list FX perps. USD strength estimated from BTC funding + risk regime.”,
+};
+
+// ── MASTER SCORE ──────────────────────────────────────────
+const masterScore = Math.round(
+cryptoBull * 0.35 +
+equBull    * 0.30 +
+commBull   * 0.20 +
+usdBull    * 0.15
+);
+
+return {
+crypto: cryptoData,
+equities: equitiesData,
+commodities: commoditiesData,
+forex: forexData,
+master: {
+score:  masterScore,
+regime: masterScore >= 60 ? “RISK-ON” : masterScore <= 40 ? “RISK-OFF” : “NEUTRAL”,
+},
+sentiment,
+ts: Date.now(),
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN REFRESH — populates shared cache
+// ─────────────────────────────────────────────────────────────────────────────
+async function doRefresh() {
+if (CACHE.generating) return;
+CACHE.generating = true;
+try {
+const [hl, sentiment] = await Promise.all([fetchAllHL(), fetchSentiment()]);
+CACHE.broadcast(computeAll(hl, sentiment));
+} catch (e) {
+console.error(”[CLVRMarketMode] refresh error:”, e);
+} finally {
+CACHE.generating = false;
+}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI PRIMITIVES
+// ─────────────────────────────────────────────────────────────────────────────
+const mono  = “‘IBM Plex Mono’, monospace”;
+const serif = “‘Playfair Display’, serif”;
+
+const SIG_COLOR = s => {
+if (!s) return “#3a4560”;
+const u = s.toUpperCase();
+if ([“BULLISH”,“LOW FEAR”,“OVERSOLD”,“RISK-ON”,“USD WEAK”]
+.some(x => u.includes(x)))             return “#00ff88”;
+if (u.includes(“MILD BULL”))               return “#4ade80”;
+if ([“NEUTRAL”,“MODERATE”,“MIXED”,”—”]
+.some(x => u === x))                   return “#f59e0b”;
+if (u.includes(“MILD BEAR”) || u === “OVERBOUGHT” || u === “USD STRONG”)
+return “#f87171”;
+if ([“BEARISH”,“HIGH FEAR”,“RISK-OFF”]
+.some(x => u.includes(x)))             return “#ff2d55”;
+return “#6b7a99”;
+};
+
+function Dot({ value }) {
+const color = SIG_COLOR(value);
+return (
+<span style={{ display:“inline-flex”, alignItems:“center”, gap:5 }}>
+<span style={{ width:6, height:6, borderRadius:“50%”, background:color,
+boxShadow:`0 0 5px ${color}55`, flexShrink:0 }}/>
+<span style={{ color, fontSize:10, fontWeight:700, fontFamily:mono }}>{value || “—”}</span>
+</span>
+);
+}
+
+function ProbBar({ bull = 50, height = 4 }) {
+return (
+<div style={{ display:“flex”, height, borderRadius:3, overflow:“hidden”,
+background:“rgba(255,255,255,0.06)”, gap:1 }}>
+<div style={{ width:`${bull}%`, background:“linear-gradient(90deg,#00ff8855,#00ff88)”,
+transition:“width 1.2s ease” }}/>
+<div style={{ width:`${100-bull}%`, background:“linear-gradient(90deg,#ff2d5555,#ff2d55)”,
+transition:“width 1.2s ease” }}/>
+</div>
+);
+}
+
+function fmt(p) {
+if (!p || p === 0) return “—”;
+if (p >= 10000) return `$${p.toFixed(0)}`;
+if (p >= 1000)  return `$${p.toFixed(1)}`;
+if (p >= 100)   return `$${p.toFixed(2)}`;
+if (p >= 10)    return `$${p.toFixed(2)}`;
+if (p >= 1)     return `$${p.toFixed(4)}`;
+return `$${p.toFixed(5)}`;
+}
+
+function PriceRow({ symbol, label, price, change, funding }) {
+const upColor   = “#00ff88”;
+const downColor = “#ff2d55”;
+const chgColor  = change > 0 ? upColor : change < 0 ? downColor : “#f59e0b”;
+
+return (
+<div style={{ display:“flex”, justifyContent:“space-between”, alignItems:“center”,
+padding:“8px 0”, borderBottom:“1px solid rgba(255,255,255,0.04)” }}>
+<div>
+<div style={{ display:“flex”, alignItems:“center”, gap:6 }}>
+<span style={{ fontSize:12, fontWeight:700, color:”#e8e8f0”, fontFamily:mono }}>
+{label || symbol}
+</span>
+<span style={{ fontSize:8, color:”#3a4560”, fontFamily:mono }}>
+{label !== symbol ? symbol : “”}
+</span>
+</div>
+{funding !== 0 && funding !== undefined && (
+<div style={{ fontSize:8, color:funding > 0 ? “#f87171” : “#4ade80”,
+fontFamily:mono, marginTop:2 }}>
+{funding > 0 ? “▲” : “▼”} {(Math.abs(funding)*100).toFixed(4)}%/h funding
+</div>
+)}
+</div>
+<div style={{ textAlign:“right” }}>
+<div style={{ fontSize:14, fontWeight:800, color:”#e8e8f0”, fontFamily:mono }}>
+{price ? fmt(price) : <span style={{ color:”#2a3550” }}>—</span>}
+</div>
+{change !== null && change !== undefined && (
+<div style={{ fontSize:9, fontWeight:600, color:chgColor, fontFamily:mono }}>
+{change > 0 ? “+” : “”}{change?.toFixed(2)}%
+</div>
+)}
+</div>
+</div>
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSET CLASS CARD — collapsible
+// ─────────────────────────────────────────────────────────────────────────────
+const CLASS_META = {
+crypto:      { icon:“₿”,  label:“CRYPTO”,      color:”#9945ff”, hex:“153,69,255”  },
+equities:    { icon:“📈”, label:“EQUITIES”,     color:”#3b82f6”, hex:“59,130,246”  },
+commodities: { icon:“🛢”,  label:“COMMODITIES”,  color:”#d4af37”, hex:“212,175,55”  },
+forex:       { icon:“💱”, label:“FOREX”,        color:”#06b6d4”, hex:“6,182,212”   },
+};
+
+function AssetClassCard({ id, data, isOpen, onToggle }) {
+const meta = CLASS_META[id];
+
+if (!data) {
+return (
+<div style={{ background:“rgba(255,255,255,0.02)”, border:“1px solid rgba(255,255,255,0.06)”,
+borderRadius:12, padding:“14px”, marginBottom:8, opacity:0.45 }}>
+<div style={{ fontSize:9, color:”#3a4560”, fontFamily:mono }}>
+Loading {meta.label}…
+</div>
+</div>
+);
+}
+
+const col = SIG_COLOR(data.regime);
+
+return (
+<div style={{
+background: isOpen ? `rgba(${meta.hex},0.05)` : “rgba(255,255,255,0.02)”,
+border:`1px solid ${isOpen ? meta.color+"30" : "rgba(255,255,255,0.07)"}`,
+borderRadius:12, marginBottom:8, transition:“all 0.2s”,
+}}>
+
+```
+  {/* ── Header ── */}
+  <div onClick={onToggle} style={{ padding:"12px 14px", cursor:"pointer", userSelect:"none" }}>
+    <div style={{ display:"flex", justifyContent:"space-between",
+      alignItems:"center", marginBottom:8 }}>
+      {/* Left */}
+      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ width:30, height:30, borderRadius:8,
+          background:`rgba(${meta.hex},0.15)`,
+          display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>
+          {meta.icon}
+        </div>
+        <div>
+          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.8, fontFamily:mono }}>
+            {meta.label}
+          </div>
+          <div style={{ fontSize:14, fontWeight:800, color:col, fontFamily:mono }}>
+            {data.regime}
+          </div>
+          <div style={{ fontSize:7, color:"#2a3550", fontFamily:mono, marginTop:1 }}>
+            {id === "forex" ? "Proxy via HL funding" : "Hyperliquid Perps"}
+          </div>
+        </div>
+      </div>
+      {/* Right */}
+      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ textAlign:"right" }}>
+          <div style={{ display:"flex", gap:6, alignItems:"center", justifyContent:"flex-end" }}>
+            <span style={{ fontSize:15, fontWeight:900, color:"#00ff88", fontFamily:mono }}>
+              {data.bull}%
+            </span>
+            <span style={{ fontSize:10, color:"#2a3550", fontFamily:mono }}>/</span>
+            <span style={{ fontSize:15, fontWeight:900, color:"#ff2d55", fontFamily:mono }}>
+              {data.bear}%
+            </span>
+          </div>
+          <div style={{ fontSize:7, color:"#3a4560", fontFamily:mono }}>bull / bear</div>
+        </div>
+        <div style={{ color:"#3a4560", fontSize:9, fontFamily:mono,
+          transform:isOpen?"rotate(180deg)":"none", transition:"transform 0.2s" }}>▼</div>
+      </div>
+    </div>
+    <ProbBar bull={data.bull} height={3}/>
+  </div>
+
+  {/* ── Expanded ── */}
+  {isOpen && (
+    <div style={{ padding:"0 14px 16px" }}>
+
+      {/* Forex note */}
+      {id === "forex" && data.note && (
+        <div style={{ background:"rgba(6,182,212,0.06)",
+          border:"1px solid rgba(6,182,212,0.15)",
+          borderRadius:8, padding:"9px 12px", marginBottom:12,
+          fontSize:9, color:"#67e8f9", fontFamily:mono, lineHeight:1.6 }}>
+          ℹ {data.note}
+        </div>
+      )}
+
+      {/* Signal grid */}
+      <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.8,
+        fontFamily:mono, marginBottom:7 }}>SIGNALS</div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:14 }}>
+        {Object.entries(data.signals).map(([k, v]) => (
+          <div key={k} style={{ background:"rgba(255,255,255,0.03)", borderRadius:8,
+            padding:"8px 10px", border:"1px solid rgba(255,255,255,0.05)" }}>
+            <div style={{ fontSize:7, color:"#3a4560", fontFamily:mono, marginBottom:3 }}>
+              {k.toUpperCase()}
+            </div>
+            <Dot value={v}/>
+          </div>
+        ))}
+      </div>
+
+      {/* Price list */}
+      {data.assets.length > 0 && (
+        <>
+          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.8,
+            fontFamily:mono, marginBottom:6 }}>
+            LIVE PRICES · HYPERLIQUID PERPS
+          </div>
+          {data.assets.map(a => <PriceRow key={a.symbol} {...a}/>)}
+        </>
+      )}
+
+      {/* Gold / Silver ratio */}
+      {id === "commodities" && data.gsRatio && (
+        <div style={{ marginTop:14,
+          background:"rgba(212,175,55,0.05)",
+          border:"1px solid rgba(212,175,55,0.15)",
+          borderRadius:9, padding:"11px 13px" }}>
+          <div style={{ fontSize:8, color:"#d4af37", letterSpacing:1.5,
+            fontFamily:mono, marginBottom:6 }}>GOLD / SILVER RATIO</div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <span style={{ fontSize:20, fontWeight:900, color:"#d4af37", fontFamily:mono }}>
+              {data.gsRatio.toFixed(1)}
+            </span>
+            <Dot value={data.gsRatio > 85 ? "RISK-OFF" : data.gsRatio < 70 ? "RISK-ON" : "NEUTRAL"}/>
+          </div>
+          <div style={{ fontSize:8, color:"#6b7a99", fontFamily:mono, marginTop:5, lineHeight:1.5 }}>
+            {data.gsRatio > 85
+              ? "High ratio — gold outperforming silver → risk-off signal"
+              : data.gsRatio < 70
+              ? "Low ratio — silver outperforming gold → risk-on signal"
+              : "Ratio neutral — no strong macro bias from metals"}
+          </div>
+        </div>
+      )}
+
+      {/* Crypto funding breakdown */}
+      {id === "crypto" && (
+        <div style={{ marginTop:14 }}>
+          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.8,
+            fontFamily:mono, marginBottom:7 }}>FUNDING RATES · HYPERLIQUID</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+            {data.assets.slice(0, 3).map(a => (
+              <div key={a.symbol} style={{ background:"rgba(255,255,255,0.03)",
+                borderRadius:8, padding:"9px 10px" }}>
+                <div style={{ fontSize:8, color:"#3a4560", fontFamily:mono }}>{a.symbol}</div>
+                <div style={{ fontSize:12, fontWeight:700, fontFamily:mono, marginTop:3,
+                  color:a.funding > 0 ? "#f87171" : a.funding < 0 ? "#4ade80" : "#f59e0b" }}>
+                  {(a.funding * 100).toFixed(4)}%
+                </div>
+                <div style={{ fontSize:7, color:"#3a4560", fontFamily:mono, marginTop:2 }}>
+                  {a.funding > 0 ? "longs pay" : a.funding < 0 ? "shorts pay" : "neutral"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Equities funding highlight */}
+      {id === "equities" && (
+        <div style={{ marginTop:14 }}>
+          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.8,
+            fontFamily:mono, marginBottom:7 }}>FUNDING RATES · EQUITY PERPS</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+            {data.assets.slice(0, 6).map(a => (
+              <div key={a.symbol} style={{ background:"rgba(255,255,255,0.03)",
+                borderRadius:8, padding:"8px 9px" }}>
+                <div style={{ fontSize:8, color:"#3a4560", fontFamily:mono }}>{a.symbol}</div>
+                <div style={{ fontSize:11, fontWeight:700, fontFamily:mono, marginTop:2,
+                  color:a.funding > 0 ? "#f87171" : a.funding < 0 ? "#4ade80" : "#f59e0b" }}>
+                  {(a.funding * 100).toFixed(4)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+export default function CLVRMarketMode() {
+const [cData,      setCData]      = useState(CACHE.data);
+const [loading,    setLoading]    = useState(!CACHE.data);
+const [lastUpdate, setLastUpdate] = useState(null);
+const [openPanel,  setOpenPanel]  = useState(null);
+
+useEffect(() => {
+const unsub = CACHE.subscribe(d => {
+setCData(d);
+setLoading(false);
+setLastUpdate(new Date());
+});
+if (CACHE.isStale()) doRefresh();
+const iv = setInterval(() => { if (CACHE.isStale()) doRefresh(); }, 15000);
+return () => { unsub(); clearInterval(iv); };
+}, []);
+
+const toggle = useCallback(id =>
+setOpenPanel(p => p === id ? null : id), []);
+
+const master      = cData?.master;
+const masterColor = master?.regime === “RISK-ON”  ? “#00ff88”
+: master?.regime === “RISK-OFF” ? “#ff2d55”
+: “#f59e0b”;
+
+return (
+<div style={{ fontFamily:mono, color:”#e8e8f0” }}>
+
+```
+  {/* ═══════════════════════════════════════
+      MASTER SCORE CARD — always visible
+  ═══════════════════════════════════════ */}
+  <div style={{
+    background:`linear-gradient(135deg,
+      rgba(${master?.regime==="RISK-ON" ?"0,255,136"
+           :master?.regime==="RISK-OFF"?"255,45,85"
+           :"245,158,11"},0.07),
+      rgba(6,10,19,0.97))`,
+    border:`1px solid ${masterColor}22`,
+    borderRadius:16, padding:16, marginBottom:12,
+    boxShadow:`0 0 40px ${masterColor}06`,
+  }}>
+    {/* Title + score */}
+    <div style={{ display:"flex", justifyContent:"space-between",
+      alignItems:"flex-start", marginBottom:12 }}>
+      <div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+          <div style={{ width:32, height:32, borderRadius:9,
+            background:"linear-gradient(135deg,#d4af37,#f5d062)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:17, fontWeight:900, color:"#060a13", fontFamily:serif }}>C</div>
+          <div>
+            <div style={{ fontSize:9, color:"#3a4560", letterSpacing:2, fontFamily:mono }}>
+              CLVR AI MARKET MODE
+            </div>
+            <div style={{ fontSize:7, color:"#2a3550", fontFamily:mono, letterSpacing:1 }}>
+              CRYPTO · EQUITIES · COMMODITIES · FOREX
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize:26, fontWeight:900, color:masterColor,
+          letterSpacing:1, fontFamily:mono, lineHeight:1 }}>
+          {loading && !master ? "LOADING..." : (master?.regime || "—")}
+        </div>
+      </div>
+
+      <div style={{ textAlign:"right" }}>
+        <div style={{ fontSize:8, color:"#3a4560", fontFamily:mono, marginBottom:3 }}>
+          RISK-ON PROBABILITY
+        </div>
+        <div style={{ fontSize:36, fontWeight:900, color:masterColor,
+          fontFamily:mono, lineHeight:1 }}>
+          {master?.score ?? "—"}
+          <span style={{ fontSize:18 }}>%</span>
+        </div>
+        <div style={{ fontSize:7, color:"#2a3550", fontFamily:mono, marginTop:4 }}>
+          {loading
+            ? "↻ refreshing..."
+            : lastUpdate
+              ? `↻ ${lastUpdate.toLocaleTimeString()}`
+              : ""}
+        </div>
+      </div>
+    </div>
+
+    {/* Master bar */}
+    <ProbBar bull={master?.score || 50} height={6}/>
+
+    {/* 4-class summary strip */}
+    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr",
+      gap:7, marginTop:12 }}>
+      {["crypto","equities","commodities","forex"].map(id => {
+        const d      = cData?.[id];
+        const meta   = CLASS_META[id];
+        const col    = d ? SIG_COLOR(d.regime) : "#3a4560";
+        const active = openPanel === id;
+        return (
+          <div key={id} onClick={() => toggle(id)} style={{
+            background: active
+              ? `rgba(${meta.hex},0.14)`
+              : "rgba(255,255,255,0.03)",
+            border:`1px solid ${active ? meta.color+"45" : "rgba(255,255,255,0.07)"}`,
+            borderRadius:9, padding:"9px 6px",
+            cursor:"pointer", textAlign:"center", transition:"all 0.15s",
+          }}>
+            <div style={{ fontSize:15, marginBottom:2 }}>{meta.icon}</div>
+            <div style={{ fontSize:7, color:"#3a4560", letterSpacing:1.2, fontFamily:mono }}>
+              {meta.label}
+            </div>
+            <div style={{ fontSize:13, fontWeight:900, color:col, fontFamily:mono, marginTop:2 }}>
+              {d?.bull ?? "—"}%
+            </div>
+            <div style={{ fontSize:7, color:col, fontFamily:mono }}>{d?.regime || "..."}</div>
+          </div>
+        );
+      })}
+    </div>
+
+    <div style={{ fontSize:7, color:"#2a3550", fontFamily:mono, marginTop:8, textAlign:"center" }}>
+      All prices: Hyperliquid perpetuals · Tap to expand ·
+      Weighted: Crypto 35% · Equities 30% · Commodities 20% · Forex 15%
+    </div>
+  </div>
+
+  {/* ═══════════════════════════════════════
+      EXPANDABLE PANELS — one at a time
+  ═══════════════════════════════════════ */}
+  {["crypto","equities","commodities","forex"].map(id => (
+    <AssetClassCard
+      key={id}
+      id={id}
+      data={cData?.[id]}
+      isOpen={openPanel === id}
+      onToggle={() => toggle(id)}
+    />
+  ))}
+
+  {/* News strip */}
+  {cData?.sentiment?.headlines?.length > 0 && (
+    <div style={{ background:"rgba(255,255,255,0.02)",
+      border:"1px solid rgba(255,255,255,0.06)",
+      borderRadius:12, padding:"13px 14px", marginTop:4 }}>
+      <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2,
+        fontFamily:mono, marginBottom:8 }}>
+        ◆ CRYPTO NEWS · {cData.sentiment.label} ({cData.sentiment.score}% BULLISH)
+      </div>
+      {cData.sentiment.headlines.map((h, i) => (
+        <div key={i} style={{
+          fontSize:9, color:"#6b7a99", lineHeight:1.5, marginBottom:6,
+          borderLeft:`2px solid ${
+            h.sentiment === "bullish" ? "rgba(0,255,136,0.4)"
+          : h.sentiment === "bearish" ? "rgba(255,45,85,0.4)"
+          : "rgba(245,158,11,0.3)"}`,
+          paddingLeft:9, fontFamily:mono,
+        }}>
+          <span style={{ fontSize:8, fontWeight:700,
+            color:h.sentiment==="bullish"?"#00ff88"
+                 :h.sentiment==="bearish"?"#ff2d55":"#f59e0b" }}>
+            [{(h.sentiment||"neutral").toUpperCase()}]{" "}
+          </span>
+          {h.title?.slice(0, 90)}{(h.title?.length||0) > 90 ? "..." : ""}
+        </div>
+      ))}
+    </div>
+  )}
+
+  <div style={{ fontSize:7, color:"#111927", textAlign:"center",
+    paddingTop:12, paddingBottom:20, lineHeight:2, fontFamily:mono }}>
+    © 2025 CLVRQuant · Mike Claver™ · Not financial advice<br/>
+    All prices sourced from Hyperliquid perpetual markets
+  </div>
+
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700;800&family=Playfair+Display:wght@900&display=swap');
+    * { box-sizing: border-box; }
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.15); border-radius: 2px; }
+  `}</style>
+</div>
+```
+
+);
+}

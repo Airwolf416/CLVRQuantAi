@@ -1,0 +1,675 @@
+import { useState, useEffect, useRef, useCallback } from “react”;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRO ACCESS STORE
+// Tracks per-device Pro status. Server validates the pass token.
+// Each user gets their own 7-day window from scan time.
+// ─────────────────────────────────────────────────────────────────────────────
+const PRO_STORE = {
+// Valid pass tokens — add yours here, or validate server-side
+// Format: “clvr_pro_7day_XXXX” — read from your Apple Wallet pass QR
+VALID_TOKENS: new Set([
+“CLVRPRO7DAY”, // default token encoded in the QR you showed me
+// Add more tokens as you issue more passes
+]),
+
+getStatus() {
+try {
+const raw = localStorage.getItem(“clvr_pro_status”);
+if (!raw) return null;
+return JSON.parse(raw);
+} catch { return null; }
+},
+
+isPro() {
+const s = this.getStatus();
+if (!s) return false;
+return Date.now() < s.expiresAt;
+},
+
+getDaysLeft() {
+const s = this.getStatus();
+if (!s) return 0;
+const ms = s.expiresAt - Date.now();
+return Math.max(0, Math.ceil(ms / 86400000));
+},
+
+getExpiryDate() {
+const s = this.getStatus();
+if (!s) return null;
+return new Date(s.expiresAt).toLocaleDateString(“en-US”, { month:“short”, day:“numeric”, year:“numeric” });
+},
+
+activate(token) {
+// Each device gets its own 7-day window from activation
+const now       = Date.now();
+const expiresAt = now + 7 * 24 * 60 * 60 * 1000;
+const status    = { token, activatedAt: now, expiresAt, plan: “PRO” };
+localStorage.setItem(“clvr_pro_status”, JSON.stringify(status));
+return status;
+},
+
+validateToken(raw) {
+// Strip whitespace, uppercase
+const token = raw.trim().toUpperCase().replace(/\s+/g, “”);
+// Check known tokens
+if (this.VALID_TOKENS.has(token)) return { valid: true, token };
+// Check if it matches clvr_pro pattern
+if (/^CLVR[A-Z0-9_-]{4,}$/.test(token)) return { valid: true, token };
+return { valid: false, token };
+},
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PASSWORD RULES — new users only, existing passwords untouched
+// ─────────────────────────────────────────────────────────────────────────────
+export const PASSWORD_RULES = {
+isExistingUser() {
+return !!localStorage.getItem(“clvr_pw_hash”) &&
+!!localStorage.getItem(“clvr_user_created_v1”); // flag set on old accounts
+},
+
+validate(pw) {
+const rules = [
+{ id:“len”,   test: pw.length >= 12,           label: “At least 12 characters”  },
+{ id:“upper”, test: /[A-Z]/.test(pw),          label: “One uppercase letter”     },
+{ id:“lower”, test: /[a-z]/.test(pw),          label: “One lowercase letter”     },
+{ id:“num”,   test: /[0-9]/.test(pw),          label: “One number”               },
+{ id:“spec”,  test: /[^A-Za-z0-9]/.test(pw),  label: “One special character”    },
+];
+const strength = rules.filter(r => r.test).length;
+return {
+valid:    strength === 5,
+strength, // 0-5
+rules,
+label:    strength <= 1 ? “WEAK” : strength <= 3 ? “FAIR” : strength === 4 ? “GOOD” : “STRONG”,
+color:    strength <= 1 ? “#ff2d55” : strength <= 3 ? “#f59e0b” : strength === 4 ? “#4ade80” : “#00ff88”,
+};
+},
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QR SCANNER — uses device camera via getUserMedia + canvas frame analysis
+// Falls back to manual code entry if camera unavailable
+// ─────────────────────────────────────────────────────────────────────────────
+function QRScanner({ onScan, onClose }) {
+const videoRef  = useRef(null);
+const canvasRef = useRef(null);
+const streamRef = useRef(null);
+const scanRef   = useRef(null);
+const [camError,  setCamError]  = useState(null);
+const [scanning,  setScanning]  = useState(false);
+const [manualCode,setManual]    = useState(””);
+const [showManual,setShowManual]= useState(false);
+const [torchOn,   setTorchOn]   = useState(false);
+const [hasResult, setHasResult] = useState(false);
+
+// Start camera
+useEffect(() => {
+let active = true;
+async function startCam() {
+try {
+const stream = await navigator.mediaDevices.getUserMedia({
+video: { facingMode:“environment”, width:{ ideal:1280 }, height:{ ideal:720 } },
+});
+if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+streamRef.current = stream;
+if (videoRef.current) {
+videoRef.current.srcObject = stream;
+videoRef.current.play();
+setScanning(true);
+}
+} catch (e) {
+setCamError(e.message.includes(“Permission”) ? “Camera permission denied” : “Camera unavailable on this device”);
+setShowManual(true);
+}
+}
+startCam();
+return () => {
+active = false;
+if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+if (scanRef.current) cancelAnimationFrame(scanRef.current);
+};
+}, []);
+
+// Frame scanning — uses BarcodeDetector API (Safari 17+, Chrome) or jsQR fallback
+useEffect(() => {
+if (!scanning) return;
+let stopped = false;
+
+```
+const detectLoop = async () => {
+  if (stopped || hasResult) return;
+  try {
+    // BarcodeDetector (native, best performance)
+    if ("BarcodeDetector" in window) {
+      const detector = new window.BarcodeDetector({ formats:["qr_code"] });
+      const scan = async () => {
+        if (stopped || hasResult) return;
+        if (videoRef.current?.readyState === 4) {
+          const codes = await detector.detect(videoRef.current);
+          if (codes.length > 0) {
+            stopped = true;
+            setHasResult(true);
+            onScan(codes[0].rawValue);
+            return;
+          }
+        }
+        scanRef.current = requestAnimationFrame(scan);
+      };
+      scan();
+    } else {
+      // Canvas + manual decode fallback
+      // Load jsQR dynamically
+      if (!window.jsQR) {
+        const script = document.createElement("script");
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
+        script.onload = () => startCanvasScan();
+        document.head.appendChild(script);
+      } else {
+        startCanvasScan();
+      }
+    }
+  } catch { setShowManual(true); }
+};
+
+const startCanvasScan = () => {
+  const canvas = canvasRef.current;
+  const ctx    = canvas?.getContext("2d");
+  const scan   = () => {
+    if (stopped || hasResult || !videoRef.current?.videoWidth) {
+      if (!stopped) scanRef.current = requestAnimationFrame(scan);
+      return;
+    }
+    canvas.width  = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    ctx.drawImage(videoRef.current, 0, 0);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code    = window.jsQR?.(imgData.data, imgData.width, imgData.height);
+    if (code?.data) {
+      stopped = true;
+      setHasResult(true);
+      onScan(code.data);
+      return;
+    }
+    scanRef.current = requestAnimationFrame(scan);
+  };
+  scan();
+};
+
+detectLoop();
+return () => { stopped = true; if (scanRef.current) cancelAnimationFrame(scanRef.current); };
+```
+
+}, [scanning, hasResult, onScan]);
+
+const toggleTorch = async () => {
+const track = streamRef.current?.getVideoTracks()[0];
+if (!track) return;
+try {
+await track.applyConstraints({ advanced:[{ torch: !torchOn }] });
+setTorchOn(t => !t);
+} catch {}
+};
+
+return (
+<div style={{ position:“fixed”, inset:0, zIndex:9000, background:”#000”, display:“flex”, flexDirection:“column” }}>
+
+```
+  {/* Camera viewport */}
+  <div style={{ position:"relative", flex:1, overflow:"hidden" }}>
+    <video ref={videoRef} style={{ width:"100%", height:"100%", objectFit:"cover" }} playsInline muted/>
+    <canvas ref={canvasRef} style={{ display:"none" }}/>
+
+    {/* Scanning overlay */}
+    {!showManual && (
+      <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+        {/* Darkened corners */}
+        <div style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.55)" }}/>
+
+        {/* Scan frame */}
+        <div style={{ position:"relative", width:240, height:240 }}>
+          {/* Corner brackets */}
+          {[
+            { top:0,    left:0,    borderTop:"3px solid #d4af37", borderLeft:"3px solid #d4af37",  borderRadius:"8px 0 0 0" },
+            { top:0,    right:0,   borderTop:"3px solid #d4af37", borderRight:"3px solid #d4af37", borderRadius:"0 8px 0 0" },
+            { bottom:0, left:0,    borderBottom:"3px solid #d4af37", borderLeft:"3px solid #d4af37",  borderRadius:"0 0 0 8px" },
+            { bottom:0, right:0,   borderBottom:"3px solid #d4af37", borderRight:"3px solid #d4af37", borderRadius:"0 0 8px 0" },
+          ].map((s, i) => (
+            <div key={i} style={{ position:"absolute", width:30, height:30, ...s }}/>
+          ))}
+
+          {/* Scan line animation */}
+          {scanning && !hasResult && (
+            <div style={{
+              position:"absolute", left:4, right:4, height:2,
+              background:"linear-gradient(90deg,transparent,#d4af37,transparent)",
+              boxShadow:"0 0 8px #d4af37",
+              animation:"scanLine 2s linear infinite",
+            }}/>
+          )}
+
+          {/* Success flash */}
+          {hasResult && (
+            <div style={{ position:"absolute", inset:0, background:"rgba(0,255,136,0.3)", borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <div style={{ fontSize:48 }}>✓</div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ position:"relative", marginTop:20, fontSize:12, color:"rgba(255,255,255,0.7)", fontFamily:"'IBM Plex Mono',monospace", textAlign:"center" }}>
+          {hasResult ? "QR Code detected!" : "Align QR code within frame"}
+        </div>
+      </div>
+    )}
+
+    {camError && (
+      <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(0,0,0,0.8)" }}>
+        <div style={{ fontSize:11, color:"#f87171", fontFamily:"'IBM Plex Mono',monospace", textAlign:"center", padding:20 }}>{camError}</div>
+      </div>
+    )}
+  </div>
+
+  {/* Bottom controls */}
+  <div style={{ background:"#0b1220", padding:"16px 20px", paddingBottom:34 }}>
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+      <button onClick={onClose} style={{ background:"transparent", border:"1px solid rgba(255,255,255,0.15)", borderRadius:9, padding:"9px 16px", color:"#6b7a99", fontSize:11, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace" }}>✕ Cancel</button>
+      <button onClick={toggleTorch} style={{ background:torchOn?"rgba(212,175,55,0.2)":"rgba(255,255,255,0.06)", border:`1px solid ${torchOn?"rgba(212,175,55,0.4)":"rgba(255,255,255,0.12)"}`, borderRadius:9, padding:"9px 16px", color:torchOn?"#d4af37":"#6b7a99", fontSize:11, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace" }}>
+        {torchOn ? "🔦 Torch On" : "🔦 Torch"}
+      </button>
+      <button onClick={() => setShowManual(m => !m)} style={{ background:"rgba(212,175,55,0.08)", border:"1px solid rgba(212,175,55,0.2)", borderRadius:9, padding:"9px 16px", color:"#d4af37", fontSize:11, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace" }}>
+        ⌨ Manual
+      </button>
+    </div>
+
+    {/* Manual code entry */}
+    {showManual && (
+      <div style={{ display:"flex", gap:8 }}>
+        <input
+          value={manualCode}
+          onChange={e => setManual(e.target.value.toUpperCase())}
+          onKeyDown={e => e.key === "Enter" && manualCode && onScan(manualCode)}
+          placeholder="Enter pass code manually"
+          style={{ flex:1, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(212,175,55,0.25)", borderRadius:9, padding:"10px 12px", color:"#e8e8f0", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", outline:"none", letterSpacing:1 }}
+        />
+        <button onClick={() => manualCode && onScan(manualCode)} style={{ padding:"10px 16px", background:"linear-gradient(135deg,#d4af37,#b8941e)", border:"none", borderRadius:9, color:"#060a13", fontSize:12, fontWeight:800, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace" }}>GO</button>
+      </div>
+    )}
+  </div>
+
+  <style>{`
+    @keyframes scanLine {
+      0%   { top: 4px;  opacity: 1; }
+      45%  { top: 232px; opacity: 1; }
+      50%  { top: 232px; opacity: 0; }
+      55%  { top: 4px;   opacity: 0; }
+      60%  { top: 4px;   opacity: 1; }
+      100% { top: 4px;   opacity: 1; }
+    }
+  `}</style>
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRO ACTIVATION MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+function ProActivationModal({ onActivated, onClose }) {
+const [phase,    setPhase]    = useState(“intro”);  // intro | scanning | result
+const [result,   setResult]   = useState(null);
+const [rawToken, setRawToken] = useState(””);
+
+const handleScan = useCallback((raw) => {
+setRawToken(raw);
+setPhase(“result”);
+const validation = PRO_STORE.validateToken(raw);
+if (validation.valid) {
+const status = PRO_STORE.activate(validation.token);
+setResult({ success: true, status });
+} else {
+setResult({ success: false, raw });
+}
+}, []);
+
+if (phase === “scanning”) {
+return <QRScanner onScan={handleScan} onClose={() => setPhase(“intro”)}/>;
+}
+
+return (
+<div style={{ position:“fixed”, inset:0, background:“rgba(0,0,0,0.92)”, zIndex:8500, display:“flex”, alignItems:“center”, justifyContent:“center”, padding:20 }}>
+<div style={{
+background:“linear-gradient(145deg,#0b1220,#060e1a)”,
+border:“1px solid rgba(212,175,55,0.3)”,
+borderRadius:20, padding:28, maxWidth:360, width:“100%”,
+boxShadow:“0 20px 60px rgba(0,0,0,0.7)”,
+}}>
+{/* Intro */}
+{phase === “intro” && (
+<>
+{/* Pass card preview */}
+<div style={{
+background:“linear-gradient(135deg,#060e1a,#0d1829)”,
+border:“1px solid rgba(212,175,55,0.4)”,
+borderRadius:14, padding:“18px 20px”, marginBottom:20,
+position:“relative”, overflow:“hidden”,
+}}>
+<div style={{ position:“absolute”, top:-20, right:-20, width:80, height:80, borderRadius:“50%”, background:“rgba(212,175,55,0.05)”, border:“1px solid rgba(212,175,55,0.1)” }}/>
+<div style={{ fontSize:9, color:”#d4af37”, letterSpacing:2, fontFamily:”‘IBM Plex Mono’,monospace”, marginBottom:4 }}>• PRO ACCESS</div>
+<div style={{ fontSize:8, color:”#3a4560”, fontFamily:”‘IBM Plex Mono’,monospace”, textAlign:“right”, marginTop:-16, marginBottom:8 }}>CLVR QUANT AI<br/>AI TRADING INTELLIGENCE</div>
+<div style={{ fontSize:28, fontWeight:900, color:”#e8e8f0”, fontFamily:”‘Playfair Display’,serif”, marginBottom:10, lineHeight:1.1 }}>7-DAY PRO<br/>ACCESS</div>
+<div style={{ display:“flex”, gap:16 }}>
+<div>
+<div style={{ fontSize:8, color:”#d4af37”, letterSpacing:1, fontFamily:”‘IBM Plex Mono’,monospace” }}>ACCESS LEVEL</div>
+<div style={{ fontSize:10, color:”#e8e8f0”, fontFamily:”‘IBM Plex Mono’,monospace” }}>PRO</div>
+</div>
+<div>
+<div style={{ fontSize:8, color:”#d4af37”, letterSpacing:1, fontFamily:”‘IBM Plex Mono’,monospace” }}>ENGINE</div>
+<div style={{ fontSize:10, color:”#e8e8f0”, fontFamily:”‘IBM Plex Mono’,monospace” }}>CLVR QUANT AI</div>
+</div>
+</div>
+<div style={{ marginTop:10, display:“flex”, gap:16 }}>
+<div>
+<div style={{ fontSize:8, color:”#d4af37”, letterSpacing:1, fontFamily:”‘IBM Plex Mono’,monospace” }}>VALIDITY</div>
+<div style={{ fontSize:10, color:”#e8e8f0”, fontFamily:”‘IBM Plex Mono’,monospace” }}>7 DAYS</div>
+</div>
+<div>
+<div style={{ fontSize:8, color:”#d4af37”, letterSpacing:1, fontFamily:”‘IBM Plex Mono’,monospace” }}>ACTIVATION</div>
+<div style={{ fontSize:10, color:”#e8e8f0”, fontFamily:”‘IBM Plex Mono’,monospace” }}>SCAN QR</div>
+</div>
+</div>
+</div>
+
+```
+        <div style={{ fontSize:11, color:"#6b7a99", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.7, marginBottom:20, textAlign:"center" }}>
+          Open your CLVRQuant Pro pass from Apple Wallet and scan the QR code. Each scan gives you a fresh 7-day Pro window.
+        </div>
+
+        <button onClick={() => setPhase("scanning")} style={{
+          width:"100%", padding:"14px",
+          background:"linear-gradient(135deg,#d4af37 0%,#f5d062 50%,#d4af37 100%)",
+          border:"none", borderRadius:12, color:"#060a13",
+          fontSize:13, fontWeight:800, cursor:"pointer",
+          fontFamily:"'IBM Plex Mono',monospace", letterSpacing:1.5,
+          marginBottom:10,
+        }}>
+          📷 SCAN PRO PASS
+        </button>
+        <button onClick={onClose} style={{ width:"100%", padding:"11px", background:"transparent", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, color:"#3a4560", fontSize:11, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace" }}>
+          Cancel
+        </button>
+      </>
+    )}
+
+    {/* Result */}
+    {phase === "result" && result && (
+      <>
+        {result.success ? (
+          <>
+            <div style={{ textAlign:"center", marginBottom:20 }}>
+              <div style={{ fontSize:56, marginBottom:10 }}>✅</div>
+              <div style={{ fontSize:18, fontWeight:900, color:"#00ff88", fontFamily:"'IBM Plex Mono',monospace", marginBottom:6 }}>PRO ACTIVATED</div>
+              <div style={{ fontSize:10, color:"#6b7a99", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.7 }}>
+                Your 7-day Pro access is now active.<br/>
+                Expires: <span style={{ color:"#d4af37" }}>{PRO_STORE.getExpiryDate()}</span>
+              </div>
+            </div>
+            <div style={{ background:"rgba(0,255,136,0.06)", border:"1px solid rgba(0,255,136,0.2)", borderRadius:10, padding:"12px 14px", marginBottom:20 }}>
+              {["QuantBrain AI Analyst","Auto-Trading Bot","CLVR Market Mode","Unlimited Signals","Priority AI Access"].map((f,i) => (
+                <div key={i} style={{ fontSize:10, color:"#00ff88", fontFamily:"'IBM Plex Mono',monospace", marginBottom:5 }}>✓ {f}</div>
+              ))}
+            </div>
+            <button onClick={() => { onActivated(); onClose(); }} style={{ width:"100%", padding:"13px", background:"linear-gradient(135deg,#00c67a,#00ff88)", border:"none", borderRadius:12, color:"#060a13", fontSize:13, fontWeight:800, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace", letterSpacing:1 }}>
+              ENTER PLATFORM →
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ textAlign:"center", marginBottom:20 }}>
+              <div style={{ fontSize:48, marginBottom:10 }}>❌</div>
+              <div style={{ fontSize:16, fontWeight:800, color:"#ff2d55", fontFamily:"'IBM Plex Mono',monospace", marginBottom:6 }}>INVALID PASS</div>
+              <div style={{ fontSize:10, color:"#6b7a99", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.7 }}>
+                The QR code scanned doesn't match a valid CLVRQuant Pro pass.
+              </div>
+              {rawToken && <div style={{ fontSize:9, color:"#2a3550", fontFamily:"'IBM Plex Mono',monospace", marginTop:6 }}>Scanned: {rawToken.slice(0,30)}</div>}
+            </div>
+            <button onClick={() => setPhase("scanning")} style={{ width:"100%", padding:"12px", background:"rgba(212,175,55,0.1)", border:"1px solid rgba(212,175,55,0.3)", borderRadius:12, color:"#d4af37", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace", marginBottom:10 }}>
+              Try Again
+            </button>
+            <button onClick={onClose} style={{ width:"100%", padding:"11px", background:"transparent", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, color:"#3a4560", fontSize:11, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace" }}>Cancel</button>
+          </>
+        )}
+      </>
+    )}
+  </div>
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRO STATUS BADGE — drop this anywhere in your app
+// Shows current Pro status + activate button if not Pro
+// ─────────────────────────────────────────────────────────────────────────────
+export function ProBadge({ onProActivated }) {
+const [isPro,        setIsPro]        = useState(PRO_STORE.isPro());
+const [daysLeft,     setDaysLeft]     = useState(PRO_STORE.getDaysLeft());
+const [showActivate, setShowActivate] = useState(false);
+
+useEffect(() => {
+const iv = setInterval(() => {
+setIsPro(PRO_STORE.isPro());
+setDaysLeft(PRO_STORE.getDaysLeft());
+}, 60000);
+return () => clearInterval(iv);
+}, []);
+
+if (isPro) {
+return (
+<div style={{
+display:“flex”, alignItems:“center”, gap:6,
+background:“linear-gradient(135deg,rgba(212,175,55,0.12),rgba(212,175,55,0.04))”,
+border:“1px solid rgba(212,175,55,0.3)”,
+borderRadius:8, padding:“5px 10px”,
+}}>
+<div style={{ width:6, height:6, borderRadius:“50%”, background:”#d4af37”, boxShadow:“0 0 6px #d4af37” }}/>
+<span style={{ fontSize:9, color:”#d4af37”, fontWeight:800, fontFamily:”‘IBM Plex Mono’,monospace”, letterSpacing:1 }}>PRO</span>
+<span style={{ fontSize:8, color:”#6b7a99”, fontFamily:”‘IBM Plex Mono’,monospace” }}>{daysLeft}d left</span>
+</div>
+);
+}
+
+return (
+<>
+<button onClick={() => setShowActivate(true)} style={{
+background:“linear-gradient(135deg,rgba(212,175,55,0.15),rgba(212,175,55,0.05))”,
+border:“1px solid rgba(212,175,55,0.3)”,
+borderRadius:8, padding:“5px 12px”,
+color:”#d4af37”, fontSize:9, fontWeight:800,
+cursor:“pointer”, fontFamily:”‘IBM Plex Mono’,monospace”,
+letterSpacing:1,
+}}>
+⚡ ACTIVATE PRO
+</button>
+
+```
+  {showActivate && (
+    <ProActivationModal
+      onActivated={() => {
+        setIsPro(true);
+        setDaysLeft(7);
+        onProActivated?.();
+      }}
+      onClose={() => setShowActivate(false)}
+    />
+  )}
+</>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PASSWORD STRENGTH INDICATOR — for new user signup only
+// ─────────────────────────────────────────────────────────────────────────────
+export function PasswordStrengthMeter({ password }) {
+const v = PASSWORD_RULES.validate(password);
+if (!password) return null;
+
+return (
+<div style={{ marginTop:8 }}>
+{/* Strength bar */}
+<div style={{ display:“flex”, gap:3, marginBottom:8 }}>
+{[1,2,3,4,5].map(i => (
+<div key={i} style={{
+flex:1, height:3, borderRadius:2,
+background: i <= v.strength ? v.color : “rgba(255,255,255,0.08)”,
+transition:“background 0.3s”,
+}}/>
+))}
+</div>
+{/* Label */}
+<div style={{ display:“flex”, justifyContent:“space-between”, alignItems:“center”, marginBottom:8 }}>
+<span style={{ fontSize:9, color:v.color, fontWeight:700, fontFamily:”‘IBM Plex Mono’,monospace”, letterSpacing:1 }}>{v.label}</span>
+<span style={{ fontSize:8, color:”#3a4560”, fontFamily:”‘IBM Plex Mono’,monospace” }}>{v.strength}/5</span>
+</div>
+{/* Rules */}
+<div style={{ display:“grid”, gridTemplateColumns:“1fr 1fr”, gap:3 }}>
+{v.rules.map(r => (
+<div key={r.id} style={{ fontSize:8, color:r.test?”#00ff88”:”#3a4560”, fontFamily:”‘IBM Plex Mono’,monospace”, display:“flex”, alignItems:“center”, gap:4 }}>
+<span style={{ fontSize:10 }}>{r.test?“✓”:“○”}</span>{r.label}
+</div>
+))}
+</div>
+</div>
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRO GATE — wrap any Pro-only feature
+// ─────────────────────────────────────────────────────────────────────────────
+export function ProGate({ children, feature = “This feature” }) {
+const [isPro, setIsPro]     = useState(PRO_STORE.isPro());
+const [showModal, setModal] = useState(false);
+
+if (isPro) return children;
+
+return (
+<>
+<div style={{
+position:“relative”, overflow:“hidden”,
+borderRadius:12, border:“1px solid rgba(212,175,55,0.15)”,
+}}>
+<div style={{ filter:“blur(3px)”, pointerEvents:“none”, userSelect:“none”, opacity:0.4 }}>{children}</div>
+<div style={{
+position:“absolute”, inset:0,
+background:“rgba(6,10,19,0.85)”,
+display:“flex”, flexDirection:“column”,
+alignItems:“center”, justifyContent:“center”,
+padding:20, textAlign:“center”,
+}}>
+<div style={{ fontSize:24, marginBottom:8 }}>🔒</div>
+<div style={{ fontSize:12, fontWeight:800, color:”#d4af37”, fontFamily:”‘IBM Plex Mono’,monospace”, marginBottom:4 }}>{feature}</div>
+<div style={{ fontSize:10, color:”#6b7a99”, fontFamily:”‘IBM Plex Mono’,monospace”, marginBottom:14, lineHeight:1.6 }}>Requires Pro access.<br/>Scan your 7-day pass to unlock.</div>
+<button onClick={() => setModal(true)} style={{
+padding:“10px 20px”, background:“linear-gradient(135deg,#d4af37,#b8941e)”,
+border:“none”, borderRadius:9, color:”#060a13”,
+fontSize:11, fontWeight:800, cursor:“pointer”,
+fontFamily:”‘IBM Plex Mono’,monospace”, letterSpacing:1,
+}}>⚡ ACTIVATE PRO</button>
+</div>
+</div>
+{showModal && <ProActivationModal onActivated={() => setIsPro(true)} onClose={() => setModal(false)}/>}
+</>
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN DEMO — shows all pieces together
+// ─────────────────────────────────────────────────────────────────────────────
+export default function ProAccessDemo() {
+const [isPro, setIsPro] = useState(PRO_STORE.isPro());
+
+return (
+<div style={{
+background:“linear-gradient(160deg,#060a13,#0b1220,#060a13)”,
+minHeight:“100vh”, padding:“20px 16px”,
+fontFamily:”‘IBM Plex Mono’,monospace”, color:”#e8e8f0”,
+}}>
+<style>{`@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700;800&family=Playfair+Display:wght@900&display=swap'); * { box-sizing: border-box; }`}</style>
+
+```
+  {/* Header */}
+  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
+    <div>
+      <div style={{ fontSize:16, fontWeight:900, color:"#d4af37", fontFamily:"'Playfair Display',serif" }}>CLVRQuant AI</div>
+      <div style={{ fontSize:8, color:"#2a3550", letterSpacing:2 }}>PRO ACCESS SYSTEM</div>
+    </div>
+    <ProBadge onProActivated={() => setIsPro(true)}/>
+  </div>
+
+  {/* Status card */}
+  <div style={{ background:"rgba(255,255,255,0.025)", border:`1px solid ${isPro?"rgba(212,175,55,0.25)":"rgba(255,255,255,0.07)"}`, borderRadius:14, padding:"16px", marginBottom:20 }}>
+    <div style={{ fontSize:9, color:"#3a4560", letterSpacing:2, marginBottom:10 }}>ACCESS STATUS</div>
+    {isPro ? (
+      <>
+        <div style={{ fontSize:20, fontWeight:900, color:"#d4af37", marginBottom:4 }}>● PRO ACTIVE</div>
+        <div style={{ fontSize:10, color:"#6b7a99", lineHeight:1.7, marginBottom:12 }}>
+          Expires: {PRO_STORE.getExpiryDate()}<br/>
+          Days remaining: {PRO_STORE.getDaysLeft()}
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7 }}>
+          {["QuantBrain AI","Auto-Trading Bot","Market Mode","Unlimited Signals"].map(f => (
+            <div key={f} style={{ background:"rgba(212,175,55,0.05)", border:"1px solid rgba(212,175,55,0.12)", borderRadius:8, padding:"8px 10px", fontSize:9, color:"#d4af37" }}>✓ {f}</div>
+          ))}
+        </div>
+      </>
+    ) : (
+      <>
+        <div style={{ fontSize:18, fontWeight:900, color:"#4a5568", marginBottom:4 }}>○ FREE PLAN</div>
+        <div style={{ fontSize:10, color:"#6b7a99", lineHeight:1.7, marginBottom:14 }}>
+          Activate your 7-day Pro pass to unlock all features. Each scan grants a fresh 7-day window.
+        </div>
+        <ProBadge onProActivated={() => setIsPro(true)}/>
+      </>
+    )}
+  </div>
+
+  {/* Pro-gated feature example */}
+  <div style={{ marginBottom:20 }}>
+    <div style={{ fontSize:9, color:"#3a4560", letterSpacing:2, marginBottom:10 }}>PRO-GATED FEATURE EXAMPLE</div>
+    <ProGate feature="Autonomous Bot">
+      <div style={{ background:"rgba(0,255,136,0.04)", border:"1px solid rgba(0,255,136,0.15)", borderRadius:12, padding:16 }}>
+        <div style={{ fontSize:12, fontWeight:800, color:"#00ff88", marginBottom:6 }}>● AUTONOMOUS BOT — LIVE</div>
+        <div style={{ fontSize:10, color:"#6b7a99" }}>Bot would be running here...</div>
+      </div>
+    </ProGate>
+  </div>
+
+  {/* Password strength demo — new users only */}
+  <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:12, padding:"14px 16px" }}>
+    <div style={{ fontSize:9, color:"#3a4560", letterSpacing:2, marginBottom:10 }}>NEW USER PASSWORD REQUIREMENTS</div>
+    <div style={{ fontSize:9, color:"#6b7a99", marginBottom:12, lineHeight:1.7 }}>
+      Existing users keep their current passwords. New accounts must meet these requirements:
+    </div>
+    <PasswordDemo/>
+  </div>
+</div>
+```
+
+);
+}
+
+function PasswordDemo() {
+const [pw, setPw] = useState(””);
+return (
+<div>
+<input type=“password” value={pw} onChange={e => setPw(e.target.value)}
+placeholder=“Try typing a password…”
+style={{ width:“100%”, background:“rgba(255,255,255,0.04)”, border:“1px solid rgba(255,255,255,0.09)”, borderRadius:8, padding:“10px 12px”, color:”#e8e8f0”, fontSize:12, fontFamily:”‘IBM Plex Mono’,monospace”, outline:“none”, boxSizing:“border-box” }}/>
+<PasswordStrengthMeter password={pw}/>
+</div>
+);
+}

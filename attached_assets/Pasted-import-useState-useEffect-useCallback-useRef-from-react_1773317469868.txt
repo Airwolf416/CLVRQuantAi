@@ -1,0 +1,1057 @@
+import { useState, useEffect, useCallback, useRef } from “react”;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS — update these to match your existing app’s env vars
+// ─────────────────────────────────────────────────────────────────────────────
+const HL_API       = “https://api.hyperliquid.xyz/info”;
+const FINNHUB_KEY  = process.env.REACT_APP_FINNHUB_KEY  || “”;
+const FINNHUB      = “https://finnhub.io/api/v1”;
+const CRYPTOPANIC  = “https://cryptopanic.com/api/v1/posts/?auth_token=” + (process.env.REACT_APP_CRYPTOPANIC_KEY || “”) + “&public=true&kind=news”;
+const POLYMARKET   = “https://gamma-api.polymarket.com/markets?closed=false&limit=6”;
+
+const ASSETS = [“SOL”,“BTC”,“ETH”,“WIF”,“BONK”,“JTO”,“W”,“ARB”,“DOGE”];
+
+const RISK_OFF_COLOR  = “#ff2d55”;
+const RISK_ON_COLOR   = “#00ff88”;
+const NEUTRAL_COLOR   = “#f59e0b”;
+
+const DEFAULT_RISK = {
+minConfidence: 75,
+dailyLossLimit: 200,
+maxPositions: 3,
+maxLeverage: 10,
+maxFundingRate: 0.001,
+maxPositionSizeUsd: 500,
+cooldownMinutes: 5,
+consecutiveLossLimit: 3,
+circuitBreakerActive: false,
+pauseOnRiskOff: true,
+};
+
+const DEFAULT_BOT = {
+assets: [“SOL”,“BTC”,“ETH”],
+leverage: 5,
+positionSizeUsd: 200,
+scanIntervalSeconds: 60,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA FETCHERS
+// ─────────────────────────────────────────────────────────────────────────────
+async function hlPost(body) {
+try {
+const r = await fetch(HL_API, { method:“POST”, headers:{“Content-Type”:“application/json”}, body:JSON.stringify(body) });
+return await r.json();
+} catch { return null; }
+}
+
+async function fetchHLMarket() {
+const [mids, meta] = await Promise.all([
+hlPost({ type:“allMids” }),
+hlPost({ type:“metaAndAssetCtxs” }),
+]);
+const universe = meta?.[0]?.universe || [];
+const ctxs     = meta?.[1] || [];
+const funding  = {};
+universe.forEach((a,i) => {
+funding[a.name] = {
+funding:      parseFloat(ctxs[i]?.funding      || 0),
+openInterest: parseFloat(ctxs[i]?.openInterest || 0),
+markPx:       parseFloat(ctxs[i]?.markPx       || 0),
+index: i,
+};
+});
+return { prices: mids || {}, funding };
+}
+
+async function fetchHLAccount(evmAddress) {
+try {
+const [state, orders] = await Promise.all([
+hlPost({ type:“clearinghouseState”, user:evmAddress }),
+hlPost({ type:“openOrders”,         user:evmAddress }),
+]);
+const margin = state?.marginSummary || {};
+const positions = (state?.assetPositions || []).map(ap => {
+const pos = ap.position;
+if (!pos || parseFloat(pos.szi) === 0) return null;
+const size = parseFloat(pos.szi);
+const mu   = parseFloat(pos.marginUsed   || 0);
+const upnl = parseFloat(pos.unrealizedPnl || 0);
+return {
+asset: pos.coin, size, side: size > 0 ? “LONG” : “SHORT”,
+entryPx: parseFloat(pos.entryPx || 0), unrealizedPnl: upnl,
+leverage: parseFloat(pos.leverage?.value || pos.leverage || 1),
+liqPx: parseFloat(pos.liquidationPx || 0), marginUsed: mu,
+roe: mu > 0 ? (upnl / mu) * 100 : 0,
+};
+}).filter(Boolean);
+return {
+accountValue:        parseFloat(margin.accountValue       || 0),
+totalMarginUsed:     parseFloat(margin.totalMarginUsed    || 0),
+totalUnrealizedPnl:  parseFloat(margin.totalUnrealizedPnl || 0),
+withdrawable:        parseFloat(state?.withdrawable       || 0),
+positions, openOrders: orders || [],
+};
+} catch { return null; }
+}
+
+async function fetchFinnhubQuote(symbol) {
+try {
+const r = await fetch(`${FINNHUB}/quote?symbol=${symbol}&token=${FINNHUB_KEY}`);
+const d = await r.json();
+return { price: d.c, change: d.dp, prev: d.pc };
+} catch { return null; }
+}
+
+async function fetchMacroData() {
+const [vix, dxy, spx, oil, ndx] = await Promise.all([
+fetchFinnhubQuote(“CBOE:VIX”),
+fetchFinnhubQuote(“OANDA:XAU_USD”), // swap to DXY if you have forex access
+fetchFinnhubQuote(“SPY”),
+fetchFinnhubQuote(“USO”),
+fetchFinnhubQuote(“QQQ”),
+]);
+return { vix, dxy, spx, oil, ndx };
+}
+
+async function fetchSocialSentiment() {
+try {
+const r = await fetch(CRYPTOPANIC);
+const d = await r.json();
+const posts = d?.results?.slice(0,10) || [];
+const bullish = posts.filter(p => p.votes?.positive > p.votes?.negative).length;
+const total   = posts.length || 1;
+return {
+score:    Math.round((bullish / total) * 100),
+label:    bullish / total > 0.6 ? “BULLISH” : bullish / total < 0.4 ? “BEARISH” : “MIXED”,
+headlines: posts.slice(0,3).map(p => p.title),
+};
+} catch { return { score:50, label:“MIXED”, headlines:[] }; }
+}
+
+async function fetchPolymarket() {
+try {
+const r = await fetch(POLYMARKET);
+const d = await r.json();
+return (d || []).slice(0,4).map(m => ({
+question: m.question,
+prob:     Math.round((m.outcomePrices?.[0] || 0.5) * 100),
+}));
+} catch { return []; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARKET MODE ENGINE — calculates Risk-On/Off regime from all data
+// ─────────────────────────────────────────────────────────────────────────────
+function computeMarketMode({ macro, hlMarket, social }) {
+let score = 50; // start neutral
+const signals = {};
+
+// VIX: below 18 = calm (risk-on), above 25 = fear (risk-off)
+if (macro?.vix?.price) {
+const v = macro.vix.price;
+signals.vix = v < 18 ? “LOW”  : v < 25 ? “MODERATE” : “HIGH”;
+score += v < 18 ? +12 : v < 25 ? 0 : -18;
+}
+
+// SPY momentum
+if (macro?.spx?.change) {
+const c = macro.spx.change;
+signals.nasdaq = c > 1 ? “BULLISH” : c > -1 ? “NEUTRAL” : “BEARISH”;
+score += c > 1 ? +10 : c > -1 ? 0 : -10;
+}
+
+// Oil — rising oil can signal risk-off / inflation
+if (macro?.oil?.change) {
+const c = macro.oil.change;
+signals.oil = c > 2 ? “BEARISH” : c > -1 ? “NEUTRAL” : “BULLISH”;
+score += c > 2 ? -6 : c > -1 ? 0 : +4;
+}
+
+// Nasdaq (QQQ) — direct AI/tech proxy
+if (macro?.ndx?.change) {
+const c = macro.ndx.change;
+signals.aiStocks = c > 1.5 ? “BULLISH” : c > -1 ? “NEUTRAL” : “BEARISH”;
+score += c > 1.5 ? +8 : c > -1 ? 0 : -8;
+}
+
+// BTC funding — positive = overheated (slight bearish), negative = underinvested (bullish)
+const btcFunding = hlMarket?.funding?.BTC?.funding || 0;
+signals.btcFunding = btcFunding > 0.001 ? “OVERHEATED” : btcFunding < -0.0005 ? “OVERSOLD” : “NEUTRAL”;
+score += btcFunding > 0.001 ? -5 : btcFunding < -0.0005 ? +5 : 0;
+
+// Social sentiment
+if (social?.score) {
+score += (social.score - 50) * 0.15;
+signals.social = social.label;
+}
+
+// Clamp
+score = Math.max(0, Math.min(100, score));
+
+const riskOn  = score;
+const regime  = score >= 60 ? “RISK-ON” : score <= 40 ? “RISK-OFF” : “NEUTRAL”;
+const btcBull = Math.min(95, Math.max(5, score + (btcFunding < 0 ? 8 : -5)));
+
+return { score: Math.round(riskOn), regime, signals, btcBull: Math.round(btcBull), btcBear: 100 - Math.round(btcBull) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RISK ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+function evaluateRisk(signal, account, riskConfig, marketMode) {
+const violations = [];
+
+if (signal.confidence < riskConfig.minConfidence)
+violations.push(`Confidence ${signal.confidence}% < min ${riskConfig.minConfidence}%`);
+
+if (account && account.totalUnrealizedPnl < -riskConfig.dailyLossLimit)
+violations.push(`Drawdown $${Math.abs(account.totalUnrealizedPnl).toFixed(0)} > limit $${riskConfig.dailyLossLimit}`);
+
+if (account && account.positions.length >= riskConfig.maxPositions)
+violations.push(`Max ${riskConfig.maxPositions} positions reached`);
+
+if (account) {
+const dup = account.positions.find(p => p.asset === signal.asset && p.side === signal.direction);
+if (dup) violations.push(`Already ${signal.direction} ${signal.asset}`);
+}
+
+if (signal.fundingRate) {
+const adverse = (signal.direction === “LONG” && signal.fundingRate > 0) ||
+(signal.direction === “SHORT” && signal.fundingRate < 0);
+if (adverse && Math.abs(signal.fundingRate) > riskConfig.maxFundingRate)
+violations.push(`Adverse funding ${(signal.fundingRate*100).toFixed(3)}%`);
+}
+
+if (signal.signal === “NEUTRAL”)
+violations.push(“Neutral signal — no trade”);
+
+if (riskConfig.pauseOnRiskOff && marketMode?.regime === “RISK-OFF” && signal.direction === “LONG”)
+violations.push(“RISK-OFF regime — LONG entries paused”);
+
+return { passed: violations.length === 0, violations };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI SIGNAL — injects ALL data sources
+// ─────────────────────────────────────────────────────────────────────────────
+async function generateSignal({ asset, account, hlMarket, macro, social, polymarket, marketMode, botConfig }) {
+const price   = parseFloat(hlMarket?.prices?.[asset] || 0);
+const funding = hlMarket?.funding?.[asset] || {};
+
+const posLines = account?.positions?.length
+? account.positions.map(p =>
+`  • ${p.side} ${Math.abs(p.size).toFixed(4)} ${p.asset} @ $${p.entryPx.toFixed(2)} | ${p.leverage}x | uPnL: ${p.unrealizedPnl>=0?"+":""}$${p.unrealizedPnl.toFixed(2)} (${p.roe.toFixed(1)}% ROE) | Liq: $${p.liqPx>0?p.liqPx.toFixed(2):"N/A"}`
+).join(”\n”)
+: “  None”;
+
+const macroLines = [
+macro?.vix?.price    ? `  VIX: ${macro.vix.price.toFixed(1)} (${macro.vix.change?.toFixed(2)}% today) — ${macro.vix.price<18?"LOW FEAR":macro.vix.price<25?"MODERATE":"HIGH FEAR"}` : null,
+macro?.spx?.price    ? `  SPY: $${macro.spx.price.toFixed(2)} (${macro.spx.change?.toFixed(2)}% today)` : null,
+macro?.ndx?.price    ? `  QQQ (Nasdaq): $${macro.ndx.price.toFixed(2)} (${macro.ndx.change?.toFixed(2)}% today)` : null,
+macro?.oil?.price    ? `  Oil (USO): $${macro.oil.price.toFixed(2)} (${macro.oil.change?.toFixed(2)}% today)` : null,
+].filter(Boolean).join(”\n”);
+
+const polyLines = polymarket?.length
+? polymarket.map(m => `  • ${m.question}: ${m.prob}% YES`).join(”\n”)
+: “  N/A”;
+
+const system = `You are CLVRQuant AI — an elite quantitative trading analyst with full cross-asset market intelligence.
+You have real-time visibility of: the trader’s Hyperliquid perp account, macro conditions (VIX, SPY, Nasdaq, Oil), crypto social sentiment, prediction market probabilities, and the current market regime classification.
+Use ALL of this context to give a personalized, macro-aware long/short signal.
+Respond ONLY with valid JSON. No markdown, no backticks, no explanation outside JSON.
+
+Schema:
+{
+“signal”: “STRONG_LONG”|“LONG”|“NEUTRAL”|“SHORT”|“STRONG_SHORT”,
+“direction”: “LONG”|“SHORT”|“NONE”,
+“confidence”: 0-100,
+“entry”: number,
+“stopLoss”: number,
+“takeProfit”: number,
+“rationale”: “2-3 sentences using macro + account context”,
+“portfolioNote”: “1 sentence on portfolio risk given current positions”,
+“macroNote”: “1 sentence on why macro conditions support or oppose this trade”,
+“keyRisks”: [“risk1”, “risk2”],
+“timeframe”: “scalp (mins)”|“intraday (hours)”|“swing (days)”
+}`;
+
+const user = `Signal request: ${asset}/USD perpetual
+
+══ CLVR MARKET MODE ══
+Regime:          ${marketMode?.regime || “UNKNOWN”}
+Risk-On Score:   ${marketMode?.score || 50}%
+BTC Bias:        ${marketMode?.btcBull || 50}% Bullish / ${marketMode?.btcBear || 50}% Bearish
+AI Stocks:       ${marketMode?.signals?.aiStocks || “N/A”}
+Nasdaq Momentum: ${marketMode?.signals?.nasdaq   || “N/A”}
+Oil Trend:       ${marketMode?.signals?.oil       || “N/A”}
+VIX Level:       ${marketMode?.signals?.vix       || “N/A”}
+BTC Funding:     ${marketMode?.signals?.btcFunding || “N/A”}
+Social Mood:     ${social?.label || “N/A”} (${social?.score || 50}% bullish)
+
+══ MACRO DATA ══
+${macroLines || “  N/A”}
+
+══ PREDICTION MARKETS ══
+${polyLines}
+
+══ SOCIAL HEADLINES ══
+${social?.headlines?.slice(0,3).map(h=>`  • ${h}`).join(”\n”) || “  N/A”}
+
+══ HYPERLIQUID ACCOUNT ══
+Account Value:    $${account?.accountValue?.toFixed(2)  ?? “N/A”}
+Free Cash:        $${account?.withdrawable?.toFixed(2)  ?? “N/A”}
+Margin Used:      $${account?.totalMarginUsed?.toFixed(2)?? “N/A”}
+Total uPnL:       ${account?(account.totalUnrealizedPnl>=0?”+”:””)+”$”+account.totalUnrealizedPnl.toFixed(2):“N/A”}
+
+Open Positions:
+${posLines}
+
+══ ${asset} MARKET ══
+Mark Price:     $${price.toFixed(price>100?2:4)}
+Funding/1H:     ${(funding.funding*100).toFixed(4)}% (${funding.funding>0?“longs paying — bearish”:“shorts paying — bullish”})
+Open Interest:  $${(funding.openInterest||0).toFixed(2)}M
+
+══ PROPOSED TRADE ══
+Size: $${botConfig.positionSizeUsd} notional | Leverage: ${botConfig.leverage}x`;
+
+const res = await fetch(“https://api.anthropic.com/v1/messages”, {
+method: “POST”,
+headers: { “Content-Type”: “application/json” },
+body: JSON.stringify({
+model: “claude-sonnet-4-20250514”,
+max_tokens: 1000,
+system, messages: [{ role:“user”, content:user }],
+}),
+});
+const data = await res.json();
+const raw  = data.content?.map(b => b.text||””).join(””) || “”;
+const clean = raw.replace(/`json|`/g,””).trim();
+return JSON.parse(clean);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMALL UI PRIMITIVES
+// ─────────────────────────────────────────────────────────────────────────────
+const mono = “‘IBM Plex Mono’, monospace”;
+
+function Label({ children }) {
+return <div style={{ fontSize:8, color:”#3a4560”, letterSpacing:1.8, marginBottom:4, fontFamily:mono }}>{children}</div>;
+}
+
+function SectionTitle({ children, right }) {
+return (
+<div style={{ display:“flex”, justifyContent:“space-between”, alignItems:“center”, marginBottom:10 }}>
+<div style={{ fontSize:9, color:”#d4af37”, letterSpacing:2, fontFamily:mono, fontWeight:700 }}>◆ {children}</div>
+{right && <div style={{ fontSize:9, color:”#3a4560”, fontFamily:mono }}>{right}</div>}
+</div>
+);
+}
+
+function Card({ children, style={}, gold, green, red }) {
+return (
+<div style={{
+background: gold ? “linear-gradient(135deg,rgba(212,175,55,0.07),rgba(6,10,19,0.8))”
+: green ? “rgba(0,255,136,0.04)”
+: red   ? “rgba(255,45,85,0.05)”
+: “rgba(255,255,255,0.025)”,
+border: `1px solid ${gold?"rgba(212,175,55,0.2)":green?"rgba(0,255,136,0.15)":red?"rgba(255,45,85,0.18)":"rgba(255,255,255,0.07)"}`,
+borderRadius:12, padding:“13px 14px”, marginBottom:10,
+…style,
+}}>{children}</div>
+);
+}
+
+function Stat({ label, value, color=”#e8e8f0”, small }) {
+return (
+<div style={{ background:“rgba(255,255,255,0.03)”, border:“1px solid rgba(255,255,255,0.07)”, borderRadius:9, padding:“9px 11px” }}>
+<Label>{label}</Label>
+<div style={{ fontSize:small?12:15, fontWeight:800, color, fontFamily:mono }}>{value}</div>
+</div>
+);
+}
+
+function SignalBadge({ signal }) {
+const map = {
+STRONG_LONG:  { color:”#00ff88”, bg:“rgba(0,255,136,0.1)”,  border:“rgba(0,255,136,0.3)”  },
+LONG:         { color:”#4ade80”, bg:“rgba(74,222,128,0.1)”, border:“rgba(74,222,128,0.25)” },
+NEUTRAL:      { color:”#f59e0b”, bg:“rgba(245,158,11,0.1)”, border:“rgba(245,158,11,0.3)”  },
+SHORT:        { color:”#f87171”, bg:“rgba(248,113,113,0.1)”,border:“rgba(248,113,113,0.25)”},
+STRONG_SHORT: { color:”#ff2d55”, bg:“rgba(255,45,85,0.1)”,  border:“rgba(255,45,85,0.3)”  },
+};
+const s = map[signal] || map.NEUTRAL;
+return (
+<span style={{
+background:s.bg, border:`1px solid ${s.border}`,
+color:s.color, fontSize:9, fontWeight:800,
+padding:“2px 9px”, borderRadius:5, letterSpacing:1,
+fontFamily:mono,
+}}>{signal?.replace(”_”,” “)}</span>
+);
+}
+
+function MomentumDot({ value }) {
+const color = value===“BULLISH”||value===“LOW”?”#00ff88”
+: value===“BEARISH”||value===“HIGH”?”#ff2d55”
+: “#f59e0b”;
+return (
+<span style={{ display:“flex”, alignItems:“center”, gap:5 }}>
+<span style={{ width:6, height:6, borderRadius:“50%”, background:color, display:“inline-block” }}/>
+<span style={{ color, fontSize:10, fontWeight:700, fontFamily:mono }}>{value||”—”}</span>
+</span>
+);
+}
+
+function RiskBar({ value, max=100 }) {
+const pct = Math.min(100, (value/max)*100);
+const color = pct<50?”#00ff88”:pct<75?”#f59e0b”:”#ff2d55”;
+return (
+<div style={{ height:3, background:“rgba(255,255,255,0.07)”, borderRadius:2, overflow:“hidden”, marginTop:4 }}>
+<div style={{ height:“100%”, width:`${pct}%`, background:color, borderRadius:2, transition:“width 0.6s ease” }}/>
+</div>
+);
+}
+
+function Pill({ children, color=“gray” }) {
+const c = color===“green”?”#00ff88”:color===“red”?”#ff2d55”:color===“gold”?”#d4af37”:”#6b7a99”;
+return (
+<span style={{
+background:`rgba(${color==="green"?"0,255,136":color==="red"?"255,45,85":color==="gold"?"212,175,55":"255,255,255"},0.08)`,
+border:`1px solid rgba(${color==="green"?"0,255,136":color==="red"?"255,45,85":color==="gold"?"212,175,55":"255,255,255"},0.18)`,
+color:c, fontSize:9, fontWeight:700, padding:“2px 8px”, borderRadius:5,
+fontFamily:mono, letterSpacing:0.8,
+}}>{children}</span>
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+export default function BotTab({ evmAddress, hlAccount: externalAccount }) {
+// Market data
+const [hlMarket,    setHlMarket]    = useState({ prices:{}, funding:{} });
+const [macro,       setMacro]       = useState({});
+const [social,      setSocial]      = useState({ score:50, label:“MIXED”, headlines:[] });
+const [polymarket,  setPolymarket]  = useState([]);
+const [marketMode,  setMarketMode]  = useState(null);
+const [account,     setAccount]     = useState(externalAccount || null);
+const [dataLoading, setDataLoading] = useState(true);
+const [lastRefresh, setLastRefresh] = useState(null);
+
+// Bot
+const [botConfig,   setBotConfig]   = useState(DEFAULT_BOT);
+const [riskConfig,  setRiskConfig]  = useState(DEFAULT_RISK);
+const [botStatus,   setBotStatus]   = useState(“idle”);
+const [botLogs,     setBotLogs]     = useState([]);
+const [botStats,    setBotStats]    = useState({ trades:0, wins:0, losses:0, pnl:0, consecutiveLosses:0 });
+const botInterval   = useRef(null);
+const lastTradeTime = useRef(0);
+const logsEnd       = useRef(null);
+
+// Panel state
+const [panel, setPanel] = useState(“overview”); // overview | config | risk | log
+
+// ── Refresh all data ──
+const refreshAll = useCallback(async () => {
+setDataLoading(true);
+try {
+const [hlM, mac, soc, poly] = await Promise.all([
+fetchHLMarket(),
+fetchMacroData(),
+fetchSocialSentiment(),
+fetchPolymarket(),
+]);
+setHlMarket(hlM);
+setMacro(mac);
+setSocial(soc);
+setPolymarket(poly);
+setMarketMode(computeMarketMode({ macro:mac, hlMarket:hlM, social:soc }));
+if (evmAddress) {
+const acc = await fetchHLAccount(evmAddress);
+if (acc) setAccount(acc);
+}
+setLastRefresh(new Date());
+} catch (e) { console.error(e); }
+finally { setDataLoading(false); }
+}, [evmAddress]);
+
+useEffect(() => {
+refreshAll();
+const iv = setInterval(refreshAll, 15000);
+return () => clearInterval(iv);
+}, [refreshAll]);
+
+useEffect(() => { if (externalAccount) setAccount(externalAccount); }, [externalAccount]);
+useEffect(() => { logsEnd.current?.scrollIntoView({ behavior:“smooth” }); }, [botLogs]);
+
+// ── Log helper ──
+const addLog = useCallback((msg, type=“info”) => {
+setBotLogs(prev => […prev.slice(-149), { id:Date.now()+Math.random(), time:new Date().toLocaleTimeString(“en-US”,{hour12:false}), msg, type }]);
+}, []);
+
+// ── Bot cycle ──
+const runCycle = useCallback(async () => {
+if (riskConfig.circuitBreakerActive) { addLog(“⚠ Circuit breaker active”,“warn”); return; }
+
+```
+const now = Date.now();
+const cd  = riskConfig.cooldownMinutes * 60000;
+if (now - lastTradeTime.current < cd) {
+  addLog(`⏱ Cooldown: ${Math.ceil((cd-(now-lastTradeTime.current))/1000)}s left`,"info");
+  return;
+}
+
+// Refresh data
+const [hlM, mac, soc, poly, acc] = await Promise.all([
+  fetchHLMarket(), fetchMacroData(), fetchSocialSentiment(), fetchPolymarket(),
+  evmAddress ? fetchHLAccount(evmAddress) : Promise.resolve(null),
+]);
+setHlMarket(hlM); setMacro(mac); setSocial(soc); setPolymarket(poly);
+const mode = computeMarketMode({ macro:mac, hlMarket:hlM, social:soc });
+setMarketMode(mode);
+if (acc) setAccount(acc);
+
+// Kill switch
+if (acc && acc.totalUnrealizedPnl < -riskConfig.dailyLossLimit) {
+  addLog(`🛑 Max drawdown $${Math.abs(acc.totalUnrealizedPnl).toFixed(0)} hit — bot stopped`,"error");
+  stopBot(); setRiskConfig(r => ({...r, circuitBreakerActive:true})); return;
+}
+if (botStats.consecutiveLosses >= riskConfig.consecutiveLossLimit) {
+  addLog(`🛑 ${riskConfig.consecutiveLossLimit} consecutive losses — circuit breaker`,"error");
+  stopBot(); setRiskConfig(r => ({...r, circuitBreakerActive:true})); return;
+}
+
+addLog(`🌐 Market Mode: ${mode.regime} | Risk-On: ${mode.score}% | VIX: ${mac?.vix?.price?.toFixed(1)||"—"}`,"info");
+addLog(`📡 Scanning: ${botConfig.assets.join(", ")}`,"info");
+
+for (const asset of botConfig.assets) {
+  try {
+    const sig = await generateSignal({ asset, account:acc, hlMarket:hlM, macro:mac, social:soc, polymarket:poly, marketMode:mode, botConfig });
+    sig.asset       = asset;
+    sig.fundingRate = hlM?.funding?.[asset]?.funding || 0;
+
+    addLog(`📊 ${asset}: ${sig.signal} (${sig.confidence}%) — ${sig.rationale?.slice(0,60)}...`,"info");
+
+    const risk = evaluateRisk(sig, acc, riskConfig, mode);
+    if (!risk.passed) { risk.violations.forEach(v => addLog(`⚠ Blocked — ${v}`,"warn")); continue; }
+    if (sig.direction === "NONE" || sig.signal === "NEUTRAL") continue;
+
+    const price = parseFloat(hlM?.prices?.[asset] || 0);
+    if (!price) continue;
+    const size = parseFloat((botConfig.positionSizeUsd / price).toFixed(4));
+
+    addLog(`⚡ ${sig.direction} ${size} ${asset} @ $${price.toFixed(2)} | ${botConfig.leverage}x | TP:$${sig.takeProfit?.toFixed(2)} SL:$${sig.stopLoss?.toFixed(2)}`,"info");
+
+    // ── Real order submission ──
+    // Wire in signAndSubmitHLOrder() from AutoTrader.jsx here
+    // For now logs as simulated; swap comment below to go live:
+    // await signAndSubmitHLOrder(evmAddress, { asset, isBuy:sig.direction==="LONG", size, price:0, leverage:botConfig.leverage });
+    addLog(`✓ [SIM] Order submitted: ${sig.direction} ${size} ${asset}`,"success");
+
+    lastTradeTime.current = Date.now();
+    setBotStats(s => ({ ...s, trades:s.trades+1, consecutiveLosses:0 }));
+    await new Promise(r => setTimeout(r,2000));
+
+  } catch(err) {
+    addLog(`✗ ${asset}: ${err.message}`,"error");
+    setBotStats(s => ({...s, losses:s.losses+1, consecutiveLosses:s.consecutiveLosses+1}));
+  }
+}
+```
+
+}, [evmAddress, riskConfig, botConfig, botStats, addLog]);
+
+const startBot = useCallback(() => {
+if (!evmAddress) { addLog(“⚠ Link your HL EVM address first”,“error”); return; }
+if (riskConfig.circuitBreakerActive) { addLog(“⚠ Reset circuit breaker first”,“error”); return; }
+setBotStatus(“running”);
+addLog(`🤖 Bot STARTED — ${botConfig.assets.join(", ")} | ${botConfig.leverage}x | $${botConfig.positionSizeUsd}/trade`,“success”);
+addLog(`🛡 Risk: min ${riskConfig.minConfidence}% confidence | max $${riskConfig.dailyLossLimit} drawdown | ${riskConfig.pauseOnRiskOff?"pause on RISK-OFF":"trade all regimes"}`,“info”);
+runCycle();
+botInterval.current = setInterval(runCycle, botConfig.scanIntervalSeconds * 1000);
+}, [evmAddress, riskConfig, botConfig, runCycle, addLog]);
+
+const stopBot = useCallback(() => {
+clearInterval(botInterval.current); botInterval.current = null;
+setBotStatus(“idle”); addLog(“🛑 Bot stopped”,“warn”);
+}, [addLog]);
+
+const pauseBot = useCallback(() => {
+clearInterval(botInterval.current); botInterval.current = null;
+setBotStatus(“paused”); addLog(“⏸ Bot paused”,“warn”);
+}, [addLog]);
+
+useEffect(() => () => clearInterval(botInterval.current), []);
+
+// ── Derived ──
+const regimeColor = marketMode?.regime === “RISK-ON” ? RISK_ON_COLOR
+: marketMode?.regime === “RISK-OFF” ? RISK_OFF_COLOR
+: NEUTRAL_COLOR;
+
+// ─────────────────────────────────────────────────────────────────────────
+// RENDER
+// ─────────────────────────────────────────────────────────────────────────
+return (
+<div style={{ fontFamily:mono, color:”#e8e8f0”, paddingBottom:40 }}>
+
+```
+  {/* ══════════════════════════════════════════════════════════
+      CLVR MARKET MODE — persistent top card
+  ══════════════════════════════════════════════════════════ */}
+  <div style={{
+    background: `linear-gradient(135deg, rgba(${marketMode?.regime==="RISK-ON"?"0,255,136":marketMode?.regime==="RISK-OFF"?"255,45,85":"245,158,11"},0.07), rgba(6,10,19,0.95))`,
+    border: `1px solid ${regimeColor}25`,
+    borderRadius:14, padding:"14px 16px", marginBottom:14,
+    boxShadow: `0 0 30px ${regimeColor}08`,
+  }}>
+    {/* Header row */}
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+      <div>
+        <div style={{ fontSize:8, color:"#3a4560", letterSpacing:2, marginBottom:4 }}>CLVR AI MARKET MODE</div>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ fontSize:22, fontWeight:900, color:regimeColor, letterSpacing:1, lineHeight:1 }}>
+            {marketMode?.regime || "LOADING..."}
+          </div>
+          {dataLoading && <div style={{ fontSize:9, color:"#3a4560" }}>↻</div>}
+        </div>
+      </div>
+      <div style={{ textAlign:"right" }}>
+        <div style={{ fontSize:8, color:"#3a4560", marginBottom:3 }}>RISK-ON PROBABILITY</div>
+        <div style={{ fontSize:26, fontWeight:900, color:regimeColor }}>{marketMode?.score ?? "—"}%</div>
+      </div>
+    </div>
+
+    {/* Risk-On probability bar */}
+    <div style={{ height:4, background:"rgba(255,255,255,0.07)", borderRadius:2, marginBottom:14, overflow:"hidden" }}>
+      <div style={{
+        height:"100%", width:`${marketMode?.score||50}%`,
+        background:`linear-gradient(90deg,${regimeColor}60,${regimeColor})`,
+        borderRadius:2, transition:"width 1.2s ease",
+      }}/>
+    </div>
+
+    {/* Asset signals row */}
+    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, marginBottom:12 }}>
+      {[
+        { label:"AI STOCKS",   value:marketMode?.signals?.aiStocks  },
+        { label:"NASDAQ",      value:marketMode?.signals?.nasdaq    },
+        { label:"OIL",         value:marketMode?.signals?.oil       },
+        { label:"VIX",         value:marketMode?.signals?.vix       },
+      ].map(({ label, value }) => (
+        <div key={label} style={{ background:"rgba(255,255,255,0.03)", borderRadius:8, padding:"8px 10px" }}>
+          <div style={{ fontSize:7, color:"#3a4560", letterSpacing:1.5, marginBottom:5 }}>{label}</div>
+          <MomentumDot value={value}/>
+        </div>
+      ))}
+    </div>
+
+    {/* BTC probability */}
+    <div style={{
+      background:"rgba(255,255,255,0.03)", borderRadius:9,
+      padding:"10px 12px", display:"flex", justifyContent:"space-between", alignItems:"center",
+    }}>
+      <div>
+        <div style={{ fontSize:8, color:"#3a4560", marginBottom:3 }}>CLVR AI SIGNAL — BTC PROBABILITY</div>
+        <div style={{ display:"flex", gap:16, alignItems:"center" }}>
+          <span>
+            <span style={{ fontSize:16, fontWeight:900, color:"#00ff88" }}>{marketMode?.btcBull ?? "—"}%</span>
+            <span style={{ fontSize:9, color:"#00ff88", marginLeft:4 }}>Bullish</span>
+          </span>
+          <span style={{ color:"#2a3550" }}>/</span>
+          <span>
+            <span style={{ fontSize:16, fontWeight:900, color:"#ff2d55" }}>{marketMode?.btcBear ?? "—"}%</span>
+            <span style={{ fontSize:9, color:"#ff2d55", marginLeft:4 }}>Bearish</span>
+          </span>
+        </div>
+      </div>
+      <div style={{ textAlign:"right" }}>
+        <div style={{ fontSize:8, color:"#3a4560", marginBottom:3 }}>BTC FUNDING</div>
+        <MomentumDot value={marketMode?.signals?.btcFunding}/>
+      </div>
+    </div>
+
+    {lastRefresh && (
+      <div style={{ fontSize:8, color:"#2a3550", marginTop:8, textAlign:"right" }}>
+        Updated {lastRefresh.toLocaleTimeString()}
+      </div>
+    )}
+  </div>
+
+  {/* ══════════════════════════════════════════════════════════
+      MACRO DATA STRIP
+  ══════════════════════════════════════════════════════════ */}
+  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr", gap:7, marginBottom:14 }}>
+    {[
+      { label:"VIX",    d:macro?.vix, warn:macro?.vix?.price>20 },
+      { label:"SPY",    d:macro?.spx },
+      { label:"QQQ",    d:macro?.ndx },
+      { label:"OIL",    d:macro?.oil },
+      { label:"SOCIAL", d:{ price:social?.score, change:null }, suffix:"%" },
+    ].map(({ label, d, warn, suffix }) => (
+      <div key={label} style={{
+        background:"rgba(255,255,255,0.025)",
+        border:`1px solid ${warn?"rgba(245,158,11,0.25)":"rgba(255,255,255,0.07)"}`,
+        borderRadius:9, padding:"9px 10px",
+      }}>
+        <div style={{ fontSize:7, color:"#3a4560", letterSpacing:1.5, marginBottom:4 }}>{label}</div>
+        <div style={{ fontSize:13, fontWeight:800, color:warn?"#f59e0b":"#e8e8f0" }}>
+          {d?.price ? `${suffix?"":d.price > 100 ? "$" : ""}${d.price.toFixed(suffix?0:d.price>100?2:1)}${suffix||""}` : "—"}
+        </div>
+        {d?.change != null && (
+          <div style={{ fontSize:8, color:d.change>0?"#00ff88":d.change<0?"#ff2d55":"#3a4560", marginTop:2 }}>
+            {d.change>0?"+":""}{d.change?.toFixed(2)}%
+          </div>
+        )}
+      </div>
+    ))}
+  </div>
+
+  {/* ══════════════════════════════════════════════════════════
+      SOCIAL SENTIMENT + POLYMARKET ROW
+  ══════════════════════════════════════════════════════════ */}
+  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
+    {/* Social */}
+    <Card>
+      <SectionTitle>SOCIAL SENTIMENT</SectionTitle>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+        <div style={{ fontSize:16, fontWeight:900, color:social.label==="BULLISH"?"#00ff88":social.label==="BEARISH"?"#ff2d55":"#f59e0b" }}>
+          {social.label}
+        </div>
+        <div style={{ fontSize:20, fontWeight:900, color:"#e8e8f0" }}>{social.score}%</div>
+      </div>
+      <RiskBar value={social.score}/>
+      <div style={{ marginTop:10 }}>
+        {social.headlines.slice(0,2).map((h,i) => (
+          <div key={i} style={{ fontSize:9, color:"#4a5568", lineHeight:1.5, marginBottom:4, borderLeft:"2px solid rgba(212,175,55,0.2)", paddingLeft:7 }}>
+            {h.slice(0,65)}{h.length>65?"...":""}
+          </div>
+        ))}
+      </div>
+    </Card>
+
+    {/* Polymarket */}
+    <Card>
+      <SectionTitle>PREDICTION MARKETS</SectionTitle>
+      {polymarket.length === 0
+        ? <div style={{ fontSize:10, color:"#2a3550", textAlign:"center", padding:"14px 0" }}>No data</div>
+        : polymarket.slice(0,3).map((m,i) => (
+          <div key={i} style={{ marginBottom:8 }}>
+            <div style={{ fontSize:9, color:"#6b7a99", lineHeight:1.4, marginBottom:3 }}>{m.question.slice(0,50)}{m.question.length>50?"...":""}</div>
+            <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+              <div style={{ flex:1, height:3, background:"rgba(255,255,255,0.06)", borderRadius:2, overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${m.prob}%`, background:m.prob>60?"#00ff88":m.prob<40?"#ff2d55":"#f59e0b", borderRadius:2 }}/>
+              </div>
+              <div style={{ fontSize:10, fontWeight:800, color:m.prob>60?"#00ff88":m.prob<40?"#ff2d55":"#f59e0b", flexShrink:0 }}>{m.prob}%</div>
+            </div>
+          </div>
+        ))
+      }
+    </Card>
+  </div>
+
+  {/* ══════════════════════════════════════════════════════════
+      BOT PANEL TABS
+  ══════════════════════════════════════════════════════════ */}
+  <div style={{ display:"flex", gap:3, marginBottom:12, background:"rgba(255,255,255,0.02)", borderRadius:10, padding:3 }}>
+    {[
+      { id:"overview", label:"OVERVIEW"   },
+      { id:"config",   label:"CONFIG"     },
+      { id:"risk",     label:"RISK ENGINE"},
+      { id:"log",      label:`LOG (${botLogs.length})` },
+    ].map(t => (
+      <button key={t.id} onClick={() => setPanel(t.id)} style={{
+        flex:1, padding:"7px 3px",
+        background: panel===t.id ? "linear-gradient(135deg,rgba(212,175,55,0.15),rgba(212,175,55,0.04))" : "transparent",
+        border: panel===t.id ? "1px solid rgba(212,175,55,0.25)" : "1px solid transparent",
+        borderRadius:7, color: panel===t.id ? "#d4af37" : "#3a4560",
+        fontSize:8, fontWeight:700, cursor:"pointer", fontFamily:mono, letterSpacing:0.8, transition:"all 0.15s",
+      }}>{t.label}</button>
+    ))}
+  </div>
+
+  {/* ════ PANEL: OVERVIEW ════ */}
+  {panel === "overview" && (
+    <div>
+      {/* Bot status card */}
+      <Card gold={botStatus==="running"} style={{ marginBottom:12 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+          <div>
+            <SectionTitle>{botStatus==="running"?"AUTONOMOUS BOT — LIVE":botStatus==="paused"?"AUTONOMOUS BOT — PAUSED":"AUTONOMOUS BOT — IDLE"}</SectionTitle>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {botConfig.assets.map(a => <Pill key={a} color="gold">{a}</Pill>)}
+              <Pill color="gold">{botConfig.leverage}x</Pill>
+              <Pill color="gold">${botConfig.positionSizeUsd}/trade</Pill>
+              <Pill color="gold">every {botConfig.scanIntervalSeconds}s</Pill>
+            </div>
+          </div>
+          {/* Bot controls */}
+          <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+            {botStatus==="running" ? (
+              <>
+                <button onClick={pauseBot} style={{ padding:"8px 12px", background:"rgba(245,158,11,0.1)", border:"1px solid rgba(245,158,11,0.3)", borderRadius:8, color:"#f59e0b", fontSize:10, cursor:"pointer", fontFamily:mono }}>⏸</button>
+                <button onClick={stopBot}  style={{ padding:"8px 12px", background:"rgba(255,45,85,0.1)",  border:"1px solid rgba(255,45,85,0.3)",  borderRadius:8, color:"#ff2d55", fontSize:10, cursor:"pointer", fontFamily:mono }}>■</button>
+              </>
+            ) : botStatus==="paused" ? (
+              <>
+                <button onClick={startBot} style={{ padding:"8px 12px", background:"rgba(0,255,136,0.1)", border:"1px solid rgba(0,255,136,0.3)", borderRadius:8, color:"#00ff88", fontSize:10, cursor:"pointer", fontFamily:mono }}>▶</button>
+                <button onClick={stopBot}  style={{ padding:"8px 12px", background:"rgba(255,45,85,0.1)", border:"1px solid rgba(255,45,85,0.3)",  borderRadius:8, color:"#ff2d55", fontSize:10, cursor:"pointer", fontFamily:mono }}>■</button>
+              </>
+            ) : (
+              <button onClick={startBot} style={{ padding:"9px 18px", background:"linear-gradient(135deg,#00c67a,#00ff88)", border:"none", borderRadius:9, color:"#060a13", fontSize:11, fontWeight:800, cursor:"pointer", fontFamily:mono, letterSpacing:1 }}>▶ START</button>
+            )}
+          </div>
+        </div>
+        {/* Stats */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:7 }}>
+          <Stat label="TRADES"       value={botStats.trades}/>
+          <Stat label="WINS"         value={botStats.wins}         color="#00ff88"/>
+          <Stat label="LOSSES"       value={botStats.losses}       color="#ff2d55"/>
+          <Stat label="CONSEC. LOSS" value={botStats.consecutiveLosses}
+            color={botStats.consecutiveLosses>=riskConfig.consecutiveLossLimit?"#ff2d55":"#e8e8f0"}/>
+        </div>
+      </Card>
+
+      {/* Circuit breaker */}
+      {riskConfig.circuitBreakerActive && (
+        <Card red style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+          <div>
+            <div style={{ fontSize:12, fontWeight:800, color:"#ff2d55", marginBottom:3 }}>🛑 CIRCUIT BREAKER ACTIVE</div>
+            <div style={{ fontSize:9, color:"#6b7a99" }}>All trading halted. Review and reset to resume.</div>
+          </div>
+          <button onClick={() => setRiskConfig(r => ({...r, circuitBreakerActive:false, }))} style={{ padding:"7px 12px", background:"rgba(255,45,85,0.12)", border:"1px solid rgba(255,45,85,0.3)", borderRadius:7, color:"#ff2d55", fontSize:10, cursor:"pointer", fontFamily:mono }}>RESET</button>
+        </Card>
+      )}
+
+      {/* Account snapshot */}
+      {account && (
+        <Card style={{ marginBottom:12 }}>
+          <SectionTitle>HL ACCOUNT</SectionTitle>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:7, marginBottom:10 }}>
+            <Stat label="ACCT VALUE"  value={`$${account.accountValue.toFixed(2)}`}  color="#d4af37"/>
+            <Stat label="FREE CASH"   value={`$${account.withdrawable.toFixed(2)}`}/>
+            <Stat label="MARGIN"      value={`$${account.totalMarginUsed.toFixed(2)}`} color="#f59e0b"/>
+            <Stat label="TOTAL uPnL"
+              value={`${account.totalUnrealizedPnl>=0?"+":""}$${account.totalUnrealizedPnl.toFixed(2)}`}
+              color={account.totalUnrealizedPnl>=0?"#00ff88":"#ff2d55"}/>
+          </div>
+          {account.positions.length === 0
+            ? <div style={{ fontSize:9, color:"#2a3550", textAlign:"center", padding:10 }}>No open positions</div>
+            : account.positions.map(pos => {
+                const mark = parseFloat(hlMarket?.prices?.[pos.asset] || pos.entryPx);
+                return (
+                  <div key={pos.asset} style={{
+                    background:pos.side==="LONG"?"rgba(0,255,136,0.04)":"rgba(255,45,85,0.04)",
+                    border:`1px solid ${pos.side==="LONG"?"rgba(0,255,136,0.13)":"rgba(255,45,85,0.13)"}`,
+                    borderRadius:9, padding:"9px 11px", marginBottom:7,
+                    display:"flex", justifyContent:"space-between", alignItems:"center",
+                  }}>
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                        <Pill color={pos.side==="LONG"?"green":"red"}>{pos.side==="LONG"?"▲ LONG":"▼ SHORT"}</Pill>
+                        <span style={{ fontSize:13, fontWeight:800 }}>{pos.asset}</span>
+                        <span style={{ fontSize:9, color:"#3a4560" }}>{pos.leverage}x</span>
+                      </div>
+                      <div style={{ fontSize:9, color:"#6b7a99" }}>
+                        {Math.abs(pos.size).toFixed(4)} @ ${pos.entryPx.toFixed(pos.entryPx>100?2:4)} → ${mark.toFixed(mark>100?2:4)}
+                      </div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:13, fontWeight:800, color:pos.unrealizedPnl>=0?"#00ff88":"#ff2d55" }}>
+                        {pos.unrealizedPnl>=0?"+":""}${pos.unrealizedPnl.toFixed(2)}
+                      </div>
+                      <div style={{ fontSize:9, color:pos.roe>=0?"#00ff88":"#ff2d55" }}>{pos.roe>=0?"+":""}{pos.roe.toFixed(1)}% ROE</div>
+                    </div>
+                  </div>
+                );
+              })
+          }
+        </Card>
+      )}
+
+      {/* Recent logs preview */}
+      <Card>
+        <SectionTitle right={<button onClick={() => setPanel("log")} style={{ background:"transparent", border:"none", color:"#d4af37", fontSize:9, cursor:"pointer", fontFamily:mono }}>VIEW ALL →</button>}>
+          RECENT ACTIVITY
+        </SectionTitle>
+        {botLogs.length === 0
+          ? <div style={{ fontSize:9, color:"#2a3550", textAlign:"center", padding:"14px 0" }}>No activity — start the bot</div>
+          : botLogs.slice(-5).map(l => (
+            <div key={l.id} style={{ display:"flex", gap:8, marginBottom:4, alignItems:"flex-start" }}>
+              <span style={{ fontSize:8, color:"#2a3550", flexShrink:0, marginTop:1 }}>{l.time}</span>
+              <span style={{ fontSize:9, lineHeight:1.5, color:l.type==="success"?"#00ff88":l.type==="error"?"#ff2d55":l.type==="warn"?"#f59e0b":"#6b7a99" }}>{l.msg}</span>
+            </div>
+          ))
+        }
+      </Card>
+    </div>
+  )}
+
+  {/* ════ PANEL: CONFIG ════ */}
+  {panel === "config" && (
+    <Card>
+      <SectionTitle>BOT CONFIGURATION</SectionTitle>
+
+      <div style={{ marginBottom:14 }}>
+        <Label>WATCH ASSETS</Label>
+        <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+          {ASSETS.map(a => (
+            <button key={a} onClick={() => setBotConfig(c => ({ ...c, assets: c.assets.includes(a) ? c.assets.filter(x=>x!==a) : [...c.assets,a] }))} style={{
+              background: botConfig.assets.includes(a) ? "linear-gradient(135deg,rgba(212,175,55,0.18),rgba(212,175,55,0.05))" : "rgba(255,255,255,0.03)",
+              border: botConfig.assets.includes(a) ? "1px solid rgba(212,175,55,0.3)" : "1px solid rgba(255,255,255,0.07)",
+              borderRadius:7, padding:"5px 11px",
+              color: botConfig.assets.includes(a) ? "#d4af37" : "#4a5568",
+              fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:mono,
+            }}>{a}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+        {[
+          { label:"LEVERAGE",          key:"leverage",            type:"select", options:[1,2,3,5,10,20] },
+          { label:"SIZE PER TRADE ($)", key:"positionSizeUsd",    type:"number" },
+          { label:"SCAN INTERVAL",     key:"scanIntervalSeconds", type:"select", options:[30,60,120,300,600], fmt:v=>`${v}s` },
+          { label:"MIN CONFIDENCE (%)", key:null, value:riskConfig.minConfidence,
+            onChange:v=>setRiskConfig(r=>({...r,minConfidence:v})), type:"number" },
+        ].map((f,i) => (
+          <div key={i}>
+            <Label>{f.label}</Label>
+            {f.type==="select"
+              ? <select value={f.key?botConfig[f.key]:f.value} onChange={e => f.key ? setBotConfig(c=>({...c,[f.key]:Number(e.target.value)})) : f.onChange(Number(e.target.value))}
+                  style={{ width:"100%", background:"#0b1220", border:"1px solid rgba(255,255,255,0.09)", borderRadius:8, padding:"8px 10px", color:"#e8e8f0", fontSize:12, fontFamily:mono, outline:"none" }}>
+                  {f.options.map(o=><option key={o} value={o}>{f.fmt?f.fmt(o):o}</option>)}
+                </select>
+              : <input type="number" value={f.key?botConfig[f.key]:f.value}
+                  onChange={e => f.key ? setBotConfig(c=>({...c,[f.key]:Number(e.target.value)})) : f.onChange(Number(e.target.value))}
+                  style={{ width:"100%", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:8, padding:"8px 10px", color:"#e8e8f0", fontSize:12, fontFamily:mono, outline:"none", boxSizing:"border-box" }}/>
+            }
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background:"rgba(212,175,55,0.05)", border:"1px solid rgba(212,175,55,0.12)", borderRadius:9, padding:"10px 12px", fontSize:10, color:"#a0aec0", lineHeight:1.7 }}>
+        ◆ Each bot cycle calls Claude AI with: live HL positions, funding rates, VIX, SPY/QQQ/Oil, social sentiment, Polymarket probabilities, and the current CLVR Market Mode regime. The AI uses all of this context before deciding to trade.
+      </div>
+    </Card>
+  )}
+
+  {/* ════ PANEL: RISK ENGINE ════ */}
+  {panel === "risk" && (
+    <div>
+      {/* Status */}
+      <Card green={!riskConfig.circuitBreakerActive} red={riskConfig.circuitBreakerActive} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+        <div>
+          <div style={{ fontSize:12, fontWeight:800, color:riskConfig.circuitBreakerActive?"#ff2d55":"#00ff88", marginBottom:3 }}>
+            {riskConfig.circuitBreakerActive ? "🛑 CIRCUIT BREAKER ACTIVE" : "✓ RISK ENGINE OPERATIONAL"}
+          </div>
+          <div style={{ fontSize:9, color:"#6b7a99" }}>
+            {riskConfig.circuitBreakerActive ? "All trading halted — reset to resume." : "All rules enforced on every trade."}
+          </div>
+        </div>
+        {riskConfig.circuitBreakerActive && (
+          <button onClick={() => setRiskConfig(r=>({...r,circuitBreakerActive:false,}))} style={{ padding:"7px 12px", background:"rgba(255,45,85,0.12)", border:"1px solid rgba(255,45,85,0.3)", borderRadius:7, color:"#ff2d55", fontSize:10, cursor:"pointer", fontFamily:mono }}>RESET</button>
+        )}
+      </Card>
+
+      <Card>
+        <SectionTitle>RISK PARAMETERS</SectionTitle>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
+          {[
+            { label:"MIN CONFIDENCE (%)",    key:"minConfidence",         min:50,  max:95  },
+            { label:"DAILY LOSS LIMIT ($)",  key:"dailyLossLimit",        min:50,  max:10000 },
+            { label:"MAX OPEN POSITIONS",    key:"maxPositions",          min:1,   max:10  },
+            { label:"MAX LEVERAGE (x)",      key:"maxLeverage",           min:1,   max:50  },
+            { label:"MAX FUNDING RATE (%)",  key:"maxFundingRate",        min:0,   max:1, step:0.001, toDisplay:v=>(v*100).toFixed(3), fromDisplay:v=>v/100 },
+            { label:"MAX POSITION ($)",      key:"maxPositionSizeUsd",    min:50,  max:50000 },
+            { label:"COOLDOWN (MINS)",       key:"cooldownMinutes",       min:0,   max:120 },
+            { label:"CONSEC. LOSS LIMIT",    key:"consecutiveLossLimit",  min:1,   max:10  },
+          ].map(({ label, key, min, max, step=1, toDisplay, fromDisplay }) => (
+            <div key={key}>
+              <Label>{label}</Label>
+              <input type="number" min={min} max={max} step={step}
+                value={toDisplay ? toDisplay(riskConfig[key]) : riskConfig[key]}
+                onChange={e => {
+                  const v = parseFloat(e.target.value);
+                  setRiskConfig(r => ({ ...r, [key]: fromDisplay ? fromDisplay(v) : v }));
+                }}
+                style={{ width:"100%", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:8, padding:"8px 10px", color:"#e8e8f0", fontSize:12, fontFamily:mono, outline:"none", boxSizing:"border-box" }}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Pause on Risk-Off toggle */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 0", borderTop:"1px solid rgba(255,255,255,0.06)", marginBottom:10 }}>
+          <div>
+            <div style={{ fontSize:11, color:"#a0aec0" }}>Pause LONG entries in RISK-OFF regime</div>
+            <div style={{ fontSize:9, color:"#3a4560" }}>Bot will only SHORT when Market Mode = RISK-OFF</div>
+          </div>
+          <div onClick={() => setRiskConfig(r => ({...r, pauseOnRiskOff:!r.pauseOnRiskOff}))} style={{
+            width:40, height:22, borderRadius:11, cursor:"pointer",
+            background: riskConfig.pauseOnRiskOff ? "linear-gradient(135deg,#d4af37,#b8941e)" : "rgba(255,255,255,0.08)",
+            border: riskConfig.pauseOnRiskOff ? "none" : "1px solid rgba(255,255,255,0.12)",
+            position:"relative", transition:"all 0.2s", flexShrink:0,
+          }}>
+            <div style={{ position:"absolute", top:3, left:riskConfig.pauseOnRiskOff?20:3, width:16, height:16, borderRadius:8, background:riskConfig.pauseOnRiskOff?"#060a13":"#6b7a99", transition:"left 0.2s" }}/>
+          </div>
+        </div>
+
+        {/* Active rules list */}
+        <div style={{ borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:12 }}>
+          <SectionTitle>ACTIVE RULES</SectionTitle>
+          {[
+            `Signal confidence ≥ ${riskConfig.minConfidence}%`,
+            `Daily drawdown cap: $${riskConfig.dailyLossLimit}`,
+            `Max ${riskConfig.maxPositions} concurrent positions`,
+            `Leverage ceiling: ${riskConfig.maxLeverage}x`,
+            `Adverse funding cap: ${(riskConfig.maxFundingRate*100).toFixed(3)}%/hr`,
+            `Max position size: $${riskConfig.maxPositionSizeUsd}`,
+            `Cooldown between trades: ${riskConfig.cooldownMinutes} min`,
+            `Circuit breaker after ${riskConfig.consecutiveLossLimit} consecutive losses`,
+            riskConfig.pauseOnRiskOff ? "LONG entries paused in RISK-OFF regime" : "Trade all market regimes",
+            "Duplicate position blocking",
+            "NEUTRAL signal blocking",
+          ].map((r,i) => (
+            <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:7, marginBottom:6, fontSize:10, color:"#a0aec0" }}>
+              <span style={{ color:"#00ff88", flexShrink:0, marginTop:1 }}>✓</span>{r}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <button onClick={() => setRiskConfig(DEFAULT_RISK)} style={{ width:"100%", padding:"10px", background:"transparent", border:"1px solid rgba(255,255,255,0.07)", borderRadius:9, color:"#3a4560", fontSize:11, cursor:"pointer", fontFamily:mono }}>
+        RESET TO DEFAULTS
+      </button>
+    </div>
+  )}
+
+  {/* ════ PANEL: LOG ════ */}
+  {panel === "log" && (
+    <Card>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <SectionTitle>ACTIVITY LOG</SectionTitle>
+        <button onClick={() => setBotLogs([])} style={{ background:"transparent", border:"none", color:"#3a4560", fontSize:9, cursor:"pointer", fontFamily:mono }}>CLEAR</button>
+      </div>
+      <div style={{ height:400, overflowY:"auto" }}>
+        {botLogs.length === 0
+          ? <div style={{ color:"#2a3550", fontSize:10, textAlign:"center", padding:"40px 0" }}>No activity — start the bot to see logs</div>
+          : botLogs.map(l => (
+            <div key={l.id} style={{ display:"flex", gap:8, marginBottom:5, alignItems:"flex-start", borderBottom:"1px solid rgba(255,255,255,0.03)", paddingBottom:5 }}>
+              <span style={{ fontSize:8, color:"#2a3550", flexShrink:0, marginTop:1, minWidth:60 }}>{l.time}</span>
+              <span style={{ fontSize:10, lineHeight:1.5, color:l.type==="success"?"#00ff88":l.type==="error"?"#ff2d55":l.type==="warn"?"#f59e0b":"#6b7a99" }}>{l.msg}</span>
+            </div>
+          ))
+        }
+        <div ref={logsEnd}/>
+      </div>
+    </Card>
+  )}
+
+  <div style={{ fontSize:8, color:"#111927", textAlign:"center", paddingTop:10, lineHeight:1.8 }}>
+    © 2025 CLVRQuant · Mike Claver™ · Not financial advice
+  </div>
+</div>
+```
+
+);
+}
