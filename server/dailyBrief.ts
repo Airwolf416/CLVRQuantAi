@@ -335,16 +335,24 @@ async function sendDailyBriefEmails() {
   try {
     const { client, fromEmail } = await getUncachableResendClient();
 
-    for (const sub of subs) {
+    for (let i = 0; i < subs.length; i++) {
+      const sub = subs[i];
+      // Stay under Resend's 2 req/s rate limit
+      if (i > 0) await new Promise(r => setTimeout(r, 600));
       try {
         const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
-        await client.emails.send({
+        const resp = await client.emails.send({
           from: senderAddress,
           to: sub.email,
+          reply_to: "mikeclaver@gmail.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
           html,
         });
-        console.log(`[daily-brief] Sent to ${sub.email}`);
+        if ((resp as any).error) {
+          console.log(`[daily-brief] Resend error for ${sub.email}:`, JSON.stringify((resp as any).error));
+        } else {
+          console.log(`[daily-brief] Sent to ${sub.email} — id: ${(resp as any).data?.id || "unknown"}`);
+        }
       } catch (e: any) {
         console.log(`[daily-brief] Failed to send to ${sub.email}:`, e.message);
       }
@@ -398,17 +406,28 @@ async function sendApologyBriefEmails() {
 
   console.log(`[daily-brief] Sending apology brief to ${subs.length} recipients...`);
   try {
-    const { client } = await getUncachableResendClient();
-    for (const sub of subs) {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const senderAddress = fromEmail && !fromEmail.includes("gmail.com")
+      ? `CLVRQuant <${fromEmail}>`
+      : "CLVRQuant <noreply@clvrquantai.com>";
+    console.log(`[daily-brief] Sending from: ${senderAddress}`);
+    for (let i = 0; i < subs.length; i++) {
+      const sub = subs[i];
+      // Stay well under Resend's 2 req/s rate limit
+      if (i > 0) await new Promise(r => setTimeout(r, 600));
       try {
-        await client.emails.send({
-          from: "CLVRQuant <noreply@clvrquantai.com>",
+        const resp = await client.emails.send({
+          from: senderAddress,
           to: sub.email,
           reply_to: "mikeclaver@gmail.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
           html: apologyHtml,
         });
-        console.log(`[daily-brief] Apology brief sent to ${sub.email}`);
+        if ((resp as any).error) {
+          console.log(`[daily-brief] Resend API error for ${sub.email}:`, JSON.stringify((resp as any).error));
+        } else {
+          console.log(`[daily-brief] Apology brief sent to ${sub.email} — id: ${(resp as any).data?.id || "unknown"}`);
+        }
       } catch (e: any) {
         console.log(`[daily-brief] Failed to send apology to ${sub.email}:`, e.message);
       }
