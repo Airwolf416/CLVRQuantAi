@@ -1332,7 +1332,7 @@ export async function registerRoutes(
 
     // Use Haiku for speed + cost (10x cheaper than Sonnet), Sonnet for Pro deep analysis
     const wantSonnet = isPro && req.body.deep === true;
-    const model = wantSonnet ? "claude-sonnet-4-20250514" : "claude-haiku-3-5-20241022";
+    const model = wantSonnet ? "claude-sonnet-4-20250514" : "claude-haiku-4-5-20251001";
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
