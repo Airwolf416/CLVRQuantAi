@@ -156,9 +156,22 @@ function playBloombergPing(){
   }catch(e){}
 }
 
-// ─── PUSH NOTIFICATIONS ─────────────────────────────────
+// ─── PUSH NOTIFICATIONS (via service worker → OS notification center) ──────
 function sendPush(title,body,tag="clvrquant"){
-  if(typeof Notification!=="undefined"&&Notification.permission==="granted"){try{new Notification(title,{body,tag});}catch(e){}}
+  if(typeof Notification==="undefined"||Notification.permission!=="granted")return;
+  // Route through service worker so notification appears in OS notification center
+  if("serviceWorker"in navigator&&navigator.serviceWorker.controller){
+    try{navigator.serviceWorker.controller.postMessage({type:"SHOW_NOTIFICATION",title,body,tag,icon:"/icons/icon-192.png"});return;}catch(e){}
+  }
+  // Fallback: use registration.showNotification if available
+  if("serviceWorker"in navigator){
+    navigator.serviceWorker.ready.then(reg=>{
+      try{reg.showNotification(title,{body,icon:"/icons/icon-192.png",badge:"/icons/icon-192.png",tag});}
+      catch{try{new Notification(title,{body,tag});}catch{}}
+    }).catch(()=>{try{new Notification(title,{body,tag});}catch{}});
+    return;
+  }
+  try{new Notification(title,{body,tag});}catch(e){}
 }
 
 // ─── NOTIFICATION MANAGER (Anti-Duplication) ─────────────
@@ -1072,14 +1085,14 @@ function Dashboard({user,setUser}){
     setCheckoutLoading(false);
   };
 
-  // ── Macro calendar (auto-refresh every 60s) ─────────
+  // ── Macro calendar (30s refresh — fast enough to catch 8:30 AM ET releases) ─
   const fetchMacro=useCallback(()=>{
     fetch("/api/macro").then(r=>r.json()).then(data=>{
       if(Array.isArray(data)) setMacroEvents(data);
       setMacroLoading(false);
     }).catch(()=>setMacroLoading(false));
   },[]);
-  useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,60000);return()=>clearInterval(iv);},[fetchMacro]);
+  useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,30000);return()=>clearInterval(iv);},[fetchMacro]);
 
   const fetchRegime=useCallback(async()=>{
     try{const r=await fetch("/api/regime");if(r.ok){const d=await r.json();setRegimeData(d);}}catch{}
@@ -1351,12 +1364,17 @@ Also provide an overall market regime assessment and your best risk-adjusted set
 
   // ── Macro event helpers ──────────────────────────────
   const today=new Date();
+  // Date string helpers: compare event dates as YYYY-MM-DD strings using ET timezone
+  // This prevents the off-by-one day issue (e.g., "2026-03-12" at UTC midnight = March 11 7PM ET)
+  const todayETStr=new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});
+  const tomorrowETStr=new Date(Date.now()+86400000).toLocaleDateString("en-CA",{timeZone:"America/New_York"});
   const eventStatus=(dateStr)=>{
-    const d=new Date(dateStr);
-    const diff=Math.floor((d-today)/(1000*60*60*24));
-    if(diff<0)return{label:"PAST",color:"muted"};
-    if(diff===0)return{label:"TODAY",color:"red"};
-    if(diff===1)return{label:"TMRW",color:"orange"};
+    if(!dateStr)return{label:"?",color:"muted"};
+    if(dateStr<todayETStr)return{label:"PAST",color:"muted"};
+    if(dateStr===todayETStr)return{label:"TODAY",color:"red"};
+    if(dateStr===tomorrowETStr)return{label:"TMRW",color:"orange"};
+    // Calculate day diff by comparing date strings directly (avoids DST/timezone issues)
+    const diff=Math.round((new Date(dateStr+"T12:00:00")-new Date(todayETStr+"T12:00:00"))/(1000*60*60*24));
     if(diff<=7)return{label:`${diff}d`,color:"gold"};
     return{label:`${diff}d`,color:"muted"};
   };
@@ -1422,10 +1440,13 @@ Also provide an overall market regime assessment and your best risk-adjusted set
     return impacts.length>0?impacts:null;
   };
 
-  const macroTodayStr=new Date().toDateString();
-  const macroTodayEvents=macroEvents.filter(e=>new Date(e.date).toDateString()===macroTodayStr);
-  const macroWeekEnd=new Date();macroWeekEnd.setDate(macroWeekEnd.getDate()+(7-macroWeekEnd.getDay()));macroWeekEnd.setHours(23,59,59,999);
-  const macroWeekEvents=macroEvents.filter(e=>{const d=new Date(e.date);return d>=new Date(new Date().toDateString())&&d<=macroWeekEnd;});
+  // Use ET timezone for date comparisons so US economic events (e.g. 8:30 AM ET jobless claims) show on correct day
+  const macroTodayStr=new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});// YYYY-MM-DD in ET
+  const macroTodayEvents=macroEvents.filter(e=>e.date===macroTodayStr);
+  const macroWeekEndDate=new Date();macroWeekEndDate.setDate(macroWeekEndDate.getDate()+(6-macroWeekEndDate.getDay()));macroWeekEndDate.setHours(23,59,59,999);
+  const macroWeekStartStr=macroTodayStr;
+  const macroWeekEndStr=macroWeekEndDate.toLocaleDateString("en-CA",{timeZone:"America/New_York"});
+  const macroWeekEvents=macroEvents.filter(e=>e.date>=macroWeekStartStr&&e.date<=macroWeekEndStr);
   const macroAllFiltered=(macroCalTab==="today"?macroTodayEvents:macroWeekEvents)
     .filter(e=>macroRegionFilter==="ALL"||(e.country||"").toUpperCase()===macroRegionFilter)
     .filter(e=>macroImpactFilter==="ALL"||e.impact===macroImpactFilter)
@@ -1433,7 +1454,7 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const macroReleasedCount=macroAllFiltered.filter(e=>e.released).length;
   const macroPendingCount=macroAllFiltered.filter(e=>!e.released).length;
   const macroHighCount=macroAllFiltered.filter(e=>e.impact==="HIGH").length;
-  const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&new Date(e.date)>=new Date(new Date().toDateString())).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
+  const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&e.date>=macroTodayStr).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
   const macroNextPending=macroSortedForNext[0]||null;
 
   const requestPush=async()=>{if(typeof Notification!=="undefined"){try{const p=await Notification.requestPermission();setNotifPerm(p);if(p==="granted"){setToast("Alerts enabled (browser + in-app)");return;}}catch(e){}}setNotifPerm("granted");setToast("In-app alerts enabled");};

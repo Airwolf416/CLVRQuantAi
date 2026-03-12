@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clvrquant-v3';
+const CACHE_NAME = 'clvrquant-v4';
 const STATIC_ASSETS = ['/', '/manifest.json', '/favicon.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-1024.png'];
 
 self.addEventListener('install', (e) => {
@@ -21,5 +21,54 @@ self.addEventListener('fetch', (e) => {
       }
       return res;
     }).catch(() => caches.match(e.request))
+  );
+});
+
+// ── Notification requests from the app page ──────────────
+self.addEventListener('message', (e) => {
+  if (!e.data || e.data.type !== 'SHOW_NOTIFICATION') return;
+  const { title, body, tag, icon } = e.data;
+  e.waitUntil(
+    self.registration.showNotification(title || 'CLVRQuant', {
+      body: body || '',
+      icon: icon || '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: tag || 'clvrquant',
+      vibrate: [200, 100, 200],
+      data: { url: '/' }
+    })
+  );
+});
+
+// ── Server-side push notifications (future) ──────────────
+self.addEventListener('push', (e) => {
+  if (!e.data) return;
+  let data = {};
+  try { data = e.data.json(); } catch { data = { title: 'CLVRQuant', body: e.data.text() }; }
+  e.waitUntil(
+    self.registration.showNotification(data.title || 'CLVRQuant', {
+      body: data.body || '',
+      icon: data.icon || '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: data.tag || 'clvrquant',
+      vibrate: [200, 100, 200],
+      data: { url: data.url || '/' }
+    })
+  );
+});
+
+// ── Notification click → bring app to foreground ─────────
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const targetUrl = e.notification.data?.url || '/';
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) return clients.openWindow(targetUrl);
+    })
   );
 });
