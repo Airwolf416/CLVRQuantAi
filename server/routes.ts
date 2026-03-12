@@ -1378,7 +1378,24 @@ export async function registerRoutes(
   ].map((e, i) => ({ ...e, id: i + 1, current: "—", forecast: "—" }));
 
   let macroCache: { data: any[]; ts: number } = { data: [], ts: 0 };
-  const MACRO_CACHE_MS = 600000; // 10 minutes
+  const MACRO_CACHE_MS = 90000; // 90 seconds — fast enough to catch data released at :00/:30 marks
+
+  // Returns true if any event is past its scheduled release time but still has no actual value
+  // In that case we skip cache and fetch fresh data immediately
+  function hasPastDueEvents(events: any[]): boolean {
+    const nowMs = Date.now();
+    return events.some((e: any) => {
+      if (e.released || e.actual) return false;
+      try {
+        const [y, mo, d] = e.date.split("-").map(Number);
+        const [h, m] = (e.timeET || "00:00").split(":").map(Number);
+        // Convert ET release time to UTC (use -4 for EDT March-November, -5 for EST)
+        const etOffset = (mo >= 3 && mo <= 11) ? 4 : 5;
+        const releaseMs = Date.UTC(y, mo - 1, d, h + etOffset, m, 0);
+        return releaseMs < nowMs;
+      } catch { return false; }
+    });
+  }
 
   function getDateRange() {
     const now = new Date();
@@ -1475,7 +1492,9 @@ export async function registerRoutes(
     try {
       let liveEvents: any[] = [];
       const cacheExpired = Date.now() - macroCache.ts > MACRO_CACHE_MS;
-      if (cacheExpired) {
+      // Also bypass cache if events are past their scheduled release time but show no actual value yet
+      const pastDue = !cacheExpired && macroCache.data.length > 0 && hasPastDueEvents(macroCache.data);
+      if (cacheExpired || pastDue) {
         const fetched = await fetchLiveCalendar();
         if (fetched.length > 0) {
           macroCache = { data: fetched, ts: Date.now() };
