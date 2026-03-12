@@ -64,11 +64,26 @@ const FINNHUB_TTL = 120000;
 const aiCache = new Map<string, { text: string; ts: number }>();
 const AI_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-function hashPrompt(system: string, msg: string): string {
-  const str = system.slice(0, 200) + "|" + msg.slice(0, 600);
+function hashStr(str: string): string {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = Math.imul(31, h) + str.charCodeAt(i) | 0;
   return (h >>> 0).toString(36);
+}
+
+function hashPrompt(system: string, msg: string): string {
+  // Trade ideas: use time-bucketed cache (15 min) so all Pro users in same window share one response
+  if (msg.includes("TOP 4 TRADE IDEAS") || msg.includes("TOP 3 TRADE IDEAS")) {
+    const bucket = Math.floor(Date.now() / (15 * 60 * 1000));
+    return "trade-ideas-" + hashStr(msg.slice(0, 200)) + "-" + bucket;
+  }
+  // Macro event analysis: bucket per event name + hour
+  if (msg.startsWith("Analyze this economic release:")) {
+    const bucket = Math.floor(Date.now() / (60 * 60 * 1000));
+    return "macro-" + hashStr(msg.slice(0, 300)) + "-" + bucket;
+  }
+  // Default: hash system (first 200 chars) + full user message
+  const str = system.slice(0, 200) + "|" + msg.slice(0, 600);
+  return hashStr(str);
 }
 
 // Per-user AI rate limiting: free = 15 calls/hour, pro = 60 calls/hour

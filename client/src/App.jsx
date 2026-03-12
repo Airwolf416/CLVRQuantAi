@@ -1118,8 +1118,13 @@ function Dashboard({user,setUser}){
     try{
       const sys=`You are QuantBrain, an elite quantitative market intelligence analyst for CLVRQuant. Provide concise, data-driven analysis of economic releases. Focus on: 1) What the data means for markets, 2) Which assets are most affected, 3) How this changes the macro picture, 4) What to watch next. Be precise and use numbers.`;
       const msg=`Analyze this economic release:\n\nEvent: ${evt.name}\nCountry/Region: ${evt.region||evt.country}\nForecast: ${evt.forecast} ${evt.unit||""}\nPrevious: ${evt.previous||evt.current} ${evt.unit||""}\nActual: ${evt.actual||"Not yet released"} ${evt.unit||""}\nImpact Level: ${evt.impact}\nToday: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}\n\n${evt.actual?`The actual came in ${parseFloat(evt.actual)>parseFloat(evt.forecast)?"ABOVE":"BELOW"} expectations.`:"This event has not yet been released."}\n\nWhat does this mean for markets? Which assets move? What's the macro implication? What should I watch next?`;
-      const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:msg})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:msg})});
       const data=await res.json();
+      if(!res.ok){
+        if(res.status===401||res.status===403)setMacroAiResp("✦ PRO FEATURE — Upgrade to Pro to unlock AI-powered macro analysis.");
+        else setMacroAiResp(data.error||"Error. Try again.");
+        setMacroAiLoading(false);return;
+      }
       setMacroAiResp(data.text||"No response.");
     }catch(e){setMacroAiResp("Error: "+(e.message||"Try again."));}
     setMacroAiLoading(false);
@@ -1215,7 +1220,7 @@ FOREX: ${fxBrief}${sigBrief}${macroSnap}${newsFeed.length>0?`\nNEWS HEADLINES: $
 Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
 {"headline":"one-line market sentiment","bias":"RISK ON|RISK OFF|NEUTRAL","btc":"2 sentence BTC analysis with key levels","eth":"1 sentence ETH","sol":"1 sentence SOL","xau":"2 sentence gold analysis","xag":"1 sentence silver","eurusd":"2 sentence EUR/USD analysis","usdjpy":"2 sentence USD/JPY with BOJ context","usdcad":"2 sentence USD/CAD","watchToday":["item1","item2","item3","item4","item5"],"keyRisk":"single sentence on biggest risk today"}`;
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt})});
       const data=await res.json();
       if(!res.ok){setToast(data.error||"Brief generation failed");setBriefLoading(false);return;}
       const txt=data.text||"";
@@ -1265,9 +1270,13 @@ Reason: [2 precise lines using live data, funding rates, OI, news]
 - If not a trade question, give sharp analytical answer using live prices and change%.
 - Never add disclaimers or hedging language. Be precise and direct.`;
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
       const data=await res.json();
-      if(!res.ok){setAiOutput(data.error||`Error ${res.status}`);setAiLoading(false);return;}
+      if(!res.ok){
+        if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Market Analyst is exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• Claude Sonnet 4 powered analysis\n• Top 4 trade ideas with Entry / Stop / TP1 / TP2\n• Confidence levels & Kelly sizing\n• Cross-asset intelligence\n\nTap UPGRADE in the top bar.");
+        else setAiOutput(data.error||`Error ${res.status}`);
+        setAiLoading(false);return;
+      }
       setAiOutput(data.text||"No response.");
     }catch(e){setAiOutput(`Error: ${e.message}`);}
     setAiLoading(false);
@@ -1363,9 +1372,13 @@ ${tfHint}
 For EACH of the 4 trades provide the EXACT format from your instructions: Entry, Stop Loss, TP1, TP2, Confidence %, Kelly Size, Rationale.
 Use live prices from the data provided. Scan all asset classes (crypto, equities, commodities, forex) to find the 4 highest-conviction setups right now.`;
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg})});
       const data=await res.json();
-      if(!res.ok){setAiOutput(data.error||`Error ${res.status}`);setAiLoading(false);return;}
+      if(!res.ok){
+        if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Trade Ideas are exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• Top 4 trade ideas across all asset classes\n• Entry / Stop Loss / TP1 / TP2 for each trade\n• Confidence levels & Kelly position sizing\n• Bayesian probability estimates\n\nTap UPGRADE in the top bar.");
+        else setAiOutput(data.error||`Error ${res.status}`);
+        setAiLoading(false);return;
+      }
       setAiOutput(data.text||"No response.");
     }catch(e){setAiOutput(`Error: ${e.message}`);}
     setAiLoading(false);
