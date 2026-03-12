@@ -1311,14 +1311,21 @@ export async function registerRoutes(
     const userMessage = req.body.userMessage || req.body.prompt || "";
     if (!userMessage) return res.status(400).json({ error: "userMessage is required" });
 
-    // Rate limiting — check per session user
+    // Auth check — AI is Pro-only
     const sessionUser = (req.session as any)?.user;
-    const userId = sessionUser?.id || req.ip || "anon";
     const isPro = sessionUser?.tier === "pro";
+    if (!sessionUser) {
+      return res.status(401).json({ error: "Sign in required to use AI." });
+    }
+    if (!isPro) {
+      return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock Claude-powered analysis." });
+    }
 
-    if (!checkAiRateLimit(userId, isPro)) {
+    const userId = sessionUser.id;
+
+    if (!checkAiRateLimit(userId, true)) {
       return res.status(429).json({
-        error: isPro ? "Rate limit: 60 AI requests/hour on Pro" : "Rate limit: 15 AI requests/hour on Free. Upgrade to Pro for more.",
+        error: "Rate limit: 60 AI requests/hour on Pro.",
         cached: false,
       });
     }
@@ -1330,9 +1337,8 @@ export async function registerRoutes(
       return res.json({ text: cached.text, response: cached.text, cached: true });
     }
 
-    // Use Haiku for speed + cost (10x cheaper than Sonnet), Sonnet for Pro deep analysis
-    const wantSonnet = isPro && req.body.deep === true;
-    const model = wantSonnet ? "claude-sonnet-4-20250514" : "claude-haiku-4-5-20251001";
+    // Pro users always get Claude Sonnet 4 for best quality analysis
+    const model = "claude-sonnet-4-20250514";
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -1344,7 +1350,7 @@ export async function registerRoutes(
         },
         body: JSON.stringify({
           model,
-          max_tokens: wantSonnet ? 1024 : 600,
+          max_tokens: 1500,
           system: system || "",
           messages: [{ role: "user", content: userMessage }],
         }),
