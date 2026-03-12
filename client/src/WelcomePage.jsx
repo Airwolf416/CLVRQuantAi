@@ -81,9 +81,11 @@ export default function WelcomePage({ onEnter }) {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [waLoading, setWaLoading] = useState(false);
   const [hasBiometric, setHasBiometric] = useState(false);
+  const [autoFaceIdDone, setAutoFaceIdDone] = useState(false);
 
   useEffect(() => {
-    setHasBiometric(!!(waSupported() && getStoredCredential()));
+    const hasCred = !!(waSupported() && getStoredCredential());
+    setHasBiometric(hasCred);
     const params = new URLSearchParams(window.location.search);
     const token = params.get("reset");
     if (token) {
@@ -97,9 +99,13 @@ export default function WelcomePage({ onEnter }) {
   }, []);
 
   // Face ID / WebAuthn sign-in
-  const handleBiometricSignIn = useCallback(async () => {
+  // isAuto=true: silently fall back on failure (no error shown, user can retry manually)
+  const handleBiometricSignIn = useCallback(async (isAuto = false) => {
     const stored = getStoredCredential();
-    if (!stored?.credentialId) { setError("No biometric credential found. Please sign in with your password first."); return; }
+    if (!stored?.credentialId) {
+      if (!isAuto) setError("No biometric credential found. Please sign in with your password first.");
+      return;
+    }
     setWaLoading(true);
     setError("");
     try {
@@ -130,6 +136,7 @@ export default function WelcomePage({ onEnter }) {
       if (onEnter) onEnter(data.user);
     } catch (e) {
       setWaLoading(false);
+      if (isAuto) return; // silently fall back to welcome screen with Face ID button
       const msg = e?.message || "";
       if (msg.includes("cancelled") || msg.includes("NotAllowedError") || msg.toLowerCase().includes("user")) {
         setError("Biometric verification cancelled.");
@@ -138,6 +145,14 @@ export default function WelcomePage({ onEnter }) {
       }
     }
   }, [onEnter]);
+
+  // Auto-trigger Face ID when returning user has it enabled and is not signed in
+  useEffect(() => {
+    if (!checkingSession && hasBiometric && !autoFaceIdDone) {
+      setAutoFaceIdDone(true);
+      setTimeout(() => handleBiometricSignIn(true), 400);
+    }
+  }, [checkingSession, hasBiometric, autoFaceIdDone, handleBiometricSignIn]);
 
   const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setError(""); setSuccess(""); };
 

@@ -2328,12 +2328,12 @@ export async function registerRoutes(
 
   // Register a new WebAuthn credential for the logged-in user
   app.post("/api/auth/webauthn/register", async (req, res) => {
-    const sessionUser = (req.session as any)?.user;
-    if (!sessionUser?.id) return res.status(401).json({ error: "Not signed in" });
+    const uid = (req.session as any)?.userId;
+    if (!uid) return res.status(401).json({ error: "Not signed in" });
     const { credentialId } = req.body;
     if (!credentialId || typeof credentialId !== "string") return res.status(400).json({ error: "credentialId required" });
     try {
-      await storage.createWebAuthnCredential(sessionUser.id, credentialId);
+      await storage.createWebAuthnCredential(uid, credentialId);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2342,10 +2342,10 @@ export async function registerRoutes(
 
   // List credentials for logged-in user (so frontend can show "biometric enabled")
   app.get("/api/auth/webauthn/credentials", async (req, res) => {
-    const sessionUser = (req.session as any)?.user;
-    if (!sessionUser?.id) return res.status(401).json({ error: "Not signed in" });
+    const uid = (req.session as any)?.userId;
+    if (!uid) return res.status(401).json({ error: "Not signed in" });
     try {
-      const creds = await storage.getWebAuthnCredentialsByUser(sessionUser.id);
+      const creds = await storage.getWebAuthnCredentialsByUser(uid);
       res.json({ credentials: creds.map(c => ({ id: c.id, createdAt: c.createdAt })) });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2359,9 +2359,12 @@ export async function registerRoutes(
     try {
       const user = await storage.getUserByCredentialId(credentialId);
       if (!user) return res.status(401).json({ error: "Unknown credential" });
-      (req.session as any).user = { id: user.id, email: user.email, name: user.name, tier: user.tier, username: user.username };
+      const tier = user.email === "mikeclaver@gmail.com" ? "pro" : user.tier;
+      // Set BOTH session.userId (used by all protected routes) and session.user (legacy)
+      (req.session as any).userId = user.id;
+      (req.session as any).user = { id: user.id, email: user.email, name: user.name, tier, username: user.username };
       await new Promise<void>((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, tier: user.tier, username: user.username } });
+      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, tier, username: user.username } });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -2369,10 +2372,10 @@ export async function registerRoutes(
 
   // Remove a biometric credential
   app.delete("/api/auth/webauthn/credential/:credId", async (req, res) => {
-    const sessionUser = (req.session as any)?.user;
-    if (!sessionUser?.id) return res.status(401).json({ error: "Not signed in" });
+    const uid = (req.session as any)?.userId;
+    if (!uid) return res.status(401).json({ error: "Not signed in" });
     try {
-      await storage.deleteWebAuthnCredential(req.params.credId, sessionUser.id);
+      await storage.deleteWebAuthnCredential(req.params.credId, uid);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
