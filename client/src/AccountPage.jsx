@@ -57,6 +57,38 @@ function QRCode({ data, size = 180 }) {
   );
 }
 
+function OwnerResendBrief({ C, MONO }) {
+  const [status, setStatus] = useState(null); // null | "sending" | "sent" | "error"
+  const [msg, setMsg] = useState("");
+  const handleResend = async () => {
+    setStatus("sending");
+    setMsg("");
+    try {
+      const r = await fetch("/api/admin/send-apology-brief", { method: "POST", headers: { "Content-Type": "application/json" } });
+      const d = await r.json();
+      if (r.ok) { setStatus("sent"); setMsg("Brief queued — subscribers will receive it within ~60 seconds."); }
+      else { setStatus("error"); setMsg(d.error || "Failed to send."); }
+    } catch (e) { setStatus("error"); setMsg("Network error. Please try again."); }
+    setTimeout(() => { setStatus(null); setMsg(""); }, 8000);
+  };
+  const btnColor = status === "sent" ? "rgba(0,199,135,.15)" : status === "error" ? "rgba(255,64,96,.1)" : "rgba(201,168,76,.08)";
+  const btnBorder = status === "sent" ? "rgba(0,199,135,.4)" : status === "error" ? "rgba(255,64,96,.3)" : "rgba(201,168,76,.3)";
+  const btnText = status === "sent" ? C.green : status === "error" ? C.red : "#e8c96d";
+  return (
+    <div style={{ background:btnColor, border:`1px solid ${btnBorder}`, borderRadius:8, padding:"16px 18px", marginBottom:12 }}>
+      <div style={{ fontFamily:MONO, fontSize:9, color:"#c9a84c", letterSpacing:"0.2em", marginBottom:6 }}>⚡ OWNER — BROADCAST TOOLS</div>
+      <div style={{ fontSize:13, fontWeight:600, color:"#e8e0d0", marginBottom:4 }}>Morning Market Brief</div>
+      <div style={{ fontFamily:MONO, fontSize:10, color:"#8a96b2", marginBottom:12, lineHeight:1.6 }}>
+        Manually resend today's market brief to all active subscribers. Use if the 6AM automated email failed to deliver.
+      </div>
+      {msg && <div style={{ fontFamily:MONO, fontSize:10, color:btnText, marginBottom:10, lineHeight:1.5 }}>{msg}</div>}
+      <button data-testid="btn-owner-resend-brief" onClick={handleResend} disabled={status === "sending"} style={{ background:btnColor, border:`1px solid ${btnBorder}`, borderRadius:6, padding:"10px 18px", fontFamily:MONO, fontSize:11, color:btnText, cursor: status === "sending" ? "not-allowed" : "pointer", letterSpacing:"0.1em", fontWeight:700, opacity: status === "sending" ? 0.6 : 1 }}>
+        {status === "sending" ? "Sending..." : status === "sent" ? "✓ Sent" : "📤 Resend to All Subscribers"}
+      </button>
+    </div>
+  );
+}
+
 export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) {
   const [tab, setTab] = useState("subscription");
   const [acct, setAcct] = useState(null);
@@ -471,6 +503,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
               We will <strong style={{ color:C.text }}>never</strong> sell or share your email. All emails include an unsubscribe link.
             </div>
           </div>
+
+          {acct.isOwner && <OwnerResendBrief C={C} MONO={MONO} />}
 
           <div style={S.card}>
             <div style={{ fontFamily:MONO, fontSize:9, color:C.red, letterSpacing:"0.2em", marginBottom:8 }}>DANGER ZONE</div>
