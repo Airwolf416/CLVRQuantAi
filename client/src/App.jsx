@@ -966,7 +966,7 @@ function Dashboard({user,setUser}){
       setFhStatus(anyLive?"live":"closed");
     }catch{setFhStatus("error");}
   },[triggerFlashes]);
-  useEffect(()=>{doFH();const iv=setInterval(doFH,60000);return()=>clearInterval(iv);},[doFH]);
+  useEffect(()=>{doFH();const iv=setInterval(doFH,15000);return()=>clearInterval(iv);},[doFH]);
 
   // ── SSE stream for real-time equity/commodity/forex (Finnhub WebSocket) ──
   const sseBuf=useRef({});
@@ -1126,7 +1126,7 @@ function Dashboard({user,setUser}){
       if(hit){
         setToast(`✦ ALERT: ${a.label}`);
         if(typeof Notification!=="undefined"&&Notification.permission==="granted")new Notification("CLVRQuant",{body:a.label});
-        if(user&&a.id)fetch(`/api/alerts/${a.id}/trigger`,{method:"POST",credentials:"include"}).catch(()=>{});
+        if(user&&a.id)fetch(`/api/alerts/${a.id}/trigger`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:a.label,sym:a.sym,threshold:a.threshold,condition:a.condition})}).catch(()=>{});
         return{...a,triggered:true};
       }
       return a;
@@ -1457,7 +1457,31 @@ Also provide an overall market regime assessment and your best risk-adjusted set
   const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&e.date>=macroTodayStr).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
   const macroNextPending=macroSortedForNext[0]||null;
 
-  const requestPush=async()=>{if(typeof Notification!=="undefined"){try{const p=await Notification.requestPermission();setNotifPerm(p);if(p==="granted"){setToast("Alerts enabled (browser + in-app)");return;}}catch(e){}}setNotifPerm("granted");setToast("In-app alerts enabled");};
+  const requestPush=async()=>{
+    if(typeof Notification==="undefined"){setNotifPerm("granted");setToast("In-app alerts enabled");return;}
+    try{
+      const perm=await Notification.requestPermission();
+      setNotifPerm(perm);
+      if(perm==="granted"){
+        // Subscribe to web push for locked-screen notifications
+        try{
+          const swReg=await navigator.serviceWorker.ready;
+          const keyRes=await fetch("/api/push/public-key");
+          const{publicKey}=await keyRes.json();
+          const sub=await swReg.pushManager.subscribe({
+            userVisibleOnly:true,
+            applicationServerKey:publicKey,
+          });
+          await fetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
+          setToast("🔔 Push notifications enabled — alerts will appear on your lock screen");
+        }catch(e){
+          setToast("Alerts enabled (in-app)");
+        }
+        return;
+      }
+    }catch(e){}
+    setToast("In-app alerts enabled");
+  };
 
   const todayDate=new Date();
   const nextEvents=macroEvents.map(e=>{const timeStr=e.timeET||e.time||"12:00";const timeParts=timeStr.match(/(\d+):(\d+)/);const h=timeParts?parseInt(timeParts[1]):12;const m=timeParts?parseInt(timeParts[2]):0;const isET=timeStr.includes("ET");const[y,mo,d]=e.date.split("-").map(Number);const t=new Date(Date.UTC(y,mo-1,d,isET?h+5:h,m,0));return{...e,timeET:timeStr,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs);

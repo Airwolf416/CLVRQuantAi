@@ -5,6 +5,7 @@ const C = {
   gold:"#c9a84c", gold2:"#e8c96d", gold3:"#f7e0a0",
   text:"#c8d4ee", muted:"#4a5d80", muted2:"#6b7fa8", white:"#f0f4ff",
   green:"#00c787", red:"#ff4060", orange:"#ff8c00", cyan:"#00d4ff",
+  purple:"#9b59b6",
 };
 const SERIF = "'Playfair Display', Georgia, serif";
 const MONO  = "'IBM Plex Mono', monospace";
@@ -47,6 +48,15 @@ function Toast({ msg, onClose }) {
   );
 }
 
+function QRCode({ data, size = 180 }) {
+  const url = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data)}&bgcolor=0c1220&color=c9a84c&margin=2`;
+  return (
+    <img src={url} alt={`QR: ${data}`}
+      style={{ width:size, height:size, borderRadius:4, border:`1px solid ${C.border2}`, display:"block" }}
+    />
+  );
+}
+
 export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) {
   const [tab, setTab] = useState("subscription");
   const [acct, setAcct] = useState(null);
@@ -55,6 +65,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
   const [cancelReason, setCancelReason] = useState("");
   const [toast, setToast] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [trialCode, setTrialCode] = useState(null);
+  const [trialLoading, setTrialLoading] = useState(false);
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
 
@@ -148,6 +160,21 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
     setActionLoading(false);
   };
 
+  const handleDowngradeToFree = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch("/api/stripe/downgrade", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (data.ok) {
+        setAcct(a => ({ ...a, tier: "free", promoCode: null, promoExpiresAt: null, stripeSubscriptionId: null, subscription: null }));
+        showToast("Downgraded to Free plan");
+        setModal(null);
+        try { localStorage.removeItem("clvr_tier"); localStorage.removeItem("clvr_code"); } catch {}
+      } else { showToast(data.error || "Failed to downgrade"); }
+    } catch (e) { showToast("Failed to downgrade"); }
+    setActionLoading(false);
+  };
+
   const handleDelete = async () => {
     setActionLoading(true);
     try {
@@ -165,6 +192,34 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
     }
   };
 
+  const loadTrialCode = async () => {
+    setTrialLoading(true);
+    try {
+      const res = await fetch("/api/admin/current-trial-code");
+      const data = await res.json();
+      if (data.code) setTrialCode(data);
+      else showToast(data.error || "Could not load trial code");
+    } catch { showToast("Failed to load trial code"); }
+    setTrialLoading(false);
+  };
+
+  const generateNewTrialCode = async () => {
+    setTrialLoading(true);
+    try {
+      const res = await fetch("/api/admin/generate-trial-code", { method: "POST" });
+      const data = await res.json();
+      if (data.code) {
+        setTrialCode(data);
+        showToast("New trial code generated!");
+      } else { showToast(data.error || "Failed to generate"); }
+    } catch { showToast("Failed to generate"); }
+    setTrialLoading(false);
+  };
+
+  useEffect(() => {
+    if (tab === "owner" && !trialCode) loadTrialCode();
+  }, [tab]);
+
   const S = {
     card: { background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:18, marginBottom:12 },
     dangerBtn: { background:"rgba(255,64,96,.06)", border:`1px solid rgba(255,64,96,.25)`, color:C.red, borderRadius:4, padding:"8px 16px", cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:MONO },
@@ -172,7 +227,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
     goldBtn: { background:`linear-gradient(135deg,${C.gold},${C.gold2})`, border:"none", color:C.bg, borderRadius:4, padding:"8px 16px", cursor:"pointer", fontSize:11, fontWeight:700, fontFamily:MONO },
   };
 
-  const tabs = ["subscription", "referral", "emails", "billing", "legal"];
+  const baseTabs = ["subscription", "referral", "emails", "billing", "legal"];
+  const tabs = acct?.isOwner ? [...baseTabs, "owner"] : baseTabs;
 
   if (loading) {
     return (
@@ -219,8 +275,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
       <div style={{ display:"flex", gap:4, marginBottom:18, flexWrap:"wrap" }}>
         {tabs.map(t => (
           <button key={t} data-testid={`tab-${t}`} onClick={() => setTab(t)}
-            style={{ background:tab === t ? C.gold : "transparent", border:`1px solid ${tab === t ? C.gold : C.border}`, color:tab === t ? C.bg : C.muted2, borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
-            {t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : "Legal"}
+            style={{ background:tab === t ? (t === "owner" ? C.purple : C.gold) : "transparent", border:`1px solid ${tab === t ? (t === "owner" ? C.purple : C.gold) : C.border}`, color:tab === t ? C.bg : (t === "owner" ? C.purple : C.muted2), borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
+            {t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : "⚡ Owner"}
           </button>
         ))}
       </div>
@@ -322,6 +378,20 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
                   Manage via Stripe →
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Switch to Free for promo-code Pro users (no Stripe sub) */}
+          {acct.tier !== "free" && !acct.stripeSubscriptionId && !acct.isOwner && (
+            <div style={S.card}>
+              <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, letterSpacing:"0.2em", marginBottom:8 }}>SWITCH PLAN</div>
+              <div style={{ fontSize:11, color:C.muted2, lineHeight:1.6, marginBottom:12, fontFamily:MONO }}>
+                Your Pro access is active via a promo code. Switching to Free will remove your Pro features immediately.
+              </div>
+              <button data-testid="btn-downgrade-free" onClick={() => setModal("downgrade")} disabled={actionLoading}
+                style={{ ...S.ghostBtn, width:"100%", borderColor:"rgba(255,64,96,.25)", color:C.red }}>
+                Switch to Free Plan
+              </button>
             </div>
           )}
         </div>
@@ -521,6 +591,81 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
         </div>
       )}
 
+      {tab === "owner" && acct.isOwner && (
+        <div>
+          <div style={{ ...S.card, borderColor:"rgba(155,89,182,.35)" }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.2em", marginBottom:14 }}>OWNER CONTROL CENTER</div>
+            <div style={{ fontFamily:SERIF, fontSize:15, fontWeight:700, color:C.white, marginBottom:4 }}>Rotating 7-Day Trial Code</div>
+            <div style={{ fontSize:11, color:C.muted2, lineHeight:1.7, marginBottom:16, fontFamily:MONO }}>
+              Share this code with potential users to give them 7 days of free Pro access. When redeemed, a new code is auto-generated.
+            </div>
+
+            {trialLoading ? (
+              <div style={{ textAlign:"center", padding:20, fontFamily:MONO, fontSize:11, color:C.muted }}>Loading trial code...</div>
+            ) : trialCode ? (
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
+                <QRCode data={trialCode.code} size={200} />
+                <div style={{ textAlign:"center" }}>
+                  <div style={{ fontFamily:MONO, fontSize:18, fontWeight:700, color:C.gold2, letterSpacing:"0.12em", marginBottom:6 }}>
+                    {trialCode.code}
+                  </div>
+                  <div style={{ fontSize:11, color:C.muted2, fontFamily:MONO }}>
+                    Valid until {new Date(trialCode.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:10, width:"100%" }}>
+                  <button data-testid="btn-copy-trial-code" onClick={() => navigator.clipboard.writeText(trialCode.code).then(() => showToast("Trial code copied!")).catch(() => showToast("Copy failed"))}
+                    style={{ ...S.goldBtn, flex:1 }}>
+                    COPY CODE
+                  </button>
+                  <button data-testid="btn-generate-new-trial" onClick={generateNewTrialCode} disabled={trialLoading}
+                    style={{ ...S.ghostBtn, flex:1 }}>
+                    {trialLoading ? "Generating..." : "Generate New"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ textAlign:"center" }}>
+                <div style={{ fontSize:11, color:C.muted, fontFamily:MONO, marginBottom:12 }}>No trial code available</div>
+                <button data-testid="btn-generate-trial" onClick={generateNewTrialCode} style={S.goldBtn}>
+                  Generate Trial Code
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ ...S.card, borderColor:"rgba(155,89,182,.2)" }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.2em", marginBottom:12 }}>GROUP ACCESS CODE</div>
+            <div style={{ fontFamily:MONO, fontSize:14, fontWeight:700, color:C.gold2, letterSpacing:"0.1em", marginBottom:6 }}>
+              CLVR-VIP-GROUP2026
+            </div>
+            <div style={{ fontSize:11, color:C.muted2, lineHeight:1.6, fontFamily:MONO, marginBottom:12 }}>
+              Unlimited-use group code — expires in ~1 month. Share with VIP communities, Discord, or group chats.
+            </div>
+            <div style={{ display:"flex", gap:12, alignItems:"flex-start" }}>
+              <QRCode data="CLVR-VIP-GROUP2026" size={120} />
+              <div>
+                <button data-testid="btn-copy-group-code" onClick={() => navigator.clipboard.writeText("CLVR-VIP-GROUP2026").then(() => showToast("Group code copied!")).catch(() => showToast("Copy failed"))}
+                  style={{ ...S.goldBtn, marginBottom:8, width:"100%" }}>
+                  COPY GROUP CODE
+                </button>
+                <div style={{ fontSize:10, color:C.muted, fontFamily:MONO, lineHeight:1.6 }}>
+                  Unlimited uses<br />Multi-user shared code
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...S.card, borderColor:"rgba(155,89,182,.2)" }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.2em", marginBottom:8 }}>CLVRQUANT OWNER CODE</div>
+            <div style={{ fontFamily:MONO, fontSize:14, fontWeight:700, color:C.gold2, letterSpacing:"0.1em", marginBottom:6 }}>
+              CLVR-OWNER-2026
+            </div>
+            <div style={{ fontSize:11, color:C.muted2, fontFamily:MONO }}>Your permanent owner access code. Keep private.</div>
+          </div>
+        </div>
+      )}
+
       {modal === "unsub_daily" && (
         <ConfirmModal
           title="Unsubscribe from Daily Brief?"
@@ -549,6 +694,17 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
           confirmLabel={actionLoading ? "Cancelling..." : "Cancel Subscription"}
           confirmColor={C.red}
           onConfirm={handleCancelSubscription}
+          onCancel={() => setModal(null)} />
+      )}
+
+      {modal === "downgrade" && (
+        <ConfirmModal
+          title="Switch to Free Plan?"
+          message="This will immediately remove your Pro access. Your promo code will be deactivated and you'll revert to the Free plan with 3 tabs."
+          warning="This cannot be undone. Your access code cannot be reused after downgrading."
+          confirmLabel={actionLoading ? "Downgrading..." : "Switch to Free"}
+          confirmColor={C.red}
+          onConfirm={handleDowngradeToFree}
           onCancel={() => setModal(null)} />
       )}
 
