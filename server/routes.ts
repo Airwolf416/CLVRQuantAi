@@ -19,7 +19,7 @@ async function sendWebPushToUser(userId: string, title: string, body: string, ta
     const subs = await pool.query("SELECT subscription FROM push_subscriptions WHERE user_id = $1", [userId]);
     for (const row of subs.rows) {
       try {
-        await webpush.sendNotification(row.subscription, JSON.stringify({ title, body, tag, icon: "/icons/icon-192.png" }));
+        await webpush.sendNotification(row.subscription, JSON.stringify({ title, body, tag, icon: "/icons/icon-512.png", url: "/", timestamp: Date.now() }));
       } catch (e: any) {
         if (e.statusCode === 410 || e.statusCode === 404) {
           // Subscription gone — remove it
@@ -805,6 +805,72 @@ const FOREX_FH_SYMS: Record<string, string> = {
 
 const livePrices: Record<string, { price: number; chg: number; ts: number; type: string }> = {};
 const sseClients: Set<Response> = new Set();
+
+// ── Server-side price cache for alert checking (crypto via Binance REST) ──────
+const serverPriceCache: Record<string, { price: number; chg: number; updatedAt: number }> = {};
+const alertLastFiredMs: Map<number, number> = new Map();
+const ALERT_COOLDOWN_MS = 5 * 60 * 1000; // don't re-fire same alert within 5 min
+
+async function refreshServerPriceCache() {
+  try {
+    const data = await fetchBinancePrices();
+    for (const [sym, info] of Object.entries(data as Record<string, any>)) {
+      serverPriceCache[sym] = { price: info.price, chg: info.chg ?? 0, updatedAt: Date.now() };
+    }
+  } catch {}
+  // Also copy equity/metal/forex from livePrices
+  for (const [sym, info] of Object.entries(livePrices)) {
+    serverPriceCache[sym] = { price: info.price, chg: info.chg, updatedAt: info.ts };
+  }
+}
+
+async function checkServerAlerts() {
+  try {
+    const now = new Date();
+    const result = await pool.query(
+      `SELECT id, user_id, sym, field, condition, threshold, label FROM user_alerts WHERE triggered = false AND expires_at > $1`,
+      [now]
+    );
+    if (!result.rows.length) return;
+
+    for (const alert of result.rows) {
+      const { id, user_id, sym, field, condition, threshold, label } = alert;
+
+      // Skip if still in cooldown
+      const lastFired = alertLastFiredMs.get(id) || 0;
+      if (Date.now() - lastFired < ALERT_COOLDOWN_MS) continue;
+
+      const cached = serverPriceCache[sym];
+      if (!cached) continue;
+
+      const currentVal = field === "chg" ? cached.chg : cached.price;
+      const thresholdVal = parseFloat(threshold);
+      if (isNaN(thresholdVal)) continue;
+
+      const hit = (condition === ">" && currentVal > thresholdVal)
+                || (condition === "<" && currentVal < thresholdVal);
+      if (!hit) continue;
+
+      alertLastFiredMs.set(id, Date.now());
+
+      // Mark triggered in DB
+      await pool.query(`UPDATE user_alerts SET triggered = true WHERE id = $1`, [id]);
+
+      // Format notification
+      const dir = condition === ">" ? "above" : "below";
+      const displayVal = field === "chg"
+        ? `${currentVal.toFixed(2)}%`
+        : currentVal >= 1 ? `$${currentVal.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : `$${currentVal.toFixed(6)}`;
+      const title = `⚡ ${label || `${sym} Alert`}`;
+      const body  = `${sym} ${field === "chg" ? "change" : "price"} is ${dir} ${field === "chg" ? `${thresholdVal}%` : `$${thresholdVal.toLocaleString()}`} — now ${displayVal}`;
+
+      await sendWebPushToUser(user_id, title, body, `price-alert-${id}`);
+      console.log(`[alerts] 🔔 Fired push for user ${user_id}: ${title} — ${body}`);
+    }
+  } catch (e) {
+    console.error("[alerts] Error checking server alerts:", e);
+  }
+}
 
 function broadcastSSE(data: Record<string, any>) {
   const msg = `data: ${JSON.stringify(data)}\n\n`;
@@ -2636,6 +2702,17 @@ export async function registerRoutes(
   setTimeout(async () => {
     try { const n = await storage.deleteExpiredAlerts(); if (n > 0) console.log(`[cleanup] Deleted ${n} expired alerts`); } catch {}
   }, 30000);
+
+  // ── Server-side alert checking (lock screen push notifications) ──────────────
+  // Refresh prices every 30s, check alerts every 15s
+  setInterval(() => { refreshServerPriceCache().catch(() => {}); }, 30000);
+  setInterval(() => { checkServerAlerts().catch(() => {}); }, 15000);
+  // Initial warm-up: cache prices first, then immediately check alerts
+  setTimeout(async () => {
+    await refreshServerPriceCache().catch(() => {});
+    await checkServerAlerts().catch(() => {});
+    console.log("[alerts] Server-side alert checker started");
+  }, 8000);
 
   return httpServer;
 }
