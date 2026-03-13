@@ -11,6 +11,7 @@ import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
+import OnboardingTour, { shouldShowTour } from "./OnboardingTour";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -747,6 +748,8 @@ function Dashboard({user,setUser}){
   const [showQRScanner,setShowQRScanner]=useState(false);
   const [showUpgrade,setShowUpgrade]=useState(false);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
+  const [showTour,setShowTour]=useState(false);
+  useEffect(()=>{ if(shouldShowTour()) setTimeout(()=>setShowTour(true),800); },[]);
   const [mustChangePassword,setMustChangePassword]=useState(()=>!!(user?.mustChangePassword));
   const [newPwInput,setNewPwInput]=useState("");
   const [newPwInput2,setNewPwInput2]=useState("");
@@ -2413,6 +2416,12 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               </div>
             </div>
           </div>
+          <div style={{...panel,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",gap:12}}>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.08em"}}>New here? Take a quick walkthrough</div>
+            <button data-testid="btn-take-tour" onClick={()=>{try{localStorage.removeItem("clvr_tour_v1_done");}catch{}setShowTour(true);}} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,padding:"7px 16px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",whiteSpace:"nowrap"}}>
+              Take the Tour
+            </button>
+          </div>
           <div style={panel}>
             <div style={ph}><PTitle>Why CLVRQuant?</PTitle></div>
             <div style={{padding:"8px 16px 16px"}}>
@@ -2474,6 +2483,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT · MIKE CLAVER
         </div>
       </div>
+
+      {/* ── ONBOARDING TOUR ── */}
+      {showTour&&<OnboardingTour isPro={isPro} onClose={()=>setShowTour(false)} onNavigateTab={(t)=>{setTab(t);setShowTour(false);}}/>}
 
       {/* ── BOTTOM NAV ── */}
       <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:"rgba(5,7,9,.97)",borderTop:`1px solid ${C.border}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
