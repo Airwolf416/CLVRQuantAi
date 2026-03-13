@@ -1582,83 +1582,148 @@ export async function registerRoutes(
     } catch { return false; }
   }
 
+  // Build ForexFactory day URLs for a range of days around today
+  function getFFDayUrls(): string[] {
+    const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+    const urls: string[] = [];
+    for (let offset = -3; offset <= 14; offset++) {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      if (d.getDay() === 0 || d.getDay() === 6) continue; // skip weekends
+      const mon = months[d.getMonth()];
+      urls.push(`https://www.forexfactory.com/calendar?day=${mon}${d.getDate()}.${d.getFullYear()}`);
+    }
+    return urls;
+  }
+
+
+  // Parse event JSON objects from ForexFactory website HTML using brace counting
+  // The website embeds full event data (including actual values) that the JSON API lacks
+  function parseFFWebsiteEvents(html: string): any[] {
+    const events: any[] = [];
+    const marker = '{"id":';
+    let pos = 0;
+    while ((pos = html.indexOf(marker, pos)) !== -1) {
+      // Walk forward counting braces to find the closing }
+      let depth = 0;
+      let inStr = false;
+      let i = pos;
+      for (; i < Math.min(html.length, pos + 4000); i++) {
+        const c = html[i];
+        if (inStr) {
+          if (c === "\\") { i++; } // skip escaped char
+          else if (c === '"') { inStr = false; }
+        } else {
+          if (c === '"') { inStr = true; }
+          else if (c === '{') { depth++; }
+          else if (c === '}') {
+            depth--;
+            if (depth === 0) { i++; break; }
+          }
+        }
+      }
+      const objStr = html.slice(pos, i);
+      try {
+        const obj = JSON.parse(objStr);
+        // Only include if it has the fields we expect from calendar events
+        if (obj.ebaseId !== undefined && obj.dateline && obj.currency && obj.impactName) {
+          events.push(obj);
+        }
+      } catch {}
+      pos = pos + 1;
+    }
+    return events;
+  }
+
   async function fetchLiveCalendar(): Promise<any[]> {
-    // Skip if currently rate-limited by ForexFactory
+    // Skip if currently rate-limited
     if (Date.now() < ffRateLimitUntil) {
       console.log(`[macro] FF rate-limited for ${Math.round((ffRateLimitUntil - Date.now()) / 1000)}s more`);
       return [];
     }
+    const RELEVANT_CURRENCIES = new Set(["USD","EUR","GBP","JPY","CAD","AUD","CHF","NZD"]);
+    const allRaw: any[] = [];
+
+    const seenEventIds = new Set<number>();
+    const dayUrls = getFFDayUrls();
+    let rateLimited = false;
+
     try {
-      // Fetch this week + next week for broader coverage
-      const urls = [
-        "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
-        "https://nfs.faireconomy.media/ff_calendar_nextweek.json",
-      ];
-      let allData: any[] = [];
-      for (const url of urls) {
-        try {
-          const res = await fetch(url, {
-            headers: { "User-Agent": "Mozilla/5.0 (compatible; CLVRQuant/2.0)" },
-            signal: AbortSignal.timeout(8000),
-          });
+      // Fetch all day pages in parallel (3 at a time) to get actual values for each day
+      const BATCH_SIZE = 3;
+      for (let b = 0; b < dayUrls.length && !rateLimited; b += BATCH_SIZE) {
+        const batch = dayUrls.slice(b, b + BATCH_SIZE);
+        const results = await Promise.allSettled(batch.map(url =>
+          fetch(url, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+            signal: AbortSignal.timeout(12000),
+          }).then(async res => ({ url, res, html: res.ok ? await res.text() : null }))
+        ));
+
+        for (const result of results) {
+          if (result.status !== "fulfilled") continue;
+          const { url, res, html } = result.value;
           if (res.status === 429) {
             const retryAfter = parseInt(res.headers.get("retry-after") || "300") * 1000;
             ffRateLimitUntil = Date.now() + retryAfter;
-            console.log(`[macro] FF 429 — backing off ${Math.round(retryAfter / 1000)}s`);
-            break; // don't try next week if we're rate-limited
+            console.log(`[macro] FF website 429 — backing off ${Math.round(retryAfter / 1000)}s`);
+            rateLimited = true; break;
           }
-          if (!res.ok) continue;
-          const ct = res.headers.get("content-type") || "";
-          if (!ct.includes("json")) continue;
-          const text = await res.text();
-          let parsed: any;
-          try { parsed = JSON.parse(text); } catch { continue; }
-          if (Array.isArray(parsed)) allData = allData.concat(parsed);
-        } catch {}
+          if (!html) { console.log(`[macro] FF ${res.status} for ${url}`); continue; }
+          const parsed = parseFFWebsiteEvents(html);
+          let added = 0;
+          for (const obj of parsed) {
+            if (!RELEVANT_CURRENCIES.has(obj.currency)) continue;
+            if (obj.name === "Bank Holiday") continue;
+            if (seenEventIds.has(obj.id)) continue; // dedup across pages
+            seenEventIds.add(obj.id);
+            allRaw.push(obj);
+            added++;
+          }
+          console.log(`[macro] FF ${url.slice(-15)}: ${parsed.length} parsed, ${added} new`);
+        }
       }
-      if (!allData.length) return [];
+    } catch {}
 
-      const relevant = allData.filter((e: any) =>
-        (e.impact === "High" || e.impact === "Medium" || e.impact === "Low") &&
-        ["USD","EUR","GBP","JPY","CAD","AUD","CHF","NZD"].includes(e.country) &&
-        e.title !== "Bank Holiday"
-      );
+    if (!allRaw.length) return [];
 
-      return relevant.map((e: any, i: number) => {
-        const dateStr = e.date ? e.date.split("T")[0] : "";
-        const timeET = e.date ? new Date(e.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" }) : "00:00";
-        const actual = (e.actual !== undefined && e.actual !== null && e.actual !== "") ? String(e.actual) : null;
-        const forecast = (e.forecast !== undefined && e.forecast !== null && e.forecast !== "") ? String(e.forecast) : "—";
-        const previous = (e.previous !== undefined && e.previous !== null && e.previous !== "") ? String(e.previous) : "—";
-        const released = actual !== null;
-        const isPast = computeIsPast(dateStr, timeET);
-        const cc = COUNTRY_TO_CODE[e.country] || e.country?.slice(0,2).toUpperCase() || "US";
-        return {
-          id: 10000 + i,
-          bank: mapCountryToBank(e.country, e.title),
-          flag: countryFlag(e.country),
-          name: e.title,
-          date: dateStr,
-          time: timeET + " ET",
-          timeET,
-          country: cc,
-          region: COUNTRY_TO_REGION[e.country] || e.country || cc,
-          current: previous,
-          forecast,
-          previous,
-          actual,
-          unit: "",
-          released,
-          isPast, // true if scheduled release time has passed (even if no actual value yet)
-          impact: e.impact === "High" ? "HIGH" : e.impact === "Medium" ? "MED" : "LOW",
-          desc: `${e.title}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : isPast ? " Data not yet available." : " Pending release."}`,
-          currency: e.country,
-          live: true,
-        };
-      });
-    } catch {
-      return [];
-    }
+    return allRaw.map((e: any, i: number) => {
+      const dt = new Date(e.dateline * 1000);
+      const dateStr = dt.toISOString().slice(0, 10);
+      const timeET = dt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" });
+      const actual = e.actual && e.actual !== "" ? String(e.actual) : null;
+      const forecast = e.forecast && e.forecast !== "" ? String(e.forecast) : "—";
+      const previous = e.previous && e.previous !== "" ? String(e.previous) : "—";
+      const released = actual !== null;
+      const isPast = computeIsPast(dateStr, timeET);
+      const cc = COUNTRY_TO_CODE[e.currency] || e.currency?.slice(0, 2) || "US";
+      return {
+        id: 10000 + i,
+        bank: mapCountryToBank(e.currency, e.name),
+        flag: countryFlag(e.currency),
+        name: e.name,
+        date: dateStr,
+        time: timeET + " ET",
+        timeET,
+        country: cc,
+        region: COUNTRY_TO_REGION[e.currency] || cc,
+        current: previous,
+        forecast,
+        previous,
+        actual,
+        unit: "",
+        released,
+        isPast,
+        impact: e.impactName === "high" ? "HIGH" : e.impactName === "medium" ? "MED" : "LOW",
+        desc: `${e.name}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : isPast ? " Data not yet available." : " Pending release."}`,
+        currency: e.currency,
+        live: true,
+      };
+    });
   }
 
   function mapCountryToBank(country: string, title: string): string {
@@ -1747,6 +1812,7 @@ export async function registerRoutes(
       }).map(e => ({ ...e, isPast: computeIsPast(e.date, (e.time || "08:30 ET").replace(" ET","").trim()) })));
     }
   });
+
 
   app.post("/api/subscribe", async (req, res) => {
     const { email, name } = req.body;
