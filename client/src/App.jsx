@@ -15,8 +15,8 @@ import QRScanner from "./QRScanner";
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
 function waSupported() { return !!(window.PublicKeyCredential && navigator.credentials?.create); }
-function getStoredWACred() { try { return JSON.parse(localStorage.getItem(WA_STORE_KEY) || "null"); } catch { return null; } }
-function storeWACred(credentialId, userId) { try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, registeredAt: Date.now() })); } catch {} }
+function getStoredWACred() { try { const c = JSON.parse(localStorage.getItem(WA_STORE_KEY) || "null"); return (c && c.v >= 2) ? c : null; } catch { return null; } }
+function storeWACred(credentialId, userId) { try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, platform: true, v: 2, registeredAt: Date.now() })); } catch {} }
 function uint8ToB64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 
 // ─── CLVRQuant Theme ──────────────────────────────────────
@@ -1073,7 +1073,11 @@ function Dashboard({user,setUser}){
         rp:{name:"CLVRQuant",id:window.location.hostname},
         user:{id:userId,name:user.email||user.username||"trader",displayName:user.name||"Trader"},
         pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
-        authenticatorSelection:{userVerification:"preferred",residentKey:"discouraged"},
+        authenticatorSelection:{
+          authenticatorAttachment:"platform",
+          userVerification:"required",
+          residentKey:"preferred",
+        },
         timeout:60000,
         attestation:"none",
       }});
