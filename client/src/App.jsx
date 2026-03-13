@@ -1525,19 +1525,21 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       const perm=await Notification.requestPermission();
       setNotifPerm(perm);
       if(perm==="granted"){
-        // Subscribe to web push for locked-screen notifications
         try{
           const swReg=await navigator.serviceWorker.ready;
           const keyRes=await fetch("/api/push/public-key");
           const{publicKey}=await keyRes.json();
-          const sub=await swReg.pushManager.subscribe({
-            userVisibleOnly:true,
-            applicationServerKey:publicKey,
-          });
+          // Convert base64url → Uint8Array for full iOS Safari compatibility
+          const b64=publicKey.replace(/-/g,"+").replace(/_/g,"/");
+          const raw=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+          // Unsubscribe any stale subscription first (avoids iOS endpoint mismatch)
+          const existing=await swReg.pushManager.getSubscription();
+          if(existing) await existing.unsubscribe().catch(()=>{});
+          const sub=await swReg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:raw});
           await fetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
           setToast("🔔 Push notifications enabled — alerts will appear on your lock screen");
         }catch(e){
-          setToast("Alerts enabled (in-app)");
+          setToast("Alerts enabled (in-app only)");
         }
         return;
       }
