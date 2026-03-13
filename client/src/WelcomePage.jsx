@@ -12,7 +12,12 @@ function getStoredCredential() {
 }
 
 function storeCredential(credentialId, userId) {
-  try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, registeredAt: Date.now() })); } catch {}
+  try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, platform: true, v: 2, registeredAt: Date.now() })); } catch {}
+}
+
+function isValidCredential(stored) {
+  // v2+ credentials are platform passkeys (Face ID); older ones lack the flag and must be re-registered
+  return stored && stored.credentialId && stored.v >= 2;
 }
 
 function clearStoredCredential() {
@@ -28,8 +33,8 @@ function b64ToUint8(b64) {
   return new Uint8Array([...bin].map(c => c.charCodeAt(0)));
 }
 
-function uint8ToB64(buf) {
-  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+function uint8ToB64(arr) {
+  return btoa(String.fromCharCode(...arr)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide financial advice, investment recommendations, or trading signals. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.`;
@@ -81,7 +86,16 @@ export default function WelcomePage({ onEnter }) {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [waLoading, setWaLoading] = useState(false);
   // Detect biometric synchronously so we can show locked screen immediately
-  const [hasBiometric] = useState(() => !!(waSupported() && getStoredCredential()));
+  // Only v2 (platform passkey) credentials are valid — auto-clear legacy cross-platform ones
+  const [hasBiometric] = useState(() => {
+    if (!waSupported()) return false;
+    const stored = getStoredCredential();
+    if (!isValidCredential(stored)) {
+      if (stored) clearStoredCredential(); // clear old/invalid credential
+      return false;
+    }
+    return true;
+  });
   const [faceIdCancelled, setFaceIdCancelled] = useState(false);
   const [faceIdTriggered, setFaceIdTriggered] = useState(false);
 
@@ -115,10 +129,12 @@ export default function WelcomePage({ onEnter }) {
         },
       });
       if (!assertion) throw new Error("cancelled");
+      // Use the credential ID from the assertion itself (more reliable than localStorage alone)
+      const assertedCredId = uint8ToB64(new Uint8Array(assertion.rawId));
       const res = await fetch("/api/auth/webauthn/authenticate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentialId: stored.credentialId }),
+        body: JSON.stringify({ credentialId: assertedCredId }),
       });
       const data = await res.json();
       if (!res.ok) {
