@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import jsQR from "jsqr";
 
 const C = {
   bg: "#050709", panel: "#0c1220", border: "#141e35",
@@ -63,18 +64,8 @@ export default function QRScanner({ onScan, onClose }) {
 
     let localStopped = false;
 
-    const loadJsQR = () => new Promise((resolve) => {
-      if (window.jsQR) { resolve(true); return; }
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
-      s.onload = () => resolve(true);
-      s.onerror = () => resolve(false);
-      document.head.appendChild(s);
-    });
-
     const canvasScan = async () => {
-      const ok = await loadJsQR();
-      if (!ok || localStopped) return;
+      if (localStopped) return;
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (!canvas || !ctx) return;
@@ -87,7 +78,7 @@ export default function QRScanner({ onScan, onClose }) {
           canvas.height = vid.videoHeight;
           ctx.drawImage(vid, 0, 0);
           const img  = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = window.jsQR?.(img.data, img.width, img.height);
+          const code = jsQR(img.data, img.width, img.height);
           if (code?.data) { handleDetected(code.data); return; }
         }
         scanRef.current = requestAnimationFrame(loop);

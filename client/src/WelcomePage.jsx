@@ -99,6 +99,7 @@ export default function WelcomePage({ onEnter }) {
   const [faceIdCancelled, setFaceIdCancelled] = useState(false);
   const [faceIdTriggered, setFaceIdTriggered] = useState(false);
   const [bypassBiometric, setBypassBiometric] = useState(false);
+  const [cancelledShowPw, setCancelledShowPw] = useState(false);
   const [verifyState, setVerifyState] = useState(null); // null | "loading" | "success" | "error"
   const [verifiedEmail, setVerifiedEmail] = useState("");
   const [verifiedName, setVerifiedName] = useState("");
@@ -410,28 +411,92 @@ export default function WelcomePage({ onEnter }) {
     );
   }
 
-  // ── Face ID cancelled fallback — retry or use password ──
+  // ── Face ID cancelled fallback — retry or inline sign-in ──
   if (!bypassBiometric && hasBiometric && faceIdCancelled) {
     return (
-      <div style={{ fontFamily: SANS, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
-        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900&family=IBM+Plex+Mono:wght@400;500&display=swap');`}</style>
-        <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translateX(-50%)", width: 400, height: 400, background: "radial-gradient(circle,rgba(201,168,76,.06) 0%,transparent 70%)", pointerEvents: "none" }} />
-        <div style={{ fontFamily: "'Playfair Display',Georgia,serif", fontWeight: 900, fontSize: 36, color: C.gold2, letterSpacing: "0.04em", marginBottom: 6 }}>CLVRQuant</div>
-        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9, color: C.gold, letterSpacing: "0.35em", marginBottom: 56, fontWeight: 500 }}>AI · MARKET INTELLIGENCE</div>
+      <div style={{ fontFamily: SANS, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 24px 48px", position: "relative", overflow: "hidden" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900&family=IBM+Plex+Mono:wght@400;500&family=Barlow:wght@400;500;600&display=swap');
+        *{-webkit-tap-highlight-color:transparent;box-sizing:border-box;}button{cursor:pointer;-webkit-appearance:none;touch-action:manipulation;}`}</style>
+        <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 400, height: 400, background: "radial-gradient(circle,rgba(201,168,76,.06) 0%,transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ fontFamily: "'Playfair Display',Georgia,serif", fontWeight: 900, fontSize: 32, color: C.gold2, letterSpacing: "0.04em", marginBottom: 4 }}>CLVRQuant</div>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9, color: C.gold, letterSpacing: "0.35em", marginBottom: 36, fontWeight: 500 }}>AI · MARKET INTELLIGENCE</div>
         {/* Lock icon */}
-        <div style={{ width: 72, height: 72, borderRadius: "50%", border: `2px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 24, background: "rgba(255,255,255,.02)" }}>
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="11" rx="2" stroke={C.muted} strokeWidth="1.8"/><path d="M7 11V7a5 5 0 0110 0v4" stroke={C.muted} strokeWidth="1.8" strokeLinecap="round"/></svg>
-        </div>
-        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: C.muted2, marginBottom: 6 }}>Verification cancelled</div>
-        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, marginBottom: 40 }}>Try again or use your password</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%", maxWidth: 320 }}>
-          <button data-testid="btn-faceid-retry" onClick={handleBiometricSignIn} disabled={waLoading} style={{ width: "100%", background: "rgba(201,168,76,.1)", border: `1px solid rgba(201,168,76,.35)`, borderRadius: 6, padding: "14px", cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: C.gold2, letterSpacing: "0.06em", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-            <svg width="18" height="18" viewBox="0 0 36 36" fill="none"><path d="M13 6C10.2 6 8 8.2 8 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M23 6C25.8 6 28 8.2 28 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M8 23v2c0 2.8 2.2 5 5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M28 23v2c0 2.8-2.2 5-5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><circle cx="14" cy="16" r="1.5" fill={C.gold}/><circle cx="22" cy="16" r="1.5" fill={C.gold}/><path d="M14 22c0 0 1.2 2 4 2s4-2 4-2" stroke={C.gold} strokeWidth="1.8" strokeLinecap="round"/></svg>
-            {waLoading ? "Authenticating..." : "Use Face ID"}
-          </button>
-          <button data-testid="btn-use-password" onClick={() => { setBypassBiometric(true); setMode("signin"); }} style={{ width: "100%", background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "14px", cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: C.muted2, letterSpacing: "0.06em" }}>
-            Use Password Instead
-          </button>
+        {!cancelledShowPw && (
+          <div style={{ width: 68, height: 68, borderRadius: "50%", border: `2px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, background: "rgba(255,255,255,.02)" }}>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="11" rx="2" stroke={C.muted} strokeWidth="1.8"/><path d="M7 11V7a5 5 0 0110 0v4" stroke={C.muted} strokeWidth="1.8" strokeLinecap="round"/></svg>
+          </div>
+        )}
+        {!cancelledShowPw && (
+          <>
+            <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: C.muted2, marginBottom: 4 }}>Verification cancelled</div>
+            <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, marginBottom: 32 }}>Try again or sign in with your password</div>
+          </>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", maxWidth: 340, position: "relative", zIndex: 10 }}>
+          {!cancelledShowPw && (
+            <button
+              data-testid="btn-faceid-retry"
+              onClick={handleBiometricSignIn}
+              disabled={waLoading}
+              style={{ width: "100%", background: "rgba(201,168,76,.1)", border: `1px solid rgba(201,168,76,.35)`, borderRadius: 8, padding: "14px", fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: C.gold2, letterSpacing: "0.06em", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, touchAction: "manipulation" }}>
+              <svg width="18" height="18" viewBox="0 0 36 36" fill="none"><path d="M13 6C10.2 6 8 8.2 8 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M23 6C25.8 6 28 8.2 28 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M8 23v2c0 2.8 2.2 5 5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M28 23v2c0 2.8-2.2 5-5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><circle cx="14" cy="16" r="1.5" fill={C.gold}/><circle cx="22" cy="16" r="1.5" fill={C.gold}/><path d="M14 22c0 0 1.2 2 4 2s4-2 4-2" stroke={C.gold} strokeWidth="1.8" strokeLinecap="round"/></svg>
+              {waLoading ? "Authenticating..." : "Use Face ID"}
+            </button>
+          )}
+          {!cancelledShowPw ? (
+            <button
+              data-testid="btn-use-password"
+              onClick={() => setCancelledShowPw(true)}
+              style={{ width: "100%", background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: C.muted2, letterSpacing: "0.06em", touchAction: "manipulation" }}>
+              Use Password Instead
+            </button>
+          ) : (
+            <div style={{ background: C.panel, border: `1px solid rgba(201,168,76,.2)`, borderRadius: 10, padding: "20px 18px" }}>
+              <div style={{ position: "relative", height: 1, background: `linear-gradient(90deg,transparent,${C.gold},transparent)`, marginBottom: 18 }} />
+              <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted2, letterSpacing: "0.15em", textAlign: "center", marginBottom: 18 }}>SIGN IN</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <label style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9, color: C.muted, marginBottom: 4, display: "block", letterSpacing: "0.12em" }}>EMAIL</label>
+                  <input
+                    data-testid="input-cancelled-email"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                    value={form.email}
+                    onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                    placeholder="you@email.com"
+                    style={{ width: "100%", background: "#080d18", border: `1px solid ${C.border}`, borderRadius: 6, padding: "11px 12px", color: C.white, fontSize: 13, fontFamily: SANS, outline: "none", WebkitAppearance: "none" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9, color: C.muted, marginBottom: 4, display: "block", letterSpacing: "0.12em" }}>PASSWORD</label>
+                  <input
+                    data-testid="input-cancelled-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={form.password}
+                    onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                    placeholder="Your password"
+                    onKeyDown={e => e.key === "Enter" && handleSignIn()}
+                    style={{ width: "100%", background: "#080d18", border: `1px solid ${C.border}`, borderRadius: 6, padding: "11px 12px", color: C.white, fontSize: 13, fontFamily: SANS, outline: "none", WebkitAppearance: "none" }}
+                  />
+                </div>
+                {error && <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.red, padding: "7px 10px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
+                <button
+                  data-testid="btn-cancelled-signin"
+                  onClick={handleSignIn}
+                  disabled={loading}
+                  style={{ width: "100%", background: `linear-gradient(135deg,${C.gold},${C.gold2})`, border: "none", borderRadius: 8, padding: "13px", fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, fontWeight: 600, color: "#0a0a0a", letterSpacing: "0.08em", opacity: loading ? 0.6 : 1, touchAction: "manipulation" }}>
+                  {loading ? "Signing In..." : "Sign In →"}
+                </button>
+                <button
+                  onClick={() => { setCancelledShowPw(false); setError(""); }}
+                  style={{ background: "none", border: "none", fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, textAlign: "center", padding: "4px 0", touchAction: "manipulation" }}>
+                  ← Back to Face ID
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
