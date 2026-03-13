@@ -80,18 +80,15 @@ export default function WelcomePage({ onEnter }) {
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [waLoading, setWaLoading] = useState(false);
-  const [hasBiometric, setHasBiometric] = useState(false);
-  const [autoFaceIdDone, setAutoFaceIdDone] = useState(false);
+  // Detect biometric synchronously so we can show locked screen immediately
+  const [hasBiometric] = useState(() => !!(waSupported() && getStoredCredential()));
+  const [faceIdCancelled, setFaceIdCancelled] = useState(false);
+  const [faceIdTriggered, setFaceIdTriggered] = useState(false);
 
   useEffect(() => {
-    const hasCred = !!(waSupported() && getStoredCredential());
-    setHasBiometric(hasCred);
     const params = new URLSearchParams(window.location.search);
     const token = params.get("reset");
-    if (token) {
-      setResetToken(token);
-      setMode("reset-password");
-    }
+    if (token) { setResetToken(token); setMode("reset-password"); }
     fetch("/api/auth/me").then(r => r.json()).then(data => {
       if (data.user) onEnter(data.user);
       else setCheckingSession(false);
@@ -99,14 +96,11 @@ export default function WelcomePage({ onEnter }) {
   }, []);
 
   // Face ID / WebAuthn sign-in
-  // isAuto=true: silently fall back on failure (no error shown, user can retry manually)
-  const handleBiometricSignIn = useCallback(async (isAuto = false) => {
+  const handleBiometricSignIn = useCallback(async () => {
     const stored = getStoredCredential();
-    if (!stored?.credentialId) {
-      if (!isAuto) setError("No biometric credential found. Please sign in with your password first.");
-      return;
-    }
+    if (!stored?.credentialId) return;
     setWaLoading(true);
+    setFaceIdCancelled(false);
     setError("");
     try {
       const challenge = new Uint8Array(32);
@@ -116,11 +110,11 @@ export default function WelcomePage({ onEnter }) {
           challenge,
           rpId: window.location.hostname,
           allowCredentials: [{ type: "public-key", id: b64ToUint8(stored.credentialId) }],
-          userVerification: "preferred",
+          userVerification: "required",
           timeout: 60000,
         },
       });
-      if (!assertion) throw new Error("Biometric verification cancelled");
+      if (!assertion) throw new Error("cancelled");
       const res = await fetch("/api/auth/webauthn/authenticate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -129,30 +123,23 @@ export default function WelcomePage({ onEnter }) {
       const data = await res.json();
       if (!res.ok) {
         clearStoredCredential();
-        setHasBiometric(false);
-        throw new Error(data.error || "Biometric auth failed");
+        throw new Error(data.error || "Auth failed");
       }
       setWaLoading(false);
       if (onEnter) onEnter(data.user);
     } catch (e) {
       setWaLoading(false);
-      if (isAuto) return; // silently fall back to welcome screen with Face ID button
-      const msg = e?.message || "";
-      if (msg.includes("cancelled") || msg.includes("NotAllowedError") || msg.toLowerCase().includes("user")) {
-        setError("Biometric verification cancelled.");
-      } else {
-        setError(msg || "Biometric sign-in failed. Please use your password.");
-      }
+      setFaceIdCancelled(true);
     }
   }, [onEnter]);
 
-  // Auto-trigger Face ID when returning user has it enabled and is not signed in
+  // Auto-trigger Face ID the moment we confirm the session is not active
   useEffect(() => {
-    if (!checkingSession && hasBiometric && !autoFaceIdDone) {
-      setAutoFaceIdDone(true);
-      setTimeout(() => handleBiometricSignIn(true), 400);
+    if (!checkingSession && hasBiometric && !faceIdTriggered) {
+      setFaceIdTriggered(true);
+      handleBiometricSignIn();
     }
-  }, [checkingSession, hasBiometric, autoFaceIdDone, handleBiometricSignIn]);
+  }, [checkingSession, hasBiometric, faceIdTriggered, handleBiometricSignIn]);
 
   const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setError(""); setSuccess(""); };
 
@@ -244,6 +231,70 @@ export default function WelcomePage({ onEnter }) {
     }
   };
 
+  // ── Biometric locked screen (shown when Face ID is registered and session needs re-auth) ──
+  if (hasBiometric && (checkingSession || waLoading || (!faceIdCancelled && faceIdTriggered))) {
+    return (
+      <div style={{ fontFamily: SANS, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900;1,700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+        @keyframes faceIdPulse{0%,100%{opacity:.5;transform:scale(1)}50%{opacity:1;transform:scale(1.06)}}
+        @keyframes shimmer{0%{opacity:.3}50%{opacity:.7}100%{opacity:.3}}`}</style>
+        {/* Background glow */}
+        <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translateX(-50%)", width: 400, height: 400, background: "radial-gradient(circle,rgba(201,168,76,.08) 0%,transparent 70%)", pointerEvents: "none" }} />
+        {/* Logo */}
+        <div style={{ fontFamily: "'Playfair Display',Georgia,serif", fontWeight: 900, fontSize: 36, color: C.gold2, letterSpacing: "0.04em", marginBottom: 6, textShadow: "0 0 30px rgba(201,168,76,.25)" }}>CLVRQuant</div>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9, color: C.gold, letterSpacing: "0.35em", marginBottom: 56, fontWeight: 500 }}>AI · MARKET INTELLIGENCE</div>
+        {/* Face ID icon */}
+        <div style={{ width: 80, height: 80, borderRadius: "50%", border: `2px solid ${waLoading ? C.gold : C.border}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 28, animation: waLoading ? "faceIdPulse 1.6s ease-in-out infinite" : "none", transition: "border-color .4s", background: "rgba(201,168,76,.04)" }}>
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <path d="M13 6C10.2 6 8 8.2 8 11v2" stroke={waLoading ? C.gold : C.muted} strokeWidth="2" strokeLinecap="round"/>
+            <path d="M23 6C25.8 6 28 8.2 28 11v2" stroke={waLoading ? C.gold : C.muted} strokeWidth="2" strokeLinecap="round"/>
+            <path d="M8 23v2c0 2.8 2.2 5 5 5" stroke={waLoading ? C.gold : C.muted} strokeWidth="2" strokeLinecap="round"/>
+            <path d="M28 23v2c0 2.8-2.2 5-5 5" stroke={waLoading ? C.gold : C.muted} strokeWidth="2" strokeLinecap="round"/>
+            <circle cx="14" cy="16" r="1.5" fill={waLoading ? C.gold : C.muted}/>
+            <circle cx="22" cy="16" r="1.5" fill={waLoading ? C.gold : C.muted}/>
+            <path d="M14 22c0 0 1.2 2 4 2s4-2 4-2" stroke={waLoading ? C.gold : C.muted} strokeWidth="1.8" strokeLinecap="round"/>
+            <path d="M18 13v3" stroke={waLoading ? C.gold2 : C.muted} strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </div>
+        {/* Status text */}
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: waLoading ? C.gold2 : C.muted2, letterSpacing: "0.06em", marginBottom: 8, animation: waLoading ? "shimmer 1.6s ease-in-out infinite" : "none" }}>
+          {checkingSession ? "Checking session..." : waLoading ? "Authenticating..." : "Face ID ready"}
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, letterSpacing: "0.1em" }}>
+          {waLoading ? "Look at your device to continue" : checkingSession ? "" : "Waiting for Face ID..."}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Face ID cancelled fallback — retry or use password ──
+  if (hasBiometric && faceIdCancelled) {
+    return (
+      <div style={{ fontFamily: SANS, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900&family=IBM+Plex+Mono:wght@400;500&display=swap');`}</style>
+        <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translateX(-50%)", width: 400, height: 400, background: "radial-gradient(circle,rgba(201,168,76,.06) 0%,transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ fontFamily: "'Playfair Display',Georgia,serif", fontWeight: 900, fontSize: 36, color: C.gold2, letterSpacing: "0.04em", marginBottom: 6 }}>CLVRQuant</div>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9, color: C.gold, letterSpacing: "0.35em", marginBottom: 56, fontWeight: 500 }}>AI · MARKET INTELLIGENCE</div>
+        {/* Lock icon */}
+        <div style={{ width: 72, height: 72, borderRadius: "50%", border: `2px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 24, background: "rgba(255,255,255,.02)" }}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="11" rx="2" stroke={C.muted} strokeWidth="1.8"/><path d="M7 11V7a5 5 0 0110 0v4" stroke={C.muted} strokeWidth="1.8" strokeLinecap="round"/></svg>
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: C.muted2, marginBottom: 6 }}>Verification cancelled</div>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, marginBottom: 40 }}>Try again or use your password</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%", maxWidth: 320 }}>
+          <button data-testid="btn-faceid-retry" onClick={handleBiometricSignIn} disabled={waLoading} style={{ width: "100%", background: "rgba(201,168,76,.1)", border: `1px solid rgba(201,168,76,.35)`, borderRadius: 6, padding: "14px", cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, color: C.gold2, letterSpacing: "0.06em", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+            <svg width="18" height="18" viewBox="0 0 36 36" fill="none"><path d="M13 6C10.2 6 8 8.2 8 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M23 6C25.8 6 28 8.2 28 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M8 23v2c0 2.8 2.2 5 5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M28 23v2c0 2.8-2.2 5-5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><circle cx="14" cy="16" r="1.5" fill={C.gold}/><circle cx="22" cy="16" r="1.5" fill={C.gold}/><path d="M14 22c0 0 1.2 2 4 2s4-2 4-2" stroke={C.gold} strokeWidth="1.8" strokeLinecap="round"/></svg>
+            {waLoading ? "Authenticating..." : "Use Face ID"}
+          </button>
+          <button data-testid="btn-use-password" onClick={() => setMode("signin")} style={{ width: "100%", background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "14px", cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: C.muted2, letterSpacing: "0.06em" }}>
+            Use Password Instead
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Session check loading (no biometric) ──
   if (checkingSession) {
     return (
       <div style={{ fontFamily: SANS, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
