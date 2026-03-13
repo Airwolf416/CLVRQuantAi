@@ -35,6 +35,9 @@ export interface IStorage {
   getWebAuthnCredentialsByUser(userId: string): Promise<WebAuthnCredential[]>;
   getUserByCredentialId(credentialId: string): Promise<User | undefined>;
   deleteWebAuthnCredential(credentialId: string, userId: string): Promise<void>;
+  setEmailVerificationToken(userId: string, token: string): Promise<void>;
+  getUserByEmailVerificationToken(token: string): Promise<User | undefined>;
+  markEmailVerified(userId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -193,6 +196,19 @@ export class DatabaseStorage implements IStorage {
     await db.delete(webauthnCredentials).where(
       and(eq(webauthnCredentials.credentialId, credentialId), eq(webauthnCredentials.userId, userId))
     );
+  }
+
+  async setEmailVerificationToken(userId: string, token: string): Promise<void> {
+    await db.update(users).set({ emailVerificationToken: token }).where(eq(users.id, userId));
+  }
+
+  async getUserByEmailVerificationToken(token: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.emailVerificationToken, token));
+    return user;
+  }
+
+  async markEmailVerified(userId: string): Promise<void> {
+    await db.update(users).set({ emailVerified: true, emailVerificationToken: null }).where(eq(users.id, userId));
   }
 }
 

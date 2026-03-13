@@ -99,11 +99,37 @@ export default function WelcomePage({ onEnter }) {
   const [faceIdCancelled, setFaceIdCancelled] = useState(false);
   const [faceIdTriggered, setFaceIdTriggered] = useState(false);
   const [bypassBiometric, setBypassBiometric] = useState(false);
+  const [verifyState, setVerifyState] = useState(null); // null | "loading" | "success" | "error"
+  const [verifiedEmail, setVerifiedEmail] = useState("");
+  const [verifiedName, setVerifiedName] = useState("");
+  const [verifyError, setVerifyError] = useState("");
+  const [verifyPassword, setVerifyPassword] = useState("");
+  const [verifySignInLoading, setVerifySignInLoading] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const token = params.get("reset");
-    if (token) { setResetToken(token); setMode("reset-password"); }
+    const resetTok = params.get("reset");
+    const verifyTok = params.get("verify");
+    if (resetTok) { setResetToken(resetTok); setMode("reset-password"); }
+    if (verifyTok) {
+      setVerifyState("loading");
+      setCheckingSession(false);
+      fetch(`/api/auth/verify-email?token=${encodeURIComponent(verifyTok)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.ok) {
+            setVerifiedEmail(data.email || "");
+            setVerifiedName(data.name || "");
+            setVerifyState("success");
+            window.history.replaceState({}, "", window.location.pathname);
+          } else {
+            setVerifyError(data.error || "Invalid or expired verification link.");
+            setVerifyState("error");
+          }
+        })
+        .catch(() => { setVerifyError("Network error. Please try again."); setVerifyState("error"); });
+      return;
+    }
     fetch("/api/auth/me").then(r => r.json()).then(data => {
       if (data.user) onEnter(data.user);
       else setCheckingSession(false);
@@ -247,6 +273,106 @@ export default function WelcomePage({ onEnter }) {
       setLoading(false);
     }
   };
+
+  // ── Email verification screens ──────────────────────────────────────────
+  if (verifyState === "loading") {
+    return (
+      <div style={{ background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 28, color: C.gold2, marginBottom: 8 }}>CLVRQuant</div>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.2em" }}>VERIFYING EMAIL...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (verifyState === "error") {
+    return (
+      <div style={{ background: C.bg, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900&family=IBM+Plex+Mono:wght@400;500&display=swap');`}</style>
+        <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 28, color: C.gold2, marginBottom: 4 }}>CLVRQuant</div>
+        <div style={{ fontFamily: MONO, fontSize: 9, color: C.gold, letterSpacing: "0.3em", marginBottom: 40 }}>AI · MARKET INTELLIGENCE</div>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+        <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 22, color: "#f87171", marginBottom: 8 }}>Link Invalid</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted2, marginBottom: 32, textAlign: "center", maxWidth: 320, lineHeight: 1.7 }}>{verifyError}</div>
+        <button onClick={() => { setVerifyState(null); setMode("signin"); }} style={{ background: "rgba(201,168,76,.1)", border: `1px solid rgba(201,168,76,.35)`, borderRadius: 6, padding: "12px 28px", fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 14, color: C.gold2, cursor: "pointer" }}>
+          Sign In Instead
+        </button>
+      </div>
+    );
+  }
+
+  if (verifyState === "success") {
+    const handleVerifySignIn = async () => {
+      if (!verifyPassword) return setError("Please enter your password.");
+      setVerifySignInLoading(true);
+      setError("");
+      try {
+        const res = await fetch("/api/auth/signin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: verifiedEmail, password: verifyPassword }),
+          credentials: "include",
+        });
+        const data = await res.json();
+        if (!res.ok) { setError(data.error || "Incorrect password."); setVerifySignInLoading(false); return; }
+        setVerifySignInLoading(false);
+        if (onEnter) onEnter(data.user);
+      } catch { setError("Network error. Please try again."); setVerifySignInLoading(false); }
+    };
+    return (
+      <div style={{ background: C.bg, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900;1,700&family=IBM+Plex+Mono:wght@400;500&family=Barlow:wght@400;600&display=swap');
+          @keyframes checkIn{0%{stroke-dashoffset:60}100%{stroke-dashoffset:0}}
+          @keyframes ringIn{0%{opacity:0;transform:scale(.6)}100%{opacity:1;transform:scale(1)}}
+          @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+        `}</style>
+        <div style={{ position: "absolute", top: "25%", left: "50%", transform: "translateX(-50%)", width: 400, height: 400, background: "radial-gradient(circle,rgba(34,197,94,.06) 0%,transparent 70%)", pointerEvents: "none" }} />
+        <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 28, color: C.gold2, marginBottom: 4 }}>CLVRQuant</div>
+        <div style={{ fontFamily: MONO, fontSize: 9, color: C.gold, letterSpacing: "0.3em", marginBottom: 40 }}>AI · MARKET INTELLIGENCE</div>
+
+        {/* Animated green checkmark */}
+        <div style={{ animation: "ringIn .5s cubic-bezier(.34,1.56,.64,1) both", marginBottom: 20 }}>
+          <svg width="88" height="88" viewBox="0 0 88 88">
+            <circle cx="44" cy="44" r="40" fill="none" stroke="rgba(34,197,94,.15)" strokeWidth="2"/>
+            <circle cx="44" cy="44" r="40" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeDasharray="251" strokeDashoffset="0" style={{ animation: "checkIn .6s ease .3s both", strokeDashoffset: 251 }}/>
+            <polyline points="26,44 38,56 62,32" fill="none" stroke="#22c55e" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="60" style={{ animation: "checkIn .5s ease .6s both", strokeDashoffset: 60 }}/>
+          </svg>
+        </div>
+
+        <div style={{ animation: "fadeUp .4s ease .8s both", textAlign: "center", marginBottom: 28 }}>
+          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 26, color: "#4ade80", marginBottom: 6 }}>Email Verified!</div>
+          <div style={{ fontFamily: SANS, fontSize: 14, color: C.muted2, marginBottom: 4 }}>
+            Welcome, <strong style={{ color: C.white }}>{verifiedName}</strong>
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, letterSpacing: "0.08em" }}>{verifiedEmail}</div>
+        </div>
+
+        {/* Password re-entry to sign in */}
+        <div style={{ animation: "fadeUp .4s ease 1s both", width: "100%", maxWidth: 340 }}>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted2, letterSpacing: "0.12em", marginBottom: 12, textAlign: "center" }}>ENTER YOUR PASSWORD TO CONTINUE</div>
+          <input
+            type="password"
+            placeholder="Your password"
+            value={verifyPassword}
+            onChange={e => { setVerifyPassword(e.target.value); setError(""); }}
+            onKeyDown={e => e.key === "Enter" && handleVerifySignIn()}
+            autoFocus
+            style={{ width: "100%", background: C.inputBg, border: `1px solid ${error ? "#f87171" : C.border}`, borderRadius: 6, padding: "13px 14px", color: C.white, fontSize: 14, fontFamily: SANS, boxSizing: "border-box", outline: "none", marginBottom: 10 }}
+          />
+          {error && <div style={{ fontFamily: MONO, fontSize: 11, color: "#f87171", marginBottom: 10, textAlign: "center" }}>{error}</div>}
+          <button
+            onClick={handleVerifySignIn}
+            disabled={verifySignInLoading}
+            style={{ width: "100%", background: "rgba(34,197,94,.12)", border: "1px solid rgba(34,197,94,.35)", borderRadius: 6, padding: "14px", fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 15, color: "#4ade80", cursor: "pointer" }}
+          >
+            {verifySignInLoading ? "Signing in..." : "Enter Dashboard →"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ── Biometric locked screen (shown when Face ID is registered and session needs re-auth) ──
   if (!bypassBiometric && hasBiometric && (checkingSession || waLoading || (!faceIdCancelled && faceIdTriggered))) {

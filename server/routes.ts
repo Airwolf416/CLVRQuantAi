@@ -2186,6 +2186,8 @@ export async function registerRoutes(
       const crypto = await import("crypto");
       const myRefCode = "CLVR-REF-" + crypto.randomBytes(3).toString("hex").toUpperCase();
       await storage.updateUserReferralCode(user.id, myRefCode);
+      const verifyToken = crypto.randomBytes(24).toString("hex");
+      await storage.setEmailVerificationToken(user.id, verifyToken);
       if (refCode && refCode.startsWith("CLVR-REF-")) {
         const referrer = await storage.getUserByReferralCode(refCode);
         if (referrer) {
@@ -2204,36 +2206,43 @@ export async function registerRoutes(
         console.log(`[signup] Resend fromEmail configured as: "${fromEmail}"`);
         const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
         console.log(`[signup] Sending welcome email to ${email.toLowerCase().trim()} from ${senderAddress}`);
+        const verifyUrl = `https://clvrquantai.com?verify=${verifyToken}`;
         const emailResult = await resend.emails.send({
           from: senderAddress,
           reply_to: "mikeclaver@gmail.com",
           to: email.toLowerCase().trim(),
-          subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
+          subject: "Verify your CLVRQuant account",
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
-            <div style="text-align:center;margin-bottom:24px">
+            <div style="text-align:center;margin-bottom:28px">
               <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
               <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">AI · MARKET INTELLIGENCE</div>
             </div>
-            <div style="border-top:1px solid #141e35;padding-top:20px">
-              <p style="font-size:16px;color:#f0f4ff;margin-bottom:4px">Welcome, <strong>${name.trim()}</strong></p>
-              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant account is live. Here's what you have access to:</p>
+            <div style="border-top:1px solid #141e35;padding-top:24px">
+              <p style="font-size:17px;color:#f0f4ff;margin-bottom:6px">Welcome, <strong>${name.trim()}</strong> 👋</p>
+              <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:28px">One step left — verify your email to activate your account and access your market intelligence terminal.</p>
+
+              <div style="text-align:center;margin:28px 0">
+                <a href="${verifyUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-style:italic;font-weight:700;font-size:16px;padding:16px 40px;border-radius:6px;text-decoration:none;letter-spacing:0.02em">
+                  ✦ Verify My Email
+                </a>
+              </div>
+
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-bottom:32px">Or copy this link into your browser:<br><span style="font-family:monospace;font-size:10px;color:#6b7fa8;word-break:break-all">${verifyUrl}</span></p>
+
               <div style="background:#0c1220;border:1px solid #141e35;border-radius:4px;padding:16px;margin:16px 0">
                 <div style="font-family:monospace;font-size:10px;color:#c9a84c;letter-spacing:0.15em;margin-bottom:10px">YOUR FEATURES</div>
                 ${[
                   "Real-time prices — 32 crypto, 16 equities, 7 commodities, 14 forex",
                   "Live signal detection — QuantBrain AI scoring",
                   "Macro calendar — Central bank decisions & economic events",
-                  "AI Market Analyst — Ask anything, get trade ideas",
-                  "Price alerts — Custom notifications",
+                  "AI Market Analyst — Ask anything, get trade ideas (Pro)",
+                  "Price alerts — Custom push notifications",
                   "Phantom Wallet — Solana integration",
-                  dailyEmail ? "📧 Daily 6AM Brief — Subscribed ✓" : "📧 Daily 6AM Brief — Not subscribed",
-                ].map(f => `<div style="font-size:12px;color:#c8d4ee;padding:4px 0;display:flex;align-items:center;gap:8px"><span style="color:#c9a84c">✦</span> ${f}</div>`).join("")}
+                  dailyEmail ? "📧 Daily 6AM Brief — Subscribed ✓" : "📧 Daily 6AM Brief — Available on Pro",
+                ].map(f => `<div style="font-size:12px;color:#c8d4ee;padding:4px 0"><span style="color:#c9a84c">✦</span> ${f}</div>`).join("")}
               </div>
-              ${dailyEmail ? `<div style="background:rgba(201,168,76,0.06);border:1px solid rgba(201,168,76,0.2);border-radius:4px;padding:12px 16px;margin:12px 0">
-                <div style="font-size:11px;color:#c9a84c;font-weight:700">Daily Brief Enrolled</div>
-                <div style="font-size:11px;color:#6b7fa8;margin-top:4px;line-height:1.6">You'll receive a morning market brief at 6:00 AM ET every weekday with key levels, signals, and AI insights. You can unsubscribe anytime.</div>
-              </div>` : ""}
-              <div style="background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.15);border-radius:4px;padding:12px 16px;margin:16px 0">
+
+              <div style="background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.15);border-radius:4px;padding:12px 16px;margin:20px 0">
                 <div style="font-size:10px;color:#ff8c00;font-weight:700;letter-spacing:0.15em;margin-bottom:4px">IMPORTANT DISCLAIMER</div>
                 <div style="font-size:10px;color:#6b7fa8;line-height:1.7">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss. CLVRQuant and Mike Claver bear no liability for any financial decisions.</div>
               </div>
@@ -2251,7 +2260,7 @@ export async function registerRoutes(
       }
       (req.session as any).userId = user.id;
       req.session.save(() => {
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier } });
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier, emailVerified: false, pendingVerification: true } });
       });
     } catch (e: any) {
       console.error("Signup error:", e.message);
@@ -2279,7 +2288,7 @@ export async function registerRoutes(
       const mustChangePassword = !!(user as any).mustChangePassword;
       (req.session as any).userId = user.id;
       req.session.save(() => {
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier }, mustChangePassword });
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification: !user.emailVerified && !!user.emailVerificationToken }, mustChangePassword });
       });
     } catch (e: any) {
       res.status(500).json({ error: "Sign in failed" });
@@ -2311,7 +2320,8 @@ export async function registerRoutes(
       const user = await storage.getUser(userId);
       if (!user) return res.json({ user: null });
       const tier = user.email === OWNER_EMAIL ? "pro" : user.tier;
-      res.json({ user: { id: user.id, name: user.name, email: user.email, tier } });
+      const pendingVerification = !user.emailVerified && !!user.emailVerificationToken;
+      res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification } });
     } catch {
       res.json({ user: null });
     }
@@ -2320,6 +2330,58 @@ export async function registerRoutes(
   app.post("/api/auth/signout", (req, res) => {
     req.session.destroy(() => {});
     res.json({ ok: true });
+  });
+
+  // ── EMAIL VERIFICATION ──────────────────────────────────────────────────
+  app.get("/api/auth/verify-email", async (req, res) => {
+    const { token } = req.query as { token?: string };
+    if (!token) return res.status(400).json({ error: "Missing token" });
+    try {
+      const user = await storage.getUserByEmailVerificationToken(token);
+      if (!user) return res.status(404).json({ error: "Invalid or expired verification link" });
+      await storage.markEmailVerified(user.id);
+      res.json({ ok: true, email: user.email, name: user.name });
+    } catch (e: any) {
+      console.error("[verify-email]", e.message);
+      res.status(500).json({ error: "Verification failed. Please try again." });
+    }
+  });
+
+  app.post("/api/auth/resend-verification", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (user.emailVerified) return res.json({ ok: true, message: "Email already verified" });
+      const crypto = await import("crypto");
+      const token = crypto.randomBytes(24).toString("hex");
+      await storage.setEmailVerificationToken(userId, token);
+      const verifyUrl = `https://clvrquantai.com?verify=${token}`;
+      const { client: resend } = await getUncachableResendClient();
+      await resend.emails.send({
+        from: "CLVRQuant <noreply@clvrquantai.com>",
+        reply_to: "mikeclaver@gmail.com",
+        to: user.email,
+        subject: "Verify your CLVRQuant email",
+        html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+          <div style="text-align:center;margin-bottom:24px">
+            <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
+            <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">AI · MARKET INTELLIGENCE</div>
+          </div>
+          <p style="font-size:15px;color:#f0f4ff">Hi <strong>${user.name}</strong>,</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:28px">Here's your verification link. Click the button below to confirm your email and activate your account.</p>
+          <div style="text-align:center;margin:28px 0">
+            <a href="${verifyUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-style:italic;font-weight:700;font-size:16px;padding:16px 40px;border-radius:6px;text-decoration:none">✦ Verify My Email</a>
+          </div>
+          <p style="font-size:11px;color:#4a5d80;text-align:center">© 2026 CLVRQuant · Not financial advice</p>
+        </div>`,
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[resend-verification]", e.message);
+      res.status(500).json({ error: "Failed to send email. Try again later." });
+    }
   });
 
   // ── WEBAUTHN / FACE ID BIOMETRIC AUTH ────────────────────────────────────

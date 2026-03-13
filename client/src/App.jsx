@@ -750,6 +750,14 @@ function Dashboard({user,setUser}){
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
   const [showTour,setShowTour]=useState(false);
   useEffect(()=>{ if(shouldShowTour()) setTimeout(()=>setShowTour(true),800); },[]);
+  const [resendLoading,setResendLoading]=useState(false);
+  const [resendSent,setResendSent]=useState(false);
+  const [verifyBannerDismissed,setVerifyBannerDismissed]=useState(false);
+  const handleResendVerification=useCallback(async()=>{
+    setResendLoading(true);
+    try{const r=await fetch("/api/auth/resend-verification",{method:"POST",credentials:"include"});const d=await r.json();if(r.ok)setResendSent(true);else setToast(d.error||"Failed to send");}catch{setToast("Network error");}
+    setResendLoading(false);
+  },[]);
   const [mustChangePassword,setMustChangePassword]=useState(()=>!!(user?.mustChangePassword));
   const [newPwInput,setNewPwInput]=useState("");
   const [newPwInput2,setNewPwInput2]=useState("");
@@ -1579,6 +1587,21 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
       {/* QR Scanner overlay */}
       {showQRScanner&&<QRScanner onScan={async(raw)=>{setShowQRScanner(false);const code=raw.trim().toUpperCase();await verifyAccessCode(code);}} onClose={()=>setShowQRScanner(false)}/>}
+
+      {/* ── EMAIL VERIFICATION BANNER ── */}
+      {user?.pendingVerification&&!verifyBannerDismissed&&(
+        <div style={{background:"rgba(201,168,76,.08)",borderBottom:`1px solid rgba(201,168,76,.2)`,padding:"10px 16px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",position:"relative",zIndex:50}}>
+          <span style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.06em",flex:1,minWidth:160}}>
+            {resendSent?"✓ Verification email sent — check your inbox":"✦ Please verify your email to activate your account"}
+          </span>
+          {!resendSent&&(
+            <button onClick={handleResendVerification} disabled={resendLoading} style={{background:"rgba(201,168,76,.15)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:3,padding:"5px 12px",fontFamily:MONO,fontSize:9,color:C.gold2,cursor:"pointer",letterSpacing:"0.08em",whiteSpace:"nowrap"}}>
+              {resendLoading?"SENDING...":"RESEND EMAIL"}
+            </button>
+          )}
+          <button onClick={()=>setVerifyBannerDismissed(true)} style={{background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:11,cursor:"pointer",padding:"2px 4px",lineHeight:1}}>✕</button>
+        </div>
+      )}
 
       {/* Force-change-password modal — cannot be dismissed */}
       {mustChangePassword&&<div style={{position:"fixed",inset:0,zIndex:600,background:"rgba(0,0,0,.95)",backdropFilter:"blur(20px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>

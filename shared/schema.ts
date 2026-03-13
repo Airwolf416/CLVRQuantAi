@@ -20,6 +20,8 @@ export const users = pgTable("users", {
   referralCode: text("referral_code").unique(),
   referredBy: text("referred_by"),
   mustChangePassword: boolean("must_change_password").notNull().default(false),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  emailVerificationToken: text("email_verification_token"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
