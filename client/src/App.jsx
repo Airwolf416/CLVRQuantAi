@@ -580,26 +580,29 @@ const MACRO_EVENTS=[];
 function MacroCard({evt,imp,surprise,marketImpacts,bc,isToday,isLiveNow,status,onAskAI,onAddCal,onGoAI}){
   const [expanded,setExpanded]=useState(false);
   return(
-    <div data-testid={`macro-card-${evt.id}`} style={{background:C.panel,border:`1px solid ${evt.released?(surprise?.color===C.red?C.red+"22":surprise?.color===C.green?C.green+"22":C.border):imp.color+"22"}`,borderRadius:2,marginBottom:8,overflow:"hidden",opacity:evt.released?1:0.88}}>
+    <div data-testid={`macro-card-${evt.id}`} style={{background:C.panel,border:`1px solid ${evt.released?(surprise?.color===C.red?C.red+"22":surprise?.color===C.green?C.green+"22":C.border):evt.isPast?C.border:imp.color+"22"}`,borderRadius:2,marginBottom:8,overflow:"hidden",opacity:(evt.released||evt.isPast)?1:0.88}}>
       <div style={{padding:"12px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
         <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
           <div style={{textAlign:"center",minWidth:40,flexShrink:0}}>
-            <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:evt.released?C.muted:C.white}}>{(evt.timeET||evt.time||"").replace(" ET","")}</div>
+            <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:(evt.released||evt.isPast)?C.muted:C.white}}>{(evt.timeET||evt.time||"").replace(" ET","")}</div>
             <div style={{fontSize:16,marginTop:2}}>{evt.flag||({"US":"\u{1F1FA}\u{1F1F8}","EU":"\u{1F1EA}\u{1F1FA}","UK":"\u{1F1EC}\u{1F1E7}","CA":"\u{1F1E8}\u{1F1E6}","JP":"\u{1F1EF}\u{1F1F5}","AU":"\u{1F1E6}\u{1F1FA}","CH":"\u{1F1E8}\u{1F1ED}","NZ":"\u{1F1F3}\u{1F1FF}"}[evt.country])||"\u{1F310}"}</div>
           </div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",marginBottom:4}}>
-              <span style={{fontFamily:SERIF,fontSize:12,fontWeight:700,color:evt.released?C.muted2:C.white}}>{evt.name}</span>
+              <span style={{fontFamily:SERIF,fontSize:12,fontWeight:700,color:(evt.released||evt.isPast)?C.muted2:C.white}}>{evt.name}</span>
               {isLiveNow&&<span style={{fontFamily:MONO,fontSize:7,background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.3)",color:C.green,borderRadius:2,padding:"1px 5px",fontWeight:700,letterSpacing:"0.1em",animation:"pulse 1.4s ease infinite"}}>LIVE NOW</span>}
               <span style={{fontFamily:MONO,fontSize:7,background:imp.bg,color:imp.color,border:`1px solid ${imp.color}33`,borderRadius:2,padding:"1px 5px",fontWeight:700,letterSpacing:"0.08em"}}>{imp.label}</span>
               {evt.released&&surprise&&<span style={{fontFamily:MONO,fontSize:7,background:"rgba(0,0,0,.3)",border:`1px solid ${surprise.color}33`,color:surprise.color,borderRadius:2,padding:"1px 5px",fontWeight:700}}>{surprise.label}</span>}
-              {!evt.released&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>PENDING</span>}
-              {isToday&&!isLiveNow&&<span style={{fontFamily:MONO,fontSize:7,color:C.red,border:`1px solid ${C.red}33`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.4s ease infinite"}}>TODAY</span>}
+              {evt.released&&!surprise&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
+              {!evt.released&&evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
+              {!evt.released&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>PENDING</span>}
+              {isToday&&!isLiveNow&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.red,border:`1px solid ${C.red}33`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.4s ease infinite"}}>TODAY</span>}
               {evt.live&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>LIVE</span>}
             </div>
             <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginBottom:6}}>{evt.region||evt.country} · {evt.date}</div>
             <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
               {evt.actual&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:15,fontWeight:800,color:surprise?.color||C.white}}>{evt.actual}<span style={{fontSize:8,color:C.muted,marginLeft:2}}>{evt.unit||""}</span></div></div>}
+              {!evt.actual&&evt.isPast&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>—</div></div>}
               <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>FORECAST</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted2}}>{evt.forecast}</div></div>
               <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>PREVIOUS</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>{evt.previous||evt.current}</div></div>
             </div>
@@ -1513,10 +1516,10 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     .filter(e=>macroRegionFilter==="ALL"||(e.country||"").toUpperCase()===macroRegionFilter)
     .filter(e=>macroImpactFilter==="ALL"||e.impact===macroImpactFilter)
     .sort((a,b)=>{const da=new Date(a.date).getTime();const db=new Date(b.date).getTime();if(da!==db)return da-db;const ta=a.timeET||a.time||"00:00";const tb=b.timeET||b.time||"00:00";return ta.localeCompare(tb);});
-  const macroReleasedCount=macroAllFiltered.filter(e=>e.released).length;
-  const macroPendingCount=macroAllFiltered.filter(e=>!e.released).length;
+  const macroReleasedCount=macroAllFiltered.filter(e=>e.released||e.isPast).length;
+  const macroPendingCount=macroAllFiltered.filter(e=>!e.released&&!e.isPast).length;
   const macroHighCount=macroAllFiltered.filter(e=>e.impact==="HIGH").length;
-  const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&e.date>=macroTodayStr).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
+  const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&!e.isPast&&e.date>=macroTodayStr).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
   const macroNextPending=macroSortedForNext[0]||null;
 
   const requestPush=async()=>{
@@ -2062,7 +2065,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             const isToday=status.label==="TODAY";
             const bc=bankColor[evt.bank]||C.gold;
             const nowTime=new Date().toTimeString().slice(0,5);
-            const isLiveNow=!evt.released&&isToday&&(evt.timeET||"").slice(0,5)===nowTime;
+            const isLiveNow=!evt.released&&!evt.isPast&&isToday&&(evt.timeET||"").slice(0,5)===nowTime;
             return(
               <MacroCard key={evt.id||evt.name+evt.date} evt={evt} imp={imp} surprise={surprise} marketImpacts={marketImpacts} bc={bc} isToday={isToday} isLiveNow={isLiveNow} status={status} onAskAI={()=>askMacroAI(evt)} onAddCal={()=>{const cal=`BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nSUMMARY:${evt.bank} - ${evt.name}\nDTSTART:${evt.date.replace(/-/g,"")}\nDTEND:${evt.date.replace(/-/g,"")}\nDESCRIPTION:${evt.desc||evt.name}\nEND:VEVENT\nEND:VCALENDAR`;const blob=new Blob([cal],{type:"text/calendar"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${evt.bank}-${evt.date}.ics`;a.click();setToast("Calendar event saved");}} onGoAI={()=>{setAiInput(`${evt.bank} ${evt.name} on ${evt.date}: forecast ${evt.forecast}, previous ${evt.previous||evt.current}${evt.actual?`, actual ${evt.actual}`:""}. How to position? Which assets most affected?`);setTab("ai");}}/>
             );

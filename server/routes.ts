@@ -1534,7 +1534,8 @@ export async function registerRoutes(
   // Keeps released events for today so they're never lost when the API stops returning them
   const releasedEventsMemory: Map<string, any> = new Map();
   let releasedMemoryDate = ""; // track which calendar date the memory belongs to
-  const MACRO_CACHE_MS = 90000; // 90 seconds — fast enough to catch data released at :00/:30 marks
+  const MACRO_CACHE_MS = 300000; // 5 minutes — avoids ForexFactory rate limits (429 retry-after ~300s)
+  let ffRateLimitUntil = 0; // don't re-hit FF API until this timestamp passes
 
   // Returns true if any event is past its scheduled release time but still has no actual value
   // In that case we skip cache and fetch fresh data immediately
@@ -1571,23 +1572,58 @@ export async function registerRoutes(
     USD:"US",EUR:"EU",GBP:"UK",CAD:"CA",JPY:"JP",AUD:"AU",CHF:"CH",NZD:"NZ",CNY:"CN",
   };
 
-  async function fetchLiveCalendar(): Promise<any[]> {
+  // Compute whether an event's scheduled release time has already passed
+  function computeIsPast(dateStr: string, timeET: string): boolean {
     try {
-      const res = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", {
-        headers: { "User-Agent": "CLVRQuant/2.0" },
-      });
-      if (!res.ok) return [];
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("json")) return [];
-      const text = await res.text();
-      let data: any;
-      try { data = JSON.parse(text); } catch { return []; }
-      if (!Array.isArray(data)) return [];
-      const relevant = data.filter((e: any) =>
+      const [y, mo, d] = dateStr.split("-").map(Number);
+      const [h, m] = timeET.split(":").map(Number);
+      const etOffset = (mo >= 3 && mo <= 11) ? 4 : 5; // EDT vs EST
+      return Date.UTC(y, mo - 1, d, h + etOffset, m, 30) < Date.now(); // +30s grace
+    } catch { return false; }
+  }
+
+  async function fetchLiveCalendar(): Promise<any[]> {
+    // Skip if currently rate-limited by ForexFactory
+    if (Date.now() < ffRateLimitUntil) {
+      console.log(`[macro] FF rate-limited for ${Math.round((ffRateLimitUntil - Date.now()) / 1000)}s more`);
+      return [];
+    }
+    try {
+      // Fetch this week + next week for broader coverage
+      const urls = [
+        "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+        "https://nfs.faireconomy.media/ff_calendar_nextweek.json",
+      ];
+      let allData: any[] = [];
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, {
+            headers: { "User-Agent": "Mozilla/5.0 (compatible; CLVRQuant/2.0)" },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (res.status === 429) {
+            const retryAfter = parseInt(res.headers.get("retry-after") || "300") * 1000;
+            ffRateLimitUntil = Date.now() + retryAfter;
+            console.log(`[macro] FF 429 — backing off ${Math.round(retryAfter / 1000)}s`);
+            break; // don't try next week if we're rate-limited
+          }
+          if (!res.ok) continue;
+          const ct = res.headers.get("content-type") || "";
+          if (!ct.includes("json")) continue;
+          const text = await res.text();
+          let parsed: any;
+          try { parsed = JSON.parse(text); } catch { continue; }
+          if (Array.isArray(parsed)) allData = allData.concat(parsed);
+        } catch {}
+      }
+      if (!allData.length) return [];
+
+      const relevant = allData.filter((e: any) =>
         (e.impact === "High" || e.impact === "Medium" || e.impact === "Low") &&
         ["USD","EUR","GBP","JPY","CAD","AUD","CHF","NZD"].includes(e.country) &&
         e.title !== "Bank Holiday"
       );
+
       return relevant.map((e: any, i: number) => {
         const dateStr = e.date ? e.date.split("T")[0] : "";
         const timeET = e.date ? new Date(e.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" }) : "00:00";
@@ -1595,6 +1631,7 @@ export async function registerRoutes(
         const forecast = (e.forecast !== undefined && e.forecast !== null && e.forecast !== "") ? String(e.forecast) : "—";
         const previous = (e.previous !== undefined && e.previous !== null && e.previous !== "") ? String(e.previous) : "—";
         const released = actual !== null;
+        const isPast = computeIsPast(dateStr, timeET);
         const cc = COUNTRY_TO_CODE[e.country] || e.country?.slice(0,2).toUpperCase() || "US";
         return {
           id: 10000 + i,
@@ -1612,8 +1649,9 @@ export async function registerRoutes(
           actual,
           unit: "",
           released,
+          isPast, // true if scheduled release time has passed (even if no actual value yet)
           impact: e.impact === "High" ? "HIGH" : e.impact === "Medium" ? "MED" : "LOW",
-          desc: `${e.title}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : " Pending release."}`,
+          desc: `${e.title}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : isPast ? " Data not yet available." : " Pending release."}`,
           currency: e.country,
           live: true,
         };
@@ -1687,9 +1725,13 @@ export async function registerRoutes(
 
       const { todayStart, endDate } = getDateRange();
       const existingDates = new Set(liveEvents.map((e: any) => `${e.date}-${e.name}`));
+      // For MACRO_2026 fallback events, compute isPast so they don't show as "PENDING" when past their date
+      const macro2026Enriched = MACRO_2026
+        .filter(e => !existingDates.has(`${e.date}-${e.name}`))
+        .map(e => ({ ...e, isPast: computeIsPast(e.date, (e.time || "08:30 ET").replace(" ET","").trim()) }));
       const combined = [
         ...liveEvents,
-        ...MACRO_2026.filter(e => !existingDates.has(`${e.date}-${e.name}`)),
+        ...macro2026Enriched,
       ]
         .filter(e => {
           const d = new Date(e.date);
@@ -1702,7 +1744,7 @@ export async function registerRoutes(
       res.json(MACRO_2026.filter(e => {
         const d = new Date(e.date);
         return d >= todayStart && d <= endDate;
-      }));
+      }).map(e => ({ ...e, isPast: computeIsPast(e.date, (e.time || "08:30 ET").replace(" ET","").trim()) })));
     }
   });
 
