@@ -98,6 +98,7 @@ export default function WelcomePage({ onEnter }) {
   });
   const [faceIdCancelled, setFaceIdCancelled] = useState(false);
   const [faceIdTriggered, setFaceIdTriggered] = useState(false);
+  const [bypassBiometric, setBypassBiometric] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -248,7 +249,7 @@ export default function WelcomePage({ onEnter }) {
   };
 
   // ── Biometric locked screen (shown when Face ID is registered and session needs re-auth) ──
-  if (hasBiometric && (checkingSession || waLoading || (!faceIdCancelled && faceIdTriggered))) {
+  if (!bypassBiometric && hasBiometric && (checkingSession || waLoading || (!faceIdCancelled && faceIdTriggered))) {
     return (
       <div style={{ fontFamily: SANS, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
         <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900;1,700&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -284,7 +285,7 @@ export default function WelcomePage({ onEnter }) {
   }
 
   // ── Face ID cancelled fallback — retry or use password ──
-  if (hasBiometric && faceIdCancelled) {
+  if (!bypassBiometric && hasBiometric && faceIdCancelled) {
     return (
       <div style={{ fontFamily: SANS, background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
         <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,900&family=IBM+Plex+Mono:wght@400;500&display=swap');`}</style>
@@ -302,7 +303,7 @@ export default function WelcomePage({ onEnter }) {
             <svg width="18" height="18" viewBox="0 0 36 36" fill="none"><path d="M13 6C10.2 6 8 8.2 8 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M23 6C25.8 6 28 8.2 28 11v2" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M8 23v2c0 2.8 2.2 5 5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><path d="M28 23v2c0 2.8-2.2 5-5 5" stroke={C.gold} strokeWidth="2" strokeLinecap="round"/><circle cx="14" cy="16" r="1.5" fill={C.gold}/><circle cx="22" cy="16" r="1.5" fill={C.gold}/><path d="M14 22c0 0 1.2 2 4 2s4-2 4-2" stroke={C.gold} strokeWidth="1.8" strokeLinecap="round"/></svg>
             {waLoading ? "Authenticating..." : "Use Face ID"}
           </button>
-          <button data-testid="btn-use-password" onClick={() => setMode("signin")} style={{ width: "100%", background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "14px", cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: C.muted2, letterSpacing: "0.06em" }}>
+          <button data-testid="btn-use-password" onClick={() => { setBypassBiometric(true); setMode("signin"); }} style={{ width: "100%", background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "14px", cursor: "pointer", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: C.muted2, letterSpacing: "0.06em" }}>
             Use Password Instead
           </button>
         </div>
