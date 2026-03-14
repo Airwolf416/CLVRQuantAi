@@ -260,13 +260,14 @@ async function checkAndGrantReferralReward(userId: string) {
       const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
       await resend.emails.send({
         from: senderAddress, to: referrer.email,
+        reply_to: "MikeClaver@CLVRQuantAI.com",
         subject: "CLVRQuant — You earned 1 week of Pro!",
         html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
           <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
           <div style="border-top:1px solid #141e35;padding-top:20px">
             <p style="font-size:14px;color:#f0f4ff">Congratulations, ${referrer.name}!</p>
             <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your referral just subscribed to CLVRQuant Pro. You've earned <strong style="color:#e8c96d">1 week of free Pro access</strong> as a thank you!</p>
-            <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver</p>
+            <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
           </div></div>`,
       });
     } catch {}
@@ -286,6 +287,7 @@ async function checkPromoExpiryReminders() {
         const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
         await resend.emails.send({
           from: senderAddress, to: u.email,
+          reply_to: "MikeClaver@CLVRQuantAI.com",
           subject: "CLVRQuant — Your Pro access expires in 2 weeks",
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
@@ -293,7 +295,7 @@ async function checkPromoExpiryReminders() {
               <p style="font-size:14px;color:#f0f4ff">Hey ${u.name},</p>
               <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant Pro access via promotion code <strong style="color:#e8c96d">${u.promoCode}</strong> expires on <strong style="color:#f0f4ff">${expiryDate}</strong>.</p>
               <p style="font-size:13px;color:#6b7fa8;line-height:1.8">To keep uninterrupted access to AI analysis, signals, and all Pro features, consider subscribing before it expires.</p>
-              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver</p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
             </div></div>`,
         });
         console.log(`[promo-reminder] Sent expiry reminder to ${u.email}`);
@@ -1424,7 +1426,7 @@ export async function registerRoutes(
     }
     const isPro = dbUser.tier === "pro" || dbUser.email === "mikeclaver@gmail.com";
     if (!isPro) {
-      return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock Claude-powered analysis." });
+      return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock CLVR AI analysis." });
     }
 
     if (!checkAiRateLimit(userId, true)) {
@@ -2315,7 +2317,7 @@ export async function registerRoutes(
           const dailyEmail = u.subscribe_to_brief;
           const emailResult = await resend.emails.send({
             from: senderAddress,
-            reply_to: "mikeclaver@gmail.com",
+            reply_to: "MikeClaver@CLVRQuantAI.com",
             to: u.email,
             subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
             html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
@@ -2342,7 +2344,7 @@ export async function registerRoutes(
                   <div style="font-size:10px;color:#ff8c00;font-weight:700;letter-spacing:0.15em;margin-bottom:4px">IMPORTANT DISCLAIMER</div>
                   <div style="font-size:10px;color:#6b7fa8;line-height:1.7">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss. CLVRQuant and Mike Claver bear no liability for any financial decisions.</div>
                 </div>
-                <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</p>
+                <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a> · Not financial advice</p>
               </div>
             </div>`,
           });
@@ -2404,7 +2406,7 @@ export async function registerRoutes(
         const verifyUrl = `https://clvrquantai.com?verify=${verifyToken}`;
         const emailResult = await resend.emails.send({
           from: senderAddress,
-          reply_to: "mikeclaver@gmail.com",
+          reply_to: "MikeClaver@CLVRQuantAI.com",
           to: email.toLowerCase().trim(),
           subject: "Verify your CLVRQuant account",
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
@@ -2441,7 +2443,7 @@ export async function registerRoutes(
                 <div style="font-size:10px;color:#ff8c00;font-weight:700;letter-spacing:0.15em;margin-bottom:4px">IMPORTANT DISCLAIMER</div>
                 <div style="font-size:10px;color:#6b7fa8;line-height:1.7">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss. CLVRQuant and Mike Claver bear no liability for any financial decisions.</div>
               </div>
-              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a> · Not financial advice</p>
             </div>
           </div>`,
         });
@@ -2556,7 +2558,7 @@ export async function registerRoutes(
       const { client: resend } = await getUncachableResendClient();
       await resend.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
-        reply_to: "mikeclaver@gmail.com",
+        reply_to: "MikeClaver@CLVRQuantAI.com",
         to: user.email,
         subject: "Verify your CLVRQuant email",
         html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
@@ -2569,7 +2571,7 @@ export async function registerRoutes(
           <div style="text-align:center;margin:28px 0">
             <a href="${verifyUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-style:italic;font-weight:700;font-size:16px;padding:16px 40px;border-radius:6px;text-decoration:none">✦ Verify My Email</a>
           </div>
-          <p style="font-size:11px;color:#4a5d80;text-align:center">© 2026 CLVRQuant · Not financial advice</p>
+          <p style="font-size:11px;color:#4a5d80;text-align:center">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a> · Not financial advice</p>
         </div>`,
       });
       res.json({ ok: true });
@@ -2658,6 +2660,7 @@ export async function registerRoutes(
         const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
         await resend.emails.send({
           from: senderAddress,
+          reply_to: "MikeClaver@CLVRQuantAI.com",
           to: email.toLowerCase().trim(),
           subject: "CLVRQuant — Password Reset",
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
@@ -2676,7 +2679,7 @@ export async function registerRoutes(
                 <a href="${resetLink}" style="background:rgba(201,168,76,0.15);color:#e8c96d;padding:12px 32px;border-radius:4px;text-decoration:none;font-family:Georgia,serif;font-weight:700;font-size:14px;border:1px solid rgba(201,168,76,0.3)">Reset Password →</a>
               </div>
               <p style="font-size:11px;color:#4a5d80;margin-top:20px">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
-              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · Mike Claver</p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
             </div>
           </div>`,
         });
