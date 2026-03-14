@@ -50,9 +50,18 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import { pool } from "./db";
+const PgSession = connectPgSimple(session);
 const isProduction = process.env.NODE_ENV === "production";
 app.set("trust proxy", 1);
 app.use(session({
+  store: new PgSession({
+    pool,
+    tableName: "user_sessions",
+    createTableIfMissing: true,
+    pruneSessionInterval: 60 * 60,
+  }),
   secret: process.env.SESSION_SECRET!,
   resave: false,
   saveUninitialized: false,

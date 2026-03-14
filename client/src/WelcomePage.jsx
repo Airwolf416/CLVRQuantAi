@@ -211,7 +211,7 @@ export default function WelcomePage({ onEnter }) {
     }
   };
 
-  const handleSignIn = async () => {
+  const handleSignIn = async (isRetry = false) => {
     if (!form.email.includes("@")) return setError("Please enter a valid email.");
     if (!form.password) return setError("Please enter your password.");
     setLoading(true);
@@ -220,6 +220,7 @@ export default function WelcomePage({ onEnter }) {
       const res = await fetch("/api/auth/signin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email: form.email, password: form.password }),
       });
       const data = await res.json();
@@ -227,7 +228,11 @@ export default function WelcomePage({ onEnter }) {
       setLoading(false);
       if (onEnter) onEnter(data.mustChangePassword ? { ...data.user, mustChangePassword: true } : data.user);
     } catch (e) {
-      setError("Network error. Please try again.");
+      if (!isRetry) {
+        await new Promise(r => setTimeout(r, 2000));
+        return handleSignIn(true);
+      }
+      setError("__network__");
       setLoading(false);
     }
   };
@@ -704,7 +709,15 @@ export default function WelcomePage({ onEnter }) {
                 style={inputStyle} onKeyDown={e => e.key === "Enter" && handleSignIn()} />
             </div>
 
-            {error && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
+            {error && error !== "__network__" && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
+            {error === "__network__" && (
+              <div data-testid="text-network-error" style={{ fontFamily: MONO, fontSize: 11, color: C.gold, padding: "10px 12px", background: "rgba(201,168,76,.06)", border: `1px solid rgba(201,168,76,.3)`, borderRadius: 4, textAlign: "center" }}>
+                <div style={{ marginBottom: 8 }}>Connection interrupted. Please reload and try again.</div>
+                <button onClick={() => window.location.reload()} style={{ background: C.gold, color: "#050709", border: "none", borderRadius: 4, padding: "6px 16px", fontFamily: MONO, fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.08em" }}>
+                  RELOAD PAGE
+                </button>
+              </div>
+            )}
             {success && <div data-testid="text-auth-success" style={{ fontFamily: MONO, fontSize: 11, color: C.green, padding: "8px 12px", background: "rgba(0,199,135,.06)", border: `1px solid rgba(0,199,135,.2)`, borderRadius: 4 }}>{success}</div>}
 
             <button data-testid="btn-submit-signin" onClick={handleSignIn} disabled={loading}
