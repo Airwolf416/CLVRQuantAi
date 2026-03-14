@@ -14,16 +14,37 @@ const VAPID_PRIVATE_KEY = "JYSHjiS26v9DWkwQ-kc-fdoBjn2sBlaTyJOo8JPttoI";
 webpush.setVapidDetails("mailto:noreply@clvrquantai.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 // Helper: send a web push to all subscriptions of a user
+const PUSH_ORIGIN = process.env.REPLIT_DOMAINS
+  ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}`
+  : "https://clvrquantai.com";
+
 async function sendWebPushToUser(userId: string, title: string, body: string, tag = "clvrquant") {
   try {
-    const subs = await pool.query("SELECT subscription FROM push_subscriptions WHERE user_id = $1", [userId]);
+    const subs = await pool.query("SELECT id, subscription FROM push_subscriptions WHERE user_id = $1", [userId]);
     for (const row of subs.rows) {
       try {
-        await webpush.sendNotification(row.subscription, JSON.stringify({ title, body, tag, icon: "/icons/icon-512.png", url: "/", timestamp: Date.now() }));
+        const payload = JSON.stringify({
+          title,
+          body,
+          tag,
+          // Absolute icon URL — required for OS lock-screen rendering (relative paths fail)
+          icon: `${PUSH_ORIGIN}/icons/icon-512.png`,
+          badge: `${PUSH_ORIGIN}/icons/icon-192.png`,
+          url: "/",
+          timestamp: Date.now(),
+        });
+        await webpush.sendNotification(row.subscription, payload, {
+          // urgency:"high" maps to APNs priority 10 → immediate lock-screen delivery on iOS
+          urgency: "high",
+          // TTL: 24 h — if device is offline the notification is retried for 24 hours
+          TTL: 86400,
+          // topic: collapse key so duplicate alerts replace each other
+          topic: tag.replace(/[^a-zA-Z0-9\-_.~%]/g, "-").slice(0, 32),
+        });
       } catch (e: any) {
         if (e.statusCode === 410 || e.statusCode === 404) {
-          // Subscription gone — remove it
-          await pool.query("DELETE FROM push_subscriptions WHERE user_id = $1 AND subscription = $2", [userId, row.subscription]);
+          // Subscription expired — remove it
+          await pool.query("DELETE FROM push_subscriptions WHERE id = $1", [row.id]);
         }
       }
     }

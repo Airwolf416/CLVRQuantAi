@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clvrquant-v5';
+const CACHE_NAME = 'clvrquant-v6';
 const STATIC_ASSETS = ['/', '/manifest.json', '/favicon.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-1024.png'];
 
 self.addEventListener('install', (e) => {
@@ -26,10 +26,15 @@ self.addEventListener('fetch', (e) => {
 
 // ── Build the notification options object (shared by push + message) ─────────
 function buildNotifOptions(data = {}) {
+  const origin = self.location.origin;
+  // Always use absolute URLs for icon/badge — relative paths fail on lock screen
+  // because the OS fetches the image independently outside the browser context
+  const icon  = data.icon  && data.icon.startsWith('http') ? data.icon  : `${origin}/icons/icon-512.png`;
+  const badge = data.badge && data.badge.startsWith('http') ? data.badge : `${origin}/icons/icon-192.png`;
   return {
     body: data.body || '',
-    icon: data.icon || '/icons/icon-512.png',
-    badge: '/icons/icon-192.png',
+    icon,
+    badge,
     tag: data.tag || 'clvrquant',
     // renotify: show a new notification even when tag already exists on screen
     renotify: true,
