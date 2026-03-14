@@ -37,7 +37,7 @@ function uint8ToB64(arr) {
   return btoa(String.fromCharCode(...arr)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide financial advice, investment recommendations, or trading signals. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.`;
+const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide financial advice, investment recommendations, or trading signals. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.\n\nAI DISCLOSURE: CLVR AI uses the Claude API by Anthropic to power its AI analysis engine.`;
 
 const C = {
   bg: "#050709", panel: "#0c1220", border: "#141e35", border2: "#1c2b4a",
@@ -318,7 +318,8 @@ export default function WelcomePage({ onEnter }) {
         const data = await res.json();
         if (!res.ok) { setError(data.error || "Incorrect password."); setVerifySignInLoading(false); return; }
         setVerifySignInLoading(false);
-        if (onEnter) onEnter(data.user);
+        // isNewUser: true — triggers the onboarding tour automatically for fresh signups
+        if (onEnter) onEnter({ ...data.user, isNewUser: true });
       } catch { setError("Network error. Please try again."); setVerifySignInLoading(false); }
     };
     return (
