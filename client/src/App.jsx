@@ -11,7 +11,7 @@ import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
-import OnboardingTour, { shouldShowTour } from "./OnboardingTour";
+import OnboardingTour from "./OnboardingTour";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -752,7 +752,8 @@ function Dashboard({user,setUser}){
   const [showUpgrade,setShowUpgrade]=useState(false);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
   const [showTour,setShowTour]=useState(false);
-  useEffect(()=>{ if(shouldShowTour()) setTimeout(()=>setShowTour(true),800); },[]);
+  // Only auto-show the tour for brand-new users (flagged at email verification sign-in)
+  useEffect(()=>{ if(user?.isNewUser) setTimeout(()=>setShowTour(true),800); },[user?.isNewUser]);
   const [resendLoading,setResendLoading]=useState(false);
   const [resendSent,setResendSent]=useState(false);
   const [verifyBannerDismissed,setVerifyBannerDismissed]=useState(false);
@@ -2455,7 +2456,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={{padding:"8px 16px 16px"}}>
               {[
                 {t:"One Dashboard, All Markets",d:"Crypto, equities, commodities, forex, and macro events — all live, all in one place. No more tab-switching."},
-                {t:"AI-Powered Intelligence",d:"Claude AI analyzes real-time data across all asset classes, giving you trade ideas with specific entries, targets, and stops. Not generic advice — data-driven analysis using live prices and your actual signals."},
+                {t:"AI-Powered Intelligence",d:"CLVR AI — powered by Claude — analyzes real-time data across all asset classes, giving you trade ideas with specific entries, targets, and stops. Not generic advice — data-driven analysis using live prices and your actual signals."},
                 {t:"Real Alpha Signals",d:"Our QuantBrain engine detects price moves, anomalies, and momentum shifts across 32 crypto assets, 16 equities, and commodities in real-time. Every signal is scored using multiple on-chain and market factors."},
                 {t:"Stay Ahead Daily",d:"The Morning Brief summarizes overnight moves, key macro events, and top setups before you even open a chart. Price alerts notify you when targets hit. The macro calendar keeps you aware of Fed decisions, CPI, NFP, and central bank events worldwide."},
                 {t:"Built for Mobile",d:"Designed mobile-first so you can check markets, review signals, and get AI analysis from anywhere — your pocket market intelligence hub."},
