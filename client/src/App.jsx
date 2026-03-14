@@ -1292,7 +1292,7 @@ Reason: [2 precise lines using live data, funding rates, OI, news]
       const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
       const data=await res.json();
       if(!res.ok){
-        if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Market Analyst is exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• Claude Sonnet 4 powered analysis\n• Top 4 trade ideas with Entry / Stop / TP1 / TP2\n• Confidence levels & Kelly sizing\n• Cross-asset intelligence\n\nTap UPGRADE in the top bar.");
+        if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Market Analyst is exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• CLVR AI analysis — powered by Claude Sonnet 4\n• Top 4 trade ideas with Entry / Stop / TP1 / TP2\n• Confidence levels & Kelly sizing\n• Cross-asset intelligence\n\nTap UPGRADE in the top bar.");
         else setAiOutput(data.error||`Error ${res.status}`);
         setAiLoading(false);return;
       }
@@ -2376,7 +2376,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
           <ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}>
           <div style={{...panel,overflow:"visible"}}>
-            <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="Claude · Live" color="gold"/></div>
+            <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="CLVR AI · Live" color="gold"/></div>
             <div style={{padding:16}}>
               <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
                 {["BTC","ETH","SOL","TRUMP","HYPE","XAU","WTI","EURUSD","TSLA","NVDA"].map(sym=>{const d=allPrices[sym];return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${fmt(d?.price,sym)} 24h:${pct(d?.chg)}`)}
@@ -2494,6 +2494,17 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                   <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.9}}>{d}</div>
                 </div>
               ))}
+            </div>
+          </div>
+          <div style={{...panel,border:`1px solid rgba(201,168,76,.15)`}}>
+            <div style={{padding:"16px 18px"}}>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em",marginBottom:12}}>CONTACT</div>
+              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.8,marginBottom:8}}>
+                Questions, feedback, or business inquiries? Reach Mike directly:
+              </div>
+              <a href="mailto:MikeClaver@CLVRQuantAI.com" data-testid="link-contact-email" style={{display:"inline-flex",alignItems:"center",gap:8,fontFamily:MONO,fontSize:12,color:C.gold2,textDecoration:"none",border:`1px solid rgba(201,168,76,.25)`,borderRadius:4,padding:"8px 14px",background:"rgba(201,168,76,.06)"}}>
+                ✉ MikeClaver@CLVRQuantAI.com
+              </a>
             </div>
           </div>
           <div style={{...panel,border:`1px solid rgba(201,168,76,.12)`}}>

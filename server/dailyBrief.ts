@@ -287,8 +287,8 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData)
   <div style="padding:16px 24px;border-top:1px solid #141e35;text-align:center">
     <div style="font-family:Georgia,serif;font-size:14px;color:#e8c96d;margin-bottom:8px">CLVRQuant</div>
     <div style="font-family:monospace;font-size:8px;color:#3a4a6a;letter-spacing:0.12em;line-height:2">
-      MIKE CLAVER · NOT FINANCIAL ADVICE<br>
-      AI-POWERED RESEARCH FOR EDUCATIONAL PURPOSES ONLY<br>
+      MIKE CLAVER · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a><br>
+      NOT FINANCIAL ADVICE · AI-POWERED RESEARCH FOR EDUCATIONAL PURPOSES ONLY<br>
       ALL DATA IS INFORMATIONAL — TRADE AT YOUR OWN RISK
     </div>
   </div>
@@ -344,7 +344,7 @@ async function sendDailyBriefEmails() {
         const resp = await client.emails.send({
           from: senderAddress,
           to: sub.email,
-          reply_to: "mikeclaver@gmail.com",
+          reply_to: "MikeClaver@CLVRQuantAI.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
           html,
         });
@@ -399,7 +399,7 @@ async function sendApologyBriefEmails() {
   // Get all active subscribers + always include owner
   const subsResult = await pool.query("SELECT email, name FROM subscribers WHERE active = true");
   const subs: {email:string;name:string}[] = subsResult.rows;
-  const ownerEmail = "mikeclaver@gmail.com";
+  const ownerEmail = "MikeClaver@CLVRQuantAI.com";
   if (!subs.find(s => s.email === ownerEmail)) {
     subs.push({ email: ownerEmail, name: "Mike" });
   }
@@ -419,7 +419,7 @@ async function sendApologyBriefEmails() {
         const resp = await client.emails.send({
           from: senderAddress,
           to: sub.email,
-          reply_to: "mikeclaver@gmail.com",
+          reply_to: "MikeClaver@CLVRQuantAI.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
           html: apologyHtml,
         });
