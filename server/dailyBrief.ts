@@ -7,6 +7,27 @@ const APP_URL = "https://clvrquant.replit.app";
 
 let lastBriefDate = "";
 
+async function getTodayBriefKey(): Promise<string | null> {
+  try {
+    const now = new Date();
+    const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const dateKey = etTime.toISOString().split("T")[0];
+    const res = await pool.query(`SELECT date_key FROM daily_briefs_log WHERE date_key = $1`, [dateKey]);
+    return res.rows.length > 0 ? dateKey : null;
+  } catch { return null; }
+}
+
+async function markBriefSent(dateKey: string, count: number) {
+  try {
+    await pool.query(
+      `INSERT INTO daily_briefs_log (date_key, sent_at, recipient_count)
+       VALUES ($1, NOW(), $2)
+       ON CONFLICT (date_key) DO NOTHING`,
+      [dateKey, count]
+    );
+  } catch (e: any) { console.log("[daily-brief] Failed to mark brief sent:", e.message); }
+}
+
 interface MarketData {
   crypto: { symbol: string; price: string; change: string; changeNum: number }[];
   forex: { pair: string; price: string; change: string; changeNum: number }[];
@@ -358,6 +379,9 @@ async function sendDailyBriefEmails() {
       }
     }
     console.log("[daily-brief] All emails sent");
+    const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const dateKey = etTime.toISOString().split("T")[0];
+    await markBriefSent(dateKey, subs.length);
   } catch (e: any) {
     console.log("[daily-brief] Resend client error:", e.message);
   }
@@ -443,7 +467,31 @@ export { sendApologyBriefEmails };
 export function startDailyBriefScheduler() {
   console.log("[daily-brief] Scheduler started — briefs will be sent at 6:00 AM ET daily");
 
-  setInterval(() => {
+  // On startup: check if today's brief was missed (server was down at 6 AM)
+  setTimeout(async () => {
+    try {
+      const now = new Date();
+      const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const hour = etTime.getHours();
+      const dateKey = etTime.toISOString().split("T")[0];
+      // If it's between 6 AM and 11 AM ET and today's brief wasn't sent, send now
+      if (hour >= BRIEF_HOUR_ET && hour < 11) {
+        const alreadySent = await getTodayBriefKey();
+        if (!alreadySent) {
+          console.log("[daily-brief] Missed 6 AM brief detected on startup — sending catch-up brief now");
+          lastBriefDate = dateKey;
+          await sendDailyBriefEmails();
+        } else {
+          lastBriefDate = dateKey;
+          console.log("[daily-brief] Today's brief already sent — skipping catch-up");
+        }
+      }
+    } catch (e: any) {
+      console.log("[daily-brief] Startup catch-up check error:", e.message);
+    }
+  }, 10_000); // Wait 10s after startup for server to warm up
+
+  setInterval(async () => {
     const now = new Date();
     const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
     const hour = etTime.getHours();
