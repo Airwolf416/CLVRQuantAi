@@ -146,6 +146,40 @@ const lastSignalTime: Record<string, number> = {};
 
 const whaleAlerts: { sym: string; ts: number; type: string; amount: string }[] = [];
 
+// ─── MACRO RISK ENGINE ──────────────────────────────────────────────────────
+// Shared cache so detectMoves can access upcoming macro events
+let sharedMacroCache: { events: any[]; ts: number } = { events: [], ts: 0 };
+export function updateSharedMacroCache(events: any[]) { sharedMacroCache = { events, ts: Date.now() }; }
+
+const HIGH_IMPACT_KEYWORDS = ["FOMC", "CPI", "NFP", "Non-Farm", "Fed Rate", "Interest Rate", "GDP", "PCE", "PPI", "Powell"];
+
+function getMacroRisk(): { highRisk: boolean; flags: string[]; confPenalty: number } {
+  const flags: string[] = [];
+  const now = Date.now();
+  const in48h = now + 48 * 60 * 60 * 1000;
+  const events = sharedMacroCache.events;
+  for (const ev of events) {
+    if (ev.impact !== "HIGH" && ev.impact !== "HIGH") continue;
+    if (!ev.impact || ev.impact === "LOW") continue;
+    const evDate = new Date(ev.date + "T" + (ev.timeET || "08:30").replace(" ET", "").replace(" UTC", "")).getTime();
+    if (isNaN(evDate)) continue;
+    if (evDate > now && evDate < in48h) {
+      const isHighImpact = ev.impact === "HIGH" && HIGH_IMPACT_KEYWORDS.some(k => (ev.name || "").includes(k));
+      if (isHighImpact) flags.push(`${ev.name} in <48h`);
+    }
+  }
+  const highRisk = flags.length > 0;
+  return { highRisk, flags, confPenalty: highRisk ? 20 : 0 };
+}
+
+function getSessionET(): { session: string; label: string; warning: string | null } {
+  const etHour = parseInt(new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }));
+  if (etHour >= 0 && etHour < 8) return { session: "ASIAN", label: "Asian Session", warning: "Asian session — lower liquidity, tighter targets" };
+  if (etHour >= 8 && etHour < 16) return { session: "NY", label: "NY Session", warning: null };
+  if (etHour >= 16 && etHour < 20) return { session: "POST_NY", label: "Post-NY", warning: "Post-NY — avoid new day trades unless strong momentum" };
+  return { session: "OVERNIGHT", label: "Overnight", warning: "Late session — Asian open, reduced liquidity" };
+}
+
 function recordPrice(sym: string, price: number) {
   if (!price || price <= 0) return;
   const now = Date.now();
@@ -496,16 +530,62 @@ function detectMoves() {
 
     const atr = calcATR(sym);
     const entry = current.price;
-    const target = dir === "LONG" ? +(entry + atr * 3).toFixed(6) : +(entry - atr * 3).toFixed(6);
+    // TP1 = 2×ATR (minimum 2:1 R:R), TP2 = 4×ATR (extended target)
     const stopLoss = dir === "LONG" ? +(entry - atr * 1.5).toFixed(6) : +(entry + atr * 1.5).toFixed(6);
+    const tp1 = dir === "LONG" ? +(entry + atr * 2).toFixed(6) : +(entry - atr * 2).toFixed(6);
+    const tp2 = dir === "LONG" ? +(entry + atr * 4).toFixed(6) : +(entry - atr * 4).toFixed(6);
+    const stopPct = atr > 0 ? (atr * 1.5 / entry * 100).toFixed(1) : "1.5";
+    const tp1Pct = atr > 0 ? (atr * 2 / entry * 100).toFixed(1) : "2.0";
+    const tp2Pct = atr > 0 ? (atr * 4 / entry * 100).toFixed(1) : "4.0";
+    const rr1 = atr > 0 ? (2 / 1.5).toFixed(1) : "1.3";
+    const rr2 = atr > 0 ? (4 / 1.5).toFixed(1) : "2.7";
+    // Keep target for backward compat
+    const target = tp2;
 
     const master = calcMasterScore(sym, dir);
 
-    const desc = pctMove > 0
-      ? `${sym} pumped +${absPct}% in ${elapsed}min. Price moved from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}`
-      : `${sym} dumped ${absPct}% in ${elapsed}min. Price dropped from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}`;
+    // ── LAYER 1: Macro Risk ──────────────────────────────────────────
+    const macroRisk = getMacroRisk();
+    // ── LAYER 3: Session Awareness ───────────────────────────────────
+    const sessionInfo = getSessionET();
 
-    const confBase = Math.min(95, 65 + Math.floor(Math.abs(pctMove) * 5));
+    // 24h spike check (Layer 2)
+    const hist24 = priceHistory[sym] || [];
+    const oldest24 = hist24.find(p => now - p.ts >= 14 * 60 * 1000); // 14min window
+    const spike24 = oldest24 ? Math.abs(((current.price - oldest24.price) / oldest24.price) * 100) : 0;
+    const isPostSpike = spike24 > 20;
+
+    // Confidence: base + move magnitude, then apply macro/session/spike penalties
+    let confBase = Math.min(90, 60 + Math.floor(Math.abs(pctMove) * 5));
+    const confFlags: string[] = [];
+    if (macroRisk.highRisk) {
+      confBase = Math.max(30, confBase - macroRisk.confPenalty);
+      confFlags.push(...macroRisk.flags.map(f => `HIGH MACRO RISK: ${f} — SIZE DOWN`));
+    }
+    if (isPostSpike) {
+      confBase = Math.max(25, confBase - 15);
+      confFlags.push("POST-SPIKE — MEAN REVERSION RISK HIGH");
+    }
+    if (sessionInfo.session === "POST_NY") {
+      confBase = Math.max(20, confBase - 10);
+      if (sessionInfo.warning) confFlags.push(sessionInfo.warning);
+    }
+    if (sessionInfo.session === "ASIAN") {
+      confBase = Math.max(30, confBase - 5);
+      if (sessionInfo.warning) confFlags.push(sessionInfo.warning);
+    }
+
+    // Risk label (5-layer system)
+    const riskLabel = macroRisk.highRisk || isPostSpike ? "🔴" : confFlags.length > 0 ? "🟡" : confBase >= 70 ? "🟢" : "🟡";
+
+    // Leverage: never >5x, reduce in high macro risk
+    const baseLev = Math.abs(pctMove) >= 3 ? 3 : 2;
+    const finalLev = macroRisk.highRisk ? Math.min(baseLev, 2) : sessionInfo.session === "ASIAN" ? Math.min(baseLev, 2) : baseLev;
+
+    const desc = pctMove > 0
+      ? `${riskLabel} ${sym} +${absPct}% in ${elapsed}min — from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}${confFlags.length > 0 ? " ⚠️ " + confFlags[0] : ""}`
+      : `${riskLabel} ${sym} −${absPct}% in ${elapsed}min — from $${fmt2(windowStart.price, sym)} to $${fmt2(current.price, sym)}.${fundingStr}${oiStr}${confFlags.length > 0 ? " ⚠️ " + confFlags[0] : ""}`;
+
     const tags = [
       { l: "LIVE DETECTED", c: "green" },
       { l: Math.abs(pctMove) >= 3 ? "MAJOR MOVE" : "BREAKOUT", c: Math.abs(pctMove) >= 3 ? "red" : "orange" },
@@ -513,6 +593,10 @@ function detectMoves() {
     if (hl?.funding && Math.abs(hl.funding) > 0.01) tags.push({ l: hl.funding > 0 ? "HIGH FUND" : "NEG FUND", c: hl.funding > 0 ? "orange" : "green" });
     const recentWhale = whaleAlerts.filter(w => w.sym === sym && now - w.ts < 300000);
     if (recentWhale.length > 0) tags.push({ l: "WHALE ALIGNED", c: "cyan" });
+    if (macroRisk.highRisk) tags.push({ l: "MACRO RISK", c: "red" });
+    if (isPostSpike) tags.push({ l: "POST-SPIKE", c: "orange" });
+    if (sessionInfo.session === "ASIAN") tags.push({ l: "ASIAN SESSION", c: "purple" });
+    if (sessionInfo.session === "NY") tags.push({ l: "NY SESSION", c: "green" });
 
     const signal = {
       id: signalIdCounter++,
@@ -520,7 +604,7 @@ function detectMoves() {
       dir,
       token: sym,
       conf: confBase,
-      lev: Math.abs(pctMove) >= 3 ? "5x" : "3x",
+      lev: `${finalLev}x`,
       src: "alpha-detect",
       desc,
       tags,
@@ -529,11 +613,22 @@ function detectMoves() {
       pctMove: +pctMove.toFixed(2),
       entry,
       target,
+      tp1,
+      tp2,
       stopLoss,
+      stopPct,
+      tp1Pct,
+      tp2Pct,
+      rr1,
+      rr2,
       atr: +atr.toFixed(6),
       masterScore: master.score,
       riskOn: master.riskOn,
       reasoning: master.reasoning,
+      riskLabel,
+      timeframe: "DAY",
+      session: sessionInfo.label,
+      macroFlags: confFlags,
       whaleAligned: recentWhale.length > 0,
     };
 
@@ -1788,6 +1883,7 @@ export async function registerRoutes(
         const fetched = await fetchLiveCalendar();
         if (fetched.length > 0) {
           macroCache = { data: fetched, ts: Date.now() };
+          updateSharedMacroCache(fetched);
           liveEvents = fetched;
         } else if (macroCache.data.length > 0) {
           liveEvents = macroCache.data;
@@ -1797,6 +1893,7 @@ export async function registerRoutes(
         }
       } else {
         liveEvents = macroCache.data;
+        if (liveEvents.length > 0) updateSharedMacroCache(liveEvents);
       }
 
       // Update released events memory: accumulate any released events from today

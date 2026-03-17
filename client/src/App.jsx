@@ -484,28 +484,38 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
               <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
             </div>
             <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,marginTop:5,lineHeight:1.55}}>{sig.desc}</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:8,marginBottom:6}}>
-              <div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 8px",textAlign:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.1em"}}>{i18n.entry}</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):fmt(md.price,sig.token)}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:5,marginTop:8,marginBottom:6}}>
+              <div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.1em"}}>📍 {i18n.entry}</div>
+                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):fmt(md.price,sig.token)}</div>
               </div>
-              <div style={{background:"rgba(0,199,135,.04)",border:`1px solid rgba(0,199,135,.2)`,borderRadius:2,padding:"5px 8px",textAlign:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.green+"88",letterSpacing:"0.1em"}}>{i18n.target} 3×ATR</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green}}>{sig.target?fmt(sig.target,sig.token):"—"}</div>
+              <div style={{background:"rgba(0,199,135,.04)",border:`1px solid rgba(0,199,135,.2)`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.green+"88",letterSpacing:"0.1em"}}>🎯 TP1 {sig.rr1?`${sig.rr1}:1`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.green}}>{sig.tp1?fmt(sig.tp1,sig.token):sig.target?fmt(sig.target,sig.token):"—"}</div>
+                {sig.tp1Pct&&<div style={{fontFamily:MONO,fontSize:7,color:C.green+"88"}}>+{sig.tp1Pct}%</div>}
               </div>
-              <div style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:2,padding:"5px 8px",textAlign:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.red+"88",letterSpacing:"0.1em"}}>{i18n.stopLoss} 1.5×ATR</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div>
+              <div style={{background:"rgba(0,199,135,.02)",border:`1px solid rgba(0,199,135,.12)`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.green+"66",letterSpacing:"0.1em"}}>🎯 TP2 {sig.rr2?`${sig.rr2}:1`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.green+"bb"}}>{sig.tp2?fmt(sig.tp2,sig.token):"—"}</div>
+                {sig.tp2Pct&&<div style={{fontFamily:MONO,fontSize:7,color:C.green+"66"}}>+{sig.tp2Pct}%</div>}
+              </div>
+              <div style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.red+"88",letterSpacing:"0.1em"}}>🛑 {i18n.stopLoss}</div>
+                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div>
+                {sig.stopPct&&<div style={{fontFamily:MONO,fontSize:7,color:C.red+"88"}}>−{sig.stopPct}%</div>}
               </div>
             </div>
+            {sig.macroFlags&&sig.macroFlags.length>0&&<div style={{background:"rgba(255,64,96,.06)",border:"1px solid rgba(255,64,96,.25)",borderRadius:2,padding:"5px 10px",marginBottom:6,fontFamily:MONO,fontSize:9,color:C.red,lineHeight:1.6}}>⚠️ {sig.macroFlags[0]}</div>}
             <div style={{marginTop:4,marginBottom:6,paddingRight:56}}>
               <StrengthMeter value={strength} C={C}/>
             </div>
             <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap",alignItems:"center"}}>
               {sig.tags.map((tg,j)=><Badge key={j} label={tg.l} color={tg.c}/>)}
               <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.purple,fontFamily:MONO,letterSpacing:"0.08em"}}>{moveType}</span>
-              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.muted2,fontFamily:MONO}}>{"\u2264"}{sig.lev}</span>
-              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${convColor}44`,color:convColor,fontFamily:MONO,fontWeight:700}}>{conviction}</span>
+              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.muted2,fontFamily:MONO}}>⚡ {sig.lev||"2x"}</span>
+              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${convColor}44`,color:convColor,fontFamily:MONO,fontWeight:700}}>📊 {conviction}</span>
+              {sig.timeframe&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.gold}44`,color:C.gold,fontFamily:MONO}}>⏱ {sig.timeframe}</span>}
+              {sig.session&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.muted2,fontFamily:MONO}}>{sig.session}</span>}
               {volumeMultiplier>1.5&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.cyan}44`,color:C.cyan,fontFamily:MONO}}>Vol {volumeMultiplier.toFixed(1)}x</span>}
             </div>
           </div>
@@ -1231,13 +1241,27 @@ function Dashboard({user,setUser}){
     const fxBrief=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}: ${snapBrief(s,forexPrices)}`).join(" | ");
     const sigBrief=liveSignals.length>0?`\nLIVE SIGNALS DETECTED: ${liveSignals.slice(0,3).map(s=>`${s.token} ${s.dir} ${s.pctMove||""}%`).join(", ")}`:"";
     const macroSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual} ${e.released?"RELEASED":""}`:""}`).join(" | ")}`:"";
-    const prompt=`Generate a concise morning market brief for ${todayStr}. ALL data below is REAL and LIVE from exchanges:
+    // Detect FOMC/CPI within 48h from macro events
+    const now48h=new Date(Date.now()+48*60*60*1000);
+    const HIGH_MACRO_KW=["FOMC","CPI","NFP","Non-Farm","GDP","PCE","PPI","Interest Rate"];
+    const macroRiskEvts=macroEvents.filter(e=>e.impact==="HIGH"&&e.date&&new Date(e.date)>=new Date()&&new Date(e.date)<=now48h&&HIGH_MACRO_KW.some(k=>(e.name||"").includes(k)));
+    const macroRiskNote=macroRiskEvts.length>0?`🔴 MACRO RISK: ${macroRiskEvts.map(e=>e.name).join(", ")} within 48h — SIZE DOWN, cap leverage ≤2x`:"";
+    const prompt=`You are CLVR AI — elite quantitative trading analyst, powered by Claude. Generate a morning brief for ${todayStr} using the 5-layer trading framework. ALL data below is REAL and LIVE from exchanges.
+
+LAYER 1 — MACRO REGIME:
+${macroRiskNote||"No HIGH-impact macro events within 48h — normal risk environment."}
+${macroSnap}
+
+LAYER 2 — LIVE MARKET DATA:
 CRYPTO: ${cryptoBrief}
 EQUITIES: ${stockBrief}
 COMMODITIES: ${metalBrief}
-FOREX: ${fxBrief}${sigBrief}${macroSnap}${newsFeed.length>0?`\nNEWS HEADLINES: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:""}
-Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
-{"headline":"one-line market sentiment","bias":"RISK ON|RISK OFF|NEUTRAL","btc":"2 sentence BTC analysis with key levels","eth":"1 sentence ETH","sol":"1 sentence SOL","xau":"2 sentence gold analysis","xag":"1 sentence silver","eurusd":"2 sentence EUR/USD analysis","usdjpy":"2 sentence USD/JPY with BOJ context","usdcad":"2 sentence USD/CAD","watchToday":["item1","item2","item3","item4","item5"],"keyRisk":"single sentence on biggest risk today"}`;
+FOREX: ${fxBrief}${sigBrief}${newsFeed.length>0?`\nNEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:""}
+
+LAYERS 3-5: Apply session awareness (current ET time), ensure min R:R 1.5:1, use 🔴/🟡/🟢 risk labels.
+
+Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 risk labels in analysis when appropriate:
+{"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it"}`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt})});
       const data=await res.json();
@@ -1263,7 +1287,7 @@ Write JSON (no markdown). Use the EXACT prices above — do not make up numbers:
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
     const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual} ${e.released?"RELEASED":""}`:""}`).join(" | ")}`:"";
-    const sys=`You are CLVRQuant — elite institutional-grade trading AI powered by Claude Sonnet. All data below is REAL and LIVE. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
+    const sys=`You are CLVR AI — an elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a 5-layer decision framework before every trade idea. All data below is REAL and LIVE. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
 
 LIVE MARKET DATA:
 CRYPTO (30 tokens): ${cryptoSnap}
@@ -1271,23 +1295,45 @@ EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${macroAiSnap}
 
-RESPONSE RULES:
-- Always reference the exact live price from the data above.
-- When asked about a trade or setup, ALWAYS use this format:
+YOUR 5-LAYER FRAMEWORK (apply every time you output a trade):
 
-ASSET: [NAME] | DIRECTION: [LONG / SHORT]
-Current Price: $X
-Entry: $X
-Stop Loss: $X  (risk = X%)
-TP1: $X  (+X% / R:R X:1)
-TP2: $X  (+X% / R:R X:1)
-Leverage: Xх (spot if no leverage)
-Confidence: XX%
-Reason: [2 precise lines using live data, funding rates, OI, news]
+LAYER 1 — MACRO REGIME
+Check: Is FOMC/CPI/NFP within 48h? If yes → reduce confidence -20%, cap leverage at 2x, add 🔴 MACRO RISK flag.
+Check: DXY direction (USD strengthening = bearish for BTC/commodities/EM pairs, watch EUR/USD, AUD/USD).
+Check: Overall risk sentiment from news and equity moves.
 
-- Confidence = your probability estimate this trade hits TP1 before stop.
-- If not a trade question, give sharp analytical answer using live prices and change%.
-- Never add disclaimers or hedging language. Be precise and direct.`;
+LAYER 2 — MARKET STRUCTURE
+Check: Is this asset trending (momentum) or ranging (mean reversion)?
+Check: BTC dominance signal — rising dom = alt weakness. ETH/BTC ratio = altcoin risk proxy.
+Check: 24h spike? If price up >20% in 24h = POST-SPIKE WARNING, mean reversion risk high.
+
+LAYER 3 — SESSION AWARENESS
+NY session (8am–4pm ET): Full participation, normal sizing.
+Asian session (midnight–8am ET): Lower liquidity, tighter targets, reduce size.
+Post-NY (4pm–8pm ET): Avoid new day trades, only follow strong momentum.
+
+LAYER 4 — SIGNAL GENERATION (output format for trades)
+Use EXACTLY this emoji format for every trade idea:
+
+[🟢 HIGH CONFIDENCE / 🟡 MEDIUM CONFIDENCE / 🔴 HIGH RISK] ASSET LONG / SHORT
+📍 Entry: $X
+🛑 Stop: $X (−X%)
+🎯 TP1: $X (+X%) | R:R X:1
+🎯 TP2: $X (+X%) | R:R X:1
+⚡ Leverage: Xx (spot if no leverage)
+📊 Confidence: X%
+⏱ Timeframe: Day / Mid-Term / Long-Term
+⚠️ Flags: [list any macro risk, spike warnings, session warnings — or "None"]
+💡 Edge: [one sentence explaining the mathematical/structural edge right now]
+
+LAYER 5 — RISK RULES
+🟢 = All 4 layers align, >65% confidence, good R:R
+🟡 = 3 layers align or macro risk present, 45–65% confidence
+🔴 = Less than 3 layers align OR FOMC/CPI within 48h — output "NO TRADE" or very small size
+Minimum R:R = 1.5:1 for any trade. If R:R is below 1.5:1, skip.
+
+- If not a trade question: give a sharp analytical answer using live prices, funding rates, OI, news.
+- Never add disclaimers. Be direct, specific, and numerical. Ask yourself: "Would I put my own money on this?"`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
       const data=await res.json();
@@ -1331,17 +1377,7 @@ Reason: [2 precise lines using live data, funding rates, OI, news]
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:"";
-    const sys=`You are QuantBrain — an elite quantitative trading analyst for CLVRQuant AI, built on the combined reasoning of the world's best statisticians, traders, mathematicians, and probability theorists.
-
-Your thinking framework:
-- Bayesian probability: continuously update beliefs as new signals arrive
-- Kelly Criterion: size positions mathematically based on edge
-- Regime detection: identify momentum vs mean reversion and adjust
-- First-principles reasoning: derive correlations from current macro, not fixed rules
-- Cross-asset thinking: consider how signals ripple across crypto, metals, forex, equities
-- Expected value over prediction: find setups where the math favors participation
-
-Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}
+    const sys=`You are CLVR AI — elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a strict 5-layer decision framework before every trade idea. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}
 
 LIVE MARKET DATA:
 CRYPTO (${CRYPTO_SYMS.length} tokens): ${cryptoSnap}
@@ -1349,39 +1385,54 @@ EQUITIES (${EQUITY_SYMS.length} stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (${FOREX_SYMS.length} pairs): ${fxSnap}${sigSnap}${newsSnap}
 
-QUANTBRAIN CONFLUENCE ENGINE (auto-scored from live data):
-Confluence Score: ${cScore > 0 ? "+" : ""}${cScore} / 8
-Regime: ${regime}
-Win Probability: ${prob.toFixed(1)}%
-Kelly Fraction: ${kellyPct.toFixed(1)}%
-Signal Breakdown:
-${bd.map(b=>"- "+b).join("\n")}
+CONFLUENCE ENGINE (auto-scored):
+Confluence Score: ${cScore > 0 ? "+" : ""}${cScore} / 8 | Regime: ${regime} | Win Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
+Breakdown: ${bd.map(b=>"- "+b).join(" | ")}
 
-Always structure your response with these EXACT sections:
-1. REGIME ASSESSMENT
-2. SIGNAL ANALYSIS (what the data is actually saying)
-3. BAYESIAN PROBABILITY ESTIMATE (with reasoning)
-4. TOP 4 TRADE IDEAS (consider all asset classes: crypto, equities, commodities, forex)
-5. CROSS-ASSET REASONING (which related assets are worth watching and WHY)
-6. KELLY POSITION SIZING
-7. VERDICT
+━━━ 5-LAYER DECISION FRAMEWORK ━━━
 
-For each of the 4 trade ideas use EXACTLY this format:
+LAYER 1 — MACRO REGIME
+• Is FOMC/CPI/NFP/PCE within 48h? → reduce confidence -20%, cap leverage ≤2x, flag 🔴 MACRO RISK
+• DXY rising = bearish for BTC, commodities, EUR/USD, AUD/USD, EM pairs
+• Risk sentiment from equities and news feeds above
 
-━━━ TRADE #N ━━━
-ASSET: [NAME] | DIRECTION: LONG / SHORT
-Current Price: $X
-Entry: $X
-Stop Loss: $X  (risk = X%)
-TP1: $X  (+X% / R:R X:1)
-TP2: $X  (+X% / R:R X:1)
-Leverage: Xх (spot if no leverage)
-Confidence: XX%
-Kelly Size: X% of portfolio
-Rationale: [2–3 lines derived from live data, funding, OI, macro, news]
-Watch: [1 correlated asset to monitor]
+LAYER 2 — MARKET STRUCTURE  
+• Trend vs range? Momentum or mean reversion regime?
+• BTC dominance rising = rotate to BTC, reduce alts. ETH/BTC = altcoin health proxy.
+• 24h spike >20%? = POST-SPIKE WARNING — mean reversion risk, skip or fade
 
-Be precise, numerical, and direct. Use EXACT live prices from the data above.`;
+LAYER 3 — SESSION AWARENESS
+• NY (8am–4pm ET): Full liquidity, normal sizing
+• Asian (midnight–8am ET): Lower liquidity, tighter stops, 50% size
+• Post-NY (4pm–8pm ET): Follow momentum only, avoid new positions
+
+LAYER 4 — SIGNAL GENERATION
+Use EXACTLY this format for each trade idea:
+
+🟢/🟡/🔴 [ASSET] [LONG/SHORT]
+📍 Entry: $X
+🛑 Stop: $X (−X%)
+🎯 TP1: $X (+X%) | R:R X:1
+🎯 TP2: $X (+X%) | R:R X:1
+⚡ Leverage: Xx
+📊 Confidence: X%
+⏱ Timeframe: Day / Mid-Term / Long-Term
+⚠️ Flags: [macro risks, spike warnings, session warnings — or "None"]
+💡 Edge: [one sentence — the mathematical or structural reason this trade has edge RIGHT NOW]
+
+LAYER 5 — RISK RULES
+🟢 HIGH CONFIDENCE: all layers align, >65% confidence, R:R ≥2:1
+🟡 MEDIUM: 3 layers align or macro risk present, 45–65% confidence
+🔴 HIGH RISK / NO TRADE: <3 layers align, FOMC/CPI within 48h, post-spike, or R:R <1.5:1
+
+Always structure your full response:
+1. REGIME ASSESSMENT (2–3 sentences, reference live prices)
+2. MACRO CONTEXT (Fed posture, DXY, upcoming events, risk-on/off)
+3. TOP 4 TRADE IDEAS (one from each asset class: crypto, equity, commodity, forex)
+4. CROSS-ASSET RIPPLE (what each trade means for correlated assets)
+5. VERDICT (overall market stance in 1 sentence)
+
+Be precise. Use exact live prices. Ask yourself: "Would I put my own money on this?"`;
     const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week horizon)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month horizon)":"TODAY'S (intraday/swing)";
     const tfHint=aiTimeframe==="midterm"?"Focus on weekly chart setups, sector rotation, macro trends. Entries can be scaled in. Use wider stops and targets appropriate for multi-week holds.":aiTimeframe==="longterm"?"Focus on monthly chart structures, macro regime shifts, secular trends, yield curves, commodity supercycles. Position sizing for multi-month conviction holds with wide stops.":"Focus on intraday and short-term swing setups. Use tight entries and stops based on current price action.";
     const userMsg=`Give me ${tfLabel} TOP 4 TRADE IDEAS with full quantitative analysis.
@@ -2128,13 +2179,14 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.28em",marginBottom:5}}>CLVRQuant · MORNING BRIEF</div>
               <div style={{fontFamily:SERIF,fontWeight:900,fontSize:20,color:C.white,fontStyle:"italic",marginBottom:4}}>Market Summary</div>
               <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{briefDate}</div>
-              <div style={{marginTop:10}}>
+              <div style={{marginTop:10,display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
                 <span style={{padding:"4px 14px",borderRadius:2,fontFamily:MONO,fontSize:8,letterSpacing:"0.15em",
                   background:briefData.bias==="RISK ON"?"rgba(0,199,135,.1)":briefData.bias==="RISK OFF"?"rgba(255,64,96,.1)":"rgba(201,168,76,.1)",
                   color:briefData.bias==="RISK ON"?C.green:briefData.bias==="RISK OFF"?C.red:C.gold,
                   border:`1px solid ${briefData.bias==="RISK ON"?"rgba(0,199,135,.3)":briefData.bias==="RISK OFF"?"rgba(255,64,96,.3)":"rgba(201,168,76,.3)"}`}}>
                   {briefData.bias}
                 </span>
+                {briefData.macroRisk==="HIGH"&&<span style={{padding:"4px 14px",borderRadius:2,fontFamily:MONO,fontSize:8,letterSpacing:"0.15em",background:"rgba(255,64,96,.1)",color:C.red,border:"1px solid rgba(255,64,96,.3)"}}>🔴 MACRO RISK</span>}
               </div>
               <div style={{marginTop:12,fontFamily:SERIF,fontSize:13,color:C.text,fontStyle:"italic",lineHeight:1.6}}>"{briefData.headline}"</div>
             </div>
