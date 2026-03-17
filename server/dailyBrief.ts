@@ -129,54 +129,104 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
     }
   } catch {}
 
-  const prompt = `Generate a morning market brief for ${today}. ALL data below is REAL and LIVE:
+  // Detect FOMC/CPI within 48h for macro risk assessment
+  const now = new Date();
+  const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+  const HIGH_MACRO_KEYWORDS = ["FOMC", "CPI", "NFP", "Non-Farm", "GDP", "PCE", "PPI", "Interest Rate"];
+  let macroRiskFlag = "";
+  let macroRiskEvents: string[] = [];
+  try {
+    const macroFull = await fetch("http://localhost:5000/api/macro").then(r => r.json());
+    if (Array.isArray(macroFull)) {
+      for (const ev of macroFull) {
+        if (ev.impact !== "HIGH") continue;
+        if (!ev.date) continue;
+        const evDate = new Date(ev.date);
+        if (evDate >= now && evDate <= in48h && HIGH_MACRO_KEYWORDS.some((k: string) => (ev.name || "").includes(k))) {
+          macroRiskEvents.push(`${ev.name} on ${ev.date} ${ev.timeET || ev.time || ""}`);
+        }
+      }
+    }
+  } catch {}
+  if (macroRiskEvents.length > 0) {
+    macroRiskFlag = `HIGH MACRO RISK EVENTS WITHIN 48H: ${macroRiskEvents.join("; ")}. → Reduce position sizing. Cap leverage at 2x. Risk label: 🔴`;
+  }
+
+  // Session context
+  const etHour = parseInt(now.toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }));
+  const sessionCtx = etHour >= 8 && etHour < 16 ? "NY Session active — full liquidity" : etHour >= 0 && etHour < 8 ? "Asian session — note lower liquidity, tighter targets" : "Post-NY/Overnight";
+
+  const prompt = `You are CLVR AI — elite quantitative trading analyst, powered by Claude. Generate a morning market brief for ${today} using the 5-layer trading framework. ALL data below is REAL and LIVE:
+
+LAYER 1 — MACRO REGIME:
+${macroRiskFlag || "No HIGH-impact macro events within 48h — normal risk environment."}
+SESSION: ${sessionCtx}
+UPCOMING MACRO: ${macroStr || "No imminent releases"}
+
+LAYER 2 — LIVE MARKET DATA:
 CRYPTO: ${cryptoStr || "Data unavailable"}
 EQUITIES: ${eqStr || "Data unavailable"}
 METALS: ${metalStr || "Data unavailable"}
 FOREX: ${fxStr || "Data unavailable"}
-${macroStr ? `UPCOMING MACRO EVENTS: ${macroStr}` : ""}
+
+LAYER 3 — SESSION: ${sessionCtx}
 
 Return a JSON object with EXACTLY these fields:
 {
-  "headline": "One compelling headline summarizing today's market",
+  "headline": "One compelling headline using 5-layer insight — e.g. 'FOMC Risk-Off: BTC Tests $X Support, Gold at $X as DXY Firms'",
   "marketSentiment": "bullish" or "bearish" or "neutral",
+  "macroRegime": "RISK ON" or "RISK OFF" or "NEUTRAL",
+  "macroRisk": "${macroRiskEvents.length > 0 ? "HIGH" : "NORMAL"}",
+  "macroRiskNote": "${macroRiskEvents.length > 0 ? macroRiskEvents[0] : "No critical events within 48h"}",
   "commentary": [
     {
       "emoji": "₿",
       "title": "Bitcoin (BTC/USD)",
-      "text": "2-4 sentences of analysis with specific price levels, support/resistance, and what to watch. Mention key technical levels."
+      "text": "3-4 sentences: current price, trend (momentum or mean-reversion?), key support/resistance levels, funding rate context, what macro catalyst could break structure. End with a 🟢/🟡/🔴 bias."
     },
     {
       "emoji": "🇪🇺",
       "title": "EUR/USD",
-      "text": "2-4 sentences about EUR/USD with specific levels and drivers."
+      "text": "3-4 sentences: current rate, DXY impact, ECB vs Fed divergence, key support/resistance. End with 🟢/🟡/🔴 bias."
     },
     {
       "emoji": "🍁",
       "title": "USD/CAD",
-      "text": "2-4 sentences about USD/CAD with oil correlation and levels."
+      "text": "3-4 sentences: current rate, oil correlation (WTI/Brent price), BOC posture, key levels. End with 🟢/🟡/🔴 bias."
     },
     {
       "emoji": "🇯🇵",
       "title": "USD/JPY",
-      "text": "2-4 sentences about USD/JPY with BOJ risk and intervention levels."
+      "text": "3-4 sentences: current rate, BOJ stance, real yield differential, intervention risk levels. End with 🟢/🟡/🔴 bias."
     },
     {
       "emoji": "🥇",
-      "title": "Gold & Silver (XAU/XAG)",
-      "text": "2-4 sentences about precious metals with real yield drivers and levels."
+      "title": "Gold & Commodities",
+      "text": "3-4 sentences: XAU current price, real yield driver, DXY correlation, WTI oil price. End with 🟢/🟡/🔴 bias."
     }
   ],
-  "watchItems": ["5-7 specific things to watch today with context"],
+  "topTrade": {
+    "asset": "Best trade idea for today — asset name",
+    "dir": "LONG or SHORT",
+    "entry": "price",
+    "stop": "price",
+    "tp1": "price",
+    "tp2": "price",
+    "confidence": "X%",
+    "edge": "one sentence explaining the edge",
+    "riskLabel": "🟢 or 🟡 or 🔴",
+    "flags": "${macroRiskEvents.length > 0 ? "MACRO RISK" : "None"}"
+  },
+  "watchItems": ["5-7 specific things to watch today — include price levels, event names, and what to do if they trigger"],
   "riskLevel": "low" or "medium" or "high",
-  "riskNote": "Brief risk summary"
+  "riskNote": "One sentence: biggest risk to positions today and how to manage it"
 }
 
 RULES:
-- Use the REAL price data provided — reference actual current prices and percentage moves
-- Be specific about support/resistance levels, not vague
-- Mention catalysts: Fed speakers, data releases, BOJ policy, oil prices, DXY
-- Each commentary should be unique and insightful, not generic
+- Reference exact prices from the data above
+- Apply 5-layer framework: macro regime → structure → session → signal → risk rules
+- If FOMC/CPI within 48h: ALL signals get 🔴 label, cap leverage at 2x, say SIZE DOWN
+- Minimum R:R 1.5:1 for any trade idea. Skip if R:R is worse.
 - Return ONLY the JSON object. No markdown, no backticks.`;
 
   try {
@@ -189,8 +239,8 @@ RULES:
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 2048,
-        system: "You are CLVRQuant, an elite quantitative market analyst at a top hedge fund. Write concise, data-driven morning briefs with specific price levels and actionable intelligence. Use the REAL data provided. Sound authoritative but clear.",
+        max_tokens: 3000,
+        system: "You are CLVR AI — powered by Claude — an elite quantitative trading analyst applying a 5-layer decision framework (Macro Regime → Market Structure → Session Awareness → Signal Generation → Risk Rules). Generate precise, data-driven morning briefs with exact prices, 🔴/🟡/🟢 risk labels, macro risk flags when FOMC/CPI is within 48h, and one actionable top trade idea per brief. Always reference the actual prices provided. Return valid JSON only.",
         messages: [{ role: "user", content: prompt }],
       }),
     });
@@ -204,6 +254,12 @@ RULES:
 
 function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData): string {
   const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787" : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
+  const macroRiskBadge = briefJson.macroRisk === "HIGH"
+    ? `<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:#ff4060;border:1px solid rgba(255,64,96,.4);background:rgba(255,64,96,.08)">🔴 MACRO RISK</div>`
+    : "";
+  const macroRegimeBadge = briefJson.macroRegime
+    ? `<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:${briefJson.macroRegime==="RISK ON"?"#00c787":briefJson.macroRegime==="RISK OFF"?"#ff4060":"#e8c96d"};border:1px solid ${briefJson.macroRegime==="RISK ON"?"rgba(0,199,135,.4)":briefJson.macroRegime==="RISK OFF"?"rgba(255,64,96,.4)":"rgba(232,201,109,.4)"};background:${briefJson.macroRegime==="RISK ON"?"rgba(0,199,135,.08)":briefJson.macroRegime==="RISK OFF"?"rgba(255,64,96,.08)":"rgba(232,201,109,.08)"}">${briefJson.macroRegime}</div>`
+    : "";
 
   const priceRow = (label: string, price: string, change: string, changeNum: number) => {
     const changeColor = change === "—" ? "#8a96b2" : changeNum >= 0 ? "#00c787" : "#ff4060";
@@ -246,7 +302,10 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData)
 
   <div style="padding:24px 24px 8px">
     <div style="font-family:Georgia,serif;font-size:20px;font-weight:700;color:#e8e0d0;line-height:1.4;margin-bottom:12px;font-style:italic">"${briefJson.headline || "Markets in Motion"}"</div>
-    <div style="display:inline-block;padding:4px 14px;border-radius:2px;font-family:monospace;font-size:9px;letter-spacing:0.15em;color:${sentimentColor};border:1px solid ${sentimentColor};margin-bottom:4px">${(briefJson.marketSentiment || "NEUTRAL").toUpperCase()}</div>
+    <div>
+      <div style="display:inline-block;padding:4px 14px;border-radius:2px;font-family:monospace;font-size:9px;letter-spacing:0.15em;color:${sentimentColor};border:1px solid ${sentimentColor};margin-bottom:4px">${(briefJson.marketSentiment || "NEUTRAL").toUpperCase()}</div>${macroRegimeBadge}${macroRiskBadge}
+    </div>
+    ${briefJson.macroRiskNote && briefJson.macroRisk === "HIGH" ? `<div style="margin-top:10px;padding:8px 14px;background:rgba(255,64,96,.06);border:1px solid rgba(255,64,96,.2);border-radius:3px;font-family:monospace;font-size:10px;color:#ff6080;line-height:1.6">⚠️ ${briefJson.macroRiskNote} — Reduce position sizing. Max 2x leverage.</div>` : ""}
   </div>
 
   <div style="padding:16px 24px">
@@ -268,6 +327,22 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData)
     <div style="height:2px;background:linear-gradient(90deg,#c9a84c,transparent);margin-bottom:20px"></div>
     ${commentarySections}
   </div>
+
+  ${briefJson.topTrade ? `<div style="padding:0 24px 24px">
+    <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px">
+      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TODAY'S TOP TRADE IDEA</div>
+      <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">${briefJson.topTrade.riskLabel || "🟡"} ${briefJson.topTrade.asset || ""} ${briefJson.topTrade.dir || ""}</div>
+      <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
+        📍 Entry: ${briefJson.topTrade.entry || "—"}<br>
+        🛑 Stop: ${briefJson.topTrade.stop || "—"}<br>
+        🎯 TP1: ${briefJson.topTrade.tp1 || "—"}<br>
+        🎯 TP2: ${briefJson.topTrade.tp2 || "—"}<br>
+        📊 Confidence: ${briefJson.topTrade.confidence || "—"}<br>
+        ⚠️ Flags: ${briefJson.topTrade.flags || "None"}
+      </div>
+      ${briefJson.topTrade.edge ? `<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 ${briefJson.topTrade.edge}</div>` : ""}
+    </div>
+  </div>` : ""}
 
   ${watchItems ? `<div style="padding:0 24px 24px">
     <div style="background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;padding:16px 20px">
