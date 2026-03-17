@@ -484,25 +484,22 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
               <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
             </div>
             <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,marginTop:5,lineHeight:1.55}}>{sig.desc}</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:5,marginTop:8,marginBottom:6}}>
-              <div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.1em"}}>📍 {i18n.entry}</div>
-                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):fmt(md.price,sig.token)}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginTop:8,marginBottom:6}}>
+              <div style={{background:"rgba(0,0,0,.25)",border:`1px solid ${C.border}`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.08em"}}>📍 Entry</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):fmt(md.price,sig.token)}</div>
               </div>
-              <div style={{background:"rgba(0,199,135,.04)",border:`1px solid rgba(0,199,135,.2)`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.green+"88",letterSpacing:"0.1em"}}>🎯 TP1 {sig.rr1?`${sig.rr1}:1`:""}</div>
-                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.green}}>{sig.tp1?fmt(sig.tp1,sig.token):sig.target?fmt(sig.target,sig.token):"—"}</div>
-                {sig.tp1Pct&&<div style={{fontFamily:MONO,fontSize:7,color:C.green+"88"}}>+{sig.tp1Pct}%</div>}
+              <div style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.25)`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.red+"99",letterSpacing:"0.08em"}}>🛑 Stop{sig.stopPct?` −${sig.stopPct}%`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div>
               </div>
-              <div style={{background:"rgba(0,199,135,.02)",border:`1px solid rgba(0,199,135,.12)`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.green+"66",letterSpacing:"0.1em"}}>🎯 TP2 {sig.rr2?`${sig.rr2}:1`:""}</div>
-                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.green+"bb"}}>{sig.tp2?fmt(sig.tp2,sig.token):"—"}</div>
-                {sig.tp2Pct&&<div style={{fontFamily:MONO,fontSize:7,color:C.green+"66"}}>+{sig.tp2Pct}%</div>}
+              <div style={{background:"rgba(0,199,135,.05)",border:`1px solid rgba(0,199,135,.25)`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.green+"99",letterSpacing:"0.08em"}}>🎯 TP1{sig.tp1Pct?` +${sig.tp1Pct}%`:""}{sig.rr1?` · ${sig.rr1}:1`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green}}>{sig.tp1?fmt(sig.tp1,sig.token):sig.target?fmt(sig.target,sig.token):"—"}</div>
               </div>
-              <div style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:2,padding:"5px 7px",textAlign:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:7,color:C.red+"88",letterSpacing:"0.1em"}}>🛑 {i18n.stopLoss}</div>
-                <div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div>
-                {sig.stopPct&&<div style={{fontFamily:MONO,fontSize:7,color:C.red+"88"}}>−{sig.stopPct}%</div>}
+              <div style={{background:"rgba(0,199,135,.02)",border:`1px solid rgba(0,199,135,.14)`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.green+"66",letterSpacing:"0.08em"}}>🎯 TP2{sig.tp2Pct?` +${sig.tp2Pct}%`:""}{sig.rr2?` · ${sig.rr2}:1`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green+"aa"}}>{sig.tp2?fmt(sig.tp2,sig.token):"—"}</div>
               </div>
             </div>
             {sig.macroFlags&&sig.macroFlags.length>0&&<div style={{background:"rgba(255,64,96,.06)",border:"1px solid rgba(255,64,96,.25)",borderRadius:2,padding:"5px 10px",marginBottom:6,fontFamily:MONO,fontSize:9,color:C.red,lineHeight:1.6}}>⚠️ {sig.macroFlags[0]}</div>}
@@ -1312,28 +1309,30 @@ NY session (8am–4pm ET): Full participation, normal sizing.
 Asian session (midnight–8am ET): Lower liquidity, tighter targets, reduce size.
 Post-NY (4pm–8pm ET): Avoid new day trades, only follow strong momentum.
 
-LAYER 4 — SIGNAL GENERATION (output format for trades)
-Use EXACTLY this emoji format for every trade idea:
+LAYER 4 — ALWAYS PROVIDE A RECOMMENDATION
+For EVERY response — whether the user asks a specific trade question or a general market question — ALWAYS end with a CLVR RECOMMENDATION block using this EXACT format:
 
-[🟢 HIGH CONFIDENCE / 🟡 MEDIUM CONFIDENCE / 🔴 HIGH RISK] ASSET LONG / SHORT
+━━━ CLVR RECOMMENDATION ━━━
+🟢/🟡/🔴 [ASSET] [LONG / SHORT]
+💰 Current Price: $X
 📍 Entry: $X
-🛑 Stop: $X (−X%)
+🛑 Stop Loss: $X (−X%)
 🎯 TP1: $X (+X%) | R:R X:1
 🎯 TP2: $X (+X%) | R:R X:1
-⚡ Leverage: Xx (spot if no leverage)
+⚡ Leverage: Xx (or SPOT)
 📊 Confidence: X%
 ⏱ Timeframe: Day / Mid-Term / Long-Term
-⚠️ Flags: [list any macro risk, spike warnings, session warnings — or "None"]
-💡 Edge: [one sentence explaining the mathematical/structural edge right now]
+⚠️ Flags: [macro risk, spike, session — or None]
+💡 Edge: [one sentence — why this trade has edge RIGHT NOW]
+
+⚠️ This is AI analysis only. You have the final say — only act if this aligns with your own research and risk tolerance.
 
 LAYER 5 — RISK RULES
-🟢 = All 4 layers align, >65% confidence, good R:R
-🟡 = 3 layers align or macro risk present, 45–65% confidence
-🔴 = Less than 3 layers align OR FOMC/CPI within 48h — output "NO TRADE" or very small size
-Minimum R:R = 1.5:1 for any trade. If R:R is below 1.5:1, skip.
+🟢 = All layers align, >65% confidence, R:R ≥2:1
+🟡 = Partial alignment or macro risk, 45–65% confidence
+🔴 = FOMC/CPI within 48h, post-spike, or R:R <1.5:1 → recommend small size or NO TRADE
 
-- If not a trade question: give a sharp analytical answer using live prices, funding rates, OI, news.
-- Never add disclaimers. Be direct, specific, and numerical. Ask yourself: "Would I put my own money on this?"`;
+- Be direct, specific, and numerical. Use exact live prices from the data above.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
       const data=await res.json();
