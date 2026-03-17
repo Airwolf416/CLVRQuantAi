@@ -1559,11 +1559,21 @@ export async function registerRoutes(
 
       if (!response.ok) {
         const errorText = await response.text();
+        // Hide technical API errors from the user — show a friendly maintenance message instead
+        if (errorText.includes("credit balance") || errorText.includes("credit_balance") || response.status === 529) {
+          return res.status(503).json({ error: "__MAINTENANCE__" });
+        }
         return res.status(response.status).json({ error: `API Error ${response.status}: ${errorText}` });
       }
 
       const data: any = await response.json();
-      if (data.error) return res.status(400).json({ error: data.error.message });
+      if (data.error) {
+        const msg = data.error.message || "";
+        if (msg.includes("credit balance") || msg.includes("credit_balance")) {
+          return res.status(503).json({ error: "__MAINTENANCE__" });
+        }
+        return res.status(400).json({ error: msg });
+      }
 
       const text = (data.content || []).map((b: any) => b.text || "").join("") || "No response.";
 

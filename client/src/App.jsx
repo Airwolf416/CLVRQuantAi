@@ -1148,6 +1148,7 @@ function Dashboard({user,setUser}){
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403)setMacroAiResp("✦ PRO FEATURE — Upgrade to Pro to unlock AI-powered macro analysis.");
+        else if(data.error==="__MAINTENANCE__"||res.status===503)setMacroAiResp("🔧 CLVR AI is currently undergoing maintenance. Intelligence will be back shortly — please try again in a few minutes.");
         else setMacroAiResp(data.error||"Error. Try again.");
         setMacroAiLoading(false);return;
       }
@@ -1338,6 +1339,7 @@ LAYER 5 — RISK RULES
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Market Analyst is exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• CLVR AI analysis — powered by Claude Sonnet 4\n• Top 4 trade ideas with Entry / Stop / TP1 / TP2\n• Confidence levels & Kelly sizing\n• Cross-asset intelligence\n\nTap UPGRADE in the top bar.");
+        else if(data.error==="__MAINTENANCE__"||res.status===503)setAiOutput("🔧 CLVR AI Maintenance\n\nOur AI intelligence engine is currently undergoing maintenance and will be back shortly.\n\nPlease try again in a few minutes — all other features remain fully operational.");
         else setAiOutput(data.error||`Error ${res.status}`);
         setAiLoading(false);return;
       }
@@ -1445,6 +1447,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Trade Ideas are exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• Top 4 trade ideas across all asset classes\n• Entry / Stop Loss / TP1 / TP2 for each trade\n• Confidence levels & Kelly position sizing\n• Bayesian probability estimates\n\nTap UPGRADE in the top bar.");
+        else if(data.error==="__MAINTENANCE__"||res.status===503)setAiOutput("🔧 CLVR AI Maintenance\n\nOur AI intelligence engine is currently undergoing maintenance and will be back shortly.\n\nPlease try again in a few minutes — all other features remain fully operational.");
         else setAiOutput(data.error||`Error ${res.status}`);
         setAiLoading(false);return;
       }
