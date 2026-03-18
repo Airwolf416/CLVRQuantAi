@@ -122,10 +122,22 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
   const eqStr = marketData.equities.map(e => `${e.symbol}: ${e.price} (${e.change})`).join(" | ");
 
   let macroStr = "";
+  let pendingHighEvents: string[] = [];
+  const macroFetchedAt = new Date().toISOString();
   try {
     const macroRes = await fetch("http://localhost:5000/api/macro").then(r => r.json());
     if (Array.isArray(macroRes) && macroRes.length > 0) {
-      macroStr = macroRes.filter((e: any) => e.impact === "HIGH" || e.impact === "MED").slice(0, 12).map((e: any) => `${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual}`:""}`).join(" | ");
+      const filtered = macroRes.filter((e: any) => e.impact === "HIGH" || e.impact === "MED").slice(0, 14);
+      macroStr = filtered.map((e: any) => {
+        const status = e.actual ? `STATUS:RELEASED ACTUAL:${e.actual}` : e.isPast ? "STATUS:PENDING_DATA" : "STATUS:PENDING";
+        return `${e.date} ${e.timeET||e.time||""} [${e.region||e.country}] ${e.name} (${e.impact}) | Prev:${e.previous||e.current||"—"} Fcast:${e.forecast||"—"} | ${status}`;
+      }).join("\n  ");
+      // Collect HIGH impact PENDING events for the anti-hallucination injection
+      for (const ev of filtered) {
+        if (ev.impact === "HIGH" && !ev.actual) {
+          pendingHighEvents.push(`${ev.name} at ${ev.timeET||ev.time||"TBD"} on ${ev.date}`);
+        }
+      }
     }
   } catch {}
 
@@ -156,14 +168,31 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
   const etHour = parseInt(now.toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }));
   const sessionCtx = etHour >= 8 && etHour < 16 ? "NY Session active — full liquidity" : etHour >= 0 && etHour < 8 ? "Asian session — note lower liquidity, tighter targets" : "Post-NY/Overnight";
 
-  const prompt = `You are CLVR AI — elite quantitative trading analyst, powered by Claude. Generate a morning market brief for ${today} using the 5-layer trading framework. ALL data below is REAL and LIVE:
+  const pendingWarningBlock = pendingHighEvents.length > 0
+    ? `\n⚠️ CRITICAL — PENDING HIGH-IMPACT EVENTS (NO OUTCOMES YET):\n${pendingHighEvents.map(e => `  - ${e}`).join("\n")}\nFor each of these events you MUST write only forward-looking language. NEVER state the outcome. NEVER write phrases like "Fed holds", "CPI came in at", "rate decision confirmed", or anything describing a result. Write what the market is pricing in and what to watch FOR. Violation of this rule produces misleading information that could cause financial harm.`
+    : "";
+
+  const prompt = `You are CLVR AI — elite quantitative trading analyst, powered by Claude. Generate a morning market brief for ${today}. ALL data below is REAL, LIVE, and TIMESTAMPED.
+
+═══ CRITICAL RULES — READ BEFORE WRITING ═══
+1. Only use prices, percentages, and figures EXPLICITLY provided in the data below. Do NOT invent or round differently.
+2. For any macro event with STATUS:PENDING — write ONLY forward-looking language ("market is pricing in X", "watch for Y"). NEVER state outcomes.
+3. For any macro event with STATUS:RELEASED — state the ACTUAL value provided. Never infer.
+4. Label market sentiment (RISK ON / RISK OFF / MIXED) using provided data only.
+5. The "What to Watch" section must use conditional language: "IF [level] breaks THEN [action]". Never unconditional calls.
+6. If any HIGH-impact event is within 6 hours of ${new Date().toISOString()}, add a tail risk note.
+7. Never fabricate data. Never state a macro outcome unless STATUS:RELEASED with actual value.
+${pendingWarningBlock}
+═════════════════════════════════════════════
 
 LAYER 1 — MACRO REGIME:
 ${macroRiskFlag || "No HIGH-impact macro events within 48h — normal risk environment."}
 SESSION: ${sessionCtx}
-UPCOMING MACRO: ${macroStr || "No imminent releases"}
 
-LAYER 2 — LIVE MARKET DATA:
+MACRO EVENTS [fetched: ${macroFetchedAt}]:
+  ${macroStr || "No imminent releases"}
+
+LAYER 2 — LIVE MARKET DATA [fetched: ${macroFetchedAt}]:
 CRYPTO: ${cryptoStr || "Data unavailable"}
 EQUITIES: ${eqStr || "Data unavailable"}
 METALS: ${metalStr || "Data unavailable"}

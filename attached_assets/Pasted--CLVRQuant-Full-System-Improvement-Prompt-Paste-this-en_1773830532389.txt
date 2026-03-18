@@ -1,0 +1,310 @@
+# CLVRQuant — Full System Improvement Prompt
+
+# Paste this entire block into Replit as your implementation instructions
+
+-----
+
+## FIX 1 — MACRO TAB: REMOVE DUPLICATE EVENTS
+
+The macro calendar is showing duplicate entries when the same event appears in multiple sources (e.g. ForexFactory AND Central Banks both return the FOMC Rate Decision).
+
+**Fix:** Before rendering the events list, deduplicate using a composite key:
+
+```javascript
+const deduplicatedEvents = Object.values(
+  rawEvents.reduce((acc, event) => {
+    const key = `${event.title.toLowerCase().trim()}_${event.date}_${event.time}`;
+    if (!acc[key]) {
+      acc[key] = event;
+    } else {
+      // Merge: keep the entry with more data (prefer non-null forecast/previous)
+      if (!acc[key].forecast && event.forecast) acc[key].forecast = event.forecast;
+      if (!acc[key].previous && event.previous) acc[key].previous = event.previous;
+    }
+    return acc;
+  }, {})
+);
+```
+
+After deduplication, only one FOMC entry should appear with the most complete data (forecast + previous populated).
+
+-----
+
+## FIX 2 — MACRO TAB: LIVE OUTCOME UPDATE AFTER RATE DECISION
+
+Once a HIGH impact event passes its scheduled time, the app should automatically fetch the actual result and update the card in real-time.
+
+**Implementation:**
+
+- Poll for the actual result every 60 seconds starting at `event.time + 1 minute`
+- When the result is available, update the event card:
+  - Change badge from `PENDING` → `RELEASED`
+  - Populate the `ACTUAL` field with the real number
+  - Add a color indicator: green if in line with forecast, red if surprise
+  - Trigger a re-generation of the Morning Brief with the confirmed data (see Fix 3)
+
+```javascript
+// Pseudo-logic for post-release polling
+if (eventIsPast && event.actual === null) {
+  const result = await fetchActualResult(event.id); // from Finnhub or ForexFactory
+  if (result) {
+    event.actual = result;
+    event.status = 'RELEASED';
+    triggerBriefRegeneration({ triggeredBy: event.title, actual: result });
+  }
+}
+```
+
+-----
+
+## FIX 3 — MORNING BRIEF: NEVER HALLUCINATE PENDING EVENT OUTCOMES
+
+**Critical bug:** The morning brief is currently stating outcomes of events that have not yet occurred (e.g. “Fed holds at 4.25-4.50%” written at 6:24 AM before the 14:00 ET FOMC decision). This is a hallucination caused by the AI inferring a likely outcome and stating it as fact.
+
+**System prompt addition for the Brief generation call:**
+
+Add this block to the brief generation system prompt:
+
+```
+CRITICAL RULE — PENDING EVENTS:
+Before writing the brief, check the macro event list for any HIGH impact events scheduled within the next 24 hours that have status = PENDING (no actual result yet).
+
+For any PENDING event:
+- You MUST NOT state or imply the outcome
+- You MUST NOT write phrases like "Fed holds", "CPI came in at", "rate decision confirmed", or any language that describes a result
+- You MUST write forward-looking language such as:
+  "FOMC Rate Decision is scheduled for 14:00 ET today — market is pricing in a hold at 4.25-4.50%. Watch for forward guidance and dot plot revisions as the key market mover."
+
+Violation of this rule produces misleading information that could cause financial harm. It is your most important constraint when generating the brief.
+
+When an event has status = RELEASED and actual result is populated, you may then describe the outcome using the actual value provided. Never infer — only state confirmed data.
+```
+
+-----
+
+## FIX 4 — MORNING BRIEF: REAL LIVE DATA ONLY, TIMESTAMPED
+
+The brief must be generated using only confirmed real-time data. Add the following constraints:
+
+**In the brief generation code:**
+
+```javascript
+const briefContext = {
+  generated_at: new Date().toISOString(), // Always inject generation timestamp
+  prices: {
+    // Each price must include its own fetch timestamp
+    BTC: { price: btcPrice, change_pct: btcChange, fetched_at: pricesFetchedAt },
+    ETH: { price: ethPrice, change_pct: ethChange, fetched_at: pricesFetchedAt },
+    SOL: { price: solPrice, change_pct: solChange, fetched_at: pricesFetchedAt },
+    XAU: { price: xauPrice, change_pct: xauChange, fetched_at: pricesFetchedAt },
+    WTI: { price: wtiPrice, change_pct: wtiChange, fetched_at: pricesFetchedAt },
+    EURUSD: { price: eurUsd, change_pct: eurUsdChange, fetched_at: pricesFetchedAt },
+    USDJPY: { price: usdJpy, change_pct: usdJpyChange, fetched_at: pricesFetchedAt },
+  },
+  macro_events: deduplicatedEvents, // Use the deduplicated list from Fix 1
+  funding_rates: fundingData,        // From Binance or similar
+  volume_data: volumeData,
+}
+```
+
+**In the brief system prompt:**
+
+```
+You are CLVRQuant's morning market analyst. You write the daily brief for CLVRQuant, a trading platform.
+
+You will be given a JSON context block containing live market data, macro events, and funding rates. 
+All data in the context block is real and timestamped. Do not add, infer, or invent any numbers.
+
+Rules:
+1. Only use prices, percentages, and figures explicitly provided in the context block
+2. Never round numbers differently from what is provided
+3. For any PENDING macro event, write only forward-looking language (never state outcomes)
+4. For any RELEASED macro event, state the actual result using the provided actual value
+5. Include data source timestamps in your reasoning but not in the final output
+6. Label market sentiment (RISK ON / RISK OFF / MIXED) based on provided data only
+7. The What to Watch section must contain conditional trade triggers ("IF X THEN Y"), never unconditional calls
+8. End with a tail risk note if any high-impact event is within 6 hours of generation time
+```
+
+-----
+
+## FIX 5 — DATA SYNC ACROSS ALL TABS
+
+All tabs (Macro, Brief, Signals, Markets, Radar) must share a single data context object that is fetched once per refresh cycle and passed to every component. This prevents inconsistencies where one tab shows a different price than another.
+
+**Implementation:**
+
+```javascript
+// Single shared data store — refresh every 60 seconds
+class MarketDataStore {
+  constructor() {
+    this.data = null;
+    this.lastFetched = null;
+    this.subscribers = [];
+  }
+
+  async refresh() {
+    const [prices, funding, macro, volume] = await Promise.all([
+      fetchPrices(),       // Binance / Finnhub
+      fetchFunding(),      // Binance perpetuals
+      fetchMacroEvents(),  // ForexFactory + Central Banks (deduplicated)
+      fetchVolume(),       // 24h volume + 7-day avg
+    ]);
+
+    this.data = {
+      prices,
+      funding,
+      macro: deduplicateEvents(macro), // Apply Fix 1 here
+      volume,
+      fetched_at: new Date().toISOString(),
+    };
+
+    this.lastFetched = Date.now();
+    this.notify();
+  }
+
+  subscribe(callback) {
+    this.subscribers.push(callback);
+  }
+
+  notify() {
+    this.subscribers.forEach(cb => cb(this.data));
+  }
+}
+
+// All tabs subscribe to the same store
+const store = new MarketDataStore();
+store.refresh();
+setInterval(() => store.refresh(), 60000);
+
+// Each tab
+store.subscribe((data) => {
+  updateMacroTab(data);
+  updateBriefTab(data);
+  updateSignalsTab(data);
+  updateMarketsTab(data);
+});
+```
+
+This ensures the AI (Claude) always receives the exact same data context regardless of which tab triggered the analysis call.
+
+-----
+
+## FIX 6 — SIGNALS TAB: PUMP DETECTION QUALITY IMPROVEMENT
+
+**Current problem:** The pump detector is triggering on moves as small as +1.2% in 6 minutes with only $3M OI. This generates too many false positives and low-confidence signals. TP1 displaying the same price as entry is also a rounding bug.
+
+### 6a — Fix the TP rounding bug
+
+```javascript
+// Minimum TP distance: 0.5% from entry
+const minTPDistance = 0.005;
+const tp1 = entry * (1 + Math.max(tp1RawPct, minTPDistance));
+const tp2 = entry * (1 + Math.max(tp2RawPct, minTPDistance * 2));
+
+// Round to meaningful precision based on price range
+const precision = entry < 0.01 ? 6 : entry < 1 ? 4 : entry < 100 ? 3 : 2;
+```
+
+### 6b — Pump detection threshold upgrade
+
+Replace the current single-threshold trigger with a multi-factor confirmation system:
+
+```javascript
+function isPumpSignal(token) {
+  const checks = {
+    // 1. Price move must be significant relative to session volatility
+    priceMove: token.change5min >= 1.5,              // Minimum 1.5% in 5min (was 0.8%)
+
+    // 2. Volume must confirm the move (not just price drift)
+    volumeSpike: token.volume5min >= token.avgVolume5min * 3.0,  // 3x average volume
+
+    // 3. OI must be meaningful (filters micro-cap noise)
+    minOI: token.openInterest >= 10_000_000,          // $10M minimum OI (was $3M)
+
+    // 4. Funding must not be extremely elevated (prevents buying into squeeze top)
+    fundingHealthy: token.fundingRate <= 0.003,       // Max 0.003%/8h
+
+    // 5. Move must be sustained (not already fading)
+    notFading: token.change1min >= 0,                 // Still moving up in last 1min
+
+    // 6. For dumps: inverse of above checks
+  };
+
+  const passedChecks = Object.values(checks).filter(Boolean).length;
+  const totalChecks = Object.keys(checks).length;
+  const confidence = Math.round((passedChecks / totalChecks) * 100);
+
+  return {
+    isSignal: passedChecks >= 4,   // Must pass at least 4/5 checks
+    confidence,
+    failedChecks: Object.entries(checks)
+      .filter(([, v]) => !v)
+      .map(([k]) => k),
+  };
+}
+```
+
+### 6c — Signal confidence scoring displayed to user
+
+Show which checks passed and which failed on each signal card:
+
+- ✅ Volume spike confirmed (4.2x avg)
+- ✅ OI $24M — sufficient liquidity
+- ⚠️ Funding elevated at +0.0028%/8h — near limit
+- ✅ Move sustained — still +0.3% in last 1min
+- ✅ Price move +2.1% in 5min
+
+This tells the user exactly why a signal fired and what its weakness is.
+
+### 6d — Session-aware minimum thresholds
+
+```javascript
+const sessionThresholds = {
+  ASIAN:    { minMove: 2.0, minVolMultiplier: 4.0, minOI: 15_000_000 }, // Tighter — lower liquidity
+  LONDON:   { minMove: 1.5, minVolMultiplier: 3.0, minOI: 10_000_000 },
+  NEW_YORK: { minMove: 1.5, minVolMultiplier: 3.0, minOI: 10_000_000 },
+  OVERLAP:  { minMove: 1.2, minVolMultiplier: 2.5, minOI:  8_000_000 }, // Most liquid — lower bar OK
+};
+```
+
+-----
+
+## SYSTEM PROMPT ADDITION FOR SIGNAL ANALYSIS (Claude Sonnet)
+
+When Claude analyzes a detected signal, inject this:
+
+```
+You are analyzing a real-time trading signal for CLVRQuant. The signal has already passed multi-factor detection filters. Your job is to:
+
+1. Validate the signal makes sense given the current macro context (provided)
+2. Set precise entry, stop, TP1, TP2 levels — TP1 must be at least 0.5% from entry, TP2 at least 1.0%
+3. Assign leverage: ASIAN session max 2x, LONDON/NY max 3x, no leverage if HIGH impact macro event within 2 hours
+4. Flag field is MANDATORY — never leave blank. List every concern.
+5. If a HIGH impact macro event (FOMC, CPI, NFP) is within 2 hours of signal detection, automatically add flag: "⚠️ HIGH IMPACT EVENT IMMINENT — reduce size or skip"
+6. Confidence score must reflect ALL of: price move strength, volume confirmation, OI size, funding health, macro environment. Score above 75 requires all 5 factors positive.
+
+Data provided:
+- Signal detection data (price move, volume, OI, funding)
+- Current macro event calendar with statuses (PENDING / RELEASED)
+- Market regime (provided)
+- Session (provided)
+
+Never fabricate data. Never state a macro event outcome unless status = RELEASED with actual value populated.
+```
+
+-----
+
+## SUMMARY OF ALL CHANGES
+
+|# |Tab    |Issue                               |Fix                                                             |
+|--|-------|------------------------------------|----------------------------------------------------------------|
+|1 |Macro  |Duplicate FOMC events               |Deduplicate by name+date+time composite key                     |
+|2 |Macro  |No live outcome after release       |Poll for actual result post-event, update card                  |
+|3 |Brief  |Hallucinated “Fed holds” before FOMC|Hard rule: PENDING events = forward language only               |
+|4 |Brief  |No data timestamps                  |Inject fetched_at on every data field                           |
+|5 |All    |Tabs not in sync                    |Single shared data store, all tabs subscribe                    |
+|6a|Signals|TP1 = Entry (rounding bug)          |Enforce minimum 0.5% TP distance                                |
+|6b|Signals|Pump fires on noise                 |Multi-factor: 1.5% move + 3x vol + $10M OI + funding + sustained|
+|6c|Signals|No transparency on why signal fired |Show passed/failed checks on each card                          |
+|6d|Signals|Same threshold all sessions         |Session-aware thresholds (Asian stricter)                       |

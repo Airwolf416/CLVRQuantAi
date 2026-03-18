@@ -139,10 +139,18 @@ const hlData: Record<string, { funding: number; oi: number; perpPrice: number; v
 const priceHistory: Record<string, { price: number; ts: number }[]> = {};
 const liveSignals: any[] = [];
 let signalIdCounter = 10000;
-const MOVE_THRESHOLD = 0.8;
 const MOVE_WINDOW = 5 * 60 * 1000;
 const SIGNAL_COOLDOWN = 10 * 60 * 1000;
 const lastSignalTime: Record<string, number> = {};
+
+// Session-aware thresholds — stricter in low-liquidity sessions
+const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: number; minOI: number }> = {
+  ASIAN:    { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
+  LONDON:   { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
+  NY:       { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
+  POST_NY:  { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
+  DEFAULT:  { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
+};
 
 const whaleAlerts: { sym: string; ts: number; type: string; amount: string }[] = [];
 
@@ -518,36 +526,124 @@ function detectMoves() {
     if (now - windowStart.ts < MOVE_WINDOW * 0.5) continue;
 
     const pctMove = ((current.price - windowStart.price) / windowStart.price) * 100;
-    if (Math.abs(pctMove) < MOVE_THRESHOLD) continue;
+    const absPctMove = Math.abs(pctMove);
 
     const dir = pctMove > 0 ? "LONG" : "SHORT";
     const icon = pctMove > 0 ? "+" : "-";
-    const absPct = Math.abs(pctMove).toFixed(1);
+    const absPct = absPctMove.toFixed(1);
     const elapsed = Math.round((current.ts - windowStart.ts) / 60000);
+
+    // Session-aware thresholds
+    const sessionInfo = getSessionET();
+    const sessionKey = sessionInfo.session || "DEFAULT";
+    const thresh = SESSION_THRESHOLDS[sessionKey] || SESSION_THRESHOLDS.DEFAULT;
+
     const hl = hlData[sym];
+    const oiVal = hl?.oi || 0;
+    const fundingVal = hl?.funding || 0;
+
+    // Compute volume multiplier from price history (use point count as proxy for volume activity)
+    const recentPts = hist.filter(p => now - p.ts <= MOVE_WINDOW);
+    const olderPts = hist.filter(p => now - p.ts > MOVE_WINDOW && now - p.ts <= MOVE_WINDOW * 4);
+    const avgRecentVol = olderPts.length > 0 ? olderPts.length / 3 : 1;
+    const volumeMult = avgRecentVol > 0 ? recentPts.length / avgRecentVol : 1;
+
+    // ── MULTI-FACTOR SIGNAL QUALITY CHECKS (FIX 6b) ─────────────────────────
+    const prev1minPts = hist.filter(p => now - p.ts <= 60000 && now - p.ts > 5000);
+    const lastMinPt = prev1minPts.length > 0 ? prev1minPts[prev1minPts.length - 1] : null;
+    const last1minMove = lastMinPt ? ((current.price - lastMinPt.price) / lastMinPt.price) * 100 : 0;
+    const notFading = dir === "LONG" ? last1minMove >= -0.1 : last1minMove <= 0.1;
+
+    const checks: Record<string, { pass: boolean; label: string; detail: string }> = {
+      priceMove: {
+        pass: absPctMove >= thresh.minMove,
+        label: `Price move ${absPct}% in ${elapsed}min`,
+        detail: `≥${thresh.minMove}% required`,
+      },
+      volume: {
+        pass: volumeMult >= thresh.minVolMult || volumeMult === 1,
+        label: `Activity ${volumeMult.toFixed(1)}x avg`,
+        detail: `≥${thresh.minVolMult}x required`,
+      },
+      minOI: {
+        pass: oiVal === 0 || oiVal >= thresh.minOI,
+        label: oiVal > 0 ? `OI $${(oiVal / 1e6).toFixed(0)}M` : "OI data unavailable",
+        detail: `≥$${(thresh.minOI / 1e6).toFixed(0)}M required`,
+      },
+      fundingHealthy: {
+        pass: Math.abs(fundingVal) <= 0.003,
+        label: `Funding ${fundingVal >= 0 ? "+" : ""}${(fundingVal * 100).toFixed(4)}%/8h`,
+        detail: "≤|0.003%| healthy",
+      },
+      notFading: {
+        pass: notFading,
+        label: notFading ? "Move still sustained" : "Move fading in last 1min",
+        detail: "Must not reverse in last 1min",
+      },
+    };
+
+    const passedCount = Object.values(checks).filter(c => c.pass).length;
+    const totalChecks = Object.keys(checks).length;
+    // Must pass at least 4/5 checks (or 3/5 if price move is very strong ≥3%)
+    const minPassed = absPctMove >= 3 ? 3 : 4;
+    if (passedCount < minPassed) {
+      const failed = Object.entries(checks).filter(([,v]) => !v.pass).map(([k]) => k).join(", ");
+      console.log(`[SIGNAL] ${sym} FILTERED — only ${passedCount}/${totalChecks} checks passed. Failed: ${failed}`);
+      continue;
+    }
+
+    const checksArray = Object.entries(checks).map(([key, c]) => ({
+      key,
+      pass: c.pass,
+      label: c.label,
+      detail: c.detail,
+    }));
+
     const fundingStr = hl?.funding ? ` Funding: ${hl.funding >= 0 ? "+" : ""}${(hl.funding).toFixed(4)}%/8h.` : "";
     const oiStr = hl?.oi ? ` OI: $${(hl.oi / 1e6).toFixed(0)}M.` : "";
 
     const atr = calcATR(sym);
     const entry = current.price;
-    // TP1 = 2×ATR (minimum 2:1 R:R), TP2 = 4×ATR (extended target)
-    const stopLoss = dir === "LONG" ? +(entry - atr * 1.5).toFixed(6) : +(entry + atr * 1.5).toFixed(6);
-    const tp1 = dir === "LONG" ? +(entry + atr * 2).toFixed(6) : +(entry - atr * 2).toFixed(6);
-    const tp2 = dir === "LONG" ? +(entry + atr * 4).toFixed(6) : +(entry - atr * 4).toFixed(6);
-    const stopPct = atr > 0 ? (atr * 1.5 / entry * 100).toFixed(1) : "1.5";
-    const tp1Pct = atr > 0 ? (atr * 2 / entry * 100).toFixed(1) : "2.0";
-    const tp2Pct = atr > 0 ? (atr * 4 / entry * 100).toFixed(1) : "4.0";
-    const rr1 = atr > 0 ? (2 / 1.5).toFixed(1) : "1.3";
-    const rr2 = atr > 0 ? (4 / 1.5).toFixed(1) : "2.7";
-    // Keep target for backward compat
+
+    // FIX 6a: Minimum TP distance — at least 0.5% for TP1, 1.0% for TP2
+    const precision = entry < 0.01 ? 6 : entry < 1 ? 4 : entry < 100 ? 3 : 2;
+    const minTP1Dist = entry * 0.005;
+    const minTP2Dist = entry * 0.010;
+    const minStopDist = entry * 0.003;
+
+    const rawStop = atr > 0 ? atr * 1.5 : entry * 0.015;
+    const rawTP1 = atr > 0 ? atr * 2 : entry * 0.02;
+    const rawTP2 = atr > 0 ? atr * 4 : entry * 0.04;
+
+    const stopLoss = dir === "LONG"
+      ? +Math.max((entry - rawStop), (entry - Math.max(rawStop, minStopDist))).toFixed(precision)
+      : +Math.min((entry + rawStop), (entry + Math.max(rawStop, minStopDist))).toFixed(precision);
+
+    const tp1 = dir === "LONG"
+      ? +Math.max(entry + rawTP1, entry + minTP1Dist).toFixed(precision)
+      : +Math.min(entry - rawTP1, entry - minTP1Dist).toFixed(precision);
+
+    const tp2 = dir === "LONG"
+      ? +Math.max(entry + rawTP2, entry + minTP2Dist).toFixed(precision)
+      : +Math.min(entry - rawTP2, entry - minTP2Dist).toFixed(precision);
+
+    const actualStop = Math.abs(entry - stopLoss);
+    const actualTP1 = Math.abs(entry - tp1);
+    const actualTP2 = Math.abs(entry - tp2);
+    const stopPct = (actualStop / entry * 100).toFixed(1);
+    const tp1Pct = (actualTP1 / entry * 100).toFixed(1);
+    const tp2Pct = (actualTP2 / entry * 100).toFixed(1);
+    const rr1 = actualStop > 0 ? (actualTP1 / actualStop).toFixed(1) : "1.3";
+    const rr2 = actualStop > 0 ? (actualTP2 / actualStop).toFixed(1) : "2.7";
     const target = tp2;
+
+    // Confidence reflects check quality
+    const checkConf = Math.round((passedCount / totalChecks) * 100);
 
     const master = calcMasterScore(sym, dir);
 
     // ── LAYER 1: Macro Risk ──────────────────────────────────────────
     const macroRisk = getMacroRisk();
-    // ── LAYER 3: Session Awareness ───────────────────────────────────
-    const sessionInfo = getSessionET();
 
     // 24h spike check (Layer 2)
     const hist24 = priceHistory[sym] || [];
@@ -555,8 +651,10 @@ function detectMoves() {
     const spike24 = oldest24 ? Math.abs(((current.price - oldest24.price) / oldest24.price) * 100) : 0;
     const isPostSpike = spike24 > 20;
 
-    // Confidence: base + move magnitude, then apply macro/session/spike penalties
-    let confBase = Math.min(90, 60 + Math.floor(Math.abs(pctMove) * 5));
+    // Confidence: blend move magnitude + check pass rate, then apply macro/session/spike penalties
+    let confBase = Math.min(90, Math.round(
+      (60 + Math.floor(absPctMove * 5)) * 0.6 + checkConf * 0.4
+    ));
     const confFlags: string[] = [];
     if (macroRisk.highRisk) {
       confBase = Math.max(30, confBase - macroRisk.confPenalty);
@@ -630,6 +728,9 @@ function detectMoves() {
       session: sessionInfo.label,
       macroFlags: confFlags,
       whaleAligned: recentWhale.length > 0,
+      checks: checksArray,
+      checksPassedCount: passedCount,
+      checksTotalCount: totalChecks,
     };
 
     liveSignals.unshift(signal);
@@ -1924,15 +2025,31 @@ export async function registerRoutes(
       const macro2026Enriched = MACRO_2026
         .filter(e => !existingDates.has(`${e.date}-${e.name}`))
         .map(e => ({ ...e, isPast: computeIsPast(e.date, (e.time || "08:30 ET").replace(" ET","").trim()) }));
-      const combined = [
+      // FIX 1: Deduplicate by composite key (name + date + time) before returning
+      const rawCombined = [
         ...liveEvents,
         ...macro2026Enriched,
-      ]
-        .filter(e => {
-          const d = new Date(e.date);
-          return d >= todayStart && d <= endDate;
-        })
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      ].filter(e => {
+        const d = new Date(e.date);
+        return d >= todayStart && d <= endDate;
+      });
+
+      const dedupMap: Record<string, any> = {};
+      for (const ev of rawCombined) {
+        const key = `${(ev.name || "").toLowerCase().trim()}_${ev.date}_${ev.timeET || ev.time || ""}`;
+        if (!dedupMap[key]) {
+          dedupMap[key] = { ...ev };
+        } else {
+          // Merge: prefer the entry with more complete data
+          if (!dedupMap[key].forecast && ev.forecast) dedupMap[key].forecast = ev.forecast;
+          if (!dedupMap[key].previous && ev.previous) dedupMap[key].previous = ev.previous;
+          if (!dedupMap[key].actual && ev.actual) dedupMap[key].actual = ev.actual;
+          if (!dedupMap[key].current && ev.current) dedupMap[key].current = ev.current;
+        }
+      }
+
+      const combined = Object.values(dedupMap)
+        .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
       res.json(combined);
     } catch (e: any) {
       const { todayStart, endDate } = getDateRange();
