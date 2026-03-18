@@ -1276,7 +1276,7 @@ FOREX: ${fxBrief}${sigBrief}${newsFeed.length>0?`\nNEWS: ${newsFeed.slice(0,5).m
 LAYERS 3-5: Apply session awareness (current ET time), ensure min R:R 1.5:1, use 🔴/🟡/🟢 risk labels.
 
 Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 risk labels in analysis when appropriate:
-{"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it"}`;
+{"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it","topTrade":{"asset":"Best trade today","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence edge","riskLabel":"🟢 or 🟡 or 🔴","flags":"macro risk flags or None"},"additionalTrades":[{"asset":"2nd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"4th trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"}]}`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt})});
       const data=await res.json();
@@ -2296,6 +2296,27 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 <span style={{fontFamily:MONO,fontSize:9,color:C.red,letterSpacing:"0.15em",fontWeight:600,flexShrink:0,marginTop:2}}>RISK</span>
                 <div style={{fontSize:11,color:C.text,lineHeight:1.7}}>{briefData.keyRisk}</div>
               </div>
+            </div>}
+            {briefData.topTrade&&<div style={{...panel,border:`1px solid rgba(201,168,76,.2)`}}>
+              <div style={{...ph,background:"rgba(201,168,76,.04)"}}><PTitle>{userTier==="pro"?"Trade Ideas (Pro — 4 Ideas)":"Today's Top Trade Idea"}</PTitle></div>
+              {[briefData.topTrade,...(userTier==="pro"&&Array.isArray(briefData.additionalTrades)?briefData.additionalTrades:[])].map((trade,idx)=>(
+                <div key={idx} style={{padding:"14px",borderBottom:idx<(userTier==="pro"?3:0)?`1px solid ${C.border}`:"none"}}>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.18em",marginBottom:8,fontWeight:700}}>⚡ TRADE IDEA {idx+1}</div>
+                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:14,color:C.white,marginBottom:10,fontStyle:"italic"}}>{trade.riskLabel||"🟡"} {trade.asset||""} {trade.dir||""}</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 16px",fontFamily:MONO,fontSize:10,color:C.text,lineHeight:2}}>
+                    <div>📍 Entry: <span style={{color:C.white}}>{trade.entry||"—"}</span></div>
+                    <div>🛑 Stop: <span style={{color:C.red}}>{trade.stop||"—"}</span></div>
+                    <div>🎯 TP1: <span style={{color:C.green}}>{trade.tp1||"—"}</span></div>
+                    <div>🎯 TP2: <span style={{color:C.green}}>{trade.tp2||"—"}</span></div>
+                    <div>📊 Confidence: <span style={{color:C.gold}}>{trade.confidence||"—"}</span></div>
+                    <div>⚠️ Flags: <span style={{color:C.muted}}>{trade.flags||"None"}</span></div>
+                  </div>
+                  {trade.edge&&<div style={{marginTop:8,fontFamily:SERIF,fontStyle:"italic",fontSize:11,color:C.muted,lineHeight:1.6}}>💡 {trade.edge}</div>}
+                </div>
+              ))}
+              {userTier!=="pro"&&<div style={{padding:"10px 14px",background:"rgba(201,168,76,.04)",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>
+                🔒 <span style={{color:C.gold}}>Pro members get 4 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
+              </div>}
             </div>}
             <div style={panel}>
               <div style={{padding:"14px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:12,alignItems:"center"}}>
