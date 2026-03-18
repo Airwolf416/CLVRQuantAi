@@ -689,6 +689,19 @@ function Toast({msg,onDone}){
   );
 }
 
+// ─── MACRO ACTUAL INFERENCE (hold detection for AI context) ──
+// Returns the best-known actual for a macro event.
+// If ForexFactory hasn't published yet but forecast===previous for a rate decision, infer a hold.
+function macroActualLabel(e){
+  if(e.actual)return{actual:e.actual,tag:e.released?"✓RELEASED":"✓"};
+  const isRateDec=(e.name||"").match(/rate|fomc|interest/i);
+  if(e.isPast&&e.impact==="HIGH"&&isRateDec&&
+     e.forecast&&e.forecast!=="—"&&e.previous&&e.previous!=="—"&&e.forecast===e.previous){
+    return{actual:e.forecast,tag:"✓HOLD (FF pending)"};
+  }
+  return{actual:null,tag:null};
+}
+
 // ─── HELP FAQ ITEM (accordion) ────────────────────────────
 function HelpItem({q,a}){
   const [open,setOpen]=useState(false);
@@ -1281,7 +1294,7 @@ function Dashboard({user,setUser}){
     const metalBrief=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}: ${snapBrief(s,metalPrices)}`).join(" | ");
     const fxBrief=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}: ${snapBrief(s,forexPrices)}`).join(" | ");
     const sigBrief=liveSignals.length>0?`\nLIVE SIGNALS DETECTED: ${liveSignals.slice(0,3).map(s=>`${s.token} ${s.dir} ${s.pctMove||""}%`).join(", ")}`:"";
-    const macroSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual} ${e.released?"RELEASED":""}`:""}`).join(" | ")}`:"";
+    const macroSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` ACTUAL:${a} ${t}`:"")()}`).join(" | ")}`:"";
     // Detect FOMC/CPI within 48h from macro events
     const now48h=new Date(Date.now()+48*60*60*1000);
     const HIGH_MACRO_KW=["FOMC","CPI","NFP","Non-Farm","GDP","PCE","PPI","Interest Rate"];
@@ -1329,7 +1342,7 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS [fetched:${nowISO}]: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO}]: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
-    const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO}]: ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${e.actual?` | ACTUAL:${e.actual} ✓RELEASED`:e.isPast?" | STATUS:PENDING DATA":""}`).join("\n  ")}`:"";
+    const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO}]: ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
     const sys=`You are CLVR AI — an elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a rigorous 7-step analysis framework before every trade recommendation. All data below is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
@@ -1453,7 +1466,7 @@ Be direct, specific, and numerical. Use exact live prices from the data above.`;
     const nowET2=new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",timeZone:"America/New_York",hour12:false});
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS [fetched:${nowISO2}]: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO2}]: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:"";
-    const macroSnap2=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO2}]:\n  ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${e.actual?` | ACTUAL:${e.actual} ✓RELEASED`:e.isPast?" | STATUS:PENDING DATA":""}`).join("\n  ")}`:"";
+    const macroSnap2=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO2}]:\n  ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
     const sys=`You are CLVR AI — elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a strict 7-step analysis framework before every trade recommendation. All data is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET time: ${nowET2}

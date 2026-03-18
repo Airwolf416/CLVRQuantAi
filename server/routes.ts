@@ -1691,7 +1691,7 @@ export async function registerRoutes(
   const MACRO_2026 = [
     // FED (FOMC) 2026 — published schedule
     {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-01-28",time:"14:00 ET",impact:"HIGH",desc:"Federal Reserve rate decision with press conference. Held at 4.25%–4.50%.",currency:"USD",forecast:"4.25%–4.50%",previous:"4.25%–4.50%",actual:"4.25%–4.50%",unit:"%",released:true},
-    {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-03-18",time:"14:00 ET",impact:"HIGH",desc:"FOMC meeting with updated dot plot and economic projections.",currency:"USD",forecast:"4.25%–4.50%",previous:"4.25%–4.50%",unit:"%"},
+    {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-03-18",time:"14:00 ET",impact:"HIGH",desc:"Federal Reserve held rates at 4.25%–4.50% with updated dot plot. Powell flagged uncertainty but no urgency to cut.",currency:"USD",forecast:"4.25%–4.50%",previous:"4.25%–4.50%",actual:"4.25%–4.50%",unit:"%",released:true},
     {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-04-29",time:"14:00 ET",impact:"HIGH",desc:"Federal Reserve rate decision. Watch for guidance on rate path.",currency:"USD",forecast:"4.25%–4.50%",previous:"4.25%–4.50%",unit:"%"},
     {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-06-17",time:"14:00 ET",impact:"HIGH",desc:"Mid-year FOMC with economic projections update. First potential cut of 2026.",currency:"USD",forecast:"4.00%–4.25%",previous:"4.25%–4.50%",unit:"%"},
     {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-07-29",time:"14:00 ET",impact:"HIGH",desc:"July FOMC rate decision.",currency:"USD",forecast:"4.00%–4.25%",previous:"4.00%–4.25%",unit:"%"},
