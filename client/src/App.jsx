@@ -525,6 +525,21 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
           {sig.reasoning.map((r,i)=><div key={i} style={{fontFamily:MONO,fontSize:10,color:C.muted2,lineHeight:1.7,display:"flex",gap:6,marginBottom:2}}><span style={{color:C.gold,flexShrink:0}}>•</span><span>{r}</span></div>)}
           {sig.masterScore&&<div style={{marginTop:6,fontFamily:MONO,fontSize:9,color:sig.masterScore>=60?C.green:sig.masterScore>=40?C.orange:C.red,fontWeight:700}}>{i18n.masterScore}: {sig.masterScore}/100 · Risk-On: {sig.riskOn||50}%</div>}
         </div>}
+        {sig.checks&&sig.checks.length>0&&<div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"10px 12px",marginBottom:10}}>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span>SIGNAL QUALITY CHECKS</span>
+            <span style={{color:sig.checksPassedCount>=4?C.green:sig.checksPassedCount>=3?C.orange:C.red,fontWeight:700}}>{sig.checksPassedCount}/{sig.checksTotalCount} PASSED</span>
+          </div>
+          {sig.checks.map((c,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:5,fontFamily:MONO,fontSize:10,lineHeight:1.5}}>
+              <span style={{flexShrink:0,fontSize:12}}>{c.pass?"✅":"⚠️"}</span>
+              <div>
+                <span style={{color:c.pass?C.white:C.orange}}>{c.label}</span>
+                {!c.pass&&<span style={{color:C.muted,fontSize:9}}> — {c.detail}</span>}
+              </div>
+            </div>
+          ))}
+        </div>}
         <FactorBreakdown factors={factors} score={qScore} C={C}/>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:10}}>
           {[
@@ -601,7 +616,8 @@ function MacroCard({evt,imp,surprise,marketImpacts,bc,isToday,isLiveNow,status,o
               <span style={{fontFamily:MONO,fontSize:7,background:imp.bg,color:imp.color,border:`1px solid ${imp.color}33`,borderRadius:2,padding:"1px 5px",fontWeight:700,letterSpacing:"0.08em"}}>{imp.label}</span>
               {evt.released&&surprise&&<span style={{fontFamily:MONO,fontSize:7,background:"rgba(0,0,0,.3)",border:`1px solid ${surprise.color}33`,color:surprise.color,borderRadius:2,padding:"1px 5px",fontWeight:700}}>{surprise.label}</span>}
               {evt.released&&!surprise&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
-              {!evt.released&&evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
+              {!evt.released&&evt.isPast&&!evt.actual&&evt.impact==="HIGH"&&<span style={{fontFamily:MONO,fontSize:7,color:C.orange,border:`1px solid ${C.orange}44`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.6s ease infinite"}}>AWAITING RESULT</span>}
+              {!evt.released&&evt.isPast&&(evt.actual||evt.impact!=="HIGH")&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
               {!evt.released&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>PENDING</span>}
               {isToday&&!isLiveNow&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.red,border:`1px solid ${C.red}33`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.4s ease infinite"}}>TODAY</span>}
               {evt.live&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>LIVE</span>}
@@ -609,7 +625,8 @@ function MacroCard({evt,imp,surprise,marketImpacts,bc,isToday,isLiveNow,status,o
             <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginBottom:6}}>{evt.region||evt.country} · {evt.date}</div>
             <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
               {evt.actual&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:15,fontWeight:800,color:surprise?.color||C.white}}>{evt.actual}<span style={{fontSize:8,color:C.muted,marginLeft:2}}>{evt.unit||""}</span></div></div>}
-              {!evt.actual&&evt.isPast&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>—</div></div>}
+              {!evt.actual&&evt.isPast&&evt.impact==="HIGH"&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.orange,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:600,color:C.orange,animation:"pulse 1.6s ease infinite"}}>AWAITING…</div></div>}
+              {!evt.actual&&evt.isPast&&evt.impact!=="HIGH"&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>—</div></div>}
               <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>FORECAST</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted2}}>{evt.forecast}</div></div>
               <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>PREVIOUS</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>{evt.previous||evt.current}</div></div>
             </div>
