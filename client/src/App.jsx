@@ -280,7 +280,8 @@ function AlertBanner({alerts,onDismiss,C:_C}){
 }
 
 // ─── COUNTDOWN TIMER ─────────────────────────────────────
-function parseTimeET(timeStr){const tp=(timeStr||"12:00").match(/(\d+):(\d+)/);let h=tp?parseInt(tp[1]):12;const m=tp?parseInt(tp[2]):0;const isPM=timeStr&&timeStr.toLowerCase().includes("pm")&&h<12;if(isPM)h+=12;const isAM=timeStr&&timeStr.toLowerCase().includes("am")&&h===12;if(isAM)h=0;const isET=!timeStr||timeStr.includes("ET");return{h,m,offsetUTC:isET?5:0};}
+function getETtoUTCOffset(){try{const now=new Date();const utcMs=now.getTime();const etMs=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"})).getTime();return Math.round((utcMs-etMs)/3600000);}catch{return 5;}}
+function parseTimeET(timeStr){const tp=(timeStr||"12:00").match(/(\d+):(\d+)/);let h=tp?parseInt(tp[1]):12;const m=tp?parseInt(tp[2]):0;const isPM=timeStr&&timeStr.toLowerCase().includes("pm")&&h<12;if(isPM)h+=12;const isAM=timeStr&&timeStr.toLowerCase().includes("am")&&h===12;if(isAM)h=0;const isET=!timeStr||timeStr.includes("ET");return{h,m,offsetUTC:isET?getETtoUTCOffset():0};}
 function Countdown({dateStr,timeET,compact=false}){
   const[diff,setDiff]=useState(null);
   useEffect(()=>{
@@ -693,6 +694,7 @@ export default function App(){
 
 function Dashboard({user,setUser}){
   const [tab,setTab]=useState("radar");
+  const [clockTick,setClockTick]=useState(0);
   const [priceTab,setPriceTab]=useState("crypto");
   const [sigSubTab,setSigSubTab]=useState("all");
   const [sigSort,setSigSort]=useState("recent");
@@ -1150,6 +1152,8 @@ function Dashboard({user,setUser}){
     }).catch(()=>setMacroLoading(false));
   },[]);
   useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,30000);return()=>clearInterval(iv);},[fetchMacro]);
+  // Tick every 30s so nextEvents recomputes and hides the countdown box once an event passes
+  useEffect(()=>{const iv=setInterval(()=>setClockTick(t=>t+1),30000);return()=>clearInterval(iv);},[]);
 
   const fetchRegime=useCallback(async()=>{
     try{const r=await fetch("/api/regime");if(r.ok){const d=await r.json();setRegimeData(d);}}catch{}
@@ -1674,12 +1678,13 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     setToast("In-app alerts enabled");
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- clockTick forces periodic recompute so expired events disappear
   const todayDate=new Date();
-  const nextEvents=macroEvents.map(e=>{const timeStr=e.timeET||e.time||"12:00";const timeParts=timeStr.match(/(\d+):(\d+)/);const h=timeParts?parseInt(timeParts[1]):12;const m=timeParts?parseInt(timeParts[2]):0;const isET=timeStr.includes("ET");const[y,mo,d]=e.date.split("-").map(Number);const t=new Date(Date.UTC(y,mo-1,d,isET?h+5:h,m,0));return{...e,timeET:timeStr,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs);
+  const nextEvents=macroEvents.map(e=>{const timeStr=e.timeET||e.time||"12:00";const{h,m,offsetUTC}=parseTimeET(timeStr);const[y,mo,d]=e.date.split("-").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+offsetUTC,m,0));return{...e,timeET:timeStr,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs); // clockTick dependency: ${clockTick}
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
 
   const isGuest=!!user?.guest;
-  const GUEST_TABS=["radar","prices","macro","about"];
+  const GUEST_TABS=["radar","prices","macro","about","help"];
   const NAV_ALL=[
     {k:"radar",icon:"📡",label:i18n.radar},
     {k:"prices",icon:"💹",label:i18n.markets},
@@ -1690,6 +1695,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
     {k:"about",icon:"📖",label:i18n.about},
+    {k:"help",icon:"❓",label:"HELP",external:"https://clvrquantai.com/faq"},
     {k:"account",icon:"⚙",label:i18n.account},
   ];
   const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
@@ -2226,7 +2232,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 ):(
                   <div style={{fontFamily:MONO,fontSize:11,color:C.text,lineHeight:1.9,whiteSpace:"pre-wrap"}}>{macroAiResp}</div>
                 )}
-                <div style={{marginTop:14,fontFamily:MONO,fontSize:7,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:10,letterSpacing:"0.08em"}}>For informational purposes only. Not financial advice. CLVRQuant · Mike Claver</div>
+                <div style={{marginTop:14,fontFamily:MONO,fontSize:7,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:10,letterSpacing:"0.08em"}}>For informational purposes only. Not financial advice. CLVRQuant · Support@CLVRQuantAI.com</div>
               </div>
             </div>
           )}
@@ -2321,11 +2327,11 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={panel}>
               <div style={{padding:"14px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:12,alignItems:"center"}}>
                 <div style={{width:36,height:36,border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                  <span style={{fontFamily:SERIF,fontWeight:900,fontSize:14,color:C.gold}}>MC</span>
+                  <span style={{fontFamily:SERIF,fontWeight:900,fontSize:14,color:C.gold}}>CQ</span>
                 </div>
                 <div>
-                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:13,color:C.white}}>Mike Claver</div>
-                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:2}}>Morning Market Commentary · CLVRQuant</div>
+                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:13,color:C.white}}>CLVRQuant Support</div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:2}}>Questions or issues? Support@CLVRQuantAI.com</div>
                 </div>
               </div>
               <div style={{padding:"9px 14px",fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",letterSpacing:"0.12em"}}>⚠ INFORMATIONAL PURPOSES ONLY · NOT FINANCIAL ADVICE</div>
@@ -2573,7 +2579,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <div style={{...panel,border:`1px solid rgba(255,140,0,.12)`}}>
             <div style={{padding:"11px 14px",background:"rgba(255,140,0,.03)"}}>
               <div style={{fontFamily:MONO,fontSize:9,color:C.orange,letterSpacing:"0.22em",marginBottom:5}}>LEGAL DISCLAIMER</div>
-              <div style={{fontSize:11,color:C.muted,lineHeight:1.9}}>CLVRQuant is an AI-powered research and analytics platform for <strong style={{color:C.muted2}}>informational and educational purposes only</strong>. Nothing constitutes financial advice, investment advice, or trading advice. AI signals are not recommendations. All trading involves significant risk of loss. Past performance does not predict future results. CLVRQuant · Mike Claver. All rights reserved.</div>
+              <div style={{fontSize:11,color:C.muted,lineHeight:1.9}}>CLVRQuant is an AI-powered research and analytics platform for <strong style={{color:C.muted2}}>informational and educational purposes only</strong>. Nothing constitutes financial advice, investment advice, or trading advice. AI signals are not recommendations. All trading involves significant risk of loss. Past performance does not predict future results. © 2026 CLVRQuant. All rights reserved.</div>
             </div>
           </div>
         </>}
@@ -2643,12 +2649,23 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           </div>
           <div style={{...panel,border:`1px solid rgba(201,168,76,.15)`}}>
             <div style={{padding:"16px 18px"}}>
-              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em",marginBottom:12}}>CONTACT</div>
-              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.8,marginBottom:8}}>
-                Questions, feedback, or business inquiries? Reach Mike directly:
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em",marginBottom:12}}>CONTACT & SUPPORT</div>
+              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.8,marginBottom:12}}>
+                Questions, feedback, or business inquiries? Our support team is here to help.
               </div>
-              <a href="mailto:MikeClaver@CLVRQuantAI.com" data-testid="link-contact-email" style={{display:"inline-flex",alignItems:"center",gap:8,fontFamily:MONO,fontSize:12,color:C.gold2,textDecoration:"none",border:`1px solid rgba(201,168,76,.25)`,borderRadius:4,padding:"8px 14px",background:"rgba(201,168,76,.06)"}}>
-                ✉ MikeClaver@CLVRQuantAI.com
+              <a href="mailto:Support@CLVRQuantAI.com" data-testid="link-contact-email" style={{display:"inline-flex",alignItems:"center",gap:8,fontFamily:MONO,fontSize:12,color:C.gold2,textDecoration:"none",border:`1px solid rgba(201,168,76,.25)`,borderRadius:4,padding:"8px 14px",background:"rgba(201,168,76,.06)"}}>
+                ✉ Support@CLVRQuantAI.com
+              </a>
+            </div>
+          </div>
+          <div style={{...panel,border:`1px solid rgba(100,180,255,.12)`}}>
+            <div style={{padding:"16px 18px"}}>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.blue,letterSpacing:"0.2em",marginBottom:12}}>📚 HELP CENTER & FAQ</div>
+              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.8,marginBottom:12}}>
+                Find answers to common questions, tutorials, and platform guides.
+              </div>
+              <a href="https://clvrquantai.com/faq" target="_blank" rel="noopener noreferrer" data-testid="link-help-center" style={{display:"inline-flex",alignItems:"center",gap:8,fontFamily:MONO,fontSize:12,color:C.blue,textDecoration:"none",border:`1px solid rgba(100,180,255,.25)`,borderRadius:4,padding:"8px 14px",background:"rgba(100,180,255,.06)"}}>
+                Visit Help Center →
               </a>
             </div>
           </div>
@@ -2657,7 +2674,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               <div style={{fontFamily:SERIF,fontSize:13,color:C.muted2,fontStyle:"italic",lineHeight:1.8}}>
                 "Markets reward the prepared. CLVRQuant keeps you prepared."
               </div>
-              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,marginTop:8,letterSpacing:"0.15em"}}>CLVRQUANT · MIKE CLAVER</div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,marginTop:8,letterSpacing:"0.15em"}}>CLVRQUANT</div>
             </div>
           </div>
         </>}
@@ -2665,7 +2682,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={setShowUpgrade}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
-          BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT · MIKE CLAVER
+          BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT
         </div>
       </div>
 
@@ -2677,7 +2694,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
           return(
-            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>setTab(item.k)} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
+            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
               <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:C.muted2}}>{item.icon}</span>
               {macroAlert&&!active&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
               <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:active?C.gold:C.muted,letterSpacing:"0.06em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
