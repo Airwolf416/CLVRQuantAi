@@ -602,32 +602,40 @@ const MACRO_EVENTS=[];
 // ─── MACRO EVENT CARD ────────────────────────────────────
 function MacroCard({evt,imp,surprise,marketImpacts,bc,isToday,isLiveNow,status,onAskAI,onAddCal,onGoAI}){
   const [expanded,setExpanded]=useState(false);
+  // Hold inference: for rate decisions where forecast === previous (a hold was priced in)
+  // and the official actual hasn't arrived yet from ForexFactory, infer the result = HOLD
+  const isRateDecision=(evt.name||"").toLowerCase().match(/rate|fomc|interest/);
+  const holdInferred=!evt.actual&&evt.isPast&&evt.impact==="HIGH"&&isRateDecision&&
+    evt.forecast&&evt.forecast!=="—"&&evt.previous&&evt.previous!=="—"&&
+    evt.forecast===evt.previous;
+  const displayActual=evt.actual||(holdInferred?evt.forecast:null);
+  const isEffectivelyReleased=evt.released||holdInferred;
   return(
-    <div data-testid={`macro-card-${evt.id}`} style={{background:C.panel,border:`1px solid ${evt.released?(surprise?.color===C.red?C.red+"22":surprise?.color===C.green?C.green+"22":C.border):evt.isPast?C.border:imp.color+"22"}`,borderRadius:2,marginBottom:8,overflow:"hidden",opacity:(evt.released||evt.isPast)?1:0.88}}>
+    <div data-testid={`macro-card-${evt.id}`} style={{background:C.panel,border:`1px solid ${isEffectivelyReleased?(surprise?.color===C.red?C.red+"22":surprise?.color===C.green?C.green+"22":C.border):evt.isPast?C.border:imp.color+"22"}`,borderRadius:2,marginBottom:8,overflow:"hidden",opacity:(isEffectivelyReleased||evt.isPast)?1:0.88}}>
       <div style={{padding:"12px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
         <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
           <div style={{textAlign:"center",minWidth:40,flexShrink:0}}>
-            <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:(evt.released||evt.isPast)?C.muted:C.white}}>{(evt.timeET||evt.time||"").replace(" ET","")}</div>
+            <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:(isEffectivelyReleased||evt.isPast)?C.muted:C.white}}>{(evt.timeET||evt.time||"").replace(" ET","")}</div>
             <div style={{fontSize:16,marginTop:2}}>{evt.flag||({"US":"\u{1F1FA}\u{1F1F8}","EU":"\u{1F1EA}\u{1F1FA}","UK":"\u{1F1EC}\u{1F1E7}","CA":"\u{1F1E8}\u{1F1E6}","JP":"\u{1F1EF}\u{1F1F5}","AU":"\u{1F1E6}\u{1F1FA}","CH":"\u{1F1E8}\u{1F1ED}","NZ":"\u{1F1F3}\u{1F1FF}"}[evt.country])||"\u{1F310}"}</div>
           </div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",marginBottom:4}}>
-              <span style={{fontFamily:SERIF,fontSize:12,fontWeight:700,color:(evt.released||evt.isPast)?C.muted2:C.white}}>{evt.name}</span>
+              <span style={{fontFamily:SERIF,fontSize:12,fontWeight:700,color:(isEffectivelyReleased||evt.isPast)?C.muted2:C.white}}>{evt.name}</span>
               {isLiveNow&&<span style={{fontFamily:MONO,fontSize:7,background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.3)",color:C.green,borderRadius:2,padding:"1px 5px",fontWeight:700,letterSpacing:"0.1em",animation:"pulse 1.4s ease infinite"}}>LIVE NOW</span>}
               <span style={{fontFamily:MONO,fontSize:7,background:imp.bg,color:imp.color,border:`1px solid ${imp.color}33`,borderRadius:2,padding:"1px 5px",fontWeight:700,letterSpacing:"0.08em"}}>{imp.label}</span>
               {evt.released&&surprise&&<span style={{fontFamily:MONO,fontSize:7,background:"rgba(0,0,0,.3)",border:`1px solid ${surprise.color}33`,color:surprise.color,borderRadius:2,padding:"1px 5px",fontWeight:700}}>{surprise.label}</span>}
-              {evt.released&&!surprise&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
-              {!evt.released&&evt.isPast&&!evt.actual&&evt.impact==="HIGH"&&<span style={{fontFamily:MONO,fontSize:7,color:C.orange,border:`1px solid ${C.orange}44`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.6s ease infinite"}}>AWAITING RESULT</span>}
-              {!evt.released&&evt.isPast&&(evt.actual||evt.impact!=="HIGH")&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
-              {!evt.released&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>PENDING</span>}
+              {isEffectivelyReleased&&!surprise&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>{holdInferred?"HOLD":"RELEASED"}</span>}
+              {!isEffectivelyReleased&&evt.isPast&&!displayActual&&evt.impact==="HIGH"&&<span style={{fontFamily:MONO,fontSize:7,color:C.orange,border:`1px solid ${C.orange}44`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.6s ease infinite"}}>AWAITING RESULT</span>}
+              {!isEffectivelyReleased&&evt.isPast&&(displayActual||evt.impact!=="HIGH")&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
+              {!isEffectivelyReleased&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>PENDING</span>}
               {isToday&&!isLiveNow&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.red,border:`1px solid ${C.red}33`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.4s ease infinite"}}>TODAY</span>}
               {evt.live&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>LIVE</span>}
             </div>
             <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginBottom:6}}>{evt.region||evt.country} · {evt.date}</div>
             <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
-              {evt.actual&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:15,fontWeight:800,color:surprise?.color||C.white}}>{evt.actual}<span style={{fontSize:8,color:C.muted,marginLeft:2}}>{evt.unit||""}</span></div></div>}
-              {!evt.actual&&evt.isPast&&evt.impact==="HIGH"&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.orange,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:600,color:C.orange,animation:"pulse 1.6s ease infinite"}}>AWAITING…</div></div>}
-              {!evt.actual&&evt.isPast&&evt.impact!=="HIGH"&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>—</div></div>}
+              {displayActual&&<div><div style={{fontFamily:MONO,fontSize:7,color:holdInferred?C.muted:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:15,fontWeight:800,color:holdInferred?C.muted2:surprise?.color||C.white}}>{displayActual}<span style={{fontSize:8,color:C.muted,marginLeft:2}}>{evt.unit||""}{holdInferred?" (hold)":""}</span></div></div>}
+              {!displayActual&&evt.isPast&&evt.impact==="HIGH"&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.orange,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:600,color:C.orange,animation:"pulse 1.6s ease infinite"}}>AWAITING…</div></div>}
+              {!displayActual&&evt.isPast&&evt.impact!=="HIGH"&&<div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>ACTUAL</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>—</div></div>}
               <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>FORECAST</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted2}}>{evt.forecast}</div></div>
               <div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginBottom:1}}>PREVIOUS</div><div style={{fontFamily:MONO,fontSize:13,fontWeight:600,color:C.muted}}>{evt.previous||evt.current}</div></div>
             </div>
@@ -677,6 +685,20 @@ function Toast({msg,onDone}){
       boxShadow:`0 4px 24px rgba(201,168,76,.5)`,whiteSpace:"nowrap",
       animation:"slideUp .2s ease"}}>
       {msg}
+    </div>
+  );
+}
+
+// ─── HELP FAQ ITEM (accordion) ────────────────────────────
+function HelpItem({q,a}){
+  const [open,setOpen]=useState(false);
+  return(
+    <div style={{borderBottom:`1px solid ${C.border}`,paddingBottom:8,marginBottom:8}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{width:"100%",background:"none",border:"none",padding:"8px 0",display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,cursor:"pointer",textAlign:"left"}}>
+        <span style={{fontFamily:SANS,fontSize:13,fontWeight:600,color:C.white,lineHeight:1.5,flex:1}}>{q}</span>
+        <span style={{fontFamily:MONO,fontSize:12,color:C.muted,flexShrink:0,marginTop:2}}>{open?"▲":"▼"}</span>
+      </button>
+      {open&&<div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.85,paddingBottom:4}}>{a}</div>}
     </div>
   );
 }
@@ -1695,7 +1717,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
     {k:"about",icon:"📖",label:i18n.about},
-    {k:"help",icon:"❓",label:"HELP",external:"https://clvrquantai.com/faq"},
+    {k:"help",icon:"❓",label:"HELP"},
     {k:"account",icon:"⚙",label:i18n.account},
   ];
   const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
@@ -2662,11 +2684,11 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={{padding:"16px 18px"}}>
               <div style={{fontFamily:MONO,fontSize:9,color:C.blue,letterSpacing:"0.2em",marginBottom:12}}>📚 HELP CENTER & FAQ</div>
               <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.8,marginBottom:12}}>
-                Find answers to common questions, tutorials, and platform guides.
+                Find answers to common questions, tutorials, and platform guides. Tap the ❓ HELP tab in the navigation bar below.
               </div>
-              <a href="https://clvrquantai.com/faq" target="_blank" rel="noopener noreferrer" data-testid="link-help-center" style={{display:"inline-flex",alignItems:"center",gap:8,fontFamily:MONO,fontSize:12,color:C.blue,textDecoration:"none",border:`1px solid rgba(100,180,255,.25)`,borderRadius:4,padding:"8px 14px",background:"rgba(100,180,255,.06)"}}>
-                Visit Help Center →
-              </a>
+              <button data-testid="btn-goto-help" onClick={()=>setTab("help")} style={{display:"inline-flex",alignItems:"center",gap:8,fontFamily:MONO,fontSize:12,color:C.blue,background:"rgba(100,180,255,.06)",border:`1px solid rgba(100,180,255,.25)`,borderRadius:4,padding:"8px 14px",cursor:"pointer"}}>
+                Open Help Center →
+              </button>
             </div>
           </div>
           <div style={{...panel,border:`1px solid rgba(201,168,76,.12)`}}>
@@ -2675,6 +2697,75 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 "Markets reward the prepared. CLVRQuant keeps you prepared."
               </div>
               <div style={{fontFamily:MONO,fontSize:9,color:C.gold,marginTop:8,letterSpacing:"0.15em"}}>CLVRQUANT</div>
+            </div>
+          </div>
+        </>}
+
+        {tab==="help"&&<>
+          <div style={{...panel,border:`1px solid rgba(201,168,76,.18)`}}>
+            <div style={{padding:"22px 18px 12px",textAlign:"center"}}>
+              <div style={{fontFamily:SERIF,fontSize:24,fontWeight:900,color:C.white,letterSpacing:"-0.02em"}}>Help <span style={{color:C.gold}}>Center</span></div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.3em",marginTop:4,marginBottom:8}}>FREQUENTLY ASKED QUESTIONS</div>
+              <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.7}}>Everything you need to know about CLVRQuant. Can't find an answer? Email us.</div>
+              <a href="mailto:Support@CLVRQuantAI.com" style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:12,fontFamily:MONO,fontSize:11,color:C.gold2,textDecoration:"none",border:`1px solid rgba(201,168,76,.25)`,borderRadius:4,padding:"6px 14px",background:"rgba(201,168,76,.06)"}}>✉ Support@CLVRQuantAI.com</a>
+            </div>
+          </div>
+
+          {[
+            {cat:"Getting Started",color:C.blue,items:[
+              {q:"What is CLVRQuant?",a:"CLVRQuant is a mobile-first AI-powered market intelligence dashboard. It aggregates live prices across crypto, equities, commodities, and forex — combined with AI analysis, macro event tracking, and real-time signals — all in one clean app."},
+              {q:"How do I create an account?",a:"Tap the Account tab (⚙) in the navigation bar, then choose Sign Up. Enter your email and password. That's it — you're in. Free accounts get access to all core market data, signals, and the daily brief."},
+              {q:"What's the difference between Free and Pro?",a:"Free accounts get live prices, macro calendar, 1 trade idea in the morning brief, and basic signals. Pro unlocks the full CLVR AI chat, 4 trade ideas in the brief, priority signal alerts, and advanced market analysis. Pro is $29/month or $199/year."},
+              {q:"Can I use CLVRQuant on my phone?",a:"Yes — CLVRQuant is designed mobile-first. You can add it to your home screen as a PWA (Progressive Web App) for a native app experience. On iPhone, tap Share → Add to Home Screen. On Android, tap the browser menu → Install App."},
+            ]},
+            {cat:"Market Data & Signals",color:C.green,items:[
+              {q:"Where does the market data come from?",a:"Live crypto prices come from Binance and Hyperliquid. Equities, metals, and forex come from Finnhub. Macro events come from ForexFactory. All data is real-time — no delayed or simulated prices."},
+              {q:"What does 'AWAITING RESULT' mean on the macro calendar?",a:"This appears when a high-impact economic event (like an FOMC rate decision) has passed its scheduled release time but the actual result hasn't been published yet on ForexFactory. This typically resolves within 30–60 minutes of the announcement. The system refreshes automatically."},
+              {q:"What is a QuantBrain Signal?",a:"QuantBrain signals are generated when an asset passes at least 4 out of 5 technical checks — price move magnitude, volume spike, funding rate, open interest shift, and momentum. Each signal shows a conviction score (55–100), suggested entry/target/stop, and Kelly position sizing."},
+              {q:"How often do signals refresh?",a:"Signal checks run continuously. The dashboard refreshes market data every 30 seconds. New signals appear as soon as they're detected."},
+              {q:"Why does a signal say SIM instead of LIVE?",a:"SIM means the data source for that asset is temporarily unavailable and a reference price is shown. LIVE means the price is fetched in real-time from market data providers."},
+            ]},
+            {cat:"CLVR AI",color:C.gold2,items:[
+              {q:"What is CLVR AI?",a:"CLVR AI is your personal AI market analyst, powered by Anthropic's Claude model. It analyzes live prices, signals, macro events, and market regime data in real-time to answer your questions and suggest trade setups."},
+              {q:"Is CLVR AI available on the Free plan?",a:"No — CLVR AI is a Pro feature. Free users can see the morning brief which includes AI-generated market summaries and 1 trade idea. Pro users get unlimited AI chat plus 4 daily trade ideas."},
+              {q:"Does the AI give financial advice?",a:"CLVRQuant and CLVR AI are for educational and informational purposes only. Nothing on this platform constitutes financial advice. Always do your own research and consult a licensed financial advisor before making investment decisions."},
+            ]},
+            {cat:"Alerts & Notifications",color:C.orange,items:[
+              {q:"How do I set a price alert?",a:"Tap the 🔔 Alerts tab in the navigation bar. Enter the asset, price target, and direction (above/below). Tap Save. You'll get a push notification when the price hits your target — even if the app is closed."},
+              {q:"Why aren't I receiving push notifications?",a:"First, make sure you've allowed notifications when prompted. On iPhone, go to Settings → Notifications → Safari (or your browser) and enable notifications for CLVRQuant. If you added the app to your home screen, you may need to re-enable notifications from Settings → CLVRQuant."},
+              {q:"What is the Morning Brief?",a:"The Morning Brief is a daily AI-generated market summary delivered every day at 6:00 AM ET. It covers overnight moves across crypto, equities, and commodities; key macro events for the day; and top trade setups. You can also receive it by email — subscribe in the Account tab."},
+            ]},
+            {cat:"Billing & Subscription",color:C.red,items:[
+              {q:"How much does Pro cost?",a:"Pro is $29/month or $199/year (save $149 vs monthly). Both plans include all Pro features: unlimited CLVR AI, 4 daily trade ideas, advanced signals, and priority support."},
+              {q:"How do I upgrade to Pro?",a:"Tap the PRO button in the top navigation bar, or go to Account → Upgrade to Pro. You'll be taken to a secure Stripe checkout. After payment, your account is instantly upgraded."},
+              {q:"Can I cancel my subscription?",a:"Yes, you can cancel anytime. Go to Account → Manage Subscription. Your Pro access continues until the end of your current billing period, then reverts to Free. No questions asked."},
+              {q:"Is my payment information secure?",a:"All payments are processed by Stripe, the industry-standard payments platform used by thousands of businesses. CLVRQuant never stores your card details."},
+            ]},
+            {cat:"Phantom Wallet & DeFi",color:C.muted2,items:[
+              {q:"What is the Phantom Wallet integration?",a:"The Wallet tab lets you connect your Phantom wallet to view your Solana balances and positions directly in CLVRQuant. You can also view your Hyperliquid perpetual futures account. This is read-only — no transactions are initiated from CLVRQuant."},
+              {q:"Is my wallet safe to connect?",a:"Yes. CLVRQuant only reads your public wallet address and balances. No private keys are ever requested or stored. You can disconnect at any time from the Wallet tab."},
+            ]},
+          ].map(({cat,color,items},ci)=>(
+            <div key={ci} style={panel}>
+              <div style={{padding:"14px 16px 8px",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{fontFamily:MONO,fontSize:9,color,letterSpacing:"0.2em",fontWeight:700}}>{cat.toUpperCase()}</div>
+              </div>
+              <div style={{padding:"8px 16px 14px"}}>
+                {items.map(({q,a},qi)=>{
+                  const key=`faq-${ci}-${qi}`;
+                  return(
+                    <HelpItem key={key} q={q} a={a}/>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
+          <div style={{...panel,border:`1px solid rgba(201,168,76,.15)`,marginBottom:4}}>
+            <div style={{padding:"16px 18px",textAlign:"center"}}>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em",marginBottom:8}}>STILL NEED HELP?</div>
+              <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.8,marginBottom:12}}>Our support team typically responds within 24 hours.</div>
+              <a href="mailto:Support@CLVRQuantAI.com" style={{display:"inline-flex",alignItems:"center",gap:6,fontFamily:MONO,fontSize:12,color:C.gold2,textDecoration:"none",border:`1px solid rgba(201,168,76,.25)`,borderRadius:4,padding:"8px 16px",background:"rgba(201,168,76,.06)"}}>✉ Support@CLVRQuantAI.com</a>
             </div>
           </div>
         </>}
