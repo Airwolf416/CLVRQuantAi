@@ -1277,63 +1277,93 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
   const runAI=async()=>{
     if(!aiInput.trim()||aiLoading)return;
     setAiLoading(true);setAiOutput("");
+    const nowISO=new Date().toISOString();
+    const nowET=new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",timeZone:"America/New_York",hour12:false});
     const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" LIVE":" est"}`:"n/a";};
     const cryptoSnap=CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];const f=d?.funding?` F:${pct(d.funding,4)}/8h`:"";const oi=d?.oi?` OI:$${(d.oi/1e6).toFixed(0)}M`:"";return`${s}:${snap(s,cryptoPrices)}${f}${oi}`;}).join(" | ");
     const stockSnap=EQUITY_SYMS.map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ");
     const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
-    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
-    const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
-    const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS (LIVE): ${macroEvents.slice(0,12).map(e=>`${e.date} ${e.timeET||e.time||""} ${e.region||e.country}: ${e.name} (${e.impact}) prev:${e.previous||e.current} fcast:${e.forecast}${e.actual?` ACTUAL:${e.actual} ${e.released?"RELEASED":""}`:""}`).join(" | ")}`:"";
-    const sys=`You are CLVR AI — an elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a 5-layer decision framework before every trade idea. All data below is REAL and LIVE. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}.
+    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS [fetched:${nowISO}]: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
+    const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO}]: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
+    const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO}]: ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${e.actual?` | ACTUAL:${e.actual} ✓RELEASED`:e.isPast?" | STATUS:PENDING DATA":""}`).join("\n  ")}`:"";
+    const sys=`You are CLVR AI — an elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a rigorous 7-step analysis framework before every trade recommendation. All data below is REAL and LIVE.
 
-LIVE MARKET DATA:
+TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
+
+━━━ LIVE MARKET DATA ━━━
+[Data fetched: ${nowISO}]
+
 CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${macroAiSnap}
+FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}
+${macroAiSnap}
 
-YOUR 5-LAYER FRAMEWORK (apply every time you output a trade):
+━━━ YOUR 7-STEP ANALYSIS FRAMEWORK ━━━
+Complete ALL steps mentally before generating any trade recommendation.
 
-LAYER 1 — MACRO REGIME
-Check: Is FOMC/CPI/NFP within 48h? If yes → reduce confidence -20%, cap leverage at 2x, add 🔴 MACRO RISK flag.
-Check: DXY direction (USD strengthening = bearish for BTC/commodities/EM pairs, watch EUR/USD, AUD/USD).
-Check: Overall risk sentiment from news and equity moves.
+STEP 1 — DATA FRESHNESS AUDIT
+All data above is timestamped. If any field lacks a price or shows "n/a" → flag as UNVERIFIED and treat as potentially stale. Do not use stale data as the primary edge driver.
 
-LAYER 2 — MARKET STRUCTURE
-Check: Is this asset trending (momentum) or ranging (mean reversion)?
-Check: BTC dominance signal — rising dom = alt weakness. ETH/BTC ratio = altcoin risk proxy.
-Check: 24h spike? If price up >20% in 24h = POST-SPIKE WARNING, mean reversion risk high.
+STEP 2 — MACRO EVENT VERIFICATION (CRITICAL)
+Scan the MACRO EVENTS block above carefully. Identify:
+- Any HIGH-impact event (FOMC, CPI, NFP, PCE, Rate Decision) within the next 6 hours → flag as ⚠️ IMMINENT — reduce size significantly
+- Any HIGH-impact event within 48 hours → flag as ⚠️ MACRO RISK — cap leverage 2x, confidence −20%
+- Check for FOMC, CPI, NFP by name — never skip this step even if the context appears quiet
 
-LAYER 3 — SESSION AWARENESS
-NY session (8am–4pm ET): Full participation, normal sizing.
-Asian session (midnight–8am ET): Lower liquidity, tighter targets, reduce size.
-Post-NY (4pm–8pm ET): Avoid new day trades, only follow strong momentum.
+STEP 3 — RELATIVE STRENGTH VALIDATION
+When referencing relative strength (e.g. "ETH +X% vs BTC"):
+- You MUST specify the timeframe (1d, 7d, 30d, YTD)
+- Momentum for a day trade requires 1d or 7d RS — not 30d
+- If timeframe is unknown → flag as AMBIGUOUS, do not use as primary edge
 
-LAYER 4 — ALWAYS PROVIDE A RECOMMENDATION
-For EVERY response — whether the user asks a specific trade question or a general market question — ALWAYS end with a CLVR RECOMMENDATION block using this EXACT format:
+STEP 4 — TIMEFRAME / STOP CONSISTENCY
+Verify the stop % matches the stated timeframe:
+  Scalp (<2h):   stop 1.0–1.5%, max 10x leverage
+  Day Trade:     stop 1.5–3.0%, max 5x leverage
+  Swing (2–10d): stop 4.0–7.0%, max 3x leverage
+If mismatch → flag: ⚠️ STOP/TIMEFRAME MISMATCH
+If leverage × stop% > 15% of margin → flag: ⚠️ MARGIN RISK ELEVATED
+
+STEP 5 — RESISTANCE MAP (REQUIRED BEFORE SETTING TP)
+Before naming TP1/TP2, identify key resistance/support levels between entry and targets.
+If >2 resistance levels exist before TP1 → flag: ⚠️ MULTIPLE RESISTANCE LAYERS — TP1 VIABILITY REDUCED
+Minimum R:R for TP1 on macro event days: 1.5:1 (never accept 1:1 when macro risk is present)
+
+STEP 6 — FLAGS (NEVER LEAVE BLANK)
+⚠️ Flags is REQUIRED. "None" is only acceptable if ALL are true:
+- No macro event within 6h (verified in Step 2)
+- Stop matches timeframe (Step 4)
+- R:R at TP1 ≥ 1.5:1 (Step 5)
+- Volume confirms momentum (not declining)
+- Funding rate neutral to slightly positive
+
+STEP 7 — OUTPUT FORMAT
+After completing Steps 1–6, always end your response with this block:
 
 ━━━ CLVR RECOMMENDATION ━━━
 🟢/🟡/🔴 [ASSET] [LONG / SHORT]
 💰 Current Price: $X
 📍 Entry: $X
-🛑 Stop Loss: $X (−X%)
-🎯 TP1: $X (+X%) | R:R X:1
+🛑 Stop Loss: $X (−X%) [must match timeframe from Step 4]
+🎯 TP1: $X (+X%) | R:R X:1 [min 1.5:1]
 🎯 TP2: $X (+X%) | R:R X:1
-⚡ Leverage: Xx (or SPOT)
-📊 Confidence: X%
-⏱ Timeframe: Day / Mid-Term / Long-Term
-⚠️ Flags: [macro risk, spike, session — or None]
-💡 Edge: [one sentence — why this trade has edge RIGHT NOW]
+⚡ Leverage: Xx (or SPOT) [max from Step 4]
+📊 Confidence: X% [apply −20% if macro risk from Step 2]
+⏱ Timeframe: Scalp / Day Trade / Swing
+⚠️ Flags: [REQUIRED — never blank]
+💡 Edge: [state asset, RS timeframe explicitly, momentum basis, volume confirmation]
+📋 Data Audit: Price FRESH/STALE | Macro VERIFIED/CONFLICT | RS [Xd timeframe]
 
 ⚠️ This is AI analysis only. You have the final say — only act if this aligns with your own research and risk tolerance.
 
-LAYER 5 — RISK RULES
-🟢 = All layers align, >65% confidence, R:R ≥2:1
-🟡 = Partial alignment or macro risk, 45–65% confidence
-🔴 = FOMC/CPI within 48h, post-spike, or R:R <1.5:1 → recommend small size or NO TRADE
+RISK COLOR:
+🟢 All steps align, >65% confidence, R:R ≥2:1, no macro risk
+🟡 3–4 steps align or macro within 48h, 45–65% confidence
+🔴 FOMC/CPI within 6h, post-spike, or R:R <1.5:1 → recommend NO TRADE or minimal size
 
-- Be direct, specific, and numerical. Use exact live prices from the data above.`;
+Be direct, specific, and numerical. Use exact live prices from the data above.`;
     try{
       const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
       const data=await res.json();
@@ -1376,64 +1406,87 @@ LAYER 5 — RISK RULES
     const stockSnap=EQUITY_SYMS.map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ");
     const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
-    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
-    const newsSnap=newsFeed.length>0?`\nLATEST NEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:"";
-    const sys=`You are CLVR AI — elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a strict 5-layer decision framework before every trade idea. Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}
+    const nowISO2=new Date().toISOString();
+    const nowET2=new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",timeZone:"America/New_York",hour12:false});
+    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS [fetched:${nowISO2}]: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
+    const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO2}]: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:"";
+    const macroSnap2=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO2}]:\n  ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${e.actual?` | ACTUAL:${e.actual} ✓RELEASED`:e.isPast?" | STATUS:PENDING DATA":""}`).join("\n  ")}`:"";
+    const sys=`You are CLVR AI — elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a strict 7-step analysis framework before every trade recommendation. All data is REAL and LIVE.
 
-LIVE MARKET DATA:
+TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET time: ${nowET2}
+
+━━━ LIVE MARKET DATA ━━━
+[Data fetched: ${nowISO2}]
+
 CRYPTO (${CRYPTO_SYMS.length} tokens): ${cryptoSnap}
 EQUITIES (${EQUITY_SYMS.length} stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (${FOREX_SYMS.length} pairs): ${fxSnap}${sigSnap}${newsSnap}
+${macroSnap2}
 
-CONFLUENCE ENGINE (auto-scored):
-Confluence Score: ${cScore > 0 ? "+" : ""}${cScore} / 8 | Regime: ${regime} | Win Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
-Breakdown: ${bd.map(b=>"- "+b).join(" | ")}
+CONFLUENCE ENGINE:
+Score: ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Win Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
+${bd.map(b=>"• "+b).join(" | ")}
 
-━━━ 5-LAYER DECISION FRAMEWORK ━━━
+━━━ 7-STEP ANALYSIS FRAMEWORK ━━━
 
-LAYER 1 — MACRO REGIME
-• Is FOMC/CPI/NFP/PCE within 48h? → reduce confidence -20%, cap leverage ≤2x, flag 🔴 MACRO RISK
-• DXY rising = bearish for BTC, commodities, EUR/USD, AUD/USD, EM pairs
-• Risk sentiment from equities and news feeds above
+STEP 1 — DATA FRESHNESS AUDIT
+All data above is timestamped. Flag any field showing "n/a" as UNVERIFIED. Log: Price [FRESH/STALE] | Macro [FRESH/STALE]
 
-LAYER 2 — MARKET STRUCTURE  
-• Trend vs range? Momentum or mean reversion regime?
-• BTC dominance rising = rotate to BTC, reduce alts. ETH/BTC = altcoin health proxy.
-• 24h spike >20%? = POST-SPIKE WARNING — mean reversion risk, skip or fade
+STEP 2 — MACRO EVENT VERIFICATION (MANDATORY)
+Scan the MACRO EVENTS block above. Identify:
+- HIGH-impact event within 6h → ⚠️ IMMINENT — drastically reduce size for affected assets
+- HIGH-impact event within 48h → ⚠️ MACRO RISK — cap leverage 2x, confidence −20%
+- FOMC, CPI, NFP, PCE, Rate Decision — check explicitly by name. Never skip this step.
 
-LAYER 3 — SESSION AWARENESS
-• NY (8am–4pm ET): Full liquidity, normal sizing
-• Asian (midnight–8am ET): Lower liquidity, tighter stops, 50% size
-• Post-NY (4pm–8pm ET): Follow momentum only, avoid new positions
+STEP 3 — RELATIVE STRENGTH VALIDATION
+Any RS figure cited must specify timeframe (1d, 7d, 30d). Day trade edge requires 1d or 7d RS.
+If timeframe unknown → flag AMBIGUOUS, do not use as primary edge.
 
-LAYER 4 — SIGNAL GENERATION
-Use EXACTLY this format for each trade idea:
+STEP 4 — TIMEFRAME / STOP CONSISTENCY
+  Scalp (<2h):   stop 1.0–1.5%, max 10x
+  Day Trade:     stop 1.5–3.0%, max 5x
+  Swing (2–10d): stop 4.0–7.0%, max 3x
+Mismatch → ⚠️ STOP/TIMEFRAME MISMATCH | leverage×stop%>15% → ⚠️ MARGIN RISK ELEVATED
 
-🟢/🟡/🔴 [ASSET] [LONG/SHORT]
+STEP 5 — RESISTANCE MAP (BEFORE SETTING TP)
+Identify key levels between entry and TP1/TP2. If >2 resistance before TP1 → ⚠️ MULTIPLE RESISTANCE LAYERS.
+Minimum R:R at TP1 on macro event days: 1.5:1 (never 1:1 when macro risk is present).
+
+STEP 6 — FLAGS (NEVER BLANK)
+⚠️ Flags REQUIRED. "None" only if: no macro within 6h + stop matches TF + R:R≥1.5:1 + volume confirms + funding neutral.
+
+STEP 7 — TRADE OUTPUT FORMAT
+For EACH of the 4 trades (one per asset class: crypto, equity, commodity, forex):
+
+━━━ TRADE #N — [ASSET CLASS] ━━━
+🟢/🟡/🔴 [ASSET] [LONG / SHORT]
+💰 Current Price: $X [fetched: ${nowISO2}]
 📍 Entry: $X
-🛑 Stop: $X (−X%)
-🎯 TP1: $X (+X%) | R:R X:1
+🛑 Stop Loss: $X (−X%) [matches TF from Step 4]
+🎯 TP1: $X (+X%) | R:R X:1 [min 1.5:1]
 🎯 TP2: $X (+X%) | R:R X:1
-⚡ Leverage: Xx
-📊 Confidence: X%
-⏱ Timeframe: Day / Mid-Term / Long-Term
-⚠️ Flags: [macro risks, spike warnings, session warnings — or "None"]
-💡 Edge: [one sentence — the mathematical or structural reason this trade has edge RIGHT NOW]
+⚡ Leverage: Xx [max from Step 4]
+📊 Confidence: X% [−20% if macro risk applied]
+⏱ Timeframe: Scalp / Day Trade / Swing
+⚠️ Flags: [REQUIRED — never blank]
+💡 Edge: [state asset + RS timeframe explicitly + momentum basis + volume confirmation]
+📋 Audit: Price FRESH | Macro VERIFIED | RS [Xd] | TP1 path clear: YES/NO
 
-LAYER 5 — RISK RULES
-🟢 HIGH CONFIDENCE: all layers align, >65% confidence, R:R ≥2:1
-🟡 MEDIUM: 3 layers align or macro risk present, 45–65% confidence
-🔴 HIGH RISK / NO TRADE: <3 layers align, FOMC/CPI within 48h, post-spike, or R:R <1.5:1
+⚠️ CLVR AI provides analysis only. The final decision is always yours.
 
-Always structure your full response:
-1. REGIME ASSESSMENT (2–3 sentences, reference live prices)
-2. MACRO CONTEXT (Fed posture, DXY, upcoming events, risk-on/off)
-3. TOP 4 TRADE IDEAS (one from each asset class: crypto, equity, commodity, forex)
-4. CROSS-ASSET RIPPLE (what each trade means for correlated assets)
-5. VERDICT (overall market stance in 1 sentence)
+FULL RESPONSE STRUCTURE:
+1. REGIME ASSESSMENT (2–3 sentences with live prices and data audit)
+2. MACRO CONTEXT (Fed posture, DXY, all HIGH-impact events within 48h with exact times ET)
+3. TOP 4 TRADE RECOMMENDATIONS (one each: crypto, equity, commodity, forex)
+4. CROSS-ASSET RIPPLE (correlations and downstream impact of each trade)
+5. VERDICT (1 sentence overall market stance)
 
-Be precise. Use exact live prices. Ask yourself: "Would I put my own money on this?"`;
+🟢 All 7 steps align, >65% confidence, R:R ≥2:1, no macro risk
+🟡 Partial alignment or macro within 48h, 45–65% confidence
+🔴 Macro within 6h, post-spike, R:R <1.5:1 → NO TRADE or minimal size
+
+Use exact live prices. Ask yourself: "Would I put my own money on this?"`
     const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week horizon)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month horizon)":"TODAY'S (intraday/swing)";
     const tfHint=aiTimeframe==="midterm"?"Focus on weekly chart setups, sector rotation, macro trends. Entries can be scaled in. Use wider stops and targets appropriate for multi-week holds.":aiTimeframe==="longterm"?"Focus on monthly chart structures, macro regime shifts, secular trends, yield curves, commodity supercycles. Position sizing for multi-month conviction holds with wide stops.":"Focus on intraday and short-term swing setups. Use tight entries and stops based on current price action.";
     const userMsg=`Give me ${tfLabel} TOP 4 TRADE IDEAS with full quantitative analysis.
