@@ -3,7 +3,7 @@ import { getUncachableResendClient } from "./resendClient";
 
 const BRIEF_HOUR_ET = 6;
 const BRIEF_MINUTE_ET = 0;
-const APP_URL = "https://clvrquant.replit.app";
+const APP_URL = "https://clvrquantai.com";
 
 let lastBriefDate = "";
 
@@ -246,6 +246,44 @@ Return a JSON object with EXACTLY these fields:
     "riskLabel": "🟢 or 🟡 or 🔴",
     "flags": "${macroRiskEvents.length > 0 ? "MACRO RISK" : "None"}"
   },
+  "additionalTrades": [
+    {
+      "asset": "2nd best trade idea — different asset class from topTrade",
+      "dir": "LONG or SHORT",
+      "entry": "price",
+      "stop": "price",
+      "tp1": "price",
+      "tp2": "price",
+      "confidence": "X%",
+      "edge": "one sentence",
+      "riskLabel": "🟢 or 🟡 or 🔴",
+      "flags": "any flags"
+    },
+    {
+      "asset": "3rd trade idea — different asset class",
+      "dir": "LONG or SHORT",
+      "entry": "price",
+      "stop": "price",
+      "tp1": "price",
+      "tp2": "price",
+      "confidence": "X%",
+      "edge": "one sentence",
+      "riskLabel": "🟢 or 🟡 or 🔴",
+      "flags": "any flags"
+    },
+    {
+      "asset": "4th trade idea — different asset class",
+      "dir": "LONG or SHORT",
+      "entry": "price",
+      "stop": "price",
+      "tp1": "price",
+      "tp2": "price",
+      "confidence": "X%",
+      "edge": "one sentence",
+      "riskLabel": "🟢 or 🟡 or 🔴",
+      "flags": "any flags"
+    }
+  ],
   "watchItems": ["5-7 specific things to watch today — include price levels, event names, and what to do if they trigger"],
   "riskLevel": "low" or "medium" or "high",
   "riskNote": "One sentence: biggest risk to positions today and how to manage it"
@@ -256,6 +294,7 @@ RULES:
 - Apply 5-layer framework: macro regime → structure → session → signal → risk rules
 - If FOMC/CPI within 48h: ALL signals get 🔴 label, cap leverage at 2x, say SIZE DOWN
 - Minimum R:R 1.5:1 for any trade idea. Skip if R:R is worse.
+- All 4 trade ideas must be from different asset classes (crypto, forex, metals, equities)
 - Return ONLY the JSON object. No markdown, no backticks.`;
 
   try {
@@ -281,7 +320,24 @@ RULES:
   }
 }
 
-function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData): string {
+function buildTradeBlock(trade: any, label: string): string {
+  if (!trade) return "";
+  return `<div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
+    <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ ${label}</div>
+    <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">${trade.riskLabel || "🟡"} ${trade.asset || ""} ${trade.dir || ""}</div>
+    <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
+      📍 Entry: ${trade.entry || "—"}<br>
+      🛑 Stop: ${trade.stop || "—"}<br>
+      🎯 TP1: ${trade.tp1 || "—"}<br>
+      🎯 TP2: ${trade.tp2 || "—"}<br>
+      📊 Confidence: ${trade.confidence || "—"}<br>
+      ⚠️ Flags: ${trade.flags || "None"}
+    </div>
+    ${trade.edge ? `<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 ${trade.edge}</div>` : ""}
+  </div>`;
+}
+
+function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData, isPro: boolean = false): string {
   const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787" : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
   const macroRiskBadge = briefJson.macroRisk === "HIGH"
     ? `<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:#ff4060;border:1px solid rgba(255,64,96,.4);background:rgba(255,64,96,.08)">🔴 MACRO RISK</div>`
@@ -358,19 +414,10 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData)
   </div>
 
   ${briefJson.topTrade ? `<div style="padding:0 24px 24px">
-    <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px">
-      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TODAY'S TOP TRADE IDEA</div>
-      <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">${briefJson.topTrade.riskLabel || "🟡"} ${briefJson.topTrade.asset || ""} ${briefJson.topTrade.dir || ""}</div>
-      <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
-        📍 Entry: ${briefJson.topTrade.entry || "—"}<br>
-        🛑 Stop: ${briefJson.topTrade.stop || "—"}<br>
-        🎯 TP1: ${briefJson.topTrade.tp1 || "—"}<br>
-        🎯 TP2: ${briefJson.topTrade.tp2 || "—"}<br>
-        📊 Confidence: ${briefJson.topTrade.confidence || "—"}<br>
-        ⚠️ Flags: ${briefJson.topTrade.flags || "None"}
-      </div>
-      ${briefJson.topTrade.edge ? `<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 ${briefJson.topTrade.edge}</div>` : ""}
-    </div>
+    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:12px">${isPro ? "⚡ Today's Trade Ideas — Pro (4 Ideas)" : "⚡ Today's Top Trade Idea"}</div>
+    ${buildTradeBlock(briefJson.topTrade, isPro ? "TRADE IDEA #1" : "TODAY'S TOP TRADE IDEA")}
+    ${isPro && Array.isArray(briefJson.additionalTrades) ? briefJson.additionalTrades.map((t: any, i: number) => buildTradeBlock(t, `TRADE IDEA #${i + 2}`)).join("") : ""}
+    ${!isPro ? `<div style="margin-top:8px;padding:10px 14px;background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">🔒 <strong style="color:#c9a84c">Pro members get 4 trade ideas daily.</strong> Upgrade at <a href="${APP_URL}" style="color:#e8c96d;text-decoration:none">clvrquantai.com</a></div>` : ""}
   </div>` : ""}
 
   ${watchItems ? `<div style="padding:0 24px 24px">
@@ -412,7 +459,7 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData)
   <div style="padding:16px 24px;border-top:1px solid #141e35;text-align:center">
     <div style="font-family:Georgia,serif;font-size:14px;color:#e8c96d;margin-bottom:8px">CLVRQuant</div>
     <div style="font-family:monospace;font-size:8px;color:#3a4a6a;letter-spacing:0.12em;line-height:2">
-      MIKE CLAVER · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a><br>
+      For any issues or inquiries, please email <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">Support@CLVRQuantAI.com</a><br>
       NOT FINANCIAL ADVICE · AI-POWERED RESEARCH FOR EDUCATIONAL PURPOSES ONLY<br>
       ALL DATA IS INFORMATIONAL — TRADE AT YOUR OWN RISK
     </div>
@@ -423,8 +470,20 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData)
 }
 
 async function sendDailyBriefEmails() {
+  const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const dateKey = etTime.toISOString().split("T")[0];
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
-  console.log(`[daily-brief] Generating brief for ${today}...`);
+
+  // ── Double-send guard: mark as sent BEFORE generating/sending ──────────────
+  // If server restarts mid-send, the DB record already exists so catch-up
+  // scheduler won't fire again. (Idempotency via INSERT … ON CONFLICT DO NOTHING)
+  const alreadySent = await getTodayBriefKey();
+  if (alreadySent) {
+    console.log(`[daily-brief] Already sent for ${dateKey}, skipping.`);
+    return;
+  }
+  await markBriefSent(dateKey, 0); // reserve the slot; update count at end
+  console.log(`[daily-brief] Reserved brief slot for ${dateKey}, generating...`);
 
   const marketData = await fetchMarketData();
   console.log(`[daily-brief] Market data: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
@@ -445,9 +504,13 @@ async function sendDailyBriefEmails() {
     return;
   }
 
-  const html = buildEmailHtml(briefJson, today, marketData);
-
-  const subsResult = await pool.query("SELECT email, name FROM subscribers WHERE active = true");
+  // Join subscribers with users table to get tier
+  const subsResult = await pool.query(`
+    SELECT s.email, s.name, COALESCE(u.tier, 'free') AS tier
+    FROM subscribers s
+    LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
+    WHERE s.active = true
+  `);
   const subs = subsResult.rows;
 
   if (subs.length === 0) {
@@ -456,18 +519,20 @@ async function sendDailyBriefEmails() {
   }
 
   console.log(`[daily-brief] Sending to ${subs.length} subscribers...`);
+  let sentCount = 0;
 
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const { client } = await getUncachableResendClient();
 
     for (let i = 0; i < subs.length; i++) {
       const sub = subs[i];
+      const isPro = sub.tier === "pro";
       // Stay under Resend's 2 req/s rate limit
       if (i > 0) await new Promise(r => setTimeout(r, 600));
       try {
-        const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
+        const html = buildEmailHtml(briefJson, today, marketData, isPro);
         const resp = await client.emails.send({
-          from: senderAddress,
+          from: "CLVRQuant <noreply@clvrquantai.com>",
           to: sub.email,
           reply_to: "MikeClaver@CLVRQuantAI.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
@@ -476,16 +541,19 @@ async function sendDailyBriefEmails() {
         if ((resp as any).error) {
           console.log(`[daily-brief] Resend error for ${sub.email}:`, JSON.stringify((resp as any).error));
         } else {
-          console.log(`[daily-brief] Sent to ${sub.email} — id: ${(resp as any).data?.id || "unknown"}`);
+          console.log(`[daily-brief] Sent to ${sub.email} [${sub.tier}] — id: ${(resp as any).data?.id || "unknown"}`);
+          sentCount++;
         }
       } catch (e: any) {
         console.log(`[daily-brief] Failed to send to ${sub.email}:`, e.message);
       }
     }
-    console.log("[daily-brief] All emails sent");
-    const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-    const dateKey = etTime.toISOString().split("T")[0];
-    await markBriefSent(dateKey, subs.length);
+    console.log(`[daily-brief] Done — ${sentCount}/${subs.length} emails sent`);
+    // Update the count (the slot was already reserved at the top)
+    await pool.query(
+      `UPDATE daily_briefs_log SET recipient_count = $1 WHERE date_key = $2`,
+      [sentCount, dateKey]
+    );
   } catch (e: any) {
     console.log("[daily-brief] Resend client error:", e.message);
   }
@@ -506,8 +574,6 @@ async function sendApologyBriefEmails() {
     briefJson = JSON.parse(jsonMatch[0]);
   } catch (e) { console.log("[daily-brief] Failed to parse brief JSON:", e); return; }
 
-  const briefHtml = buildEmailHtml(briefJson, today, marketData);
-
   // Apology note injected right after the header banner
   const apologyNote = `
   <div style="margin:0 24px 16px;padding:14px 18px;background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.25);border-radius:6px">
@@ -515,37 +581,38 @@ async function sendApologyBriefEmails() {
     <div style="font-family:Georgia,serif;font-size:13px;color:#c5cfe0;line-height:1.7;font-style:italic">
       We apologize for the delay in this morning's brief. We've been making improvements to CLVRQuant to give you faster, more accurate market intelligence. Thank you for your patience — today's full analysis is below.
     </div>
-    <div style="font-family:monospace;font-size:10px;color:#5a6a8a;margin-top:6px">— Mike Claver, CLVRQuant</div>
+    <div style="font-family:monospace;font-size:10px;color:#5a6a8a;margin-top:6px">— CLVRQuant Team</div>
   </div>`;
 
-  // Insert apology after the first closing </div> of the header block
-  const apologyHtml = briefHtml.replace(
-    `<div style="padding:24px 24px 8px">`,
-    apologyNote + `<div style="padding:24px 24px 8px">`
-  );
-
-  // Get all active subscribers + always include owner
-  const subsResult = await pool.query("SELECT email, name FROM subscribers WHERE active = true");
-  const subs: {email:string;name:string}[] = subsResult.rows;
-  const ownerEmail = "MikeClaver@CLVRQuantAI.com";
-  if (!subs.find(s => s.email === ownerEmail)) {
-    subs.push({ email: ownerEmail, name: "Mike" });
+  // Get all active subscribers + always include owner (join with users for tier)
+  const subsResult = await pool.query(`
+    SELECT s.email, s.name, COALESCE(u.tier, 'free') AS tier
+    FROM subscribers s
+    LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
+    WHERE s.active = true
+  `);
+  const subs: {email:string;name:string;tier:string}[] = subsResult.rows;
+  const ownerEmail = "mikeclaver@gmail.com";
+  if (!subs.find(s => s.email.toLowerCase() === ownerEmail.toLowerCase())) {
+    subs.push({ email: ownerEmail, name: "Mike", tier: "pro" });
   }
 
   console.log(`[daily-brief] Sending apology brief to ${subs.length} recipients...`);
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
-    const senderAddress = fromEmail && !fromEmail.includes("gmail.com")
-      ? `CLVRQuant <${fromEmail}>`
-      : "CLVRQuant <noreply@clvrquantai.com>";
-    console.log(`[daily-brief] Sending from: ${senderAddress}`);
+    const { client } = await getUncachableResendClient();
     for (let i = 0; i < subs.length; i++) {
       const sub = subs[i];
+      const isPro = sub.tier === "pro";
       // Stay well under Resend's 2 req/s rate limit
       if (i > 0) await new Promise(r => setTimeout(r, 600));
       try {
+        const briefHtml = buildEmailHtml(briefJson, today, marketData, isPro);
+        const apologyHtml = briefHtml.replace(
+          `<div style="padding:24px 24px 8px">`,
+          apologyNote + `<div style="padding:24px 24px 8px">`
+        );
         const resp = await client.emails.send({
-          from: senderAddress,
+          from: "CLVRQuant <noreply@clvrquantai.com>",
           to: sub.email,
           reply_to: "MikeClaver@CLVRQuantAI.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
@@ -554,7 +621,7 @@ async function sendApologyBriefEmails() {
         if ((resp as any).error) {
           console.log(`[daily-brief] Resend API error for ${sub.email}:`, JSON.stringify((resp as any).error));
         } else {
-          console.log(`[daily-brief] Apology brief sent to ${sub.email} — id: ${(resp as any).data?.id || "unknown"}`);
+          console.log(`[daily-brief] Apology brief sent to ${sub.email} [${sub.tier}] — id: ${(resp as any).data?.id || "unknown"}`);
         }
       } catch (e: any) {
         console.log(`[daily-brief] Failed to send apology to ${sub.email}:`, e.message);
