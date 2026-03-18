@@ -1,0 +1,165 @@
+# CLVRQuant — 3 Fixes Prompt
+
+# Paste this entire block into Replit
+
+-----
+
+## FIX 1 — FOMC COUNTDOWN: HIDE OR UPDATE AFTER EVENT HAS PASSED
+
+**Bug:** The “Next Macro Event” countdown is still showing and counting down after the FOMC Rate Decision at 14:00 ET has already passed. The timer should never show a negative or post-event countdown.
+
+**Fix — update the countdown logic with these rules:**
+
+```javascript
+function renderNextMacroEvent(events) {
+  const now = new Date();
+
+  // Filter to only FUTURE events (strictly after current time)
+  const upcomingEvents = events.filter(event => {
+    const eventTime = new Date(event.datetime); // must be in ISO format with timezone
+    return eventTime > now;
+  });
+
+  const nextEventSection = document.getElementById('next-macro-event'); // adjust to your selector
+
+  if (upcomingEvents.length === 0) {
+    // No upcoming events — hide the section entirely
+    nextEventSection.style.display = 'none';
+    return;
+  }
+
+  // Sort ascending and take the next one
+  upcomingEvents.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+  const nextEvent = upcomingEvents[0];
+
+  // Render the countdown for the next genuine future event
+  renderCountdown(nextEvent);
+}
+
+function renderCountdown(event) {
+  const countdownInterval = setInterval(() => {
+    const now = new Date();
+    const eventTime = new Date(event.datetime);
+    const diff = eventTime - now;
+
+    if (diff <= 0) {
+      // Event has now passed — stop countdown, update status to PENDING → check for result
+      clearInterval(countdownInterval);
+      updateEventStatus(event.id, 'RELEASED');  // triggers your result polling (Fix 2 from previous prompt)
+      renderNextMacroEvent(getAllEvents());       // re-render to show next event or hide
+      return;
+    }
+
+    const hours   = Math.floor(diff / 1000 / 60 / 60);
+    const minutes = Math.floor((diff / 1000 / 60) % 60);
+    const seconds = Math.floor((diff / 1000) % 60);
+
+    document.getElementById('countdown-display').textContent =
+      `${String(hours).padStart(2, '0')} : ${String(minutes).padStart(2, '0')} : ${String(seconds).padStart(2, '0')}`;
+  }, 1000);
+}
+```
+
+**Key rule:** Event datetime must be stored in UTC/ISO format with timezone offset included (e.g. `2026-03-18T14:00:00-05:00` for 14:00 ET). Never store as a naive time string — this causes timezone bugs where events appear to not have passed yet.
+
+**After the event passes:**
+
+- The countdown section either disappears or immediately advances to the next upcoming event
+- The event card in the Macro tab updates from `PENDING` to `RELEASED` and begins polling for the actual result (see previous prompt Fix 2)
+- The Alerts tab fires a notification: “FOMC Rate Decision released — checking for result…”
+
+-----
+
+## FIX 2 — ADD FAQ / HELP CENTER LINK (OPENS IN NEW TAB)
+
+Add a visible FAQ / Help Center link that opens in a new browser tab. Place it in two locations:
+
+**Location A — in the navigation bar (bottom tab bar), add a new tab:**
+
+```javascript
+// Add to your tab bar config array
+{
+  id: 'help',
+  label: 'HELP',
+  icon: '❓',  // or use your icon system
+  action: 'external',
+  url: 'https://clvrquantai.com/faq',  // Replace with your actual FAQ URL
+  openInNewTab: true,
+}
+
+// In your tab click handler:
+if (tab.action === 'external') {
+  window.open(tab.url, '_blank', 'noopener,noreferrer');
+  return; // Don't navigate internally
+}
+```
+
+**Location B — in the About page, add a Help Center card:**
+
+```html
+<!-- Add this card in your About page content -->
+<div class="about-card">
+  <h3>📚 Help Center & FAQ</h3>
+  <p>Find answers to common questions, tutorials, and platform guides.</p>
+  <a href="https://clvrquantai.com/faq" target="_blank" rel="noopener noreferrer" class="btn-outline">
+    Visit Help Center →
+  </a>
+</div>
+```
+
+Replace `https://clvrquantai.com/faq` with your actual FAQ URL when ready. Until the page exists, you can point it to a Notion page, Google Doc, or a placeholder.
+
+-----
+
+## FIX 3 — ABOUT / CONTACT: REPLACE “MIKE” WITH SUPPORT EMAIL
+
+In the About page contact section, remove the name “Mike” and replace all contact references with the support email address.
+
+Find and replace every instance of the contact name/info:
+
+```javascript
+// If rendered dynamically:
+const contactInfo = {
+  // OLD:
+  // name: 'Mike Claver',
+  // label: 'Morning Market Commentary · CLVRQuant',
+
+  // NEW:
+  email: 'Support@CLVRQuantAI.com',
+  label: 'CLVRQuant Support',
+  displayText: 'Support@CLVRQuantAI.com',
+  href: 'mailto:Support@CLVRQuantAI.com',
+};
+```
+
+```html
+<!-- In your About page HTML/JSX — replace the contact card with: -->
+<div class="contact-card">
+  <div class="contact-avatar">CQ</div>
+  <div class="contact-details">
+    <a href="mailto:Support@CLVRQuantAI.com" class="contact-email">
+      Support@CLVRQuantAI.com
+    </a>
+    <span class="contact-label">CLVRQuant Support</span>
+  </div>
+</div>
+```
+
+Also update the footer disclaimer line if it shows a name:
+
+```
+// OLD: "Mike Claver · Morning Market Commentary · CLVRQuant"
+// NEW: "CLVRQuant · Support@CLVRQuantAI.com · Not Financial Advice"
+```
+
+Do a full search across all files for the string “Mike” and “Mike Claver” to catch any hardcoded instances in footer, brief generator attribution, email templates, or alert notifications.
+
+-----
+
+## SUMMARY
+
+|#|Location      |Issue                                |Fix                                                                                         |
+|-|--------------|-------------------------------------|--------------------------------------------------------------------------------------------|
+|1|Alerts / Macro|Countdown persists after event passed|Filter to future events only; hide or advance when event time passes; trigger result polling|
+|2|Nav + About   |No FAQ/Help Center link              |Add tab + About card linking to FAQ URL in new tab                                          |
+|3|About / Footer|“Mike” shown as contact              |Replace all instances with Support@CLVRQuantAI.com                                          |
