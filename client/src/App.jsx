@@ -2133,7 +2133,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ PRICES ══ */}
-        {tab==="prices"&&<MarketTab/>}
+        {tab==="prices"&&<MarketTab cryptoPrices={cryptoPrices} equityPrices={equityPrices} metalPrices={metalPrices} forexPrices={forexPrices} flashes={flashes}/>}
 
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>

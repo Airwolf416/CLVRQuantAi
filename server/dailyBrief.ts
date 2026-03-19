@@ -652,6 +652,191 @@ async function sendApologyBriefEmails() {
 
 export { sendApologyBriefEmails };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVICE APOLOGY EMAIL — simple outage/disruption notice (no market brief)
+// ─────────────────────────────────────────────────────────────────────────────
+let lastServiceApologySentAt = 0;
+
+export async function sendServiceApologyEmail(): Promise<{ sent: number; skipped: number }> {
+  const nowMs = Date.now();
+  if (lastServiceApologySentAt > 0 && (nowMs - lastServiceApologySentAt) < 2 * 60 * 60 * 1000) {
+    console.log("[service-apology] Already sent recently — skipping.");
+    return { sent: 0, skipped: 1 };
+  }
+  lastServiceApologySentAt = nowMs;
+
+  const usersResult = await pool.query(
+    `SELECT DISTINCT COALESCE(u.email, s.email) AS email, COALESCE(u.name, s.name, 'Valued Member') AS name
+     FROM users u
+     LEFT JOIN subscribers s ON LOWER(s.email) = LOWER(u.email)
+     WHERE u.id IS NOT NULL
+     UNION
+     SELECT s.email, COALESCE(s.name, 'Valued Member')
+     FROM subscribers s WHERE s.active = true`
+  );
+
+  const recipients: { email: string; name: string }[] = usersResult.rows;
+  const ownerEmail = "mikeclaver@gmail.com";
+  if (!recipients.find(r => r.email.toLowerCase() === ownerEmail)) {
+    recipients.push({ email: ownerEmail, name: "Mike" });
+  }
+
+  console.log(`[service-apology] Sending apology to ${recipients.length} recipients...`);
+  const { client } = await getUncachableResendClient();
+  let sent = 0;
+
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    if (i > 0) await new Promise(res => setTimeout(res, 600));
+    try {
+      const html = `
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Service Update — CLVRQuant</title></head>
+<body style="margin:0;padding:0;background:#050709;font-family:Georgia,serif">
+<div style="max-width:600px;margin:0 auto;padding:32px 16px">
+  <div style="text-align:center;margin-bottom:28px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:900;color:#c9a84c;letter-spacing:0.15em">CLVR<span style="color:#e8c96d">QUANT</span></div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;letter-spacing:0.2em;margin-top:4px">TRADE SMARTER WITH AI</div>
+  </div>
+  <div style="background:#0c1220;border:1px solid #1c2b4a;border-radius:8px;padding:32px 28px;margin-bottom:20px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#c9a84c;letter-spacing:0.2em;margin-bottom:16px">⚡ SERVICE UPDATE</div>
+    <h1 style="font-family:Georgia,serif;font-size:22px;font-weight:700;color:#f0f4ff;margin:0 0 16px;line-height:1.4;font-style:italic">
+      An Apology from the CLVRQuant Team
+    </h1>
+    <p style="font-size:14px;color:#c8d4ee;line-height:1.8;margin:0 0 16px">
+      Hi ${r.name},
+    </p>
+    <p style="font-size:14px;color:#c8d4ee;line-height:1.8;margin:0 0 16px">
+      We want to sincerely apologize for any recent disruptions or issues you may have experienced with CLVRQuant. We hold ourselves to a high standard and we know how important reliable market intelligence is to your daily trading.
+    </p>
+    <p style="font-size:14px;color:#c8d4ee;line-height:1.8;margin:0 0 16px">
+      Our team has been working to identify and resolve the issue. We are committed to providing you with the fastest, most accurate market data and AI-powered insights available.
+    </p>
+    <p style="font-size:14px;color:#c8d4ee;line-height:1.8;margin:0 0 24px">
+      Thank you for your patience and for being part of the CLVRQuant community. If you have any questions or continue to experience issues, please reach out to us directly — we're here to help.
+    </p>
+    <div style="background:rgba(201,168,76,0.06);border:1px solid rgba(201,168,76,0.2);border-radius:6px;padding:16px 20px;margin-bottom:8px">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#c9a84c;letter-spacing:0.15em;margin-bottom:6px">SUPPORT</div>
+      <div style="font-size:13px;color:#c8d4ee">Email us at <a href="mailto:Support@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">Support@CLVRQuantAI.com</a></div>
+    </div>
+    <div style="margin-top:24px;font-size:13px;color:#6b7fa8;font-style:italic">
+      — Mike Claver, Founder<br>CLVRQuant
+    </div>
+  </div>
+  <div style="text-align:center;font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;line-height:1.8">
+    CLVRQuant · Market Intelligence for Serious Traders<br>
+    © ${new Date().getFullYear()} CLVRQuantAI.com · All rights reserved
+  </div>
+</div></body></html>`;
+      const resp = await client.emails.send({
+        from: "CLVRQuant <noreply@clvrquantai.com>",
+        to: r.email,
+        reply_to: "Support@CLVRQuantAI.com",
+        subject: "A Message from the CLVRQuant Team",
+        html,
+      });
+      if (!(resp as any).error) { sent++; console.log(`[service-apology] Sent to ${r.email}`); }
+    } catch (e: any) {
+      console.log(`[service-apology] Failed for ${r.email}:`, e.message);
+    }
+  }
+  console.log(`[service-apology] Done — ${sent}/${recipients.length} sent`);
+  return { sent, skipped: recipients.length - sent };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROMOTION EMAIL — referral push: share app, earn 1 week free Pro
+// ─────────────────────────────────────────────────────────────────────────────
+let lastPromoSentAt = 0;
+
+export async function sendPromoEmail(): Promise<{ sent: number; skipped: number }> {
+  const nowMs = Date.now();
+  if (lastPromoSentAt > 0 && (nowMs - lastPromoSentAt) < 6 * 60 * 60 * 1000) {
+    console.log("[promo-email] Already sent recently — skipping.");
+    return { sent: 0, skipped: 1 };
+  }
+  lastPromoSentAt = nowMs;
+
+  const usersResult = await pool.query(
+    `SELECT id, email, name, referral_code FROM users WHERE email IS NOT NULL`
+  );
+  const recipients: { id: number; email: string; name: string; referral_code: string }[] = usersResult.rows;
+
+  console.log(`[promo-email] Sending promo to ${recipients.length} recipients...`);
+  const { client } = await getUncachableResendClient();
+  let sent = 0;
+
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    if (i > 0) await new Promise(res => setTimeout(res, 600));
+    const refCode = r.referral_code || "CLVR-REF-XXXXXX";
+    const appUrl = "https://clvrquantai.com";
+    try {
+      const html = `
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Share CLVRQuant — Earn Free Pro Access</title></head>
+<body style="margin:0;padding:0;background:#050709;font-family:Georgia,serif">
+<div style="max-width:600px;margin:0 auto;padding:32px 16px">
+  <div style="text-align:center;margin-bottom:28px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:900;color:#c9a84c;letter-spacing:0.15em">CLVR<span style="color:#e8c96d">QUANT</span></div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;letter-spacing:0.2em;margin-top:4px">TRADE SMARTER WITH AI</div>
+  </div>
+  <div style="background:#0c1220;border:1px solid #1c2b4a;border-radius:8px;padding:32px 28px;margin-bottom:20px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#c9a84c;letter-spacing:0.2em;margin-bottom:16px">🎁 EXCLUSIVE REFERRAL OFFER</div>
+    <h1 style="font-family:Georgia,serif;font-size:22px;font-weight:700;color:#f0f4ff;margin:0 0 16px;line-height:1.4;font-style:italic">
+      Share CLVRQuant &amp; Earn <span style="color:#c9a84c">1 Week Free Pro</span>
+    </h1>
+    <p style="font-size:14px;color:#c8d4ee;line-height:1.8;margin:0 0 16px">
+      Hi ${r.name || "Trader"},
+    </p>
+    <p style="font-size:14px;color:#c8d4ee;line-height:1.8;margin:0 0 16px">
+      Love CLVRQuant? Know a fellow trader who needs real-time market intelligence, AI-powered signals, and macro data all in one place?
+    </p>
+    <p style="font-size:14px;color:#c8d4ee;line-height:1.8;margin:0 0 24px">
+      <strong style="color:#f0f4ff">Share your referral code below.</strong> When your friend signs up and upgrades to a paid Pro subscription, <strong style="color:#c9a84c">you both get 1 week of CLVRQuant Pro for free</strong>.
+    </p>
+    <div style="background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.3);border-radius:8px;padding:20px 24px;margin-bottom:24px;text-align:center">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#c9a84c;letter-spacing:0.2em;margin-bottom:10px">YOUR REFERRAL CODE</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:900;color:#e8c96d;letter-spacing:0.15em">${refCode}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#6b7fa8;margin-top:8px">Share this code with your friends</div>
+    </div>
+    <div style="background:#060f1e;border:1px solid #141e35;border-radius:6px;padding:16px 20px;margin-bottom:24px">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#6b7fa8;letter-spacing:0.15em;margin-bottom:10px">HOW IT WORKS</div>
+      <div style="font-size:13px;color:#c8d4ee;line-height:2">
+        <span style="color:#c9a84c">01</span> &nbsp;Share your code with a friend<br>
+        <span style="color:#c9a84c">02</span> &nbsp;They sign up at <a href="${appUrl}" style="color:#c9a84c;text-decoration:none">CLVRQuantAI.com</a> and enter your code<br>
+        <span style="color:#c9a84c">03</span> &nbsp;They upgrade to Pro (monthly or annual)<br>
+        <span style="color:#c9a84c">04</span> &nbsp;You both receive <strong style="color:#e8c96d">1 week of Pro access FREE</strong>
+      </div>
+    </div>
+    <div style="text-align:center">
+      <a href="${appUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:900;letter-spacing:0.15em;padding:14px 32px;border-radius:6px;text-decoration:none">
+        SHARE CLVRQUANT NOW →
+      </a>
+    </div>
+  </div>
+  <div style="text-align:center;font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;line-height:1.8">
+    CLVRQuant · Market Intelligence for Serious Traders<br>
+    © ${new Date().getFullYear()} CLVRQuantAI.com · All rights reserved<br>
+    Questions? <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80">Support@CLVRQuantAI.com</a>
+  </div>
+</div></body></html>`;
+      const resp = await client.emails.send({
+        from: "CLVRQuant <noreply@clvrquantai.com>",
+        to: r.email,
+        reply_to: "MikeClaver@CLVRQuantAI.com",
+        subject: "🎁 Share CLVRQuant & Earn 1 Week Free Pro",
+        html,
+      });
+      if (!(resp as any).error) { sent++; console.log(`[promo-email] Sent to ${r.email}`); }
+    } catch (e: any) {
+      console.log(`[promo-email] Failed for ${r.email}:`, e.message);
+    }
+  }
+  console.log(`[promo-email] Done — ${sent}/${recipients.length} sent`);
+  return { sent, skipped: recipients.length - sent };
+}
+
 export function startDailyBriefScheduler() {
   console.log("[daily-brief] Scheduler started — briefs will be sent at 6:00 AM ET daily");
 
