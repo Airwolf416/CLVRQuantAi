@@ -222,7 +222,8 @@ async function fetchHLDex(dex) {
     const out = {};
     universe.forEach((asset, i) => {
       const ctx = ctxs[i] || {};
-      const ticker = asset.name;
+      // Strip dex prefix: "xyz:TSLA" → "TSLA", "flx:OIL" → "OIL"
+      const ticker = asset.name.includes(":") ? asset.name.split(":").slice(1).join(":") : asset.name;
       const markPx = parseFloat(ctx.markPx || 0);
       if (!markPx || markPx === 0) return; // HARD RULE: skip zero prices
       const prevPx = parseFloat(ctx.prevDayPx || markPx);
