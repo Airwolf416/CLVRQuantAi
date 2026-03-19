@@ -68,9 +68,34 @@ function fmtFund(v) {
   return (Number(v) >= 0 ? "+" : "") + Number(v).toFixed(4) + "% /8h";
 }
 
+// ── Bloomberg-style blink keyframes (injected once) ──────────────────────────
+const BLINK_CSS = `
+@keyframes clvrBlinkUp {
+  0%   { opacity:1; transform:scaleY(1.4) translateY(-1px); }
+  30%  { opacity:0.05; transform:scaleY(0.8); }
+  60%  { opacity:1; transform:scaleY(1.4) translateY(-1px); }
+  100% { opacity:1; transform:scaleY(1); }
+}
+@keyframes clvrBlinkDown {
+  0%   { opacity:1; transform:scaleY(1.4) translateY(1px); }
+  30%  { opacity:0.05; transform:scaleY(0.8); }
+  60%  { opacity:1; transform:scaleY(1.4) translateY(1px); }
+  100% { opacity:1; transform:scaleY(1); }
+}
+`;
+let _blinkInjected = false;
+function injectBlink() {
+  if (_blinkInjected) return;
+  _blinkInjected = true;
+  const s = document.createElement("style");
+  s.textContent = BLINK_CSS;
+  document.head.appendChild(s);
+}
+
 // ── Flash-animated row ────────────────────────────────────────────────────────
 // flash is "green" | "red" | undefined (from Dashboard's triggerFlashes)
 function FlashRow({ sym, label, price, chg, flash, isForex, children }) {
+  injectBlink();
   const chgN = Number(chg) || 0;
   const isUp = chgN >= 0;
   const bgFlash = flash === "green" ? "rgba(0,199,135,0.22)"
@@ -80,25 +105,32 @@ function FlashRow({ sym, label, price, chg, flash, isForex, children }) {
                    : flash === "red"   ? C.red
                    : C.white;
 
+  // Arrow blinks while flash is active; direction follows last-tick or 24h chg
+  const arrowUp    = flash === "green" ? true : flash === "red" ? false : isUp;
+  const arrowAnim  = flash === "green" ? "clvrBlinkUp 0.28s 2 ease-in-out"
+                   : flash === "red"   ? "clvrBlinkDown 0.28s 2 ease-in-out"
+                   : "none";
+  const arrowColor = flash === "green" ? C.green : flash === "red" ? C.red : isUp ? C.green : C.red;
+
   return (
     <div data-testid={`row-${sym}`} style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
       padding: "11px 10px", borderBottom: `1px solid ${C.border}`,
       background: bgFlash,
-      // Instant flash-in, smooth fade-out
       transition: flash ? "none" : "background 0.5s",
       borderRadius: 4,
     }}>
-      {/* Left: ticker + arrow */}
+      {/* Left: ticker + blinking arrow */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 80 }}>
         <span style={{
           fontFamily: MONO, fontSize: 14, fontWeight: 700,
           color: C.text, letterSpacing: "0.05em",
         }}>{label || sym}</span>
         <span style={{
-          fontSize: 12, fontWeight: 900,
-          color: isUp ? C.green : C.red,
-        }}>{isUp ? "↑" : "↓"}</span>
+          fontSize: 14, fontWeight: 900, display: "inline-block",
+          color: arrowColor,
+          animation: arrowAnim,
+        }}>{arrowUp ? "↑" : "↓"}</span>
       </div>
 
       {/* Right: price + change + badge */}
@@ -221,11 +253,13 @@ function SubTabs({ tabs, value, onChange }) {
 function CryptoTab({ cryptoPrices, flashes, storePerps, storeByClass }) {
   const [sub, setSub] = useState("spot");
 
-  // storeByClass.crypto is an array of ticker strings ["BTC","ETH",...]
-  // Sort by open interest from storePerps
-  const allCryptoTickers = storeByClass?.crypto?.length
-    ? [...storeByClass.crypto].sort((a, b) => (storePerps[b]?.openInterest || storePerps[b]?.volume24h || 0) - (storePerps[a]?.openInterest || storePerps[a]?.volume24h || 0))
-    : CRYPTO_SYMS;
+  // PERP crypto order mirrors SPOT (CRYPTO_SYMS) for easy side-by-side comparison,
+  // then appends any additional HL-only tickers sorted by OI
+  const hlSet = new Set(storeByClass?.crypto || []);
+  const extraHL = [...hlSet]
+    .filter(s => !CRYPTO_SYMS.includes(s))
+    .sort((a, b) => (storePerps[b]?.openInterest || 0) - (storePerps[a]?.openInterest || 0));
+  const allCryptoTickers = [...CRYPTO_SYMS, ...extraHL];
 
   const anyLive = Object.values(cryptoPrices).some(d => d.live);
 
