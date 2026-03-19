@@ -310,6 +310,7 @@ async function checkAndGrantReferralReward(userId: string) {
             <p style="font-size:14px;color:#f0f4ff">Congratulations, ${referrer.name}!</p>
             <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your referral just subscribed to CLVRQuant Pro. You've earned <strong style="color:#e8c96d">1 week of free Pro access</strong> as a thank you!</p>
             <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
+          <p style="font-size:9px;color:#2a3650;text-align:center;line-height:2">You are receiving this email because you have a CLVRQuant account. <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(referrer.email)}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a></p>
           </div></div>`,
       });
     } catch {}
@@ -338,6 +339,7 @@ async function checkPromoExpiryReminders() {
               <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant Pro access via promotion code <strong style="color:#e8c96d">${u.promoCode}</strong> expires on <strong style="color:#f0f4ff">${expiryDate}</strong>.</p>
               <p style="font-size:13px;color:#6b7fa8;line-height:1.8">To keep uninterrupted access to AI analysis, signals, and all Pro features, consider subscribing before it expires.</p>
               <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
+              <p style="font-size:9px;color:#2a3650;text-align:center;line-height:2">You are receiving this email because you have a CLVRQuant account. <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a></p>
             </div></div>`,
         });
         console.log(`[promo-reminder] Sent expiry reminder to ${u.email}`);
@@ -2086,6 +2088,20 @@ export async function registerRoutes(
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // CASL one-click unsubscribe link (GET — linked from every marketing email)
+  app.get("/api/unsubscribe", async (req, res) => {
+    const email = decodeURIComponent((req.query.email as string) || "");
+    if (!email || !email.includes("@")) {
+      return res.status(400).send(`<html><body style="font-family:sans-serif;background:#050709;color:#c8d4ee;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0"><div style="text-align:center;padding:40px"><h2 style="color:#ff4060">Invalid unsubscribe link.</h2><p>Please contact <a href="mailto:Support@CLVRQuantAI.com" style="color:#c9a84c">Support@CLVRQuantAI.com</a></p></div></body></html>`);
+    }
+    try {
+      await pool.query("UPDATE subscribers SET active = false WHERE LOWER(email) = LOWER($1)", [email]);
+      res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unsubscribed — CLVRQuant</title></head><body style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0"><div style="text-align:center;padding:40px;max-width:500px"><div style="font-family:Georgia,serif;font-size:28px;font-weight:900;color:#e8c96d;margin-bottom:16px">CLVRQuant</div><h2 style="color:#f0f4ff;margin-bottom:12px">You've been unsubscribed</h2><p style="color:#6b7fa8;line-height:1.8;margin-bottom:20px">${email} has been removed from CLVRQuant morning brief emails. You will no longer receive marketing communications from us.</p><p style="font-size:12px;color:#4a5d80">Changed your mind? You can re-subscribe anytime from the app.<br>Questions? <a href="mailto:Support@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">Support@CLVRQuantAI.com</a></p></div></body></html>`);
+    } catch (e: any) {
+      res.status(500).send("Error processing unsubscribe request.");
     }
   });
 

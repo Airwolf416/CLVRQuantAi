@@ -1356,6 +1356,17 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO}]: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
     const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO}]: ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
     const storeModeSnap=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
+    // Fetch Polymarket prediction odds live and inject into AI context
+    let polySnap="";
+    try{
+      const pr=await fetch("/api/polymarket",{credentials:"include"});
+      if(pr.ok){
+        const pd=await pr.json();
+        if(Array.isArray(pd)&&pd.length>0){
+          polySnap=`\nPOLYMARKET PREDICTION ODDS [fetched:${nowISO}]: ${pd.slice(0,8).map(m=>`${m.question||m.slug}: ${m.probability!==undefined?(m.probability*100).toFixed(1)+"% YES":m.outcomePrices?JSON.stringify(m.outcomePrices):"N/A"}`).join(" | ")}`;
+        }
+      }
+    }catch{}
     const sys=`You are CLVR AI — an elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a rigorous 7-step analysis framework before every trade recommendation. All data below is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
@@ -1367,7 +1378,7 @@ CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap}
-${macroAiSnap}
+${macroAiSnap}${polySnap}
 
 ━━━ YOUR 7-STEP ANALYSIS FRAMEWORK ━━━
 Complete ALL steps mentally before generating any trade recommendation.
@@ -2598,6 +2609,21 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                   style={{padding:"5px 11px",borderRadius:2,border:`1px solid ${store?.price?"rgba(201,168,76,.28)":d?.live?"rgba(201,168,76,.20)":C.border}`,background:C.panel,color:store?.price?C.gold2:d?.live?C.gold:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.08em",cursor:"pointer"}}>
                   {sym}{store?.price?" ✦":""}
                 </button>;})}
+              </div>
+              {/* Quick-analyze buttons — PERP & SPOT */}
+              <div style={{display:"flex",gap:6,marginBottom:10}}>
+                <button data-testid="button-analyze-perp" disabled={aiLoading} onClick={()=>{
+                  const perpLines=CRYPTO_SYMS.map(s=>{const d=storePerps[s];if(!d?.price)return null;const f=d.funding!=null?` Fund:${(d.funding*100).toFixed(4)}%/8h`:"";const oi=d.openInterest&&d.price?` OI:$${((d.openInterest*d.price)/1e9).toFixed(2)}B`:"";return`${s} ${mfmtPrice(d.price)} (${pct(d.change24h||0)})${f}${oi}`;}).filter(Boolean).join(" | ");
+                  setAiInput(`Analyze the current PERP futures market across all assets. Identify the top 3 PERP opportunities with clear entry, stop, and targets. Focus on funding rate extremes, open interest imbalances, and momentum.\n\nLIVE PERP DATA: ${perpLines}`);
+                }} style={{flex:1,padding:"8px 6px",borderRadius:2,border:"1px solid rgba(0,212,255,.3)",background:"rgba(0,212,255,.06)",color:aiLoading?C.muted:C.cyan,fontFamily:MONO,fontSize:9,letterSpacing:"0.08em",cursor:aiLoading?"not-allowed":"pointer",fontWeight:700}}>
+                  📊 Analyze PERP Markets
+                </button>
+                <button data-testid="button-analyze-spot" disabled={aiLoading} onClick={()=>{
+                  const spotLines=[...CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];return d?.price?`${s} ${fmt(d.price,s)} (${pct(d.chg)})`:null;}), ...EQUITY_SYMS.map(s=>{const d=equityPrices[s];return d?.price?`${s} ${fmt(d.price,s)} (${pct(d.chg)})`:null;}), ...METALS_SYMS.map(s=>{const d=metalPrices[s];return d?.price?`${METAL_LABELS[s]||s} ${fmt(d.price,s)} (${pct(d.chg)})`:null;})].filter(Boolean).join(" | ");
+                  setAiInput(`Analyze the current SPOT market across crypto, equities, and commodities. Identify the top 3 SPOT opportunities — no leverage needed. Focus on momentum, relative strength, and macro alignment.\n\nLIVE SPOT DATA: ${spotLines}`);
+                }} style={{flex:1,padding:"8px 6px",borderRadius:2,border:"1px solid rgba(201,168,76,.3)",background:"rgba(201,168,76,.06)",color:aiLoading?C.muted:C.gold,fontFamily:MONO,fontSize:9,letterSpacing:"0.08em",cursor:aiLoading?"not-allowed":"pointer",fontWeight:700}}>
+                  📈 Analyze SPOT Markets
+                </button>
               </div>
               <AIInput value={aiInput} onChange={onAiChange} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
               <div style={{display:"flex",gap:6,marginTop:8}}>

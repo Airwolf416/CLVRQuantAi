@@ -338,7 +338,18 @@ function buildTradeBlock(trade: any, label: string): string {
   </div>`;
 }
 
-function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData, isPro: boolean = false): string {
+function unsubFooter(email: string): string {
+  const encoded = encodeURIComponent(email);
+  return `<div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525">
+    <div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">
+      You are receiving this email because you subscribed to CLVRQuant market intelligence.<br>
+      To stop receiving these emails, <a href="https://clvrquantai.com/api/unsubscribe?email=${encoded}" style="color:#4a5d80;text-decoration:underline">unsubscribe here</a>.<br>
+      CLVRQuant · 100 King St W, Toronto, ON, Canada · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a>
+    </div>
+  </div>`;
+}
+
+function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData, isPro: boolean = false, subscriberEmail: string = ""): string {
   const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787" : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
   const macroRiskBadge = briefJson.macroRisk === "HIGH"
     ? `<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:#ff4060;border:1px solid rgba(255,64,96,.4);background:rgba(255,64,96,.08)">🔴 MACRO RISK</div>`
@@ -473,6 +484,8 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData,
     </div>
   </div>
 
+  ${subscriberEmail ? unsubFooter(subscriberEmail) : ""}
+
 </div>
 </body></html>`;
 }
@@ -538,7 +551,7 @@ async function sendDailyBriefEmails() {
       // Stay under Resend's 2 req/s rate limit
       if (i > 0) await new Promise(r => setTimeout(r, 600));
       try {
-        const html = buildEmailHtml(briefJson, today, marketData, isPro);
+        const html = buildEmailHtml(briefJson, today, marketData, isPro, sub.email);
         const resp = await client.emails.send({
           from: "CLVRQuant <noreply@clvrquantai.com>",
           to: sub.email,
@@ -727,6 +740,7 @@ export async function sendServiceApologyEmail(): Promise<{ sent: number; skipped
     CLVRQuant · Market Intelligence for Serious Traders<br>
     © ${new Date().getFullYear()} CLVRQuantAI.com · All rights reserved
   </div>
+  ${unsubFooter(r.email)}
 </div></body></html>`;
       const resp = await client.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
@@ -820,6 +834,7 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
     © ${new Date().getFullYear()} CLVRQuantAI.com · All rights reserved<br>
     Questions? <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80">Support@CLVRQuantAI.com</a>
   </div>
+  ${unsubFooter(r.email)}
 </div></body></html>`;
       const resp = await client.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
