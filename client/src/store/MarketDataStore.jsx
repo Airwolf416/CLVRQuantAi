@@ -698,10 +698,52 @@ async function doFetch() {
   }
 }
 
+// ── HL WebSocket — real-time allMids streaming (~1s updates) ─────────────────
+let _hlWs = null;
+let _wsReconnTimer = null;
+
+function startHLStream() {
+  if (_hlWs) return;
+  try {
+    _hlWs = new WebSocket("wss://api.hyperliquid.xyz/ws");
+    _hlWs.onopen = () => {
+      _hlWs.send(JSON.stringify({ method: "subscribe", subscription: { type: "allMids" } }));
+    };
+    _hlWs.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.channel !== "allMids" || !msg.data?.mids) return;
+        const mids = msg.data.mids;
+        const cur = _state.perps;
+        const next = { ...cur };
+        let changed = false;
+        for (const [sym, midStr] of Object.entries(mids)) {
+          const price = parseFloat(midStr);
+          if (price > 0 && cur[sym]) {
+            next[sym] = { ...cur[sym], price };
+            changed = true;
+          }
+        }
+        if (changed) {
+          _state = { ..._state, perps: next, lastUpdate: Date.now() };
+          notify();
+        }
+      } catch {}
+    };
+    _hlWs.onerror = () => {};
+    _hlWs.onclose = () => {
+      _hlWs = null;
+      clearTimeout(_wsReconnTimer);
+      _wsReconnTimer = setTimeout(startHLStream, 3000);
+    };
+  } catch {}
+}
+
 function ensurePolling() {
   if (_intervalId) return;
   doFetch();
   _intervalId = setInterval(doFetch, REFRESH_MS);
+  startHLStream(); // WebSocket for real-time price ticks (~1s)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

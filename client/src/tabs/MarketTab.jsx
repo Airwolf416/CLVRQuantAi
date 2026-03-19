@@ -4,7 +4,7 @@
 // Each has SPOT and PERP sub-tabs with live data and flash animations
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import useMarketData from "../store/MarketDataStore.jsx";
 
 const MONO  = "'IBM Plex Mono', monospace";
@@ -185,8 +185,26 @@ function LiveBadge({ live }) {
     : <span style={{ fontFamily: MONO, fontSize: 8, fontWeight: 700, color: C.orange, background: "rgba(255,140,0,0.08)", border: "1px solid rgba(255,140,0,0.2)", borderRadius: 3, padding: "3px 8px", letterSpacing: "0.1em" }}>CLOSED</span>;
 }
 
-// ── Perp row (Hyperliquid) ────────────────────────────────────────────────────
+// ── Perp row (Hyperliquid) — with Bloomberg-style flash on every price tick ───
 function PerpRow({ sym, label, asset }) {
+  const prevPriceRef = useRef(null);
+  const [flash, setFlash] = useState(null);
+
+  useEffect(() => {
+    injectBlink();
+    const price = asset?.price;
+    if (!price) return;
+    const prev = prevPriceRef.current;
+    if (prev !== null && price !== prev) {
+      const dir = price > prev ? "green" : "red";
+      setFlash(dir);
+      const t = setTimeout(() => setFlash(null), 600);
+      prevPriceRef.current = price;
+      return () => clearTimeout(t);
+    }
+    prevPriceRef.current = price;
+  }, [asset?.price]);
+
   if (!asset || !asset.price) {
     return (
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 10px", borderBottom: `1px solid ${C.border}` }}>
@@ -195,22 +213,53 @@ function PerpRow({ sym, label, asset }) {
       </div>
     );
   }
-  const chgN = Number(asset.change24h) || 0;
-  const isUp = chgN >= 0;
-  const fund = fmtFund(asset.funding ?? asset.fundingRate);
-  const oi   = fmtOI(asset.openInterest, asset.price);
+
+  const chgN      = Number(asset.change24h) || 0;
+  const isUp      = chgN >= 0;
+  const fund      = fmtFund(asset.funding ?? asset.fundingRate);
+  const oi        = fmtOI(asset.openInterest, asset.price);
+
+  // Flash-driven visuals — same grammar as FlashRow (SPOT tab)
+  const arrowUp    = flash === "green" ? true : flash === "red" ? false : isUp;
+  const arrowAnim  = flash === "green" ? "clvrBlinkUp 0.28s 2 ease-in-out"
+                   : flash === "red"   ? "clvrBlinkDown 0.28s 2 ease-in-out"
+                   : "none";
+  const arrowColor = flash ? (flash === "green" ? C.green : C.red) : (isUp ? C.green : C.red);
+  const bgFlash    = flash === "green" ? "rgba(0,199,135,0.22)"
+                   : flash === "red"   ? "rgba(255,64,96,0.18)"
+                   : "transparent";
+  const priceColor = flash ? (flash === "green" ? C.green : C.red) : (isUp ? C.green : C.red);
+
   return (
-    <div data-testid={`perp-row-${sym}`} style={{ borderBottom: `1px solid ${C.border}` }}>
+    <div data-testid={`perp-row-${sym}`} style={{
+      borderBottom: `1px solid ${C.border}`,
+      background: bgFlash,
+      transition: flash ? "none" : "background 0.5s",
+      borderRadius: 4,
+    }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 10px 4px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text }}>{label || sym}</span>
-          <span style={{ fontSize: 14, fontWeight: 900, color: isUp ? C.green : C.red, display:"inline-block" }}>{isUp ? "↑" : "↓"}</span>
+          <span style={{
+            fontSize: 14, fontWeight: 900, display: "inline-block",
+            color: arrowColor,
+            animation: arrowAnim,
+          }}>{arrowUp ? "↑" : "↓"}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: isUp ? C.green : C.red }}>
+          <span style={{
+            fontFamily: MONO, fontSize: 15, fontWeight: 700,
+            color: priceColor,
+            transition: flash ? "none" : "color 0.5s",
+          }}>
             {fmt(asset.price, sym)}
           </span>
-          <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: isUp ? C.green : C.red, background: isUp ? "rgba(0,199,135,0.1)" : "rgba(255,64,96,0.1)", borderRadius: 3, padding: "2px 6px" }}>
+          <span style={{
+            fontFamily: MONO, fontSize: 10, fontWeight: 700,
+            color: isUp ? C.green : C.red,
+            background: isUp ? "rgba(0,199,135,0.1)" : "rgba(255,64,96,0.1)",
+            borderRadius: 3, padding: "2px 6px",
+          }}>
             {fmtChg(chgN)}
           </span>
           <Badge label="HL" color={C.cyan} />
