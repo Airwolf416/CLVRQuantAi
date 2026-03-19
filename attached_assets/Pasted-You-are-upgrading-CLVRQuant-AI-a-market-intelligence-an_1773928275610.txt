@@ -1,0 +1,345 @@
+You are upgrading CLVRQuant AI — a market intelligence and decision-support platform for active traders.
+This is NOT a trading platform. It helps traders make smarter decisions.
+Built in React on Replit. Do NOT replace existing code — UPGRADE it.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ABSOLUTE DATA RULES — NON-NEGOTIABLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. REAL LIVE DATA ONLY — no mock data, no hardcoded prices, no simulations, no placeholders
+1. If a price cannot be fetched from the live API — show “—” not a fake number
+1. NEVER show [estimated], [simulated], [mock], or any fabricated value
+1. If an asset has no live price — hide it completely, do not render the row
+1. All prices must show their source label so users know where data comes from
+1. Stale data (older than 30s) must be clearly marked or hidden
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+THE BACKBONE — MarketDataStore.js
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create src/store/MarketDataStore.js — this single file feeds ALL tabs.
+Every tab imports useMarketData() hook. No tab fetches its own prices.
+Auto-refreshes every 15 seconds. One fetch cycle serves all users.
+
+TWO DATA STREAMS:
+
+STREAM 1 — PERPS via Hyperliquid API (https://api.hyperliquid.xyz/info)
+POST { type: “metaAndAssetCtxs” }           → crypto perps (BTC ETH SOL + 150 more)
+POST { type: “metaAndAssetCtxs”, dex:“xyz” } → equity perps (NVDA TSLA AAPL etc)
+POST { type: “metaAndAssetCtxs”, dex:“flx” } → commodity perps (GOLD SILVER OIL BRENT etc)
+
+Each response returns: markPx, prevDayPx, oraclePx, funding, openInterest, dayNtlVlm
+Compute: change24h = ((markPx - prevDayPx) / prevDayPx) * 100
+DYNAMIC DISCOVERY: fetch the live list, do NOT hardcode tickers
+New HIP-3 listings auto-appear. If markPx === 0 → skip that asset entirely.
+
+STREAM 2 — SPOT via Finnhub (primary) then Yahoo Finance (fallback)
+Finnhub: GET /quote?symbol=TICKER&token=REACT_APP_FINNHUB_KEY
+Yahoo:   GET https://query1.finance.yahoo.com/v8/finance/chart/TICKER?interval=1d&range=2d
+Only fetch spot for assets that have a known spot symbol
+If both sources fail → show “—”, never fake it
+
+CONFIRMED ASSET METADATA (names + spot symbols + yahoo fallbacks):
+
+Equities (xyz dex):
+NVDA→Nvidia, TSLA→Tesla, AAPL→Apple, MSFT→Microsoft, META→Meta,
+AMZN→Amazon, GOOGL→Alphabet, COIN→Coinbase, AMD→AMD, MSTR→MicroStrategy,
+PLTR→Palantir, INTC→Intel, BABA→Alibaba, HOOD→Robinhood, NFLX→Netflix,
+CRCL→Circle, CRWV→CoreWeave, RIVN→Rivian, MU→Micron, ORCL→Oracle,
+SNDK→SanDisk, TSM→TSMC, SMSN→Samsung(yahoo:005930.KS),
+HYUNDAI→Hyundai(yahoo:005380.KS), EWY→iShares MSCI Korea(yahoo:EWY),
+EWJ→iShares MSCI Japan(yahoo:EWJ), SKHX→SkyHarbour(yahoo:SKYH),
+USAR→US Arms ETF, SBET→SharpLink, XYZ100→Nasdaq100(spot:QQQ),
+SP500→S&P500(spot:SPY), SPX500→S&P500(spot:SPY)
+
+Commodities (flx dex):
+GOLD/XAU→Gold(spot:OANDA:XAU_USD yahoo:GC=F),
+SILVER/XAG→Silver(spot:OANDA:XAG_USD yahoo:SI=F),
+CL/OIL→WTI Crude(spot:NYMEX:CL1! yahoo:CL=F),
+BRENTOIL/BRENT→Brent Crude(spot:NYMEX:BB1! yahoo:BZ=F),
+NATGAS→Natural Gas(spot:NYMEX:NG1! yahoo:NG=F),
+COPPER→Copper(spot:NYMEX:HG1! yahoo:HG=F),
+PLATINUM→Platinum(spot:OANDA:XPT_USD yahoo:PL=F),
+PALLADIUM→Palladium(spot:OANDA:XPD_USD yahoo:PA=F),
+URNM→Uranium ETF(spot:URNM yahoo:URNM)
+
+Macro (spot only, no HL perp):
+VIX(CBOE:VIX), SPY, QQQ
+
+DERIVED INTELLIGENCE (compute from both streams):
+
+Spot vs Perp Spread:
+spreadPct = ((perpPrice - spotPrice) / spotPrice) * 100
+> +0.5% → PERP_PREMIUM (futures more bullish than spot)
+< -0.5% → PERP_DISCOUNT (futures more bearish than spot)
+Only show spread if both spot AND perp exist with real prices
+
+CLVR Market Mode Score (0-100, deterministic weighted formula):
+score = 50
++ (btcFunding < -0.0005 ? +12 : btcFunding > 0.001 ? -15 : 0)
++ btcChange * 3.5
++ ethChange * 2.0
++ nvdaChange * 2.5
++ spyChange * 2.0
+- goldChange * 2.0   ← gold up = risk-off
++ oilChange * 0.8
++ vixScore           ← VIX < 16 → +18, VIX > 30 → -24
++ (sentimentScore - 50) * 0.3
+score >= 60 → RISK-ON | score <= 40 → RISK-OFF | else → NEUTRAL
+Same inputs = same output always (deterministic, no randomness)
+
+Cross-Asset Correlations (auto-detected):
+Gold +1.5% AND BTC negative → RISK-OFF signal
+Gold rising AND SPY falling → macro fear
+BTC funding > 0.002 AND BTC up > 2% → OVERHEATED
+NVDA +3% AND BTC +2% → RISK-ON broad appetite
+VIX > 25 AND SPY < -1% → equity fear spreading
+Oil +2% AND Gold +1% → inflation trade active
+
+Auto-generated Alerts from anomalies:
+BTC/ETH/SOL funding > 0.003 → funding spike alert
+Spread severity HIGH → spread anomaly alert
+Market mode regime change → regime shift alert
+HIGH correlation detected → cross-asset alert
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HOOK USAGE — in any component:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const {
+spot,             // { TICKER: { price, change24h, source, high, low, prevClose } }
+perps,            // { TICKER: { price, funding, openInterest, volume24h, oraclePx, change24h } }
+spreads,          // { TICKER: { spotPrice, perpPrice, spreadPct, signal, label, severity } }
+marketMode,       // { score, regime, vix, crypto, equities, commodities, correlations, signals }
+sentiment,        // { score, label, headlines }
+alerts,           // [ { id, type, asset, category, title, msg, severity, ts } ]
+discoveredAssets, // { TICKER: { ticker, name, icon, class, dex } }
+byClass,          // { crypto:[], equity:[], commodity:[] }
+loading,
+lastUpdate,
+spotPx,           // (ticker) => number | 0
+perpPx,           // (ticker) => number | 0
+bestPx,           // (ticker) => spot price for equities/commodities, perp for crypto
+funding,          // (ticker) => number | 0
+spread,           // (ticker) => spread object | null
+morningBrief,     // () => complete brief data object
+refresh,          // () => force refresh
+dismissAlert,     // (id) => void
+} = useMarketData();
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5 TABS TO UPGRADE — add useMarketData() to each
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+━━ TAB 1: MARKET TAB (MarketTab.jsx) ━━
+
+Layout:
+Master header: regime, Risk-On score bar, VIX, per-class scores (Crypto/Equities/Commodities)
+4 sub-views via tab pills: PRICES | SPREADS | CORRELATIONS | NEWS
+
+PRICES view:
+Class filter pills: ALL | CRYPTO | EQUITIES | COMMODITIES (with live count)
+Search bar filters by ticker or name
+Sort by: VOLUME | 24H CHANGE | FUNDING | OI (clickable headers, toggle asc/desc)
+Asset row shows:
+- Icon + ticker + class badge (PERP/EQ/COM) + max leverage
+- Display price (spot for equities/commodities, perp for crypto)
+- 24h change with color (green up, red down)
+- For equities/commodities: sub-row with SPOT price + PERP price + SPREAD % + FUNDING/HR
+- For crypto: funding rate + OI + 24h volume inline
+- Source label (“HL Live” or “Finnhub” or “Yahoo Finance”)
+Tap any asset → expands detail panel showing:
+- Full dual price breakdown with spread interpretation in plain English
+- All 6 stats: 24h change, funding/hr, OI, volume, oracle price, prev close
+- Funding direction explanation (who’s paying who and what it means)
+
+SPREADS view:
+Brief explainer of what spot vs perp spread means
+Full table: all equities + commodities sorted by |spreadPct| descending
+Each row: icon, name, spot price (blue), perp price (purple), spread % (colored)
+Only show assets where BOTH spot and perp have real live prices
+
+CORRELATIONS view:
+Live cross-asset correlation cards with severity badges
+Per-class performance matrix (Crypto/Equities/Commodities with top 3 assets each)
+
+NEWS view:
+CryptoPanic headlines with per-article sentiment (bullish/bearish/neutral)
+Sentiment score and label at top
+
+━━ TAB 2: SIGNALS TAB (existing — upgrade only) ━━
+
+Import useMarketData() and replace all internal price fetches.
+For each asset the user selects:
+
+- Show live HL perp price BEFORE generating any AI signal
+- Show spot price if available (from store, not a new fetch)
+- Show funding rate + OI from store
+- If price is 0 or missing → show error “No live price — signal blocked” and disable button
+- NEVER pass a stale or missing price to the AI
+
+AI signal prompt must include:
+
+- CLVR Market Mode: regime + score + all signals
+- Asset: live mark price + oracle price + 24h change + funding + OI (all from store)
+- BTC context: price + funding (from store)
+- ETH context: price + funding (from store)
+- Gold: spot + perp + change (from store)
+- Oil: spot + perp + change (from store)
+- Top cross-asset correlations (from marketMode.correlations)
+- News sentiment score + top 4 headlines (from store)
+- VIX level (from store)
+- Label every data point with its source (“Hyperliquid Live” or “Finnhub”)
+
+Signal response card must show:
+
+- Green “✓ Price source: Hyperliquid Perps · $XXX.XX” verification line
+- Signal, confidence, entry, stop loss, take profit, rationale, risks
+- NEVER show [estimated] or [stale] — if data is bad, block the signal
+
+━━ TAB 3: AI / ANALYSIS TAB (existing — upgrade only) ━━
+
+Import useMarketData(). Pull full context from store for AI prompts.
+AI has access to the complete picture:
+
+- Full market mode with correlations
+- All confirmed live prices across crypto + equities + commodities
+- Spread anomalies (which assets’ futures are diverging from spot)
+- News sentiment
+- VIX + SPY + QQQ macro context
+
+AI must prioritize these in its analysis (in order):
+
+1. Cross-asset correlations (Gold + BTC divergence, etc.)
+1. Funding rate divergence (which assets are overheated)
+1. Spot vs perp spread anomalies (futures sentiment vs reality)
+1. News sentiment impact on specific assets
+1. CLVR Market Mode macro regime (Risk-On / Risk-Off / Neutral)
+
+━━ TAB 4: MORNING BRIEF TAB (existing — upgrade only) ━━
+
+Import useMarketData() and call morningBrief() for data.
+Brief must include:
+
+- Today’s date + CLVR Market Mode regime + score
+- VIX level + regime label
+- BTC: live perp price, 24h change, funding rate
+- ETH: live perp price, 24h change, funding rate
+- Gold: spot (Finnhub/Yahoo) vs perp (HL) + change
+- Oil: spot vs perp + change
+- Top 6 movers across ALL asset classes (equities + commodities + crypto)
+- Top spread anomalies: assets where futures diverge most from spot
+- Live cross-asset correlation signals detected
+- News sentiment score + top headlines
+- Total markets monitored count
+  Only show assets with confirmed real prices — hide rows with missing data
+
+━━ TAB 5: ALERTS TAB (existing — upgrade only) ━━
+
+Alerts come from store.alerts — auto-generated from live data anomalies.
+Alert types:
+FUNDING: BTC/ETH/SOL funding > 0.003 → spike or negative alert
+SPREAD: equity/commodity spot vs perp divergence > 2% → anomaly alert
+REGIME: market mode shifts RISK-ON ↔ RISK-OFF ↔ NEUTRAL
+CORRELATION: high-severity cross-asset signal detected
+
+Alert card shows:
+
+- Severity badge (HIGH = red, MODERATE = yellow, LOW = grey)
+- Category + asset + timestamp
+- Plain English explanation
+- Toast notification appears at top for 5 seconds then disappears
+- Alert stays in the Active Alerts section permanently until dismissed
+- Browser push notification sent for HIGH severity alerts (if permission granted)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DESIGN SYSTEM — apply consistently across all tabs
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Colors:
+Background:    #060a13 (near black)
+Surface:       rgba(255,255,255,0.025)
+Border:        rgba(255,255,255,0.07)
+Gold accent:   #d4af37
+Green (up):    #00ff88
+Red (down):    #ff2d55
+Neutral:       #f59e0b
+Muted text:    #6b7a99
+Dim text:      #3a4560
+Invisible:     #2a3550
+
+Crypto class:    #9945ff
+Equity class:    #3b82f6
+Commodity class: #d4af37
+
+Typography:
+Data/numbers:  ‘IBM Plex Mono’, monospace (weights 400/700/800)
+Headers:       ‘Playfair Display’, serif (weight 900)
+
+Price colors:
+Positive change: #00ff88
+Negative change: #ff2d55
+Zero/neutral:    #f59e0b
+VIX up (fear):   #ff2d55 (inverted — VIX up is bad)
+VIX down:        #00ff88
+
+Source badges:
+“HL Live” → green dot + green text
+“Finnhub” → blue
+“Yahoo Finance” → purple
+Missing/stale → red “—”
+
+Funding colors:
+Positive funding (longs pay): #f87171 (bearish signal)
+Negative funding (shorts pay): #4ade80 (bullish signal)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENVIRONMENT VARIABLES (already in Replit Secrets)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REACT_APP_FINNHUB_KEY      → Finnhub API key (spot prices)
+REACT_APP_CRYPTOPANIC_KEY  → CryptoPanic key (news sentiment)
+ANTHROPIC_API_KEY          → Claude API (AI signals + analysis)
+
+No other API keys needed. Hyperliquid is public, Yahoo Finance is free.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL RULES — enforce throughout
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DO:
+✓ Show “—” when any price is missing
+✓ Hide entire asset rows if price is 0 or null
+✓ Label every price with its source
+✓ Block AI signals if live price is unavailable
+✓ Use the store for all data — never fetch independently inside a tab
+✓ Handle all API errors gracefully with try/catch
+✓ Show loading state while first fetch runs
+✓ Auto-discover new HL listings without code changes
+
+DO NOT:
+✗ Use mock, fake, hardcoded, or estimated prices anywhere
+✗ Show [simulated] or [estimated] labels
+✗ Fall back to hardcoded ticker lists (use dynamic API discovery)
+✗ Fetch prices inside individual tab components
+✗ Generate AI signals with missing or stale price data
+✗ Replace existing working features — only upgrade them
+✗ Use Finnhub for crypto prices (use Hyperliquid instead)
+✗ Use any trading execution code (this is information only)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+src/
+store/
+MarketDataStore.js     ← CREATE THIS FIRST, everything depends on it
+components/
+MarketTab.jsx          ← upgrade with dual spot+perp view
+SignalsTab.jsx         ← upgrade to use store prices
+AITab.jsx              ← upgrade with full cross-asset context
+MorningBrief.jsx       ← upgrade with store data
+AlertsTab.jsx          ← upgrade with store alerts
+
+Build order: MarketDataStore.js first → then upgrade each tab one by one.
+Test that useMarketData() returns real data before proceeding to tabs.

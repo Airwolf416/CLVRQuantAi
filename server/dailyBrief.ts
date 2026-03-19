@@ -6,6 +6,7 @@ const BRIEF_MINUTE_ET = 0;
 const APP_URL = "https://clvrquantai.com";
 
 let lastBriefDate = "";
+let lastApologySentAt = 0; // Unix ms — prevents double-send within 6 hours
 
 async function getTodayBriefKey(): Promise<string | null> {
   try {
@@ -420,6 +421,13 @@ function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData,
     ${!isPro ? `<div style="margin-top:8px;padding:10px 14px;background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">🔒 <strong style="color:#c9a84c">Pro members get 4 trade ideas daily.</strong> Upgrade at <a href="${APP_URL}" style="color:#e8c96d;text-decoration:none">clvrquantai.com</a></div>` : ""}
   </div>` : ""}
 
+  ${briefJson.topTrade ? `<div style="padding:0 24px 16px">
+    <div style="padding:12px 16px;background:rgba(255,160,0,.04);border:1px solid rgba(255,160,0,.18);border-radius:4px">
+      <div style="font-family:monospace;font-size:8px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:5px;font-weight:700">⚠️ TRADE IDEA DISCLAIMER</div>
+      <div style="font-size:11px;color:#6a7a9a;line-height:1.75">These trade ideas are based on market data and conditions available <strong style="color:#8a9ab2">at the time this brief was generated</strong>. Prices, funding rates, and risk factors can change rapidly between generation and when you read this. <strong style="color:#8a9ab2">Always confirm current prices before entering any position.</strong> CLVRQuant AI is not a financial advisor. All content is for research and educational purposes only. <strong style="color:#c5a060">Operate with caution. Never risk more than you can afford to lose.</strong></div>
+    </div>
+  </div>` : ""}
+
   ${watchItems ? `<div style="padding:0 24px 24px">
     <div style="background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;padding:16px 20px">
       <div style="font-size:16px;font-weight:700;color:#e8e0d0;margin-bottom:12px">🚀 Key Things to Watch Today</div>
@@ -560,6 +568,15 @@ async function sendDailyBriefEmails() {
 }
 
 async function sendApologyBriefEmails() {
+  // ── Double-send guard (6-hour window) ─────────────────────────────────────
+  const nowMs = Date.now();
+  if (lastApologySentAt > 0 && (nowMs - lastApologySentAt) < 6 * 60 * 60 * 1000) {
+    const minutesAgo = Math.round((nowMs - lastApologySentAt) / 60_000);
+    console.log(`[daily-brief] Apology brief already sent ${minutesAgo}m ago — skipping to prevent duplicate.`);
+    return;
+  }
+  lastApologySentAt = nowMs;
+
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
   console.log(`[daily-brief] Generating apology brief for ${today}...`);
 

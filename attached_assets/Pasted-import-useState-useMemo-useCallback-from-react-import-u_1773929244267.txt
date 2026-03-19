@@ -1,0 +1,702 @@
+import { useState, useMemo, useCallback } from “react”;
+import {
+useMarketData,
+fmtPrice, fmtChange, fmtFunding, changeColor, sigColor,
+computeVolatility, VolatilityBar,
+} from “../store/MarketDataStore”;
+
+const mono  = “‘IBM Plex Mono’, monospace”;
+const serif = “‘Playfair Display’, serif”;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MASTER HEADER
+// ─────────────────────────────────────────────────────────────────────────────
+function MasterHeader({ marketMode, sentiment, lastUpdate, loading, totalMarkets, onRefresh }) {
+const score  = marketMode?.score  ?? 50;
+const regime = marketMode?.regime ?? “NEUTRAL”;
+const col    = regime===“RISK-ON”?”#00ff88”:regime===“RISK-OFF”?”#ff2d55”:”#f59e0b”;
+const hex    = regime===“RISK-ON”?“0,255,136”:regime===“RISK-OFF”?“255,45,85”:“245,158,11”;
+
+return (
+<div style={{
+background:`linear-gradient(135deg,rgba(${hex},0.08),rgba(6,10,19,0.98))`,
+border:`1px solid ${col}20`, borderRadius:16, padding:“15px 15px 12px”, marginBottom:12,
+position:“relative”, overflow:“hidden”,
+}}>
+<div style={{ position:“absolute”, inset:0, opacity:0.02,
+backgroundImage:“linear-gradient(rgba(212,175,55,1) 1px,transparent 1px),linear-gradient(90deg,rgba(212,175,55,1) 1px,transparent 1px)”,
+backgroundSize:“20px 20px” }}/>
+<div style={{ position:“relative” }}>
+<div style={{ display:“flex”, justifyContent:“space-between”, alignItems:“flex-start”, marginBottom:10 }}>
+<div>
+<div style={{ display:“flex”, alignItems:“center”, gap:8, marginBottom:6 }}>
+<div style={{ width:32,height:32,borderRadius:8,
+background:“linear-gradient(135deg,#d4af37,#f5d062)”,
+display:“flex”,alignItems:“center”,justifyContent:“center”,
+fontSize:16,fontWeight:900,color:”#060a13”,fontFamily:serif,
+boxShadow:“0 0 14px rgba(212,175,55,0.25)” }}>C</div>
+<div>
+<div style={{ fontSize:9,color:”#3a4560”,letterSpacing:2.5,fontFamily:mono }}>CLVR AI · MARKET INTELLIGENCE</div>
+<div style={{ fontSize:7,color:”#2a3550”,fontFamily:mono }}>
+{totalMarkets} LIVE MARKETS · SPOT + PERPS · {lastUpdate ? `↻ ${new Date(lastUpdate).toLocaleTimeString()}` : “connecting…”}
+</div>
+</div>
+</div>
+<div style={{ fontSize:26,fontWeight:900,color:col,fontFamily:mono,lineHeight:1 }}>
+{loading&&!marketMode?“LOADING…”:regime}
+</div>
+{marketMode?.vix?.price > 0 && (
+<div style={{ fontSize:8,color:”#6b7a99”,fontFamily:mono,marginTop:3 }}>
+VIX {marketMode.vix.price.toFixed(1)} · <span style={{ color:sigColor(marketMode.vix.regime) }}>{marketMode.vix.regime}</span>
+</div>
+)}
+</div>
+<div style={{ textAlign:“right” }}>
+<div style={{ fontSize:8,color:”#3a4560”,fontFamily:mono,marginBottom:2 }}>RISK-ON SCORE</div>
+<div style={{ fontSize:36,fontWeight:900,color:col,fontFamily:mono,lineHeight:1 }}>
+{score}<span style={{ fontSize:18 }}>%</span>
+</div>
+<button onClick={onRefresh} style={{ marginTop:6,background:“transparent”,
+border:“1px solid rgba(212,175,55,0.2)”,borderRadius:6,padding:“3px 10px”,
+color:”#d4af37”,fontSize:8,cursor:“pointer”,fontFamily:mono }}>↻ REFRESH</button>
+</div>
+</div>
+
+```
+    <div style={{ height:4,background:"rgba(255,255,255,0.06)",borderRadius:3,marginBottom:10,overflow:"hidden" }}>
+      <div style={{ height:"100%",width:`${score}%`,background:`linear-gradient(90deg,${col}40,${col})`,
+        borderRadius:3,transition:"width 1.5s ease" }}/>
+    </div>
+
+    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8 }}>
+      {[
+        { label:"CRYPTO",      d:marketMode?.crypto,      hex:"153,69,255"  },
+        { label:"EQUITIES",    d:marketMode?.equities,    hex:"59,130,246"  },
+        { label:"COMMODITIES", d:marketMode?.commodities, hex:"212,175,55"  },
+      ].map(({ label,d,hex:h }) => {
+        const sc=d?.score??50; const rg=d?.regime??"NEUTRAL"; const c=sigColor(rg);
+        return (
+          <div key={label} style={{ background:`rgba(${h},0.05)`,border:`1px solid rgba(${h},0.15)`,borderRadius:9,padding:"8px 10px" }}>
+            <div style={{ fontSize:7,color:"#3a4560",letterSpacing:1.5,fontFamily:mono,marginBottom:3 }}>{label}</div>
+            <div style={{ fontSize:15,fontWeight:900,color:c,fontFamily:mono }}>{sc}%</div>
+            <div style={{ fontSize:8,color:c,fontFamily:mono,marginBottom:3 }}>{rg}</div>
+            <div style={{ height:2,background:"rgba(255,255,255,0.06)",borderRadius:2,overflow:"hidden" }}>
+              <div style={{ height:"100%",width:`${sc}%`,background:c,borderRadius:2 }}/>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+
+    <div style={{ display:"flex",gap:4,flexWrap:"wrap" }}>
+      {Object.entries(marketMode?.signals||{}).map(([k,v]) => (
+        <div key={k} style={{ background:`rgba(${sigColor(v)==="#00ff88"?"0,255,136":sigColor(v)==="#ff2d55"?"255,45,85":"245,158,11"},0.07)`,
+          border:`1px solid ${sigColor(v)}20`,borderRadius:5,padding:"2px 7px",display:"flex",alignItems:"center",gap:4 }}>
+          <span style={{ width:4,height:4,borderRadius:"50%",background:sigColor(v),flexShrink:0 }}/>
+          <span style={{ fontSize:7,color:"#3a4560",fontFamily:mono }}>{k}: </span>
+          <span style={{ fontSize:7,color:sigColor(v),fontWeight:700,fontFamily:mono }}>{v}</span>
+        </div>
+      ))}
+    </div>
+    <div style={{ marginTop:7,fontSize:7,color:"#2a3550",fontFamily:mono }}>
+      Perps: Hyperliquid (all dexes, auto-discovers new listings) · Spot: Finnhub → Yahoo Finance · 15s refresh
+    </div>
+  </div>
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSET ROW
+// ─────────────────────────────────────────────────────────────────────────────
+function AssetRow({ ticker, meta, spotData, perpData, spread, isSelected, onSelect }) {
+const cls     = meta?.class || “crypto”;
+const clsHex  = cls===“equity”?“59,130,246”:cls===“commodity”?“212,175,55”:“153,69,255”;
+const clsCol  = cls===“equity”?”#3b82f6”:cls===“commodity”?”#d4af37”:”#9945ff”;
+const clsLabel= cls===“equity”?“EQ”:cls===“commodity”?“COM”:“PERP”;
+
+const price   = cls===“crypto” ? (perpData?.price||0) : (spotData?.price||perpData?.price||0);
+const change  = cls===“crypto” ? (perpData?.change24h||0) : (spotData?.change24h||perpData?.change24h||0);
+const fund    = perpData?.funding || 0;
+const chCol   = changeColor(change);
+const fundCol = fund>0?”#f87171”:fund<0?”#4ade80”:”#6b7a99”;
+
+// Volatility — computed from live data, zero extra API calls
+const vol = computeVolatility(ticker, perpData, cls);
+
+return (
+<div onClick={() => onSelect(ticker)} style={{
+padding:“9px 12px”,
+background:isSelected?`rgba(${clsHex},0.07)`:“transparent”,
+borderBottom:“1px solid rgba(255,255,255,0.04)”,
+borderLeft:`2px solid ${isSelected?clsCol:"transparent"}`,
+cursor:“pointer”, transition:“all 0.12s”,
+}}>
+<div style={{ display:“flex”,justifyContent:“space-between”,alignItems:“center”,marginBottom: (cls!==“crypto”&&(spotData||perpData)) ? 5 : 0 }}>
+<div style={{ display:“flex”,alignItems:“center”,gap:8 }}>
+<span style={{ fontSize:15,lineHeight:1,flexShrink:0 }}>{meta?.icon||“◆”}</span>
+<div>
+<div style={{ display:“flex”,alignItems:“center”,gap:5 }}>
+<span style={{ fontSize:12,fontWeight:800,color:”#e8e8f0”,fontFamily:mono }}>{ticker}</span>
+<span style={{ fontSize:6,color:clsCol,fontFamily:mono,letterSpacing:1,
+background:`rgba(${clsHex},0.12)`,padding:“1px 5px”,borderRadius:3 }}>{clsLabel}</span>
+{perpData?.maxLeverage > 0 && (
+<span style={{ fontSize:6,color:”#3a4560”,fontFamily:mono }}>{perpData.maxLeverage}x</span>
+)}
+</div>
+<div style={{ fontSize:8,color:”#3a4560”,fontFamily:mono }}>{meta?.name||ticker}</div>
+</div>
+</div>
+<div style={{ display:“flex”,alignItems:“center”,gap:10 }}>
+{/* Volatility bar — subtle, right of price, before the numbers */}
+<VolatilityBar vol={vol}/>
+<div style={{ textAlign:“right” }}>
+<div style={{ fontSize:13,fontWeight:800,color:”#e8e8f0”,fontFamily:mono }}>
+{price>0?fmtPrice(price):”—”}
+</div>
+<div style={{ fontSize:9,fontWeight:700,color:chCol,fontFamily:mono }}>{fmtChange(change)}</div>
+</div>
+</div>
+</div>
+
+```
+  {/* Dual price strip for equities + commodities */}
+  {cls !== "crypto" && (
+    <div style={{ display:"flex",gap:5 }}>
+      {spotData?.price > 0 && (
+        <div style={{ background:"rgba(59,130,246,0.07)",borderRadius:5,padding:"3px 7px",flex:1 }}>
+          <div style={{ fontSize:6,color:"#3a4560",fontFamily:mono }}>SPOT·{spotData.source||"—"}</div>
+          <div style={{ fontSize:9,fontWeight:700,color:"#93c5fd",fontFamily:mono }}>{fmtPrice(spotData.price)}</div>
+        </div>
+      )}
+      {perpData?.price > 0 && (
+        <div style={{ background:"rgba(153,69,255,0.07)",borderRadius:5,padding:"3px 7px",flex:1 }}>
+          <div style={{ fontSize:6,color:"#3a4560",fontFamily:mono }}>PERP·HL</div>
+          <div style={{ fontSize:9,fontWeight:700,color:"#c084fc",fontFamily:mono }}>{fmtPrice(perpData.price)}</div>
+        </div>
+      )}
+      {spread && (
+        <div style={{ background:`rgba(${spread.spreadPct>0?"0,255,136":"255,45,85"},0.07)`,borderRadius:5,padding:"3px 7px",flex:1 }}>
+          <div style={{ fontSize:6,color:"#3a4560",fontFamily:mono }}>SPREAD</div>
+          <div style={{ fontSize:9,fontWeight:700,fontFamily:mono,
+            color:spread.spreadPct>0.5?"#00ff88":spread.spreadPct<-0.5?"#ff2d55":"#f59e0b" }}>
+            {spread.spreadPct>0?"+":""}{spread.spreadPct.toFixed(2)}%
+          </div>
+        </div>
+      )}
+      {fund !== 0 && (
+        <div style={{ background:"rgba(255,255,255,0.03)",borderRadius:5,padding:"3px 7px",flex:1 }}>
+          <div style={{ fontSize:6,color:"#3a4560",fontFamily:mono }}>FUND/HR</div>
+          <div style={{ fontSize:9,fontWeight:700,color:fundCol,fontFamily:mono }}>{fmtFunding(fund)}</div>
+        </div>
+      )}
+    </div>
+  )}
+
+  {/* Crypto: funding + OI inline */}
+  {cls === "crypto" && (fund!==0 || (perpData?.openInterest||0)>0) && (
+    <div style={{ display:"flex",gap:10,marginTop:3 }}>
+      {fund !== 0 && (
+        <span style={{ fontSize:8,color:fundCol,fontFamily:mono }}>
+          {fund>0?"▲":"▼"} {fmtFunding(fund)}/hr
+        </span>
+      )}
+      {(perpData?.openInterest||0) > 0 && (
+        <span style={{ fontSize:8,color:"#3a4560",fontFamily:mono }}>
+          OI ${perpData.openInterest>=1000?`${(perpData.openInterest/1000).toFixed(1)}B`:`${perpData.openInterest.toFixed(0)}M`}
+        </span>
+      )}
+      {(perpData?.volume24h||0) > 0 && (
+        <span style={{ fontSize:8,color:"#2a3550",fontFamily:mono }}>
+          Vol ${perpData.volume24h>=1000?`${(perpData.volume24h/1000).toFixed(1)}B`:`${perpData.volume24h.toFixed(0)}M`}
+        </span>
+      )}
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSET DETAIL PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+function AssetDetail({ ticker, meta, spot, perp, spread }) {
+if (!ticker) return null;
+const cls     = meta?.class || “crypto”;
+const clsCol  = cls===“equity”?”#3b82f6”:cls===“commodity”?”#d4af37”:”#9945ff”;
+const price   = cls===“crypto”?(perp?.price||0):(spot?.price||perp?.price||0);
+const change  = cls===“crypto”?(perp?.change24h||0):(spot?.change24h||perp?.change24h||0);
+const fund    = perp?.funding||0;
+
+return (
+<div style={{ background:“rgba(255,255,255,0.025)”,border:`1px solid ${clsCol}25`,borderRadius:14,padding:“14px”,marginBottom:12 }}>
+<div style={{ display:“flex”,justifyContent:“space-between”,alignItems:“flex-start”,marginBottom:12 }}>
+<div style={{ display:“flex”,alignItems:“center”,gap:10 }}>
+<div style={{ fontSize:28 }}>{meta?.icon||“◆”}</div>
+<div>
+<div style={{ fontSize:18,fontWeight:900,color:”#e8e8f0”,fontFamily:mono }}>{ticker}</div>
+<div style={{ fontSize:9,color:”#6b7a99”,fontFamily:mono }}>{meta?.name||ticker}</div>
+<div style={{ fontSize:7,color:clsCol,fontFamily:mono,letterSpacing:1.5,marginTop:2 }}>
+{cls===“equity”?“EQUITY PERP (xyz dex)”:cls===“commodity”?“COMMODITY PERP (flx dex)”:“CRYPTO PERP”}
+{perp?.maxLeverage ? ` · Max ${perp.maxLeverage}x` : “”}
+</div>
+</div>
+</div>
+<div style={{ textAlign:“right” }}>
+<div style={{ fontSize:22,fontWeight:900,color:”#e8e8f0”,fontFamily:mono }}>{fmtPrice(price)}</div>
+<div style={{ fontSize:12,fontWeight:700,color:changeColor(change),fontFamily:mono }}>{fmtChange(change)}</div>
+</div>
+</div>
+
+```
+  {/* Dual price for equities/commodities */}
+  {cls!=="crypto" && (
+    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:10 }}>
+      <div style={{ background:"rgba(59,130,246,0.06)",border:"1px solid rgba(59,130,246,0.15)",borderRadius:9,padding:"9px 10px" }}>
+        <div style={{ fontSize:7,color:"#3a4560",fontFamily:mono,marginBottom:2 }}>SPOT PRICE</div>
+        <div style={{ fontSize:14,fontWeight:800,color:"#93c5fd",fontFamily:mono }}>{fmtPrice(spot?.price)}</div>
+        <div style={{ fontSize:7,color:"#2a3550",fontFamily:mono,marginTop:2 }}>{spot?.source||"—"}</div>
+      </div>
+      <div style={{ background:"rgba(153,69,255,0.06)",border:"1px solid rgba(153,69,255,0.15)",borderRadius:9,padding:"9px 10px" }}>
+        <div style={{ fontSize:7,color:"#3a4560",fontFamily:mono,marginBottom:2 }}>PERP PRICE</div>
+        <div style={{ fontSize:14,fontWeight:800,color:"#c084fc",fontFamily:mono }}>{fmtPrice(perp?.price)}</div>
+        <div style={{ fontSize:7,color:"#2a3550",fontFamily:mono,marginTop:2 }}>Hyperliquid</div>
+      </div>
+      <div style={{
+        background:`rgba(${spread?.spreadPct>0?"0,255,136":"255,45,85"},0.06)`,
+        border:`1px solid rgba(${spread?.spreadPct>0?"0,255,136":"255,45,85"},0.15)`,
+        borderRadius:9,padding:"9px 10px" }}>
+        <div style={{ fontSize:7,color:"#3a4560",fontFamily:mono,marginBottom:2 }}>SPREAD</div>
+        <div style={{ fontSize:14,fontWeight:800,fontFamily:mono,
+          color:spread?.spreadPct>0.5?"#00ff88":spread?.spreadPct<-0.5?"#ff2d55":"#f59e0b" }}>
+          {spread?`${spread.spreadPct>0?"+":""}${spread.spreadPct.toFixed(2)}%`:"—"}
+        </div>
+        <div style={{ fontSize:7,color:"#6b7a99",fontFamily:mono,marginTop:2 }}>{spread?.label||"—"}</div>
+      </div>
+    </div>
+  )}
+
+  {/* Spread interpretation */}
+  {cls!=="crypto" && spread && Math.abs(spread.spreadPct)>0.3 && (
+    <div style={{ background:`rgba(${spread.spreadPct>0?"0,255,136":"255,45,85"},0.05)`,
+      border:`1px solid rgba(${spread.spreadPct>0?"0,255,136":"255,45,85"},0.15)`,
+      borderRadius:8,padding:"8px 10px",marginBottom:10,
+      fontSize:9,color:spread.spreadPct>0?"#00ff88":"#f87171",fontFamily:mono,lineHeight:1.6 }}>
+      {spread.spreadPct>0
+        ? `◆ Futures premium ${spread.spreadPct.toFixed(2)}% — perp traders more bullish than spot. Positive sentiment.`
+        : `◆ Futures discount ${Math.abs(spread.spreadPct).toFixed(2)}% — perp traders more bearish than spot. Caution signal.`}
+    </div>
+  )}
+
+  <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6 }}>
+    {[
+      { label:"24H CHANGE",   value:fmtChange(change),               color:changeColor(change) },
+      { label:"FUNDING/HR",   value:perp?fmtFunding(fund):"—",       color:fund>0?"#f87171":fund<0?"#4ade80":"#6b7a99" },
+      { label:"OPEN INT",     value:perp?.openInterest>0?`$${perp.openInterest>=1000?(perp.openInterest/1000).toFixed(1)+"B":perp.openInterest.toFixed(0)+"M"}`:"—", color:"#6b7a99" },
+      { label:"VOLUME 24H",   value:perp?.volume24h>0?`$${perp.volume24h>=1000?(perp.volume24h/1000).toFixed(1)+"B":perp.volume24h.toFixed(0)+"M"}`:"—", color:"#6b7a99" },
+      { label:"ORACLE PRICE", value:fmtPrice(perp?.oraclePx),        color:"#6b7a99" },
+      { label:"PREV CLOSE",   value:fmtPrice(spot?.prevClose||perp?.prevDayPx), color:"#6b7a99" },
+    ].map(({ label,value,color }) => (
+      <div key={label} style={{ background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"8px 9px" }}>
+        <div style={{ fontSize:7,color:"#3a4560",fontFamily:mono,marginBottom:2 }}>{label}</div>
+        <div style={{ fontSize:11,fontWeight:700,color,fontFamily:mono }}>{value||"—"}</div>
+      </div>
+    ))}
+  </div>
+
+  {/* Volatility — expanded with plain English explanation */}
+  {computeVolatility(ticker, perp, cls) && (
+    <div style={{ marginTop:10 }}>
+      <VolatilityBar vol={computeVolatility(ticker, perp, cls)} expanded/>
+    </div>
+  )}
+
+  {perp && fund!==0 && (
+    <div style={{ marginTop:10,background:`rgba(${fund>0?"248,113,113":"74,222,128"},0.05)`,
+      border:`1px solid rgba(${fund>0?"248,113,113":"74,222,128"},0.15)`,
+      borderRadius:8,padding:"8px 10px",fontSize:8,
+      color:fund>0?"#f87171":"#4ade80",fontFamily:mono,lineHeight:1.6 }}>
+      {fund>0
+        ? `▲ Positive ${fmtFunding(fund)}/hr — longs paying shorts. Overextended longs, potential fade.`
+        : `▼ Negative ${fmtFunding(Math.abs(fund))}/hr — shorts paying longs. Overextended shorts, squeeze potential.`}
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPREAD TABLE
+// ─────────────────────────────────────────────────────────────────────────────
+function SpreadsView({ spreads, spot, perps, discoveredAssets }) {
+const notable = Object.entries(spreads||{})
+.filter(([,s])=>Math.abs(s.spreadPct)>0.1)
+.sort(([,a],[,b])=>Math.abs(b.spreadPct)-Math.abs(a.spreadPct));
+
+return (
+<div>
+<div style={{ background:“rgba(255,255,255,0.02)”,border:“1px solid rgba(212,175,55,0.15)”,borderRadius:12,padding:“12px 14px”,marginBottom:12 }}>
+<div style={{ fontSize:9,color:”#d4af37”,fontFamily:mono,fontWeight:700,marginBottom:6 }}>◆ SPOT vs PERP SPREAD</div>
+<div style={{ fontSize:9,color:”#6b7a99”,fontFamily:mono,lineHeight:1.7 }}>
+The spread is the % difference between the real market <span style={{ color:”#93c5fd” }}>spot price</span> (Finnhub/Yahoo) and the <span style={{ color:”#c084fc” }}>futures perp price</span> (Hyperliquid).
+A premium means futures traders are more bullish. A discount means more bearish. Both are signals.
+</div>
+</div>
+
+```
+  {notable.length === 0 ? (
+    <div style={{ background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"30px 20px",textAlign:"center" }}>
+      <div style={{ fontSize:10,color:"#3a4560",fontFamily:mono }}>No significant spreads detected — markets aligned</div>
+    </div>
+  ) : (
+    <div style={{ background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,overflow:"hidden" }}>
+      {notable.map(([ticker,s]) => {
+        const meta  = discoveredAssets?.[ticker] || { icon:"◆", name:ticker };
+        const col   = s.spreadPct>0.5?"#00ff88":s.spreadPct<-0.5?"#ff2d55":"#f59e0b";
+        const hexC  = s.spreadPct>0?"0,255,136":"255,45,85";
+        return (
+          <div key={ticker} style={{ padding:"11px 14px",borderBottom:"1px solid rgba(255,255,255,0.04)",display:"flex",alignItems:"center",gap:10 }}>
+            <span style={{ fontSize:18 }}>{meta.icon}</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:12,fontWeight:800,color:"#e8e8f0",fontFamily:mono }}>{ticker}</div>
+              <div style={{ fontSize:8,color:"#3a4560",fontFamily:mono }}>{meta.name}</div>
+            </div>
+            <div style={{ textAlign:"right",minWidth:70 }}>
+              <div style={{ fontSize:7,color:"#93c5fd",fontFamily:mono }}>SPOT</div>
+              <div style={{ fontSize:11,fontWeight:700,color:"#93c5fd",fontFamily:mono }}>{fmtPrice(s.spotPrice)}</div>
+            </div>
+            <div style={{ textAlign:"right",minWidth:70 }}>
+              <div style={{ fontSize:7,color:"#c084fc",fontFamily:mono }}>PERP</div>
+              <div style={{ fontSize:11,fontWeight:700,color:"#c084fc",fontFamily:mono }}>{fmtPrice(s.perpPrice)}</div>
+            </div>
+            <div style={{ textAlign:"right",minWidth:65,background:`rgba(${hexC},0.07)`,borderRadius:7,padding:"5px 8px" }}>
+              <div style={{ fontSize:14,fontWeight:900,color:col,fontFamily:mono }}>
+                {s.spreadPct>0?"+":""}{s.spreadPct.toFixed(2)}%
+              </div>
+              <div style={{ fontSize:7,color:col,fontFamily:mono }}>{s.signal.replace("_"," ")}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORRELATIONS VIEW
+// ─────────────────────────────────────────────────────────────────────────────
+function CorrelationsView({ marketMode, spot, perps }) {
+const corrs = marketMode?.correlations || [];
+return (
+<div>
+{corrs.length === 0 ? (
+<div style={{ background:“rgba(255,255,255,0.02)”,border:“1px solid rgba(255,255,255,0.06)”,borderRadius:12,padding:“30px 20px”,textAlign:“center” }}>
+<div style={{ fontSize:10,color:”#3a4560”,fontFamily:mono,marginBottom:6 }}>No significant correlations detected</div>
+<div style={{ fontSize:8,color:”#2a3550”,fontFamily:mono }}>Markets moving within expected ranges</div>
+</div>
+) : (
+<div style={{ marginBottom:14 }}>
+{corrs.map((c,i) => (
+<div key={i} style={{
+background:`rgba(${sigColor(c.signal)==="#00ff88"?"0,255,136":sigColor(c.signal)==="#ff2d55"?"255,45,85":"245,158,11"},0.05)`,
+border:`1px solid ${sigColor(c.signal)}18`,borderRadius:10,padding:“10px 13px”,marginBottom:7,
+display:“flex”,alignItems:“flex-start”,gap:10 }}>
+<div style={{ width:7,height:7,borderRadius:“50%”,background:sigColor(c.signal),
+flexShrink:0,marginTop:3,boxShadow:`0 0 6px ${sigColor(c.signal)}60` }}/>
+<div style={{ flex:1 }}>
+<div style={{ fontSize:10,fontWeight:800,color:sigColor(c.signal),fontFamily:mono,marginBottom:2 }}>
+{c.signal.replace(”_”,” “)}
+</div>
+<div style={{ fontSize:9,color:”#a0aec0”,fontFamily:mono,lineHeight:1.55 }}>{c.desc}</div>
+</div>
+<div style={{ fontSize:7,fontWeight:700,fontFamily:mono,
+color:c.severity===“HIGH”?”#ff2d55”:c.severity===“MODERATE”?”#f59e0b”:”#6b7a99”,flexShrink:0 }}>
+{c.severity}
+</div>
+</div>
+))}
+</div>
+)}
+
+```
+  {/* Per-class matrix */}
+  <div style={{ background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"13px 14px" }}>
+    <div style={{ fontSize:9,color:"#d4af37",fontFamily:mono,fontWeight:700,marginBottom:10 }}>◆ CROSS-ASSET PERFORMANCE</div>
+    {[
+      { label:"CRYPTO",      d:marketMode?.crypto,      tickers:[["BTC",perps],["ETH",perps],["SOL",perps]] },
+      { label:"EQUITIES",    d:marketMode?.equities,    tickers:[["NVDA",spot],["TSLA",spot],["MSTR",spot]]  },
+      { label:"COMMODITIES", d:marketMode?.commodities, tickers:[["XAU",spot],["OIL",spot],["XAG",spot]]    },
+    ].map(({ label,d,tickers }) => (
+      <div key={label} style={{ marginBottom:12 }}>
+        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:5 }}>
+          <span style={{ fontSize:9,color:"#6b7a99",fontFamily:mono,fontWeight:700 }}>{label}</span>
+          <span style={{ fontSize:9,fontWeight:800,fontFamily:mono,color:sigColor(d?.regime) }}>
+            {d?.regime} · {d?.score}%
+          </span>
+        </div>
+        <div style={{ display:"flex",gap:6 }}>
+          {tickers.map(([t,src]) => {
+            const ch=(src?.[t]||perps?.[t])?.change24h||0;
+            return (
+              <div key={t} style={{ flex:1,background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"6px 8px",textAlign:"center" }}>
+                <div style={{ fontSize:8,color:"#3a4560",fontFamily:mono }}>{t}</div>
+                <div style={{ fontSize:11,fontWeight:700,color:changeColor(ch),fontFamily:mono }}>{fmtChange(ch)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    ))}
+  </div>
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN MARKET TAB
+// ─────────────────────────────────────────────────────────────────────────────
+export default function MarketTab() {
+const {
+spot, perps, spreads, marketMode, sentiment,
+loading, lastUpdate, refresh,
+discoveredAssets, byClass,
+} = useMarketData();
+
+const [view,           setView]           = useState(“prices”);
+const [activeClass,    setActiveClass]    = useState(“all”);
+const [selectedTicker, setSelectedTicker] = useState(null);
+const [search,         setSearch]         = useState(””);
+const [sortBy,         setSortBy]         = useState(“volume”);
+const [sortDir,        setSortDir]        = useState(-1);
+
+const totalMarkets = Object.keys(perps||{}).length;
+
+// Build sorted/filtered asset list
+const sortedAssets = useMemo(() => {
+const allMeta = Object.values(discoveredAssets||{});
+return allMeta
+.filter(a => {
+if (activeClass !== “all” && a.class !== activeClass) return false;
+if (search) {
+const q = search.toLowerCase();
+if (!a.ticker.toLowerCase().includes(q) && !a.name.toLowerCase().includes(q)) return false;
+}
+const hasPx = (perps?.[a.ticker]?.price||0)>0 || (spot?.[a.ticker]?.price||0)>0;
+return hasPx;
+})
+.sort((a,b) => {
+const pa=perps?.[a.ticker]||{}, pb=perps?.[b.ticker]||{};
+const sa=spot?.[a.ticker] ||{}, sb=spot?.[b.ticker] ||{};
+if (sortBy===“volume”)  return sortDir*((pb.volume24h||0)-(pa.volume24h||0));
+if (sortBy===“change”)  return sortDir*((sb.change24h||pb.change24h||0)-(sa.change24h||pa.change24h||0));
+if (sortBy===“funding”) return sortDir*(Math.abs(pb.funding||0)-Math.abs(pa.funding||0));
+if (sortBy===“oi”)      return sortDir*((pb.openInterest||0)-(pa.openInterest||0));
+if (sortBy===“name”)    return sortDir*a.ticker.localeCompare(b.ticker);
+return 0;
+});
+}, [discoveredAssets, perps, spot, activeClass, search, sortBy, sortDir]);
+
+const cycleSort = useCallback(key => {
+if (sortBy===key) setSortDir(d=>d*-1);
+else { setSortBy(key); setSortDir(-1); }
+}, [sortBy]);
+
+const classTabs = [
+{ id:“all”,       label:“ALL”,         count:Object.keys(discoveredAssets||{}).filter(t=>(perps?.[t]?.price||spot?.[t]?.price)>0).length },
+{ id:“crypto”,    label:“CRYPTO”,      count:(byClass?.crypto||[]).filter(t=>perps?.[t]?.price>0).length,    color:”#9945ff”, hex:“153,69,255” },
+{ id:“equity”,    label:“EQUITIES”,    count:(byClass?.equity||[]).filter(t=>(spot?.[t]?.price||perps?.[t]?.price)>0).length, color:”#3b82f6”, hex:“59,130,246” },
+{ id:“commodity”, label:“COMMODITIES”, count:(byClass?.commodity||[]).filter(t=>(spot?.[t]?.price||perps?.[t]?.price)>0).length,color:”#d4af37”,hex:“212,175,55” },
+];
+
+const selectedMeta = selectedTicker ? discoveredAssets?.[selectedTicker] : null;
+
+return (
+<div style={{ fontFamily:mono, color:”#e8e8f0” }}>
+
+```
+  <MasterHeader
+    marketMode={marketMode} sentiment={sentiment}
+    lastUpdate={lastUpdate} loading={loading}
+    totalMarkets={totalMarkets} onRefresh={refresh}
+  />
+
+  {/* Selected asset detail */}
+  {selectedTicker && (
+    <AssetDetail
+      ticker={selectedTicker} meta={selectedMeta}
+      spot={spot?.[selectedTicker]} perp={perps?.[selectedTicker]}
+      spread={spreads?.[selectedTicker]}
+    />
+  )}
+
+  {/* View tabs */}
+  <div style={{ display:"flex",gap:5,marginBottom:10 }}>
+    {[
+      { id:"prices",       label:"PRICES"       },
+      { id:"spreads",      label:"SPREADS"      },
+      { id:"correlations", label:"SIGNALS"      },
+      { id:"news",         label:"NEWS"         },
+    ].map(t => (
+      <button key={t.id} onClick={()=>setView(t.id)} style={{
+        flex:1,padding:"7px 4px",
+        background:view===t.id?"linear-gradient(135deg,#d4af37,#b8941e)":"rgba(255,255,255,0.03)",
+        border:`1px solid ${view===t.id?"transparent":"rgba(255,255,255,0.07)"}`,
+        borderRadius:8,color:view===t.id?"#060a13":"#6b7a99",
+        fontSize:8,fontWeight:800,cursor:"pointer",fontFamily:mono,letterSpacing:0.8,
+      }}>{t.label}</button>
+    ))}
+  </div>
+
+  {/* PRICES */}
+  {view==="prices" && (
+    <>
+      {/* Class filters */}
+      <div style={{ display:"flex",gap:5,marginBottom:8,overflowX:"auto" }}>
+        {classTabs.map(t => (
+          <button key={t.id} onClick={()=>setActiveClass(t.id)} style={{
+            padding:"6px 11px",flexShrink:0,
+            background:activeClass===t.id
+              ? t.hex?`rgba(${t.hex},0.18)`:"rgba(255,255,255,0.1)"
+              : "rgba(255,255,255,0.03)",
+            border:`1px solid ${activeClass===t.id?(t.color||"rgba(255,255,255,0.3)"):"rgba(255,255,255,0.07)"}`,
+            borderRadius:8,cursor:"pointer",
+            color:activeClass===t.id?(t.color||"#e8e8f0"):"#4a5568",
+            fontSize:8,fontWeight:800,fontFamily:mono,letterSpacing:1,
+          }}>
+            {t.label} <span style={{ fontSize:7,opacity:0.7 }}>({t.count})</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Search */}
+      <input value={search} onChange={e=>setSearch(e.target.value)}
+        placeholder="Search ticker or name..."
+        style={{ width:"100%",background:"rgba(255,255,255,0.04)",
+          border:"1px solid rgba(255,255,255,0.09)",borderRadius:9,
+          padding:"9px 12px",color:"#e8e8f0",fontSize:11,fontFamily:mono,
+          outline:"none",boxSizing:"border-box",marginBottom:8 }}/>
+
+      {/* Sort header */}
+      <div style={{ display:"flex",gap:6,padding:"5px 12px",marginBottom:2 }}>
+        {[
+          { label:"ASSET",   key:"name",    left:true },
+          { label:"VOLUME",  key:"volume"  },
+          { label:"24H",     key:"change"  },
+          { label:"FUNDING", key:"funding" },
+          { label:"OI",      key:"oi"      },
+        ].map(({ label,key,left }) => (
+          <div key={key} onClick={()=>cycleSort(key)} style={{
+            flex:1,fontSize:7,color:sortBy===key?"#d4af37":"#3a4560",
+            letterSpacing:1.5,fontFamily:mono,cursor:"pointer",userSelect:"none",
+            textAlign:left?"left":"right",
+          }}>{label}{sortBy===key?(sortDir===-1?" ↓":" ↑"):""}</div>
+        ))}
+      </div>
+
+      {/* Asset list */}
+      <div style={{ background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,overflow:"hidden",marginBottom:12 }}>
+        {loading && totalMarkets===0 ? (
+          <div style={{ padding:"40px 20px",textAlign:"center" }}>
+            <div style={{ fontSize:10,color:"#3a4560",fontFamily:mono,marginBottom:6 }}>↻ Discovering all HL markets...</div>
+            <div style={{ fontSize:8,color:"#2a3550",fontFamily:mono }}>Crypto · Equity perps (xyz) · Commodity perps (flx)</div>
+          </div>
+        ) : sortedAssets.length===0 ? (
+          <div style={{ padding:"30px 20px",textAlign:"center",fontSize:10,color:"#3a4560",fontFamily:mono }}>
+            No results{search?` for "${search}"`:""}
+          </div>
+        ) : (
+          sortedAssets.map(asset => (
+            <AssetRow
+              key={asset.ticker}
+              ticker={asset.ticker}
+              meta={asset}
+              spotData={spot?.[asset.ticker]}
+              perpData={perps?.[asset.ticker]}
+              spread={spreads?.[asset.ticker]}
+              isSelected={selectedTicker===asset.ticker}
+              onSelect={t=>setSelectedTicker(p=>p===t?null:t)}
+            />
+          ))
+        )}
+      </div>
+
+      {sortedAssets.length > 0 && (
+        <div style={{ fontSize:7,color:"#2a3550",fontFamily:mono,textAlign:"center",marginBottom:10 }}>
+          Showing {sortedAssets.length} markets · New HL listings auto-appear · Tap any asset for full breakdown
+        </div>
+      )}
+    </>
+  )}
+
+  {/* SPREADS */}
+  {view==="spreads" && (
+    <SpreadsView spreads={spreads} spot={spot} perps={perps} discoveredAssets={discoveredAssets}/>
+  )}
+
+  {/* CORRELATIONS */}
+  {view==="correlations" && (
+    <CorrelationsView marketMode={marketMode} spot={spot} perps={perps}/>
+  )}
+
+  {/* NEWS */}
+  {view==="news" && (
+    <div style={{ background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"13px 14px" }}>
+      <div style={{ fontSize:9,color:"#d4af37",letterSpacing:2,fontFamily:mono,fontWeight:700,marginBottom:10 }}>
+        ◆ CRYPTO NEWS · {sentiment?.label} ({sentiment?.score}% BULLISH)
+      </div>
+      {sentiment?.headlines?.map((h,i) => (
+        <div key={i} style={{ marginBottom:12,borderBottom:"1px solid rgba(255,255,255,0.04)",paddingBottom:12 }}>
+          <div style={{ display:"flex",alignItems:"flex-start",gap:8 }}>
+            <div style={{ width:5,height:5,borderRadius:"50%",flexShrink:0,marginTop:4,
+              background:h.sentiment==="bullish"?"#00ff88":h.sentiment==="bearish"?"#ff2d55":"#f59e0b" }}/>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:10,color:"#a0aec0",fontFamily:mono,lineHeight:1.55,marginBottom:4 }}>{h.title}</div>
+              <div style={{ display:"flex",gap:8 }}>
+                <span style={{ fontSize:7,color:h.sentiment==="bullish"?"#00ff88":h.sentiment==="bearish"?"#ff2d55":"#f59e0b",fontFamily:mono,fontWeight:700 }}>
+                  {(h.sentiment||"neutral").toUpperCase()}
+                </span>
+                {h.source&&<span style={{ fontSize:7,color:"#2a3550",fontFamily:mono }}>{h.source}</span>}
+                {h.currency&&<span style={{ fontSize:7,color:"#3a4560",fontFamily:mono }}>{h.currency}</span>}
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+      {!sentiment?.headlines?.length && (
+        <div style={{ fontSize:9,color:"#3a4560",fontFamily:mono,textAlign:"center",padding:"20px 0" }}>
+          Set REACT_APP_CRYPTOPANIC_KEY for live news
+        </div>
+      )}
+    </div>
+  )}
+
+  <div style={{ fontSize:7,color:"#111927",textAlign:"center",paddingTop:12,paddingBottom:20,lineHeight:2,fontFamily:mono }}>
+    © 2025 CLVRQuant · Mike Claver™ · Not financial advice<br/>
+    Spot: Finnhub (primary) · Yahoo Finance (fallback) · Perps: Hyperliquid (all dexes) · Auto-refresh 15s<br/>
+    New HIP-3 markets appear automatically as they launch on Hyperliquid
+  </div>
+
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700;800&family=Playfair Display:wght@900&display=swap');
+    * { box-sizing: border-box; }
+    input::placeholder { color: #2a3550; }
+    ::-webkit-scrollbar { width:3px; height:3px; }
+    ::-webkit-scrollbar-thumb { background:rgba(212,175,55,0.15); border-radius:2px; }
+  `}</style>
+</div>
+```
+
+);
+}

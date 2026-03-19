@@ -1,0 +1,834 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// MarketDataStore.js  —  CLVRQuant AI · Master Data Backbone v3
+//
+// KEY DESIGN: Dynamic asset discovery from Hyperliquid API
+// Instead of hardcoding tickers that go stale, we fetch the LIVE list
+// from HL at startup. Every new equity/commodity perp launched via HIP-3
+// automatically appears in your app the moment it goes live.
+//
+// DATA STREAMS:
+//   PERPS  → Hyperliquid (dynamic discovery, all dexes)
+//   SPOT   → Finnhub (primary) → Yahoo Finance (fallback)
+//
+// CONFIRMED HL TICKERS (as of March 2026):
+//   xyz dex: TSLA NVDA AAPL MSFT META AMZN GOOGL COIN AMD MSTR PLTR INTC
+//            BABA HOOD NFLX CRCL SBET XYZ100 (Nasdaq 100 synthetic)
+//            SPX500 (S&P 500 — newly licensed by S&P DJI)
+//   flx dex: XAU XAG OIL BRENT NATGAS (+ more being added)
+//   default: BTC ETH SOL + 150 crypto perps
+//
+// Place at: src/store/MarketDataStore.js
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { useState, useEffect } from “react”;
+
+const HL_API  = “https://api.hyperliquid.xyz/info”;
+const FINNHUB = “https://finnhub.io/api/v1”;
+
+const FINNHUB_KEY = typeof window !== “undefined”
+? (window?.CLVR_CONFIG?.FINNHUB_KEY || process.env?.REACT_APP_FINNHUB_KEY || “”)
+: “”;
+const CP_KEY = typeof window !== “undefined”
+? (window?.CLVR_CONFIG?.CRYPTOPANIC_KEY || process.env?.REACT_APP_CRYPTOPANIC_KEY || “”)
+: “”;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSET METADATA LIBRARY  — complete as of March 2026
+// Covers every confirmed ticker visible on Hyperliquid xyz + flx dexes
+// New tickers discovered dynamically still show up — this just adds
+// human-readable names, icons, and spot price sources
+// ─────────────────────────────────────────────────────────────────────────────
+const ASSET_META_LIB = {
+
+// ── CRYPTO (default dex) ─────────────────────────────────────────────────
+BTC:      { name:“Bitcoin”,            icon:“₿”,  spotSymbol:null,               yahoo:null        },
+ETH:      { name:“Ethereum”,           icon:“Ξ”,  spotSymbol:null,               yahoo:null        },
+SOL:      { name:“Solana”,             icon:“◎”,  spotSymbol:null,               yahoo:null        },
+AVAX:     { name:“Avalanche”,          icon:“▲”,  spotSymbol:null,               yahoo:null        },
+ARB:      { name:“Arbitrum”,           icon:“🔵”, spotSymbol:null,               yahoo:null        },
+WIF:      { name:“dogwifhat”,          icon:“🐕”, spotSymbol:null,               yahoo:null        },
+DOGE:     { name:“Dogecoin”,           icon:“Ð”,  spotSymbol:null,               yahoo:null        },
+BONK:     { name:“Bonk”,              icon:“🔨”, spotSymbol:null,               yahoo:null        },
+SUI:      { name:“Sui”,               icon:“💧”, spotSymbol:null,               yahoo:null        },
+PEPE:     { name:“Pepe”,              icon:“🐸”, spotSymbol:null,               yahoo:null        },
+INJ:      { name:“Injective”,          icon:“🔷”, spotSymbol:null,               yahoo:null        },
+TIA:      { name:“Celestia”,           icon:“🌌”, spotSymbol:null,               yahoo:null        },
+SEI:      { name:“Sei”,               icon:“🔴”, spotSymbol:null,               yahoo:null        },
+APT:      { name:“Aptos”,             icon:“🌀”, spotSymbol:null,               yahoo:null        },
+JTO:      { name:“Jito”,              icon:“⚡”, spotSymbol:null,               yahoo:null        },
+OP:       { name:“Optimism”,           icon:“🔴”, spotSymbol:null,               yahoo:null        },
+LINK:     { name:“Chainlink”,          icon:“🔗”, spotSymbol:null,               yahoo:null        },
+ATOM:     { name:“Cosmos”,             icon:“⚛”,  spotSymbol:null,               yahoo:null        },
+DOT:      { name:“Polkadot”,           icon:“⚫”, spotSymbol:null,               yahoo:null        },
+MATIC:    { name:“Polygon”,            icon:“🔷”, spotSymbol:null,               yahoo:null        },
+UNI:      { name:“Uniswap”,            icon:“🦄”, spotSymbol:null,               yahoo:null        },
+AAVE:     { name:“Aave”,              icon:“👻”, spotSymbol:null,               yahoo:null        },
+LTC:      { name:“Litecoin”,           icon:“Ł”,  spotSymbol:null,               yahoo:null        },
+XRP:      { name:“XRP”,               icon:“◈”,  spotSymbol:null,               yahoo:null        },
+ADA:      { name:“Cardano”,            icon:“₳”,  spotSymbol:null,               yahoo:null        },
+HYPE:     { name:“Hyperliquid”,        icon:“⚡”, spotSymbol:null,               yahoo:null        },
+NEAR:     { name:“NEAR Protocol”,      icon:“Ⓝ”,  spotSymbol:null,               yahoo:null        },
+FTM:      { name:“Fantom”,             icon:“👻”, spotSymbol:null,               yahoo:null        },
+MKR:      { name:“Maker”,             icon:“⬡”,  spotSymbol:null,               yahoo:null        },
+SNX:      { name:“Synthetix”,          icon:“🔵”, spotSymbol:null,               yahoo:null        },
+CRV:      { name:“Curve”,             icon:“🔵”, spotSymbol:null,               yahoo:null        },
+
+// ── EQUITIES (xyz dex) — full list confirmed from screenshots ────────────
+// US Large Cap Tech
+NVDA:     { name:“Nvidia”,             icon:“🟢”, spotSymbol:“NVDA”,            yahoo:“NVDA”      },
+TSLA:     { name:“Tesla”,              icon:“⚡”, spotSymbol:“TSLA”,            yahoo:“TSLA”      },
+AAPL:     { name:“Apple”,              icon:“🍎”, spotSymbol:“AAPL”,            yahoo:“AAPL”      },
+MSFT:     { name:“Microsoft”,          icon:“🪟”, spotSymbol:“MSFT”,            yahoo:“MSFT”      },
+META:     { name:“Meta Platforms”,     icon:“👤”, spotSymbol:“META”,            yahoo:“META”      },
+AMZN:     { name:“Amazon”,             icon:“📦”, spotSymbol:“AMZN”,            yahoo:“AMZN”      },
+GOOGL:    { name:“Alphabet”,           icon:“🔍”, spotSymbol:“GOOGL”,           yahoo:“GOOGL”     },
+AMD:      { name:“AMD”,               icon:“🔴”, spotSymbol:“AMD”,             yahoo:“AMD”       },
+INTC:     { name:“Intel”,             icon:“💻”, spotSymbol:“INTC”,            yahoo:“INTC”      },
+MU:       { name:“Micron Technology”,  icon:“💾”, spotSymbol:“MU”,              yahoo:“MU”        },
+ORCL:     { name:“Oracle”,             icon:“🔴”, spotSymbol:“ORCL”,            yahoo:“ORCL”      },
+SNDK:     { name:“SanDisk”,            icon:“💿”, spotSymbol:“SNDK”,            yahoo:“SNDK”      },
+
+// Crypto-adjacent equities
+COIN:     { name:“Coinbase”,           icon:“🔵”, spotSymbol:“COIN”,            yahoo:“COIN”      },
+MSTR:     { name:“MicroStrategy”,      icon:“₿”,  spotSymbol:“MSTR”,            yahoo:“MSTR”      },
+HOOD:     { name:“Robinhood”,          icon:“🏹”, spotSymbol:“HOOD”,            yahoo:“HOOD”      },
+CRCL:     { name:“Circle Internet”,    icon:“⭕”, spotSymbol:“CRCL”,            yahoo:“CRCL”      },
+SBET:     { name:“SharpLink Gaming”,   icon:“🎮”, spotSymbol:“SBET”,            yahoo:“SBET”      },
+CRWV:     { name:“CoreWeave”,          icon:“☁”,  spotSymbol:“CRWV”,            yahoo:“CRWV”      },
+
+// Other US equities
+PLTR:     { name:“Palantir”,           icon:“🔮”, spotSymbol:“PLTR”,            yahoo:“PLTR”      },
+NFLX:     { name:“Netflix”,            icon:“🎬”, spotSymbol:“NFLX”,            yahoo:“NFLX”      },
+RIVN:     { name:“Rivian”,             icon:“🚗”, spotSymbol:“RIVN”,            yahoo:“RIVN”      },
+USAR:     { name:“US Arms (ETF)”,      icon:“🏔”, spotSymbol:“USAR”,            yahoo:“USAR”      },
+SKHX:     { name:“SkyHarbour Group”,   icon:“✈”,  spotSymbol:“SKYH”,            yahoo:“SKYH”      },
+
+// International / ETFs
+BABA:     { name:“Alibaba”,            icon:“🛒”, spotSymbol:“BABA”,            yahoo:“BABA”      },
+TSM:      { name:“TSMC”,              icon:“🇹🇼”, spotSymbol:“TSM”,             yahoo:“TSM”       },
+SMSN:     { name:“Samsung Electronics”,icon:“📱”, spotSymbol:null,              yahoo:“005930.KS” },
+HYUNDAI:  { name:“Hyundai Motor”,      icon:“🚘”, spotSymbol:null,              yahoo:“005380.KS” },
+EWY:      { name:“iShares MSCI S.Korea”,icon:“🇰🇷”,spotSymbol:“EWY”,            yahoo:“EWY”       },
+EWJ:      { name:“iShares MSCI Japan”, icon:“🇯🇵”, spotSymbol:“EWJ”,            yahoo:“EWJ”       },
+
+// Indices (synthetic perps)
+XYZ100:   { name:“Nasdaq 100”,         icon:“📊”, spotSymbol:“QQQ”,             yahoo:“QQQ”       },
+SP500:    { name:“S&P 500”,            icon:“📈”, spotSymbol:“SPY”,             yahoo:“SPY”       },
+SPX500:   { name:“S&P 500”,            icon:“📈”, spotSymbol:“SPY”,             yahoo:“SPY”       },
+
+// ── COMMODITIES (flx dex) — full list confirmed from screenshots ──────────
+// Precious metals
+GOLD:     { name:“Gold”,               icon:“🥇”, spotSymbol:“OANDA:XAU_USD”,  yahoo:“GC=F”      },
+XAU:      { name:“Gold”,               icon:“🥇”, spotSymbol:“OANDA:XAU_USD”,  yahoo:“GC=F”      },
+SILVER:   { name:“Silver”,             icon:“🥈”, spotSymbol:“OANDA:XAG_USD”,  yahoo:“SI=F”      },
+XAG:      { name:“Silver”,             icon:“🥈”, spotSymbol:“OANDA:XAG_USD”,  yahoo:“SI=F”      },
+PLATINUM: { name:“Platinum”,           icon:“⬜”, spotSymbol:“OANDA:XPT_USD”,  yahoo:“PL=F”      },
+PALLADIUM:{ name:“Palladium”,          icon:“🔘”, spotSymbol:“OANDA:XPD_USD”,  yahoo:“PA=F”      },
+
+// Energy
+CL:       { name:“WTI Crude Oil”,      icon:“🛢”,  spotSymbol:“NYMEX:CL1!”,     yahoo:“CL=F”      },
+OIL:      { name:“WTI Crude Oil”,      icon:“🛢”,  spotSymbol:“NYMEX:CL1!”,     yahoo:“CL=F”      },
+BRENTOIL: { name:“Brent Crude Oil”,    icon:“⛽”, spotSymbol:“NYMEX:BB1!”,     yahoo:“BZ=F”      },
+BRENT:    { name:“Brent Crude Oil”,    icon:“⛽”, spotSymbol:“NYMEX:BB1!”,     yahoo:“BZ=F”      },
+NATGAS:   { name:“Natural Gas”,        icon:“🔥”, spotSymbol:“NYMEX:NG1!”,     yahoo:“NG=F”      },
+
+// Base metals
+COPPER:   { name:“Copper”,             icon:“🟤”, spotSymbol:“NYMEX:HG1!”,     yahoo:“HG=F”      },
+
+// Other commodities
+URNM:     { name:“Uranium ETF (URNM)”, icon:“☢”,  spotSymbol:“URNM”,            yahoo:“URNM”      },
+
+// ── MACRO (spot only — no HL perp) ───────────────────────────────────────
+VIX:      { name:“CBOE VIX”,           icon:“⚡”, spotSymbol:“CBOE:VIX”,       yahoo:”^VIX”      },
+SPY:      { name:“S&P 500 ETF”,        icon:“📊”, spotSymbol:“SPY”,             yahoo:“SPY”       },
+QQQ:      { name:“Nasdaq 100 ETF”,     icon:“💹”, spotSymbol:“QQQ”,             yahoo:“QQQ”       },
+DXY:      { name:“US Dollar Index”,    icon:“💵”, spotSymbol:“OANDA:USD_CHF”,   yahoo:“DX-Y.NYB”  },
+};
+
+// Classify a ticker by its HL dex
+const DEX_CLASS = {
+“crypto”:    “crypto”,
+“xyz”:       “equity”,
+“flx”:       “commodity”,
+};
+
+function enrichAsset(ticker, dex) {
+const meta = ASSET_META_LIB[ticker] || {};
+return {
+ticker,
+name:        meta.name || ticker,
+icon:        meta.icon || “◆”,
+class:       DEX_CLASS[dex || “crypto”] || “crypto”,
+dex:         dex || “crypto”,
+spotSymbol:  meta.spotSymbol || null,
+yahoo:       meta.yahoo || null,
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 1: HYPERLIQUID — DYNAMIC DISCOVERY
+// Fetches complete list of ALL live markets, no hardcoding
+// ─────────────────────────────────────────────────────────────────────────────
+async function hlPost(body) {
+try {
+const r = await fetch(HL_API, {
+method:  “POST”,
+headers: { “Content-Type”: “application/json” },
+body:    JSON.stringify(body),
+});
+return await r.json();
+} catch { return null; }
+}
+
+async function fetchHLDex(dex) {
+const data = await hlPost(
+dex ? { type: “metaAndAssetCtxs”, dex } : { type: “metaAndAssetCtxs” }
+);
+if (!Array.isArray(data) || data.length < 2) return {};
+const universe = data[0]?.universe || [];
+const ctxs     = data[1] || [];
+const result   = {};
+
+universe.forEach((asset, i) => {
+const ctx    = ctxs[i] || {};
+const mark   = parseFloat(ctx.markPx    || ctx.midPx || 0);
+const prev   = parseFloat(ctx.prevDayPx || 0);
+const oracle = parseFloat(ctx.oraclePx  || 0);
+if (mark === 0 && oracle === 0) return; // skip unlaunched markets
+const change = prev > 0 ? ((mark - prev) / prev) * 100 : 0;
+const raw    = asset.name || “”;
+const ticker = raw.includes(”:”) ? raw.split(”:”)[1] : raw;
+
+```
+result[ticker] = {
+  ticker,
+  price:        mark || oracle,
+  oraclePx:     oracle,
+  prevDayPx:    prev,
+  change24h:    parseFloat(change.toFixed(3)),
+  funding:      parseFloat(ctx.funding       || 0),
+  openInterest: parseFloat(ctx.openInterest  || 0),
+  volume24h:    parseFloat(ctx.dayNtlVlm      || 0),
+  maxLeverage:  asset.maxLeverage || 20,
+  dex:          dex || "crypto",
+  source:       "Hyperliquid Perps",
+  fresh:        true,
+  fetchedAt:    Date.now(),
+};
+```
+
+});
+return result;
+}
+
+// Fetch ALL three dexes and merge — discovers every live HL market
+async function fetchAllPerps() {
+const [crypto, equities, commodities] = await Promise.all([
+fetchHLDex(null),    // 150+ crypto perps
+fetchHLDex(“xyz”),   // all equity perps (auto-discovers new ones)
+fetchHLDex(“flx”),   // all commodity perps (auto-discovers new ones)
+]);
+
+// Build enriched asset list from discovered tickers
+const discovered = {};
+Object.keys(crypto).forEach(t => { discovered[t] = enrichAsset(t, “crypto”); });
+Object.keys(equities).forEach(t => { discovered[t] = enrichAsset(t, “xyz”); });
+Object.keys(commodities).forEach(t => { discovered[t] = enrichAsset(t, “flx”); });
+
+return {
+prices:    { …crypto, …equities, …commodities },
+assets:    discovered,  // enriched metadata for all discovered assets
+byClass: {
+crypto:    Object.keys(crypto),
+equity:    Object.keys(equities),
+commodity: Object.keys(commodities),
+},
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 2: SPOT PRICES (Finnhub → Yahoo fallback)
+// Only fetches spot for assets that have a spot symbol defined
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchFinnhubQuote(symbol) {
+if (!FINNHUB_KEY || !symbol) return null;
+try {
+const r = await fetch(`${FINNHUB}/quote?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_KEY}`);
+const d = await r.json();
+if (!d?.c || d.c === 0) return null;
+return { price:d.c, change24h:d.dp||0, high:d.h||0, low:d.l||0, prevClose:d.pc||0, source:“Finnhub” };
+} catch { return null; }
+}
+
+async function fetchYahooQuote(symbol) {
+if (!symbol) return null;
+try {
+const r = await fetch(
+`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`
+);
+const d  = await r.json();
+const q  = d?.chart?.result?.[0];
+if (!q) return null;
+const price = q.meta?.regularMarketPrice || 0;
+const prev  = q.meta?.previousClose || 0;
+if (!price) return null;
+return {
+price, change24h: prev > 0 ? parseFloat(((price-prev)/prev*100).toFixed(3)) : 0,
+high: q.meta?.regularMarketDayHigh||0, low: q.meta?.regularMarketDayLow||0,
+prevClose: prev, source:“Yahoo Finance”,
+};
+} catch { return null; }
+}
+
+async function fetchSpotForAssets(assets) {
+// Build unique list of assets that need spot prices
+const toFetch = Object.values(assets)
+.filter(a => a.spotSymbol || a.yahoo)
+.filter((a, i, arr) => arr.findIndex(x => x.ticker === a.ticker) === i);
+
+const results = await Promise.allSettled(
+toFetch.map(async a => {
+let data = null;
+if (a.spotSymbol && FINNHUB_KEY) data = await fetchFinnhubQuote(a.spotSymbol);
+if (!data && a.yahoo) data = await fetchYahooQuote(a.yahoo);
+return { ticker: a.ticker, data };
+})
+);
+
+const spot = {};
+results.forEach(r => {
+if (r.status === “fulfilled” && r.value?.data) {
+spot[r.value.ticker] = r.value.data;
+}
+});
+
+// Also fetch macro indicators
+const macroTargets = [
+{ ticker:“VIX”, sym:“CBOE:VIX”,     yahoo:”^VIX”   },
+{ ticker:“SPY”, sym:“SPY”,           yahoo:“SPY”    },
+{ ticker:“QQQ”, sym:“QQQ”,           yahoo:“QQQ”    },
+];
+await Promise.allSettled(macroTargets.map(async m => {
+let d = await fetchFinnhubQuote(m.sym);
+if (!d) d = await fetchYahooQuote(m.yahoo);
+if (d) spot[m.ticker] = d;
+}));
+
+return spot;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 3: NEWS & SENTIMENT
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchSentiment() {
+try {
+const r = await fetch(
+`https://cryptopanic.com/api/v1/posts/?auth_token=${CP_KEY}&public=true&kind=news&currencies=BTC,ETH,SOL`
+);
+const d     = await r.json();
+const posts = d?.results?.slice(0, 15) || [];
+const bull  = posts.filter(p => (p.votes?.positive||0) > (p.votes?.negative||0)).length;
+const score = posts.length ? Math.round((bull/posts.length)*100) : 50;
+return {
+score,
+label:     score > 60 ? “BULLISH” : score < 40 ? “BEARISH” : “MIXED”,
+headlines: posts.slice(0,8).map(p => ({
+title:     p.title,
+url:       p.url,
+source:    p.source?.title,
+currency:  p.currencies?.[0]?.code,
+sentiment: (p.votes?.positive||0)>(p.votes?.negative||0) ? “bullish”
+: (p.votes?.negative||0)>(p.votes?.positive||0) ? “bearish” : “neutral”,
+})),
+};
+} catch { return { score:50, label:“MIXED”, headlines:[] }; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 4: DERIVED INTELLIGENCE
+// ─────────────────────────────────────────────────────────────────────────────
+function computeSpreads(spot, perps, assets) {
+const spreads = {};
+Object.values(assets).forEach(({ ticker, class: cls }) => {
+if (cls === “crypto”) return; // crypto has no spot counterpart
+const s = spot?.[ticker];
+const p = perps?.[ticker];
+if (!s?.price || !p?.price) return;
+const diff    = p.price - s.price;
+const diffPct = (diff / s.price) * 100;
+spreads[ticker] = {
+spotPrice:  s.price,
+perpPrice:  p.price,
+spread:     diff,
+spreadPct:  parseFloat(diffPct.toFixed(3)),
+signal:     diffPct >  0.5 ? “PERP_PREMIUM” : diffPct < -0.5 ? “PERP_DISCOUNT” : “NEUTRAL”,
+label:      diffPct >  0.5 ? “Futures Premium — Bulls in control”
+: diffPct < -0.5 ? “Futures Discount — Bears in control”
+: “Spot/Perp Aligned”,
+severity:   Math.abs(diffPct) > 2 ? “HIGH” : Math.abs(diffPct) > 0.5 ? “MODERATE” : “LOW”,
+};
+});
+return spreads;
+}
+
+function computeMarketMode(spot, perps, sentiment) {
+const gp = t => perps?.[t] || {};
+const gs = t => spot?.[t]  || {};
+const btcF   = gp(“BTC”).funding    || 0;
+const ethF   = gp(“ETH”).funding    || 0;
+const btcCh  = gp(“BTC”).change24h  || 0;
+const ethCh  = gp(“ETH”).change24h  || 0;
+const solCh  = gp(“SOL”).change24h  || 0;
+const nvdaCh = gs(“NVDA”).change24h || gp(“NVDA”).change24h || 0;
+const mstrCh = gs(“MSTR”).change24h || gp(“MSTR”).change24h || 0;
+const xauCh  = gs(“XAU”).change24h  || gp(“XAU”).change24h  || 0;
+const oilCh  = gs(“OIL”).change24h  || gp(“OIL”).change24h  || 0;
+const vix    = gs(“VIX”).price || 20;
+const spyCh  = gs(“SPY”).change24h  || 0;
+
+const vixScore = vix < 16 ? 18 : vix < 22 ? 0 : vix < 30 ? -14 : -24;
+const raw = Math.round(
+50
++ (btcF < -0.0005 ? 12 : btcF > 0.001 ? -15 : 0)
++ (ethF < -0.0005 ?  5 : ethF > 0.001 ?  -7 : 0)
++ btcCh * 3.5 + ethCh * 2.0 + solCh * 1.2
++ nvdaCh * 2.5 + mstrCh * 1.5 + spyCh * 2.0
+- xauCh * 2.0 + oilCh * 0.8
++ vixScore
++ (sentiment.score - 50) * 0.3
+);
+const score  = Math.max(0, Math.min(100, raw));
+const regime = score >= 60 ? “RISK-ON” : score <= 40 ? “RISK-OFF” : “NEUTRAL”;
+
+const cryptoScore = Math.max(0,Math.min(100,Math.round(
+50 + btcCh*4.5 + ethCh*3 + solCh*2
++ (btcF < -0.0005 ? 15 : btcF > 0.001 ? -18 : 0)
++ (sentiment.score - 50) * 0.4
+)));
+const equityScore = Math.max(0,Math.min(100,Math.round(
+50 + nvdaCh*4 + spyCh*3.5 + mstrCh*2 + vixScore*0.8
+)));
+const commScore = Math.max(0,Math.min(100,Math.round(
+50 + xauCh*4 + oilCh*3
+)));
+
+// Cross-asset correlation signals
+const correlations = [];
+if (xauCh > 1.5 && btcCh < 0)
+correlations.push({ signal:“RISK-OFF”, desc:`Gold +${xauCh.toFixed(1)}% while BTC ${btcCh.toFixed(1)}% — flight to safety`, severity:“HIGH” });
+if (xauCh > 1 && spyCh < -0.5)
+correlations.push({ signal:“RISK-OFF”, desc:`Gold rising + equities falling — macro fear`, severity:“HIGH” });
+if (btcF > 0.002 && btcCh > 2)
+correlations.push({ signal:“OVERHEATED”, desc:`BTC funding ${(btcF*100).toFixed(3)}%/hr — longs overextended`, severity:“HIGH” });
+if (btcF < -0.001 && btcCh < -2)
+correlations.push({ signal:“CAPITULATION”, desc:`Negative funding + price drop — squeeze potential`, severity:“MODERATE” });
+if (nvdaCh > 3 && btcCh > 2)
+correlations.push({ signal:“RISK-ON”, desc:`NVDA +${nvdaCh.toFixed(1)}% + BTC +${btcCh.toFixed(1)}% — broad risk appetite`, severity:“MODERATE” });
+if (vix > 25 && spyCh < -1)
+correlations.push({ signal:“RISK-OFF”, desc:`VIX ${vix.toFixed(1)} elevated + SPY down — equity fear`, severity:“HIGH” });
+if (oilCh > 2 && xauCh > 1)
+correlations.push({ signal:“INFLATION”, desc:`Oil +${oilCh.toFixed(1)}% + Gold +${xauCh.toFixed(1)}% — inflation trade active`, severity:“MODERATE” });
+if (mstrCh > btcCh + 3)
+correlations.push({ signal:“BTC_LEVERAGE”, desc:`MSTR +${mstrCh.toFixed(1)}% vs BTC +${btcCh.toFixed(1)}% — leveraged BTC outperforming`, severity:“LOW” });
+
+return {
+score, regime,
+vix: { price: vix, regime: vix < 16 ? “LOW FEAR” : vix < 22 ? “MODERATE” : vix < 30 ? “ELEVATED” : “HIGH FEAR” },
+crypto:      { score:cryptoScore, regime:cryptoScore>=60?“BULLISH”:cryptoScore<=40?“BEARISH”:“NEUTRAL” },
+equities:    { score:equityScore, regime:equityScore>=60?“BULLISH”:equityScore<=40?“BEARISH”:“NEUTRAL” },
+commodities: { score:commScore,   regime:commScore>=60?“BULLISH”:commScore<=40?“BEARISH”:“NEUTRAL”     },
+correlations,
+signals: {
+“BTC Funding”:  btcF > 0.001 ? “BEARISH” : btcF < -0.0005 ? “BULLISH” : “NEUTRAL”,
+“Crypto Trend”: btcCh > 2 ? “BULLISH” : btcCh < -2 ? “BEARISH” : “NEUTRAL”,
+“Equity Trend”: nvdaCh > 1.5 ? “BULLISH” : nvdaCh < -1.5 ? “BEARISH” : “NEUTRAL”,
+“SPY Trend”:    spyCh > 1 ? “BULLISH” : spyCh < -1 ? “BEARISH” : “NEUTRAL”,
+“Gold”:         xauCh > 1 ? “RISK-OFF” : xauCh < -1 ? “RISK-ON” : “NEUTRAL”,
+“Oil”:          oilCh > 1.5 ? “BULLISH” : oilCh < -1.5 ? “BEARISH” : “NEUTRAL”,
+“VIX”:          vix < 16 ? “LOW FEAR” : vix < 22 ? “MODERATE” : vix < 30 ? “ELEVATED” : “HIGH FEAR”,
+“Social”:       sentiment.label,
+},
+};
+}
+
+function generateAlerts(spot, perps, spreads, marketMode, prevMode) {
+const alerts = [];
+const ts = new Date().toISOString();
+// Funding spikes
+[“BTC”,“ETH”,“SOL”].forEach(t => {
+const f = perps?.[t]?.funding || 0;
+if (Math.abs(f) > 0.003) alerts.push({
+id:`funding_${t}_${Date.now()}`, type:f>0?“warning”:“opportunity”,
+asset:t, category:“FUNDING”, severity:Math.abs(f)>0.005?“HIGH”:“MODERATE”,
+title:`${t} Funding ${f>0?"Spike":"Negative"}`,
+msg:`${t} funding ${(f*100).toFixed(4)}%/hr — ${f>0?"longs overextended":"squeeze potential"}`,
+ts,
+});
+});
+// Spread anomalies
+Object.entries(spreads||{}).forEach(([ticker, s]) => {
+if (s.severity === “HIGH”) alerts.push({
+id:`spread_${ticker}_${Date.now()}`, type:s.spreadPct>0?“info”:“warning”,
+asset:ticker, category:“SPREAD”, severity:“HIGH”,
+title:`${ticker} Futures ${s.spreadPct>0?"Premium":"Discount"}`,
+msg:`${ticker} perp ${s.spreadPct>0?"+":""}${s.spreadPct.toFixed(2)}% vs spot — ${s.label}`,
+ts,
+});
+});
+// Regime change
+if (prevMode?.regime && prevMode.regime !== marketMode.regime) alerts.push({
+id:`regime_${Date.now()}`, type:marketMode.regime===“RISK-ON”?“success”:“warning”,
+asset:“MARKET”, category:“REGIME”, severity:“HIGH”,
+title:`Mode: ${prevMode.regime} → ${marketMode.regime}`,
+msg:`CLVR Market Mode shifted to ${marketMode.regime} (${marketMode.score}%)`,
+ts,
+});
+// High correlations
+marketMode.correlations?.filter(c=>c.severity===“HIGH”).forEach((c,i) => alerts.push({
+id:`corr_${i}_${Date.now()}`, type:c.signal===“RISK-ON”?“success”:“warning”,
+asset:“CROSS-ASSET”, category:“CORRELATION”, severity:“HIGH”,
+title:c.signal.replace(”_”,” “), msg:c.desc, ts,
+}));
+return alerts;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MORNING BRIEF BUILDER
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildMorningBrief(state) {
+const { spot, perps, spreads, marketMode, sentiment, discoveredAssets } = state;
+const gp = t => perps?.[t] || {};
+const gs = t => spot?.[t]  || {};
+
+const allEquities    = Object.values(discoveredAssets||{}).filter(a=>a.class===“equity”);
+const allCommodities = Object.values(discoveredAssets||{}).filter(a=>a.class===“commodity”);
+const allCrypto      = Object.values(discoveredAssets||{}).filter(a=>a.class===“crypto”);
+
+const topMovers = […allEquities, …allCommodities]
+.map(a => ({ …a, change:gs(a.ticker).change24h||gp(a.ticker).change24h||0 }))
+.filter(a => Math.abs(a.change) > 0.5)
+.sort((a,b) => Math.abs(b.change)-Math.abs(a.change)).slice(0,6);
+
+const cryptoMovers = allCrypto
+.map(a => ({ …a, change:gp(a.ticker).change24h||0 }))
+.filter(a => gp(a.ticker).price > 0)
+.sort((a,b) => Math.abs(b.change)-Math.abs(a.change)).slice(0,5);
+
+const topSpreads = Object.entries(spreads||{})
+.filter(([,s])=>Math.abs(s.spreadPct)>0.3)
+.sort(([,a],[,b])=>Math.abs(b.spreadPct)-Math.abs(a.spreadPct))
+.slice(0,4).map(([ticker,s])=>({ticker,…s}));
+
+return {
+date:         new Date().toLocaleDateString(“en-US”,{weekday:“long”,year:“numeric”,month:“long”,day:“numeric”}),
+regime:       marketMode?.regime,
+regimeScore:  marketMode?.score,
+vix:          marketMode?.vix,
+topMovers, cryptoMovers, topSpreads,
+correlations: marketMode?.correlations || [],
+sentiment,
+totalMarkets: Object.keys(perps||{}).length,
+btc:  { price:gp(“BTC”).price, change:gp(“BTC”).change24h, funding:gp(“BTC”).funding },
+eth:  { price:gp(“ETH”).price, change:gp(“ETH”).change24h, funding:gp(“ETH”).funding },
+gold: { spot:gs(“XAU”).price, perp:gp(“XAU”).price, change:gs(“XAU”).change24h||gp(“XAU”).change24h },
+oil:  { spot:gs(“OIL”).price, perp:gp(“OIL”).price, change:gs(“OIL”).change24h||gp(“OIL”).change24h },
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE STORE
+// ─────────────────────────────────────────────────────────────────────────────
+const STORE = {
+spot:             {},
+perps:            {},
+spreads:          {},
+marketMode:       null,
+sentiment:        { score:50, label:“MIXED”, headlines:[] },
+alerts:           [],
+discoveredAssets: {},   // all assets discovered from HL API
+byClass:          { crypto:[], equity:[], commodity:[] },
+loading:          true,
+fetching:         false,
+lastUpdate:       null,
+TTL:              15000,
+listeners:        new Set(),
+
+isStale() { return !this.lastUpdate || (Date.now()-this.lastUpdate)>this.TTL; },
+subscribe(fn) { this.listeners.add(fn); return ()=>this.listeners.delete(fn); },
+snapshot() {
+return {
+spot:this.spot, perps:this.perps, spreads:this.spreads,
+marketMode:this.marketMode, sentiment:this.sentiment,
+alerts:this.alerts, discoveredAssets:this.discoveredAssets,
+byClass:this.byClass, loading:this.loading, lastUpdate:this.lastUpdate,
+};
+},
+notify() { const s=this.snapshot(); this.listeners.forEach(fn=>fn(s)); },
+
+async refresh() {
+if (this.fetching) return;
+this.fetching = true;
+const prevMode = this.marketMode;
+try {
+// Fetch perps first to discover all assets
+const perpResult = await fetchAllPerps();
+this.perps           = perpResult.prices;
+this.discoveredAssets= perpResult.assets;
+this.byClass         = perpResult.byClass;
+
+```
+  // Fetch spot + sentiment in parallel
+  const [spot, sentiment] = await Promise.all([
+    fetchSpotForAssets(perpResult.assets),
+    fetchSentiment(),
+  ]);
+  this.spot       = spot;
+  this.sentiment  = sentiment;
+  this.spreads    = computeSpreads(spot, this.perps, this.discoveredAssets);
+  this.marketMode = computeMarketMode(spot, this.perps, sentiment);
+
+  const newAlerts = generateAlerts(spot, this.perps, this.spreads, this.marketMode, prevMode);
+  if (newAlerts.length) {
+    this.alerts = [...newAlerts, ...this.alerts].slice(0,100);
+    if ("Notification" in window && Notification.permission==="granted") {
+      newAlerts.filter(a=>a.severity==="HIGH").forEach(a=>{
+        new Notification(`CLVRQuant · ${a.title}`,{body:a.msg,icon:"/favicon.ico"});
+      });
+    }
+  }
+  this.loading    = false;
+  this.lastUpdate = Date.now();
+  this.notify();
+} catch(e) {
+  console.error("[MarketDataStore]",e);
+} finally {
+  this.fetching = false;
+}
+```
+
+},
+
+perpPx(t)    { return this.perps?.[t]?.price        || 0; },
+spotPx(t)    { return this.spot?.[t]?.price         || 0; },
+bestPx(t)    {
+const cls = this.discoveredAssets?.[t]?.class;
+if (cls === “crypto”) return this.perps?.[t]?.price || 0;
+return this.spot?.[t]?.price || this.perps?.[t]?.price || 0;
+},
+funding(t)   { return this.perps?.[t]?.funding      || 0; },
+oi(t)        { return this.perps?.[t]?.openInterest || 0; },
+};
+
+let _started = false;
+function startRefreshLoop() {
+if (_started) return;
+_started = true;
+STORE.refresh();
+setInterval(()=>{ if(STORE.isStale()) STORE.refresh(); },5000);
+if (“Notification” in window && Notification.permission===“default”) {
+Notification.requestPermission();
+}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REACT HOOK
+// ─────────────────────────────────────────────────────────────────────────────
+export function useMarketData() {
+const [state, setState] = useState(STORE.snapshot());
+useEffect(() => {
+startRefreshLoop();
+if (!STORE.loading) setState(STORE.snapshot());
+const unsub = STORE.subscribe(setState);
+return unsub;
+}, []);
+
+return {
+…state,
+spotPx:    t => state.spot?.[t]?.price        || 0,
+perpPx:    t => state.perps?.[t]?.price        || 0,
+funding:   t => state.perps?.[t]?.funding      || 0,
+oi:        t => state.perps?.[t]?.openInterest || 0,
+bestPx:    t => {
+const cls = state.discoveredAssets?.[t]?.class;
+if (cls===“crypto”) return state.perps?.[t]?.price || 0;
+return state.spot?.[t]?.price || state.perps?.[t]?.price || 0;
+},
+spread:    t => state.spreads?.[t] || null,
+getMeta:   t => state.discoveredAssets?.[t] || { ticker:t, name:t, icon:“◆”, class:“crypto” },
+morningBrief: () => buildMorningBrief(state),
+refresh:      () => STORE.refresh(),
+dismissAlert: id => { STORE.alerts=STORE.alerts.filter(a=>a.id!==id); STORE.notify(); },
+};
+}
+
+export { STORE as MarketStore };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED FORMATTERS
+// ─────────────────────────────────────────────────────────────────────────────
+export function fmtPrice(p) {
+if (!p || p===0) return “—”;
+if (p>=10000) return `$${p.toFixed(0)}`;
+if (p>=1000)  return `$${p.toFixed(1)}`;
+if (p>=100)   return `$${p.toFixed(2)}`;
+if (p>=10)    return `$${p.toFixed(2)}`;
+if (p>=1)     return `$${p.toFixed(4)}`;
+return `$${p.toFixed(5)}`;
+}
+export function fmtChange(c) {
+if (c==null) return “—”;
+return `${c>0?"+":""}${c.toFixed(2)}%`;
+}
+export function fmtFunding(f) {
+if (f==null) return “—”;
+return `${(f*100).toFixed(4)}%`;
+}
+export function changeColor(c, invert=false) {
+if (c==null) return “#f59e0b”;
+const up=invert?”#ff2d55”:”#00ff88”, dn=invert?”#00ff88”:”#ff2d55”;
+return c>0.01?up:c<-0.01?dn:”#f59e0b”;
+}
+export function sigColor(s) {
+if (!s) return “#3a4560”;
+const u=s.toUpperCase();
+if ([“BULLISH”,“RISK-ON”,“LOW FEAR”,“RISK_ON”,“CAPITULATION”,“INFLATION”,“BTC_LEVERAGE”].some(x=>u.includes(x))) return “#00ff88”;
+if ([“NEUTRAL”,“MODERATE”,“MIXED”,“ALIGNED”].some(x=>u===x||u.includes(x))) return “#f59e0b”;
+if ([“BEARISH”,“RISK-OFF”,“HIGH FEAR”,“OVERHEATED”,“RISK_OFF”,“ELEVATED”].some(x=>u.includes(x))) return “#ff2d55”;
+return “#6b7a99”;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLATILITY ENGINE
+// Computed from live data already in the store — zero extra API calls.
+//
+// Method: intraday range vs asset-class baseline
+//   ratio = |change24h| / typicalDailyRange[class]
+//
+// Baselines (what a “normal” day looks like per class):
+//   Crypto:      4%   (BTC/ETH average 2-3%, alts more)
+//   Equities:    2%   (stocks average 1-2%)
+//   Commodities: 1.5% (gold/oil move less)
+//
+// Ratio → label:
+//   < 0.5x  → LOW
+//   0.5–1.5x → MODERATE
+//   1.5–2.5x → HIGH
+//   > 2.5x  → EXTREME
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VOL_BASELINE = {
+crypto:    4.0,
+equity:    2.0,
+commodity: 1.5,
+};
+
+const VOL_TIERS = [
+{ label:“EXTREME”, min:2.5, color:”#ff2d55”, glow:“255,45,85”   },
+{ label:“HIGH”,    min:1.5, color:”#f87171”, glow:“248,113,113” },
+{ label:“MODERATE”,min:0.5, color:”#f59e0b”, glow:“245,158,11”  },
+{ label:“LOW”,     min:0,   color:”#4ade80”, glow:“74,222,128”  },
+];
+
+export function computeVolatility(ticker, perpData, assetClass) {
+const change = perpData?.change24h;
+if (change == null || !perpData?.price) return null;
+
+const rangePct = Math.abs(change);
+const baseline = VOL_BASELINE[assetClass] || VOL_BASELINE.crypto;
+const ratio    = rangePct / baseline;
+const tier     = VOL_TIERS.find(t => ratio >= t.min) || VOL_TIERS[3];
+
+// Smooth bar width within each tier band
+let barWidth = 18;
+if (tier.label === “LOW”)      barWidth = Math.round(4 + 14 * Math.min(ratio / 0.5, 1));
+if (tier.label === “MODERATE”) barWidth = Math.round(18 + 27 * ((ratio - 0.5) / 1.0));
+if (tier.label === “HIGH”)     barWidth = Math.round(45 + 30 * ((ratio - 1.5) / 1.0));
+if (tier.label === “EXTREME”)  barWidth = Math.min(100, Math.round(75 + 25 * ((ratio - 2.5) / 1.5)));
+
+return {
+label:    tier.label,
+color:    tier.color,
+glow:     tier.glow,
+barWidth: Math.max(4, Math.min(100, barWidth)),
+ratio:    parseFloat(ratio.toFixed(2)),
+rangePct: parseFloat(rangePct.toFixed(2)),
+explanation:
+tier.label === “EXTREME” ? “Unusually large moves — extra caution with position sizing”
+: tier.label === “HIGH”    ? “Moving significantly today — wider stops recommended”
+: tier.label === “MODERATE”? “Normal conditions — typical daily movement”
+:                            “Quiet market — moving less than usual”,
+};
+}
+
+// VolatilityBar — inline React component, drop into any price row
+// Usage:
+//   import { computeVolatility, VolatilityBar } from ‘../store/MarketDataStore’;
+//   const vol = computeVolatility(ticker, perps[ticker], assetClass);
+//   <VolatilityBar vol={vol} />
+//   <VolatilityBar vol={vol} expanded />   ← for detail panel
+
+export function VolatilityBar({ vol, expanded = false }) {
+if (!vol) return null;
+const mono = “‘IBM Plex Mono’, monospace”;
+
+if (!expanded) {
+// ── Compact inline row version ───────────────────────────────────────────
+return (
+<div style={{ display:“flex”, alignItems:“center”, gap:5, flexShrink:0 }}>
+<div style={{
+width:36, height:3, borderRadius:2,
+background:“rgba(255,255,255,0.06)”, overflow:“hidden”,
+}}>
+<div style={{
+width:`${vol.barWidth}%`, height:“100%”,
+background:vol.color, borderRadius:2,
+boxShadow:`0 0 4px rgba(${vol.glow},0.55)`,
+transition:“width 0.9s ease”,
+}}/>
+</div>
+<span style={{
+fontSize:7, fontWeight:700, fontFamily:mono,
+color:vol.color, letterSpacing:0.8, opacity:0.9,
+minWidth:48,
+}}>
+{vol.label}
+</span>
+</div>
+);
+}
+
+// ── Expanded detail panel version ─────────────────────────────────────────
+return (
+<div style={{
+background:`rgba(${vol.glow},0.05)`,
+border:`1px solid rgba(${vol.glow},0.18)`,
+borderRadius:9, padding:“11px 13px”,
+}}>
+<div style={{ display:“flex”, justifyContent:“space-between”, alignItems:“center”, marginBottom:7 }}>
+<span style={{ fontSize:8, color:”#3a4560”, letterSpacing:1.5, fontFamily:mono }}>VOLATILITY</span>
+<span style={{ fontSize:11, fontWeight:800, color:vol.color, fontFamily:mono, letterSpacing:1 }}>
+{vol.label}
+</span>
+</div>
+<div style={{ height:5, background:“rgba(255,255,255,0.06)”, borderRadius:3, marginBottom:8, overflow:“hidden” }}>
+<div style={{
+width:`${vol.barWidth}%`, height:“100%”, borderRadius:3,
+background:`linear-gradient(90deg,rgba(${vol.glow},0.35),${vol.color})`,
+boxShadow:`0 0 7px rgba(${vol.glow},0.45)`,
+transition:“width 0.9s ease”,
+}}/>
+</div>
+<div style={{ display:“flex”, justifyContent:“space-between”, marginBottom:6 }}>
+<span style={{ fontSize:8, color:”#6b7a99”, fontFamily:mono }}>
+24h range <span style={{ color:vol.color }}>{vol.rangePct.toFixed(2)}%</span>
+</span>
+<span style={{ fontSize:8, color:”#3a4560”, fontFamily:mono }}>
+{vol.ratio.toFixed(1)}× typical
+</span>
+</div>
+<div style={{ fontSize:8, color:”#6b7a99”, fontFamily:mono, lineHeight:1.6 }}>
+{vol.explanation}
+</div>
+</div>
+);
+}

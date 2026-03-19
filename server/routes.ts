@@ -2100,7 +2100,15 @@ export async function registerRoutes(
   });
 
   app.post("/api/admin/send-apology-brief", async (req, res) => {
+    // Owner-only: must be logged in as the owner account
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
     try {
+      const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+      const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+      if (userEmail !== "mikeclaver@gmail.com") {
+        return res.status(403).json({ error: "Owner only" });
+      }
       const { sendApologyBriefEmails } = await import("./dailyBrief");
       sendApologyBriefEmails().catch((e: any) => console.log("[apology-brief] Error:", e.message));
       res.json({ ok: true, message: "Apology brief sending started — check server logs" });
