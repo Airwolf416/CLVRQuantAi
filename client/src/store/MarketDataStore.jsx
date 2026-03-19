@@ -251,11 +251,14 @@ async function fetchHLDex(dex) {
 
 async function fetchAllHL() {
   const [cryptoPerps, equityPerps, commodityPerps] = await Promise.all([
-    fetchHLDex("crypto"),
-    fetchHLDex("xyz"),
-    fetchHLDex("flx"),
+    fetchHLDex("crypto"),  // HL main exchange — authoritative for ALL crypto
+    fetchHLDex("xyz"),     // equity synthetics (TSLA, NVDA, AAPL…)
+    fetchHLDex("flx"),     // commodity synthetics (GOLD, OIL, GAS…)
   ]);
-  return { ...cryptoPerps, ...equityPerps, ...commodityPerps };
+  // Equity + commodity dex data first, then cryptoPerps LAST so it overwrites
+  // any synthetic flx tokens (flx:BTC=$90K) with real main-exchange prices (BTC=$68K).
+  // The main HL exchange is the single source of truth for crypto perpetuals.
+  return { ...equityPerps, ...commodityPerps, ...cryptoPerps };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
