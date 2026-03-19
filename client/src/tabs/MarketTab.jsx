@@ -64,8 +64,18 @@ function fmtChg(v) {
   return (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
 }
 function fmtFund(v) {
-  if (!v || isNaN(v)) return null;
-  return (Number(v) >= 0 ? "+" : "") + Number(v).toFixed(4) + "% /8h";
+  if (v == null || isNaN(v) || v === 0) return null;
+  // HL funding is a raw decimal (e.g. -0.0000057 = -0.000570%/8h); multiply ×100 for display
+  const pct = Number(v) * 100;
+  return (pct >= 0 ? "+" : "") + pct.toFixed(4) + "%/8h";
+}
+function fmtOI(openInterest, price) {
+  if (!openInterest || !price) return null;
+  const usd = openInterest * price;
+  if (usd >= 1e9) return "$" + (usd / 1e9).toFixed(1) + "B";
+  if (usd >= 1e6) return "$" + (usd / 1e6).toFixed(0) + "M";
+  if (usd >= 1e3) return "$" + (usd / 1e3).toFixed(0) + "K";
+  return null;
 }
 
 // ── Bloomberg-style blink keyframes (injected once) ──────────────────────────
@@ -187,13 +197,14 @@ function PerpRow({ sym, label, asset }) {
   }
   const chgN = Number(asset.change24h) || 0;
   const isUp = chgN >= 0;
-  const fund = fmtFund(asset.funding || asset.fundingRate);
+  const fund = fmtFund(asset.funding ?? asset.fundingRate);
+  const oi   = fmtOI(asset.openInterest, asset.price);
   return (
     <div data-testid={`perp-row-${sym}`} style={{ borderBottom: `1px solid ${C.border}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 10px 4px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text }}>{label || sym}</span>
-          <span style={{ fontSize: 12, fontWeight: 900, color: isUp ? C.green : C.red }}>{isUp ? "↑" : "↓"}</span>
+          <span style={{ fontSize: 14, fontWeight: 900, color: isUp ? C.green : C.red, display:"inline-block" }}>{isUp ? "↑" : "↓"}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: isUp ? C.green : C.red }}>
@@ -205,10 +216,14 @@ function PerpRow({ sym, label, asset }) {
           <Badge label="HL" color={C.cyan} />
         </div>
       </div>
-      {(fund || asset.openInterest > 1000) && (
+      {(fund || oi) && (
         <div style={{ padding: "0 10px 8px", display: "flex", gap: 12 }}>
-          {fund && <span style={{ fontFamily: MONO, fontSize: 8, color: Number(asset.funding || asset.fundingRate) >= 0 ? C.green : C.red }}>FUND {fund}</span>}
-          {asset.openInterest > 1000 && <span style={{ fontFamily: MONO, fontSize: 8, color: C.muted }}>OI ${(asset.openInterest / 1e6).toFixed(0)}M</span>}
+          {fund && (
+            <span style={{ fontFamily: MONO, fontSize: 8, color: Number(asset.funding ?? asset.fundingRate) >= 0 ? C.green : C.red }}>
+              FUND {fund}
+            </span>
+          )}
+          {oi && <span style={{ fontFamily: MONO, fontSize: 8, color: C.muted }}>OI {oi}</span>}
         </div>
       )}
     </div>
