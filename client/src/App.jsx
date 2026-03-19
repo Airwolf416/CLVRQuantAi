@@ -14,6 +14,7 @@ import QRScanner from "./QRScanner";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
+import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -819,6 +820,8 @@ function Dashboard({user,setUser}){
     refresh:storeRefresh,
   } = useMarketData();
 
+  const { aiContext:twAiContext } = useTwitterIntelligence();
+
   const [accessCodeInput,setAccessCodeInput]=useState("");
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
   const [showQRScanner,setShowQRScanner]=useState(false);
@@ -1378,7 +1381,7 @@ CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap}
-${macroAiSnap}${polySnap}
+${macroAiSnap}${polySnap}${twAiContext||""}
 
 ━━━ YOUR 7-STEP ANALYSIS FRAMEWORK ━━━
 Complete ALL steps mentally before generating any trade recommendation.
@@ -1503,7 +1506,7 @@ CRYPTO (${CRYPTO_SYMS.length} tokens): ${cryptoSnap}
 EQUITIES (${EQUITY_SYMS.length} stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (${FOREX_SYMS.length} pairs): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap2}
-${macroSnap2}
+${macroSnap2}${twAiContext||""}
 
 CONFLUENCE ENGINE:
 Score: ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Win Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
@@ -1948,6 +1951,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
           <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
+          <TwitterMarketModeStrip />
 
           {regimeData&&<>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
@@ -2360,6 +2364,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             </div>
           </>}
 
+          <TwitterMorningBrief />
+
           {/* Subscribe info */}
           <div style={{...panel,border:`1px solid rgba(201,168,76,.18)`}}>
             <div style={{...ph,background:"rgba(201,168,76,.04)",borderBottom:`1px solid rgba(201,168,76,.12)`}}>
@@ -2640,6 +2646,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 {aiLoading?"QuantBrain Analyzing...":`Get Top 4 ${aiTimeframe==="today"?"Today's":aiTimeframe==="midterm"?"Mid-Term":"Long-Term"} Trade Ideas ✦`}
               </button>
               {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>}
+              <TwitterSignalPanel ticker={aiInput.match(/\b(BTC|ETH|SOL|NVDA|TSLA|AAPL|MSFT|MSTR|META|PLTR|AMD|COIN|DOGE|XAU|XAG|OIL|EURUSD|USDJPY|GBPUSD|HYPE|TRUMP|AVAX|LINK|ARB|OP|WIF|BONK|JUP|WTI|XAUUSD)/i)?.[1]?.toUpperCase()||"BTC"} />
               {liveSignals.length>0&&<div style={{marginTop:16}}>
                 <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.18em",marginBottom:10}}>AI TRADE REASONINGS · {i18n.masterScore}</div>
                 {liveSignals.filter(s=>s.reasoning&&s.reasoning.length>0).slice(0,5).map(sig=>(
