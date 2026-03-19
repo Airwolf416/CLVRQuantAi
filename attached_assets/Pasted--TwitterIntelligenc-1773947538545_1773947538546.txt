@@ -1,0 +1,844 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// TwitterIntelligence.js  —  CLVRQuant AI · Social Intelligence Layer
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// COPY THIS ENTIRE FILE TO: src/store/TwitterIntelligence.js
+//
+// REPLIT SECRETS — add ONE new key:
+//   REACT_APP_RAPIDAPI_KEY = your_rapidapi_key_from_twitter135
+//   (Get it from rapidapi.com → Twitter135 API → Subscribe to Pro $10/mo)
+//
+// ALL OTHER KEYS ALREADY IN YOUR APP — nothing else needed:
+//   REACT_APP_FINNHUB_KEY      ✓ already set
+//   REACT_APP_CRYPTOPANIC_KEY  ✓ already set
+//   ANTHROPIC_API_KEY          ✓ already set
+//
+// REFRESH RATE: every 4 minutes
+//   4 API calls × 15 cycles/hour × 24h × 30 days = ~43,200 requests/month
+//   Well within Twitter135 Pro plan (100,000/month at $10/mo)
+//
+// FEEDS:
+//   → Signals Tab        via <TwitterSignalPanel ticker="BTC" />
+//   → Morning Brief Tab  via <TwitterMorningBrief />
+//   → Market Mode Strip  via <TwitterMarketModeStrip />
+//   → AI prompts         via buildTwitterContext(data) or buildAssetTwitterContext(data, ticker)
+//
+// HOW TO USE IN EACH TAB — add these imports at the top:
+//
+//   // Signals Tab:
+//   import { TwitterSignalPanel } from ‘./TwitterIntelligence’;
+//   <TwitterSignalPanel ticker={selectedAsset} />
+//
+//   // Morning Brief Tab:
+//   import { TwitterMorningBrief } from ‘./TwitterIntelligence’;
+//   <TwitterMorningBrief />
+//
+//   // Market Tab:
+//   import { TwitterMarketModeStrip } from ‘./TwitterIntelligence’;
+//   <TwitterMarketModeStrip />
+//
+//   // AI prompt injection:
+//   import { useTwitterIntelligence, buildAssetTwitterContext } from ‘./TwitterIntelligence’;
+//   const { aiContext } = useTwitterIntelligence();
+//   // Then add aiContext to your AI prompt string
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+import { useState, useEffect } from “react”;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+const RAPIDAPI_KEY  = typeof window !== “undefined”
+? (window?.CLVR_CONFIG?.RAPIDAPI_KEY || process.env?.REACT_APP_RAPIDAPI_KEY || “”)
+: “”;
+const RAPIDAPI_HOST = “twitter135.p.rapidapi.com”;
+const BASE_URL      = `https://${RAPIDAPI_HOST}`;
+const HEADERS       = {
+“x-rapidapi-key”:  RAPIDAPI_KEY,
+“x-rapidapi-host”: RAPIDAPI_HOST,
+};
+
+const REFRESH_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes = ~43,200 req/month
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WHALE ACCOUNTS — key market influencers to monitor
+// ─────────────────────────────────────────────────────────────────────────────
+const WHALE_ACCOUNTS = [
+// Crypto heavyweights
+{ handle:“elonmusk”,        name:“Elon Musk”,          category:“crypto”,    weight:10 },
+{ handle:“saylor”,          name:“Michael Saylor”,     category:“crypto”,    weight:9  },
+{ handle:“cz_binance”,      name:“CZ Binance”,         category:“crypto”,    weight:8  },
+{ handle:“VitalikButerin”,  name:“Vitalik Buterin”,    category:“crypto”,    weight:8  },
+{ handle:“brian_armstrong”, name:“Brian Armstrong”,    category:“crypto”,    weight:7  },
+{ handle:“tyler”,           name:“Tyler Winklevoss”,   category:“crypto”,    weight:7  },
+{ handle:“cameron”,         name:“Cameron Winklevoss”, category:“crypto”,    weight:6  },
+{ handle:“aantonop”,        name:“Andreas Antonop.”,   category:“crypto”,    weight:6  },
+// Macro / equities
+{ handle:“chamath”,         name:“Chamath Palihap.”,   category:“macro”,     weight:8  },
+{ handle:“RaoulGMI”,        name:“Raoul Pal”,          category:“macro”,     weight:8  },
+{ handle:“PeterSchiff”,     name:“Peter Schiff”,       category:“commodity”, weight:7  },
+{ handle:“federalreserve”,  name:“Federal Reserve”,    category:“macro”,     weight:9  },
+{ handle:“KitcoNewsNOW”,    name:“Kitco News”,         category:“commodity”, weight:7  },
+{ handle:“ZeroHedge”,       name:“ZeroHedge”,          category:“macro”,     weight:6  },
+];
+
+// Tickers tracked for mention volume
+const TRACKED_TICKERS = [
+“$BTC”,”$ETH”,”$SOL”,”$DOGE”,”$WIF”,”$AVAX”,
+“$NVDA”,”$TSLA”,”$AAPL”,”$MSFT”,”$MSTR”,”$COIN”,”$PLTR”,”$META”,”$AMD”,
+“$GOLD”,”$OIL”,”$SILVER”,
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+async function twitterGet(endpoint, params = {}) {
+if (!RAPIDAPI_KEY) return null;
+try {
+const url = new URL(`${BASE_URL}${endpoint}`);
+Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+const r = await fetch(url.toString(), { headers: HEADERS });
+if (!r.ok) return null;
+return await r.json();
+} catch { return null; }
+}
+
+// Safely extract tweets from any Twitter135 response shape
+function extractTweets(data) {
+return (
+data?.result?.timeline?.instructions
+?.flatMap(i => i.entries || [])
+?.filter(e => e.content?.itemContent?.tweet_results?.result)
+?.map(e => {
+const t    = e.content.itemContent.tweet_results.result;
+const user = t.core?.user_results?.result?.legacy;
+return {
+id:        t.legacy?.id_str || “”,
+text:      t.legacy?.full_text || “”,
+likes:     t.legacy?.favorite_count || 0,
+retweets:  t.legacy?.retweet_count  || 0,
+createdAt: t.legacy?.created_at     || “”,
+author:    user?.name               || “Unknown”,
+handle:    user?.screen_name        || “”,
+};
+}) || []
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SENTIMENT CLASSIFIER
+// Rule-based — no extra API call needed
+// ─────────────────────────────────────────────────────────────────────────────
+const BULLISH_WORDS = [
+“bull”,“bullish”,“moon”,“mooning”,“pump”,“rally”,“buy”,“long”,“breakout”,
+“ath”,“all time high”,“surge”,“rip”,“explode”,“🚀”,“🔥”,“📈”,“🟢”,
+“accumulate”,“hodl”,“hold”,“bullrun”,“up only”,“send it”,“massive”,
+“positive”,“gain”,“profit”,“green”,“higher”,“recovery”,“bounce”,
+];
+const BEARISH_WORDS = [
+“bear”,“bearish”,“dump”,“crash”,“sell”,“short”,“collapse”,“drop”,“fall”,
+“rug”,“scam”,“dead”,“rekt”,“liquidated”,“📉”,“🔴”,“🩸”,“down”,
+“lower”,“recession”,“fear”,“panic”,“correction”,“plunge”,“tank”,
+“negative”,“loss”,“red”,“warning”,“danger”,“caution”,“bubble”,
+];
+
+function classifySentiment(text) {
+if (!text) return “neutral”;
+const t = text.toLowerCase();
+let bull = 0, bear = 0;
+BULLISH_WORDS.forEach(w => { if (t.includes(w)) bull++; });
+BEARISH_WORDS.forEach(w => { if (t.includes(w)) bear++; });
+if (bull === 0 && bear === 0) return “neutral”;
+if (bull > bear) return “bullish”;
+if (bear > bull) return “bearish”;
+return “neutral”;
+}
+
+// Extract asset tickers mentioned in tweet text
+function extractAssets(text) {
+if (!text) return [];
+const MAP = {
+“bitcoin”:“BTC”,“btc”:“BTC”,”$btc”:“BTC”,
+“ethereum”:“ETH”,“eth”:“ETH”,”$eth”:“ETH”,
+“solana”:“SOL”,“sol”:“SOL”,”$sol”:“SOL”,
+“dogecoin”:“DOGE”,“doge”:“DOGE”,”$doge”:“DOGE”,
+“nvidia”:“NVDA”,“nvda”:“NVDA”,”$nvda”:“NVDA”,
+“tesla”:“TSLA”,“tsla”:“TSLA”,”$tsla”:“TSLA”,
+“apple”:“AAPL”,“aapl”:“AAPL”,”$aapl”:“AAPL”,
+“microsoft”:“MSFT”,“msft”:“MSFT”,”$msft”:“MSFT”,
+“microstrategy”:“MSTR”,“mstr”:“MSTR”,”$mstr”:“MSTR”,
+“coinbase”:“COIN”,”$coin”:“COIN”,
+“palantir”:“PLTR”,“pltr”:“PLTR”,”$pltr”:“PLTR”,
+“meta”:“META”,”$meta”:“META”,
+“amd”:“AMD”,”$amd”:“AMD”,
+“gold”:“XAU”,“xau”:“XAU”,”$gold”:“XAU”,
+“silver”:“XAG”,“xag”:“XAG”,”$silver”:“XAG”,
+“oil”:“OIL”,“crude”:“OIL”,”$oil”:“OIL”,
+};
+const t = text.toLowerCase();
+const found = [];
+Object.entries(MAP).forEach(([k, v]) => {
+if (t.includes(k) && !found.includes(v)) found.push(v);
+});
+return found;
+}
+
+function isWithinHours(dateStr, hours) {
+if (!dateStr) return false;
+const ts = new Date(dateStr).getTime();
+return !isNaN(ts) && (Date.now() - ts) < hours * 3_600_000;
+}
+
+export function timeAgo(dateStr) {
+if (!dateStr) return “”;
+const diff = Date.now() - new Date(dateStr).getTime();
+const m    = Math.floor(diff / 60000);
+if (m < 1)  return “just now”;
+if (m < 60) return `${m}m ago`;
+const h = Math.floor(m / 60);
+if (h < 24) return `${h}h ago`;
+return `${Math.floor(h / 24)}d ago`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STREAM 1 — Whale account monitoring (top 8 by weight, deduped)
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchWhaleActivity() {
+const top = WHALE_ACCOUNTS
+.filter((w, i, arr) => arr.findIndex(x => x.handle === w.handle) === i)
+.sort((a, b) => b.weight - a.weight)
+.slice(0, 8);
+
+const results = [];
+await Promise.allSettled(top.map(async whale => {
+const data   = await twitterGet(”/UserTweets/”, { username: whale.handle, count:“5” });
+const tweets = extractTweets(data).slice(0, 3);
+if (!tweets.length) return;
+
+```
+const latest   = tweets[0];
+const sentiment = classifySentiment(latest.text);
+results.push({
+  whale,
+  tweet: { ...latest, url:`https://twitter.com/${whale.handle}/status/${latest.id}` },
+  sentiment,
+  isRecent: isWithinHours(latest.createdAt, 4),
+  isViral:  latest.likes > 5000 || latest.retweets > 1000,
+  assets:   extractAssets(latest.text),
+});
+```
+
+}));
+
+return results.sort((a, b) => {
+if (a.isViral  !== b.isViral)  return a.isViral  ? -1 : 1;
+if (a.isRecent !== b.isRecent) return a.isRecent ? -1 : 1;
+return b.whale.weight - a.whale.weight;
+});
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STREAM 2 — Ticker mention volume (top 8 tickers)
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchTickerMentions() {
+const top     = [”$BTC”,”$ETH”,”$SOL”,”$NVDA”,”$TSLA”,”$MSTR”,”$COIN”,”$GOLD”];
+const results = {};
+
+await Promise.allSettled(top.map(async ticker => {
+const data   = await twitterGet(”/SearchV2/”, {
+query: `${ticker} lang:en -is:retweet`,
+count: “25”,
+type:  “Latest”,
+});
+const tweets  = extractTweets(data);
+const recent  = tweets.filter(t => isWithinHours(t.createdAt, 1));
+const bull    = recent.filter(t => classifySentiment(t.text) === “bullish”).length;
+const bear    = recent.filter(t => classifySentiment(t.text) === “bearish”).length;
+const engage  = recent.reduce((s, t) => s + t.likes + t.retweets * 3, 0);
+const score   = recent.length > 0 ? Math.round((bull / recent.length) * 100) : 50;
+
+```
+results[ticker] = {
+  ticker,
+  count1h:         recent.length,
+  bullishCount:    bull,
+  bearishCount:    bear,
+  neutralCount:    recent.length - bull - bear,
+  sentimentScore:  score,
+  totalEngagement: engage,
+  isSpiking:       recent.length > 15,
+  topTweet:        tweets.sort((a, b) => (b.likes + b.retweets) - (a.likes + a.retweets))[0] || null,
+};
+```
+
+}));
+
+return results;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STREAM 3 — Breaking / viral tweets
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchBreakingTweets() {
+const data   = await twitterGet(”/SearchV2/”, {
+query: “crypto market stocks bitcoin breaking lang:en -is:retweet min_faves:100”,
+count: “15”,
+type:  “Latest”,
+});
+return extractTweets(data)
+.filter(t => isWithinHours(t.createdAt, 2))
+.map(t => ({
+…t,
+sentiment: classifySentiment(t.text),
+assets:    extractAssets(t.text),
+isViral:   t.likes > 1000,
+url:       `https://twitter.com/${t.handle}/status/${t.id}`,
+}))
+.sort((a, b) => (b.likes + b.retweets * 3) - (a.likes + a.retweets * 3))
+.slice(0, 6);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STREAM 4 — Overall sentiment score
+// ─────────────────────────────────────────────────────────────────────────────
+async function fetchOverallSentiment() {
+const data   = await twitterGet(”/SearchV2/”, {
+query: “crypto market stocks bitcoin ethereum lang:en -is:retweet”,
+count: “40”,
+type:  “Latest”,
+});
+const tweets = extractTweets(data).filter(t => isWithinHours(t.createdAt, 2));
+const total  = Math.max(tweets.length, 1);
+const bull   = tweets.filter(t => classifySentiment(t.text) === “bullish”).length;
+const bear   = tweets.filter(t => classifySentiment(t.text) === “bearish”).length;
+const score  = Math.round((bull / total) * 100);
+
+// Weighted by engagement — viral tweets count more
+const wBull = tweets.filter(t => classifySentiment(t.text) === “bullish”)
+.reduce((s, t) => s + 1 + Math.log(t.likes + 1), 0);
+const wBear = tweets.filter(t => classifySentiment(t.text) === “bearish”)
+.reduce((s, t) => s + 1 + Math.log(t.likes + 1), 0);
+const wTotal = wBull + wBear + 0.001;
+
+return {
+score,
+weightedScore: Math.round((wBull / wTotal) * 100),
+label:
+score > 65 ? “VERY BULLISH” :
+score > 55 ? “BULLISH”      :
+score < 35 ? “VERY BEARISH” :
+score < 45 ? “BEARISH”      : “NEUTRAL”,
+bullishCount:  bull,
+bearishCount:  bear,
+totalTweets:   tweets.length,
+sampleSize:    `${tweets.length} tweets (last 2h)`,
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MASTER STORE — module-level singleton, 4-minute refresh
+// ─────────────────────────────────────────────────────────────────────────────
+const STORE = {
+data:      null,
+fetching:  false,
+lastFetch: 0,
+listeners: new Set(),
+
+isStale()     { return !this.lastFetch || (Date.now() - this.lastFetch) > REFRESH_INTERVAL_MS; },
+subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+notify()      { this.listeners.forEach(fn => fn(this.data)); },
+
+async refresh() {
+if (this.fetching || !RAPIDAPI_KEY) return;
+this.fetching = true;
+try {
+// Fetch streams in two batches — slight stagger avoids rate limit
+const [whales, sentiment] = await Promise.all([
+fetchWhaleActivity(),
+fetchOverallSentiment(),
+]);
+await new Promise(r => setTimeout(r, 600));
+const [mentions, breaking] = await Promise.all([
+fetchTickerMentions(),
+fetchBreakingTweets(),
+]);
+
+```
+  this.data = {
+    whales, mentions, breaking, sentiment,
+    fetchedAt:    Date.now(),
+    fetchedAtStr: new Date().toLocaleTimeString(),
+  };
+  this.lastFetch = Date.now();
+  this.notify();
+} catch (e) {
+  console.error("[TwitterIntelligence]", e);
+} finally {
+  this.fetching = false;
+}
+```
+
+},
+};
+
+// Auto-refresh loop — starts once globally
+let _started = false;
+function startLoop() {
+if (_started || !RAPIDAPI_KEY) return;
+_started = true;
+STORE.refresh();
+setInterval(() => { if (STORE.isStale()) STORE.refresh(); }, 60_000);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REACT HOOK — import this in any tab
+// ─────────────────────────────────────────────────────────────────────────────
+export function useTwitterIntelligence() {
+const [data,    setData]    = useState(STORE.data);
+const [loading, setLoading] = useState(!STORE.data);
+
+useEffect(() => {
+startLoop();
+if (STORE.data) { setData(STORE.data); setLoading(false); }
+const unsub = STORE.subscribe(d => { setData(d); setLoading(false); });
+return unsub;
+}, []);
+
+return {
+whales:    data?.whales    || [],
+mentions:  data?.mentions  || {},
+breaking:  data?.breaking  || [],
+sentiment: data?.sentiment || { score:50, label:“NEUTRAL”, totalTweets:0 },
+loading,
+hasKey:       !!RAPIDAPI_KEY,
+hasData:      !!data,
+fetchedAtStr: data?.fetchedAtStr || “”,
+timeAgo,
+refresh:      () => STORE.refresh(),
+// Pre-built AI context string — inject directly into AI prompts
+aiContext:    data ? buildTwitterContext(data) : “”,
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI CONTEXT BUILDERS — inject into AI prompts
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Full context — use in Morning Brief and general AI analysis
+export function buildTwitterContext(data) {
+if (!data) return “Twitter/X data unavailable.”;
+const { whales, mentions, breaking, sentiment } = data;
+const lines = [“── TWITTER/X SOCIAL INTELLIGENCE ──”];
+
+lines.push(`Overall Sentiment: ${sentiment.label} (${sentiment.score}% bullish, weighted: ${sentiment.weightedScore}%)`);
+lines.push(`Sample: ${sentiment.sampleSize}`);
+lines.push(””);
+
+const recentWhales = whales.filter(w => w.isRecent);
+if (recentWhales.length) {
+lines.push(“WHALE ACTIVITY (last 4h):”);
+recentWhales.slice(0, 4).forEach(w => {
+lines.push(`  @${w.whale.handle}${w.isViral?" [VIRAL]":""}: "${w.tweet.text.slice(0,120)}"`);
+lines.push(`  → ${w.sentiment.toUpperCase()} | ${w.tweet.likes} likes${w.assets.length?` | ${w.assets.join(”,”)}`:""}`);
+});
+lines.push(””);
+}
+
+const spikes = Object.values(mentions).filter(m => m.isSpiking);
+if (spikes.length) {
+lines.push(“MENTION SPIKES (unusual 1h activity):”);
+spikes.forEach(m => lines.push(`  ${m.ticker}: ${m.count1h} mentions | ${m.sentimentScore}% bullish`));
+lines.push(””);
+}
+
+const normal = Object.values(mentions).filter(m => !m.isSpiking && m.count1h > 0);
+if (normal.length) {
+lines.push(“TICKER MENTIONS (last 1h):”);
+normal.forEach(m => lines.push(`  ${m.ticker}: ${m.count1h} tweets | ${m.sentimentScore}% bullish`));
+lines.push(””);
+}
+
+if (breaking.length) {
+lines.push(“BREAKING / VIRAL TWEETS:”);
+breaking.slice(0, 3).forEach(t => {
+lines.push(`  @${t.handle}: "${t.text.slice(0,100)}"`);
+lines.push(`  → ${t.sentiment.toUpperCase()} | ${t.likes} likes | ${t.assets.join(",")||"general"}`);
+});
+}
+
+lines.push(`[Fetched: ${data.fetchedAtStr} | Refreshes every 4 min | ~43,200 req/mo]`);
+lines.push(“── END TWITTER INTELLIGENCE ──”);
+return lines.join(”\n”);
+}
+
+// Asset-specific context — use in Signals Tab AI prompt
+export function buildAssetTwitterContext(data, ticker) {
+if (!data) return `No Twitter data available for ${ticker}.`;
+const { whales, mentions, breaking, sentiment } = data;
+const lines = [];
+
+const tickerData = mentions[`$${ticker}`] || mentions[ticker];
+if (tickerData) {
+lines.push(`${ticker} Twitter (last 1h): ${tickerData.count1h} mentions | ${tickerData.sentimentScore}% bullish | Bullish:${tickerData.bullishCount} Bearish:${tickerData.bearishCount}`);
+if (tickerData.isSpiking) lines.push(`⚠ MENTION SPIKE — unusually high ${ticker} activity`);
+}
+
+const relWhales = whales.filter(w => w.assets?.includes(ticker) && w.isRecent);
+relWhales.slice(0, 2).forEach(w =>
+lines.push(`@${w.whale.handle}: "${w.tweet.text.slice(0,100)}" → ${w.sentiment.toUpperCase()} (${w.tweet.likes} likes)`)
+);
+
+const relBreaking = breaking.filter(t => t.assets?.includes(ticker));
+relBreaking.slice(0, 2).forEach(t =>
+lines.push(`Breaking @${t.handle}: "${t.text.slice(0,100)}" → ${t.sentiment.toUpperCase()}`)
+);
+
+lines.push(`Overall X mood: ${sentiment.label} (${sentiment.score}%)`);
+return lines.join(”\n”) || `No specific ${ticker} Twitter activity in last 2h.`;
+}
+
+// Morning brief builder — structured data for Morning Brief Tab
+export function buildTwitterMorningSummary(data) {
+if (!data) return null;
+const { whales, mentions, breaking, sentiment } = data;
+const topAsset     = Object.values(mentions).sort((a,b) => b.count1h - a.count1h)[0];
+const mostBullish  = Object.values(mentions).filter(m=>m.count1h>3).sort((a,b)=>b.sentimentScore-a.sentimentScore)[0];
+const mostBearish  = Object.values(mentions).filter(m=>m.count1h>3).sort((a,b)=>a.sentimentScore-b.sentimentScore)[0];
+const viralWhales  = whales.filter(w => w.isViral && w.isRecent);
+const trend        = sentiment.score > 60 ? “IMPROVING” : sentiment.score < 40 ? “DETERIORATING” : “STABLE”;
+return {
+overallScore:     sentiment.score,
+overallLabel:     sentiment.label,
+sentimentTrend:   trend,
+topMentionedAsset:topAsset?.ticker,
+mostBullishAsset: mostBullish?.ticker,
+mostBearishAsset: mostBearish?.ticker,
+viralWhaleCount:  viralWhales.length,
+viralWhales:      viralWhales.slice(0, 2),
+breakingCount:    breaking.length,
+topBreaking:      breaking[0] || null,
+tickerSentiments: Object.fromEntries(Object.entries(mentions).map(([k,v]) => [k, v.sentimentScore])),
+fetchedAt:        data.fetchedAtStr,
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+const mono = “‘IBM Plex Mono’, monospace”;
+
+const sentColor = s =>
+s > 65 ? “#00ff88” : s > 55 ? “#4ade80” : s < 35 ? “#ff2d55” : s < 45 ? “#f87171” : “#f59e0b”;
+
+const sentLabel = s =>
+s > 65 ? “VERY BULLISH” : s > 55 ? “BULLISH” : s < 35 ? “VERY BEARISH” : s < 45 ? “BEARISH” : “NEUTRAL”;
+
+function TweetCard({ tweet, sentiment, whale, isViral, assets, ago }) {
+const col = sentiment === “bullish” ? “0,255,136” : sentiment === “bearish” ? “255,45,85” : “245,158,11”;
+const c   = sentiment === “bullish” ? “#00ff88”   : sentiment === “bearish” ? “#ff2d55”   : “#f59e0b”;
+return (
+<div style={{ background:`rgba(${col},0.04)`, border:`1px solid rgba(${col},0.15)`, borderRadius:9, padding:“10px 12px”, marginBottom:7 }}>
+<div style={{ display:“flex”, justifyContent:“space-between”, alignItems:“center”, marginBottom:5 }}>
+<div style={{ display:“flex”, alignItems:“center”, gap:6 }}>
+<span style={{ fontSize:10, fontWeight:800, color:”#e8e8f0”, fontFamily:mono }}>
+@{whale?.handle || tweet.handle}
+</span>
+{whale && <span style={{ fontSize:8, color:”#6b7a99”, fontFamily:mono }}>{whale.name}</span>}
+{isViral && <span style={{ fontSize:7, color:”#f59e0b”, fontFamily:mono }}>🔥 VIRAL</span>}
+</div>
+<span style={{ fontSize:7, color:”#2a3550”, fontFamily:mono }}>{ago}</span>
+</div>
+<div style={{ fontSize:9, color:”#a0aec0”, fontFamily:mono, lineHeight:1.6, marginBottom:6 }}>
+“{tweet.text?.slice(0, 160)}{tweet.text?.length > 160 ? “…” : “”}”
+</div>
+<div style={{ display:“flex”, gap:8, flexWrap:“wrap” }}>
+<span style={{ fontSize:8, fontWeight:700, color:c, fontFamily:mono }}>{sentiment?.toUpperCase()}</span>
+<span style={{ fontSize:8, color:”#3a4560”, fontFamily:mono }}>♥ {tweet.likes?.toLocaleString()}</span>
+<span style={{ fontSize:8, color:”#3a4560”, fontFamily:mono }}>↺ {tweet.retweets?.toLocaleString()}</span>
+{assets?.length > 0 && <span style={{ fontSize:8, color:”#6b7a99”, fontFamily:mono }}>{assets.join(” · “)}</span>}
+</div>
+</div>
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENT 1: TwitterSentimentBadge
+// Compact badge for any header — shows score + label
+// Usage: <TwitterSentimentBadge />
+// ─────────────────────────────────────────────────────────────────────────────
+export function TwitterSentimentBadge() {
+const { sentiment, fetchedAtStr, loading, hasKey } = useTwitterIntelligence();
+if (!hasKey) return null;
+const col = sentColor(sentiment.score);
+return (
+<div style={{ display:“flex”, alignItems:“center”, gap:6, background:“rgba(255,255,255,0.03)”, border:`1px solid ${col}25`, borderRadius:8, padding:“5px 10px” }}>
+<span style={{ fontSize:11 }}>𝕏</span>
+{loading
+? <span style={{ fontSize:8, color:”#3a4560”, fontFamily:mono }}>loading…</span>
+: <>
+<span style={{ fontSize:9, fontWeight:700, color:col, fontFamily:mono }}>{sentLabel(sentiment.score)}</span>
+<span style={{ fontSize:8, color:”#3a4560”, fontFamily:mono }}>{sentiment.score}%</span>
+{fetchedAtStr && <span style={{ fontSize:7, color:”#2a3550”, fontFamily:mono }}>· {fetchedAtStr}</span>}
+</>
+}
+</div>
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENT 2: TwitterSignalPanel
+// For Signals Tab — shows full Twitter context for selected asset
+// Usage: <TwitterSignalPanel ticker="BTC" />
+// ─────────────────────────────────────────────────────────────────────────────
+export function TwitterSignalPanel({ ticker }) {
+const { whales, mentions, breaking, sentiment, loading, hasKey, timeAgo: ta } = useTwitterIntelligence();
+const [open, setOpen] = useState(false);
+if (!hasKey) return (
+<div style={{ background:“rgba(255,255,255,0.02)”, border:“1px solid rgba(255,255,255,0.06)”, borderRadius:12, padding:“12px 14px” }}>
+<div style={{ fontSize:9, color:”#3a4560”, fontFamily:mono }}>𝕏 Add REACT_APP_RAPIDAPI_KEY to Replit Secrets to enable Twitter intelligence</div>
+</div>
+);
+
+const tickerData   = mentions[`$${ticker}`] || mentions[ticker] || null;
+const relWhales    = whales.filter(w => w.assets?.includes(ticker) && w.isRecent);
+const relBreaking  = breaking.filter(t => t.assets?.includes(ticker));
+const col          = sentColor(sentiment.score);
+
+return (
+<div style={{ background:“rgba(255,255,255,0.02)”, border:`1px solid rgba(${sentiment.score>55?"0,255,136":sentiment.score<45?"255,45,85":"245,158,11"},0.15)`, borderRadius:12, overflow:“hidden” }}>
+
+```
+  {/* Header */}
+  <div onClick={() => setOpen(o => !o)} style={{ padding:"11px 14px", cursor:"pointer", userSelect:"none", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+      <span style={{ fontSize:14 }}>𝕏</span>
+      <div>
+        <div style={{ fontSize:9, color:"#d4af37", letterSpacing:1.5, fontFamily:mono, fontWeight:700 }}>TWITTER INTELLIGENCE · {ticker}</div>
+        <div style={{ fontSize:8, color:"#3a4560", fontFamily:mono, marginTop:1 }}>
+          {loading ? "Fetching..." : `${sentiment.totalTweets} tweets · ${sentLabel(sentiment.score)} · updates every 4 min`}
+        </div>
+      </div>
+    </div>
+    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+      <div style={{ textAlign:"right" }}>
+        <div style={{ fontSize:14, fontWeight:900, color:col, fontFamily:mono }}>{sentiment.score}%</div>
+        <div style={{ fontSize:7, color:"#3a4560", fontFamily:mono }}>bullish</div>
+      </div>
+      <div style={{ fontSize:9, color:"#3a4560", fontFamily:mono, transform:open?"rotate(180deg)":"none", transition:"transform 0.2s" }}>▼</div>
+    </div>
+  </div>
+
+  {/* Sentiment bar */}
+  <div style={{ height:3, background:"rgba(255,255,255,0.06)", overflow:"hidden" }}>
+    <div style={{ height:"100%", width:`${sentiment.score}%`, background:`linear-gradient(90deg,${col}40,${col})`, transition:"width 1s ease" }}/>
+  </div>
+
+  {/* Expanded */}
+  {open && (
+    <div style={{ padding:"12px 14px" }}>
+
+      {/* Ticker-specific mentions */}
+      {tickerData && (
+        <div style={{ background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:9, padding:"10px 12px", marginBottom:10 }}>
+          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.5, fontFamily:mono, marginBottom:7 }}>{ticker} MENTIONS · LAST 1H</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6 }}>
+            {[
+              { label:"MENTIONS",  value:tickerData.count1h,                     color:"#e8e8f0" },
+              { label:"SENTIMENT", value:`${tickerData.sentimentScore}%`,         color:sentColor(tickerData.sentimentScore) },
+              { label:"BULLISH",   value:tickerData.bullishCount,                 color:"#00ff88" },
+              { label:"BEARISH",   value:tickerData.bearishCount,                 color:"#ff2d55" },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{ background:"rgba(255,255,255,0.03)", borderRadius:7, padding:"7px 8px", textAlign:"center" }}>
+                <div style={{ fontSize:7, color:"#3a4560", fontFamily:mono, marginBottom:2 }}>{label}</div>
+                <div style={{ fontSize:13, fontWeight:800, color, fontFamily:mono }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          {tickerData.isSpiking && (
+            <div style={{ marginTop:8, background:"rgba(255,165,0,0.08)", border:"1px solid rgba(255,165,0,0.2)", borderRadius:7, padding:"6px 10px", fontSize:8, color:"#fbbf24", fontFamily:mono }}>
+              ⚠ MENTION SPIKE — unusually high {ticker} activity in the last hour
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Whale tweets */}
+      {relWhales.length > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.5, fontFamily:mono, marginBottom:7 }}>WHALE ACTIVITY</div>
+          {relWhales.slice(0, 2).map((w, i) => (
+            <TweetCard key={i} tweet={w.tweet} sentiment={w.sentiment} whale={w.whale} isViral={w.isViral} assets={w.assets} ago={ta(w.tweet.createdAt)}/>
+          ))}
+        </div>
+      )}
+
+      {/* Breaking tweets */}
+      {relBreaking.length > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.5, fontFamily:mono, marginBottom:7 }}>BREAKING TWEETS</div>
+          {relBreaking.slice(0, 2).map((t, i) => (
+            <TweetCard key={i} tweet={t} sentiment={t.sentiment} isViral={t.isViral} assets={t.assets} ago={ta(t.createdAt)}/>
+          ))}
+        </div>
+      )}
+
+      {!tickerData && relWhales.length === 0 && relBreaking.length === 0 && (
+        <div style={{ fontSize:9, color:"#3a4560", fontFamily:mono, textAlign:"center", padding:"12px 0" }}>No specific {ticker} Twitter activity in last 2h</div>
+      )}
+
+      {/* Overall mood */}
+      <div style={{ background:"rgba(255,255,255,0.02)", borderRadius:8, padding:"8px 10px" }}>
+        <div style={{ fontSize:8, color:"#3a4560", fontFamily:mono, marginBottom:3 }}>OVERALL MARKET MOOD — X/Twitter</div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:11, fontWeight:700, color:col, fontFamily:mono }}>{sentLabel(sentiment.score)}</span>
+          <span style={{ fontSize:9, color:"#6b7a99", fontFamily:mono }}>{sentiment.score}% bullish · {sentiment.sampleSize}</span>
+        </div>
+      </div>
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENT 3: TwitterMorningBrief
+// For Morning Brief Tab — full daily Twitter intelligence summary
+// Usage: <TwitterMorningBrief />
+// ─────────────────────────────────────────────────────────────────────────────
+export function TwitterMorningBrief() {
+const { whales, mentions, breaking, sentiment, loading, hasKey, fetchedAtStr, timeAgo: ta } = useTwitterIntelligence();
+if (!hasKey) return null;
+if (loading) return (
+<div style={{ background:“rgba(255,255,255,0.02)”, border:“1px solid rgba(255,255,255,0.06)”, borderRadius:12, padding:“16px” }}>
+<div style={{ fontSize:9, color:”#3a4560”, fontFamily:mono }}>↻ Loading Twitter intelligence…</div>
+</div>
+);
+
+const col          = sentColor(sentiment.score);
+const viralWhales  = whales.filter(w => w.isViral);
+const spikes       = Object.values(mentions).filter(m => m.isSpiking);
+const topMentions  = Object.values(mentions).sort((a,b) => b.count1h - a.count1h).slice(0, 6);
+
+return (
+<div style={{ background:“rgba(255,255,255,0.02)”, border:`1px solid ${col}20`, borderRadius:14, overflow:“hidden” }}>
+
+```
+  {/* Header */}
+  <div style={{ padding:"14px 16px", borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+      <div>
+        <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:4 }}>
+          <span style={{ fontSize:16 }}>𝕏</span>
+          <span style={{ fontSize:9, color:"#d4af37", letterSpacing:2, fontFamily:mono, fontWeight:700 }}>TWITTER · MARKET INTELLIGENCE</span>
+        </div>
+        <div style={{ fontSize:22, fontWeight:900, color:col, fontFamily:mono }}>{sentLabel(sentiment.score)}</div>
+        <div style={{ fontSize:8, color:"#6b7a99", fontFamily:mono, marginTop:2 }}>{sentiment.sampleSize} · {fetchedAtStr} · refreshes every 4 min</div>
+      </div>
+      <div style={{ textAlign:"right" }}>
+        <div style={{ fontSize:8, color:"#3a4560", fontFamily:mono, marginBottom:2 }}>BULLISH SCORE</div>
+        <div style={{ fontSize:32, fontWeight:900, color:col, fontFamily:mono, lineHeight:1 }}>{sentiment.score}<span style={{ fontSize:16 }}>%</span></div>
+        <div style={{ fontSize:8, color:"#3a4560", fontFamily:mono, marginTop:2 }}>weighted: {sentiment.weightedScore}%</div>
+      </div>
+    </div>
+    <div style={{ height:4, background:"rgba(255,255,255,0.06)", borderRadius:3, marginTop:10, overflow:"hidden" }}>
+      <div style={{ height:"100%", width:`${sentiment.score}%`, background:`linear-gradient(90deg,${col}40,${col})`, borderRadius:3, transition:"width 1.5s ease" }}/>
+    </div>
+  </div>
+
+  <div style={{ padding:"14px 16px" }}>
+
+    {/* Spikes */}
+    {spikes.length > 0 && (
+      <div style={{ background:"rgba(255,165,0,0.06)", border:"1px solid rgba(255,165,0,0.2)", borderRadius:10, padding:"10px 13px", marginBottom:12 }}>
+        <div style={{ fontSize:8, color:"#fbbf24", letterSpacing:1.5, fontFamily:mono, fontWeight:700, marginBottom:7 }}>⚠ MENTION SPIKES</div>
+        {spikes.map(m => (
+          <div key={m.ticker} style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+            <span style={{ fontSize:10, fontWeight:800, color:"#e8e8f0", fontFamily:mono }}>{m.ticker}</span>
+            <div style={{ display:"flex", gap:10 }}>
+              <span style={{ fontSize:9, color:"#fbbf24", fontFamily:mono }}>{m.count1h}/hr</span>
+              <span style={{ fontSize:9, color:sentColor(m.sentimentScore), fontFamily:mono }}>{m.sentimentScore}% bullish</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* Ticker sentiment grid */}
+    {topMentions.length > 0 && (
+      <div style={{ marginBottom:12 }}>
+        <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.5, fontFamily:mono, marginBottom:7 }}>MOST DISCUSSED · LAST 1H</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+          {topMentions.map(m => (
+            <div key={m.ticker} style={{ background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:8, padding:"9px 10px" }}>
+              <div style={{ fontSize:9, fontWeight:800, color:"#e8e8f0", fontFamily:mono, marginBottom:2 }}>{m.ticker}</div>
+              <div style={{ fontSize:14, fontWeight:900, color:sentColor(m.sentimentScore), fontFamily:mono }}>{m.sentimentScore}%</div>
+              <div style={{ fontSize:7, color:"#3a4560", fontFamily:mono }}>{m.count1h} tweets</div>
+              <div style={{ height:2, background:"rgba(255,255,255,0.06)", borderRadius:2, marginTop:4, overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${m.sentimentScore}%`, background:sentColor(m.sentimentScore), borderRadius:2 }}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    {/* Viral whales */}
+    {viralWhales.length > 0 && (
+      <div style={{ marginBottom:12 }}>
+        <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.5, fontFamily:mono, marginBottom:7 }}>🔥 VIRAL WHALE ACTIVITY</div>
+        {viralWhales.slice(0, 2).map((w, i) => (
+          <TweetCard key={i} tweet={w.tweet} sentiment={w.sentiment} whale={w.whale} isViral assets={w.assets} ago={ta(w.tweet.createdAt)}/>
+        ))}
+      </div>
+    )}
+
+    {/* Breaking tweets */}
+    {breaking.length > 0 && (
+      <div>
+        <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.5, fontFamily:mono, marginBottom:7 }}>BREAKING TWEETS</div>
+        {breaking.slice(0, 3).map((t, i) => (
+          <TweetCard key={i} tweet={t} sentiment={t.sentiment} isViral={t.isViral} assets={t.assets} ago={ta(t.createdAt)}/>
+        ))}
+      </div>
+    )}
+  </div>
+</div>
+```
+
+);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENT 4: TwitterMarketModeStrip
+// Compact strip for Market Tab header — sentiment + spikes inline
+// Usage: <TwitterMarketModeStrip />
+// ─────────────────────────────────────────────────────────────────────────────
+export function TwitterMarketModeStrip() {
+const { sentiment, mentions, hasKey, loading } = useTwitterIntelligence();
+if (!hasKey || loading) return null;
+
+const col    = sentColor(sentiment.score);
+const spikes = Object.values(mentions).filter(m => m.isSpiking);
+
+return (
+<div style={{ background:“rgba(255,255,255,0.02)”, border:`1px solid ${col}18`, borderRadius:9, padding:“8px 12px”, display:“flex”, alignItems:“center”, gap:10, flexWrap:“wrap”, marginBottom:10 }}>
+<div style={{ display:“flex”, alignItems:“center”, gap:6 }}>
+<span style={{ fontSize:12 }}>𝕏</span>
+<span style={{ fontSize:8, fontWeight:700, color:col, fontFamily:mono }}>{sentLabel(sentiment.score)}</span>
+<span style={{ fontSize:8, color:”#3a4560”, fontFamily:mono }}>{sentiment.score}%</span>
+</div>
+<div style={{ flex:1, height:3, background:“rgba(255,255,255,0.06)”, borderRadius:2, overflow:“hidden”, minWidth:40 }}>
+<div style={{ height:“100%”, width:`${sentiment.score}%`, background:col, borderRadius:2, transition:“width 1s ease” }}/>
+</div>
+{spikes.map(m => (
+<div key={m.ticker} style={{ background:“rgba(255,165,0,0.08)”, border:“1px solid rgba(255,165,0,0.2)”, borderRadius:5, padding:“2px 7px” }}>
+<span style={{ fontSize:7, color:”#fbbf24”, fontFamily:mono }}>⚠ {m.ticker} spike</span>
+</div>
+))}
+<span style={{ fontSize:7, color:”#2a3550”, fontFamily:mono }}>𝕏 · {sentiment.sampleSize}</span>
+</div>
+);
+}

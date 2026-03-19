@@ -1340,6 +1340,17 @@ export async function registerRoutes(
     { id:"dollar-collapse", cat:"trump",   label:"DXY drops 10%+ in 2025?",            slug:"will-the-dollar-index-drop-10-percent-2025",         assets:["XAU","BTC","EURUSD"] },
   ];
 
+  // ── Twitter/X Social Intelligence ────────────────────────────────────────
+  app.get("/api/twitter", async (_req, res) => {
+    try {
+      const { getTwitterData } = await import("./twitter");
+      const data = await getTwitterData();
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message, hasKey: false });
+    }
+  });
+
   app.get("/api/polymarket", async (_req, res) => {
     const cached = cache["polymarket"];
     if (cached && Date.now() - cached.ts < 60000) {
