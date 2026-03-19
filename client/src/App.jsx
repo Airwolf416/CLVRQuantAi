@@ -12,6 +12,8 @@ import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
 import OnboardingTour from "./OnboardingTour";
+import MarketTab from "./tabs/MarketTab";
+import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -807,6 +809,16 @@ function Dashboard({user,setUser}){
   const [briefDate,setBriefDate]=useState(null);
 
   const [userTier,setUserTier]=useState(()=>{try{return user?.tier||localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
+
+  // ── Market Data Store (shared singleton, all tabs read from here) ──────────
+  const {
+    spot:storeSpot, perps:storePerps, spreads:storeSpreads,
+    marketMode:storeMode, sentiment:storeSentiment, alerts:storeAlerts,
+    discoveredAssets:storeAssets, byClass:storeByClass,
+    loading:storeLoading, lastUpdate:storeLastUpdate, totalMarkets:storeTotalMarkets,
+    refresh:storeRefresh,
+  } = useMarketData();
+
   const [accessCodeInput,setAccessCodeInput]=useState("");
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
   const [showQRScanner,setShowQRScanner]=useState(false);
@@ -1343,6 +1355,7 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS [fetched:${nowISO}]: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO}]: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
     const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO}]: ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
+    const storeModeSnap=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
     const sys=`You are CLVR AI — an elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a rigorous 7-step analysis framework before every trade recommendation. All data below is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
@@ -1353,7 +1366,7 @@ TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",mo
 CRYPTO (30 tokens): ${cryptoSnap}
 EQUITIES (16 stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}
+FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap}
 ${macroAiSnap}
 
 ━━━ YOUR 7-STEP ANALYSIS FRAMEWORK ━━━
@@ -1467,6 +1480,7 @@ Be direct, specific, and numerical. Use exact live prices from the data above.`;
     const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS [fetched:${nowISO2}]: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO2}]: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:"";
     const macroSnap2=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO2}]:\n  ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
+    const storeModeSnap2=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
     const sys=`You are CLVR AI — elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a strict 7-step analysis framework before every trade recommendation. All data is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET time: ${nowET2}
@@ -1477,7 +1491,7 @@ TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",mo
 CRYPTO (${CRYPTO_SYMS.length} tokens): ${cryptoSnap}
 EQUITIES (${EQUITY_SYMS.length} stocks): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (${FOREX_SYMS.length} pairs): ${fxSnap}${sigSnap}${newsSnap}
+FOREX (${FOREX_SYMS.length} pairs): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap2}
 ${macroSnap2}
 
 CONFLUENCE ENGINE:
@@ -2119,45 +2133,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ PRICES ══ */}
-        {tab==="prices"&&<>
-          <div style={{marginBottom:14}}><SLabel>Market Data</SLabel></div>
-          <div style={{display:"flex",gap:4,marginBottom:10,overflowX:"auto"}}>
-            {[{k:"crypto",l:"Crypto"},{k:"equity",l:"Equities",col:"blue"},{k:"metals",l:"Commodities"},{k:"forex",l:"Forex",col:"teal"}].map(t=>(
-              <SubBtn key={t.k} k={t.k} label={t.l} col={t.col||"gold"} state={priceTab} setter={setPriceTab}/>
-            ))}
-          </div>
-          {priceTab==="crypto"&&<div style={panel}>
-            <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`}}>
-              {[{k:"spot",l:"Spot · Binance"},{k:"perp",l:"Perp · Hyperliquid"}].map(t=>(
-                <button key={t.k} data-testid={`crypto-tab-${t.k}`} onClick={()=>setCryptoSubTab(t.k)} style={{flex:1,padding:"9px 0",background:cryptoSubTab===t.k?"rgba(201,168,76,.06)":"transparent",border:"none",borderBottom:cryptoSubTab===t.k?`2px solid ${C.gold}`:"2px solid transparent",cursor:"pointer",fontFamily:MONO,fontSize:9,letterSpacing:"0.1em",color:cryptoSubTab===t.k?C.gold:C.muted2,transition:"all .2s"}}>{t.l}</button>
-              ))}
-            </div>
-            {cryptoSubTab==="spot"&&<>
-              <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>binance websocket · real-time trades · ~16ms</div>
-              {CRYPTO_SYMS.map(sym=>{const d=cryptoPrices[sym];return <PriceRow key={sym} sym={sym} d={d} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>;})}
-            </>}
-            {cryptoSubTab==="perp"&&<>
-              <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>hyperliquid.xyz · perp mid-price · 5s</div>
-              {CRYPTO_SYMS.map(sym=>{const d=perpPrices[sym];const extraParts=[d?.funding?`Fund: ${pct(d.funding,4)}/8h`:"",d?.oi?`OI: $${(d.oi/1e6).toFixed(0)}M`:""].filter(Boolean).join(" · ");return(<div key={sym}><PriceRow sym={sym} d={d} extra={d?.live&&extraParts?extraParts:null} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/></div>);})}
-            </>}
-          </div>}
-          {priceTab==="equity"&&<div style={panel}>
-            <div style={ph}><PTitle>Equities · Finnhub</PTitle><div style={{display:"flex",gap:6,alignItems:"center"}}>{isNYSEOpen()?<Badge label="LIVE" color="green"/>:<Badge label="CLOSED" color="muted"/>}<Badge label={fhLive?`${Object.values(equityPrices).filter(p=>p.live).length} Streaming`:"Offline"} color={fhLive?"green":"gold"}/></div></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time trades · NYSE 9:30a–4p ET</div>
-            {EQUITY_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={equityPrices[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)} marketClosed={!isNYSEOpen()}/>)}
-          </div>}
-          {priceTab==="metals"&&<div style={panel}>
-            <div style={ph}><PTitle>Commodities</PTitle><Badge label={fhLive?`${Object.values(metalPrices).filter(p=>p.live).length} Live`:"Closed"} color={fhLive?"green":"gold"}/></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>gold-api.com · finnhub websocket · real-time</div>
-            {METALS_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={metalPrices[sym]} label={METAL_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)}/>)}
-            <div style={{padding:"10px 14px",fontFamily:MONO,fontSize:9,color:C.muted2}}>Gold/Silver Ratio: <span style={{color:C.gold2,fontWeight:600}}>{metalPrices.XAU?.price&&metalPrices.XAG?.price?(metalPrices.XAU.price/metalPrices.XAG.price).toFixed(0):"—"}:1</span>{metalPrices.XAU?.price&&metalPrices.XAG?.price&&(metalPrices.XAU.price/metalPrices.XAG.price)>=90&&<span style={{color:C.green}}> · bullish for silver</span>}</div>
-          </div>}
-          {priceTab==="forex"&&<div style={panel}>
-            <div style={ph}><PTitle>Forex</PTitle><div style={{display:"flex",gap:6,alignItems:"center"}}>{isForexOpen()?<Badge label="LIVE" color="green"/>:<Badge label="CLOSED" color="muted"/>}<Badge label={fhLive?`${Object.values(forexPrices).filter(p=>p.live).length} Streaming`:"Offline"} color={fhLive?"green":"gold"}/></div></div>
-            <div style={{padding:"4px 14px 6px",borderBottom:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted}}>finnhub websocket · real-time · Sun 5pm–Fri 5pm ET</div>
-            {FOREX_SYMS.map(sym=><PriceRow key={sym} sym={sym} d={forexPrices[sym]} label={FOREX_LABELS[sym]} flash={flashes[sym]} onToggleWatch={toggleWatch} watched={isWatched(sym)} marketClosed={!isForexOpen()}/>)}
-          </div>}
-        </>}
+        {tab==="prices"&&<MarketTab/>}
 
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>
@@ -2387,7 +2363,29 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
         {/* ══ SIGNALS ══ */}
         {tab==="signals"&&<>
-          <div style={{marginBottom:14}}><SLabel>Quant AI Signals</SLabel></div>
+          <div style={{marginBottom:10}}><SLabel>Quant AI Signals</SLabel></div>
+
+          {/* ── Store price strip (top 6 assets by volume) ── */}
+          {storeMode&&(
+            <div style={{background:"rgba(255,255,255,0.02)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:8,padding:"8px 10px",marginBottom:10,overflowX:"auto"}}>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.18em",marginBottom:5}}>LIVE PRICES · {storeMode.regime} {storeMode.score}%</div>
+              <div style={{display:"flex",gap:6}}>
+                {["BTC","ETH","SOL","NVDA","TSLA","GOLD"].map(t=>{
+                  const p=storePerps[t]||storeSpot[t];
+                  if(!p?.price)return null;
+                  const chg=p.change24h||0;
+                  const col=chg>0?C.green:chg<0?C.red:C.muted;
+                  return(
+                    <div key={t} style={{flexShrink:0,textAlign:"center"}}>
+                      <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em"}}>{t}</div>
+                      <div style={{fontFamily:MONO,fontSize:9,fontWeight:800,color:C.white}}>{mfmtPrice(p.price)}</div>
+                      <div style={{fontFamily:MONO,fontSize:7,color:col}}>{mfmtChange(chg)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Stats header */}
           <div style={{display:"flex",gap:6,marginBottom:12}}>
@@ -2456,10 +2454,36 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
         {/* ══ ALERTS ══ */}
         {tab==="alerts"&&<>
-          <div style={{marginBottom:14}}><SLabel>Price Alerts</SLabel></div>
+          <div style={{marginBottom:10}}><SLabel>Alerts & Anomalies</SLabel></div>
+
+          {/* ── Store auto-generated alerts ── */}
+          {storeAlerts&&storeAlerts.length>0&&(
+            <div style={{marginBottom:12}}>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.22em",marginBottom:7}}>⚡ LIVE AUTO-ALERTS ({storeAlerts.length})</div>
+              {storeAlerts.map((a,i)=>{
+                const colMap={high:"#ff2d55",moderate:"#f59e0b",low:"#6b7a99",info:"#3b82f6"};
+                const bgMap={high:"rgba(255,45,85,0.06)",moderate:"rgba(245,158,11,0.06)",low:"rgba(107,122,153,0.06)",info:"rgba(59,130,246,0.06)"};
+                const bMap={high:"rgba(255,45,85,0.2)",moderate:"rgba(245,158,11,0.2)",low:"rgba(255,255,255,0.07)",info:"rgba(59,130,246,0.2)"};
+                const col=colMap[a.severity]||C.muted2;
+                return(
+                  <div key={i} data-testid={`store-alert-${i}`} style={{background:bgMap[a.severity]||"transparent",border:`1px solid ${bMap[a.severity]||C.border}`,borderRadius:6,padding:"8px 11px",marginBottom:5,display:"flex",gap:9,alignItems:"flex-start"}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0,marginTop:3}}/>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
+                        <span style={{fontFamily:MONO,fontSize:10,fontWeight:800,color:C.text}}>{a.ticker}</span>
+                        <span style={{fontFamily:MONO,fontSize:7,color:col,letterSpacing:"0.1em"}}>{a.type.toUpperCase()}</span>
+                      </div>
+                      <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,lineHeight:1.5}}>{a.message}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div style={panel}>
             <div style={ph}>
-              <PTitle>Active Alerts</PTitle>
+              <PTitle>My Price Alerts</PTitle>
               <Badge label={`${alerts.filter(a=>!a.triggered).length} active`} color="green"/>
             </div>
             <div style={{padding:14}}>
@@ -2565,9 +2589,14 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="CLVR AI · Live" color="gold"/></div>
             <div style={{padding:16}}>
               <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
-                {["BTC","ETH","SOL","TRUMP","HYPE","XAU","WTI","EURUSD","TSLA","NVDA"].map(sym=>{const d=allPrices[sym];return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${fmt(d?.price,sym)} 24h:${pct(d?.chg)}`)}
-                  style={{padding:"5px 11px",borderRadius:2,border:`1px solid ${d?.live?"rgba(201,168,76,.28)":C.border}`,background:C.panel,color:d?.live?C.gold2:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.08em",cursor:"pointer"}}>
-                  {sym}{d?.live?" ✦":""}
+                {["BTC","ETH","SOL","TRUMP","HYPE","XAU","WTI","EURUSD","TSLA","NVDA"].map(sym=>{
+                const store=storePerps[sym]||storeSpot[sym];
+                const legacy=allPrices[sym];
+                const d=store?.price ? {price:store.price,chg:store.change24h||0,live:true} : legacy;
+                const livePx=store?.price>0?mfmtPrice(store.price):fmt(d?.price,sym);
+                return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${livePx} 24h:${pct(d?.chg||0)}`)}
+                  style={{padding:"5px 11px",borderRadius:2,border:`1px solid ${store?.price?"rgba(201,168,76,.28)":d?.live?"rgba(201,168,76,.20)":C.border}`,background:C.panel,color:store?.price?C.gold2:d?.live?C.gold:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.08em",cursor:"pointer"}}>
+                  {sym}{store?.price?" ✦":""}
                 </button>;})}
               </div>
               <AIInput value={aiInput} onChange={onAiChange} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
