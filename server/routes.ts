@@ -2117,6 +2117,36 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/send-service-apology", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+      const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+      if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
+      const { sendServiceApologyEmail } = await import("./dailyBrief");
+      const result = await sendServiceApologyEmail();
+      res.json({ ok: true, ...result });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/send-promo-email", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+      const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+      if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
+      const { sendPromoEmail } = await import("./dailyBrief");
+      const result = await sendPromoEmail();
+      res.json({ ok: true, ...result });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/stripe/config", async (_req, res) => {
     try {
       const publishableKey = await getStripePublishableKey();
