@@ -1351,6 +1351,13 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
     const nowISO=new Date().toISOString();
     const nowET=new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",timeZone:"America/New_York",hour12:false});
     const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" LIVE":" est"}`:"n/a";};
+    // ── HL PERP data (WebSocket streaming — <1s latency) ──
+    const fmtHLPerp=(sym)=>{const d=storePerps[sym];if(!d?.price)return null;const chg=d.change24h!=null?` (${d.change24h>=0?"+":""}${d.change24h.toFixed(2)}%)`:"";const fund=d.funding!=null?` Fund:${d.funding>=0?"+":""}${(d.funding*100).toFixed(4)}%/8h`:" Fund:n/a";const oi=d.openInterest&&d.price?` OI:$${((d.openInterest*d.price)/1e9).toFixed(2)}B`:"";return`${sym} $${mfmtPrice(d.price)}${chg}${fund}${oi}`;};
+    const hlCryptoPerpSnap=CRYPTO_SYMS.map(fmtHLPerp).filter(Boolean).join(" | ")||"HL perp data loading";
+    const hlEquityPerpSnap=EQUITY_SYMS.map(fmtHLPerp).filter(Boolean).join(" | ");
+    const hlMetalPerpSnap=METALS_SYMS.map(fmtHLPerp).filter(Boolean).join(" | ");
+    const hlSpotSnap=CRYPTO_SYMS.map(s=>{const d=storeSpot[s];if(!d?.price)return null;const chg=d.change24h!=null?` (${d.change24h>=0?"+":""}${d.change24h.toFixed(2)}%)`:"";return`${s} $${mfmtPrice(d.price)}${chg}`;}).filter(Boolean).join(" | ")||"HL spot data loading";
+    // ── Legacy/additional market data ──
     const cryptoSnap=CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];const f=d?.funding?` F:${pct(d.funding,4)}/8h`:"";const oi=d?.oi?` OI:$${(d.oi/1e6).toFixed(0)}M`:"";return`${s}:${snap(s,cryptoPrices)}${f}${oi}`;}).join(" | ");
     const stockSnap=EQUITY_SYMS.map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ");
     const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
@@ -1373,15 +1380,30 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
     const sys=`You are CLVR AI — an elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a rigorous 7-step analysis framework before every trade recommendation. All data below is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
-
-━━━ LIVE MARKET DATA ━━━
 [Data fetched: ${nowISO}]
 
-CRYPTO (30 tokens): ${cryptoSnap}
-EQUITIES (16 stocks): ${stockSnap}
+━━━ SECTION A — HYPERLIQUID PERP DATA [LIVE STREAMING — <1s latency] ━━━
+Authority source for ALL perpetuals/futures analysis. Mark prices direct from HL WebSocket.
+CRYPTO PERPS (${hlCryptoPerpSnap.split("|").length} assets): ${hlCryptoPerpSnap}${hlEquityPerpSnap?`\nEQUITY PERPS (HL synthetic): ${hlEquityPerpSnap}`:""}${hlMetalPerpSnap?`\nCOMMODITY PERPS (HL synthetic): ${hlMetalPerpSnap}`:""}
+Funding rate key: positive = longs pay shorts (crowded long, reversal risk); negative = shorts pay longs (short squeeze risk)
+
+━━━ SECTION B — HYPERLIQUID SPOT DATA [LIVE] ━━━
+${hlSpotSnap}
+
+━━━ SECTION C — ADDITIONAL MARKET DATA [30-120s delayed — confirmation only] ━━━
+CRYPTO spot (CoinGecko): ${cryptoSnap}
+EQUITIES (Finnhub): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (14 pairs): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap}
+FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap}
 ${macroAiSnap}${polySnap}${twAiContext||""}
+
+⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
+→ PERP/futures question → use SECTION A (HL mark price + funding + OI are definitive)
+→ SPOT question → use SECTION B first, SECTION C as confirmation
+→ EQUITY/COMMODITY → HL synthetic perps in SECTION A for futures; SECTION C for cash/spot
+→ FOREX → SECTION C only (no HL forex perpetuals)
+→ If SECTION A and SECTION C differ by >0.5% → flag the basis difference, trust SECTION A
+→ "n/a" or missing HL data → state data unavailable; use SECTION C with "est" caveat
 
 ━━━ YOUR 7-STEP ANALYSIS FRAMEWORK ━━━
 Complete ALL steps mentally before generating any trade recommendation.
@@ -1485,6 +1507,13 @@ Be direct, specific, and numerical. Use exact live prices from the data above.`;
     const prob=Math.max(5,Math.min(95,50+(cScore/8)*40));
     const kellyPct=Math.max(0,Math.min(25,(prob/100)-(1-prob/100)/2))*100;
     const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" LIVE":" est"}`:"n/a";};
+    // ── HL PERP data (WebSocket streaming — <1s latency) ──
+    const fmtHLPerp2=(sym)=>{const d=storePerps[sym];if(!d?.price)return null;const chg=d.change24h!=null?` (${d.change24h>=0?"+":""}${d.change24h.toFixed(2)}%)`:"";const fund=d.funding!=null?` Fund:${d.funding>=0?"+":""}${(d.funding*100).toFixed(4)}%/8h`:" Fund:n/a";const oi=d.openInterest&&d.price?` OI:$${((d.openInterest*d.price)/1e9).toFixed(2)}B`:"";return`${sym} $${mfmtPrice(d.price)}${chg}${fund}${oi}`;};
+    const hlCryptoPerpSnap2=CRYPTO_SYMS.map(fmtHLPerp2).filter(Boolean).join(" | ")||"HL perp data loading";
+    const hlEquityPerpSnap2=EQUITY_SYMS.map(fmtHLPerp2).filter(Boolean).join(" | ");
+    const hlMetalPerpSnap2=METALS_SYMS.map(fmtHLPerp2).filter(Boolean).join(" | ");
+    const hlSpotSnap2=CRYPTO_SYMS.map(s=>{const d=storeSpot[s];if(!d?.price)return null;const chg=d.change24h!=null?` (${d.change24h>=0?"+":""}${d.change24h.toFixed(2)}%)`:"";return`${s} $${mfmtPrice(d.price)}${chg}`;}).filter(Boolean).join(" | ")||"HL spot data loading";
+    // ── Legacy/additional market data ──
     const cryptoSnap=CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];const f=d?.funding?` F:${pct(d.funding,4)}/8h`:"";const oi=d?.oi?` OI:$${(d.oi/1e6).toFixed(0)}M`:"";return`${s}:${snap(s,cryptoPrices)}${f}${oi}`;}).join(" | ");
     const stockSnap=EQUITY_SYMS.map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ");
     const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
@@ -1498,15 +1527,30 @@ Be direct, specific, and numerical. Use exact live prices from the data above.`;
     const sys=`You are CLVR AI — elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a strict 7-step analysis framework before every trade recommendation. All data is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET time: ${nowET2}
-
-━━━ LIVE MARKET DATA ━━━
 [Data fetched: ${nowISO2}]
 
-CRYPTO (${CRYPTO_SYMS.length} tokens): ${cryptoSnap}
-EQUITIES (${EQUITY_SYMS.length} stocks): ${stockSnap}
+━━━ SECTION A — HYPERLIQUID PERP DATA [LIVE STREAMING — <1s latency] ━━━
+Authority source for ALL perpetuals/futures analysis. Mark prices direct from HL WebSocket.
+CRYPTO PERPS (${hlCryptoPerpSnap2.split("|").length} assets): ${hlCryptoPerpSnap2}${hlEquityPerpSnap2?`\nEQUITY PERPS (HL synthetic): ${hlEquityPerpSnap2}`:""}${hlMetalPerpSnap2?`\nCOMMODITY PERPS (HL synthetic): ${hlMetalPerpSnap2}`:""}
+Funding rate key: positive = longs pay shorts (crowded long, reversal risk); negative = shorts pay longs (short squeeze risk)
+
+━━━ SECTION B — HYPERLIQUID SPOT DATA [LIVE] ━━━
+${hlSpotSnap2}
+
+━━━ SECTION C — ADDITIONAL MARKET DATA [30-120s delayed — confirmation only] ━━━
+CRYPTO spot (CoinGecko): ${cryptoSnap}
+EQUITIES (Finnhub): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (${FOREX_SYMS.length} pairs): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap2}
+FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap2}
 ${macroSnap2}${twAiContext||""}
+
+⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
+→ PERP/futures question → use SECTION A (HL mark price + funding + OI are definitive)
+→ SPOT question → use SECTION B first, SECTION C as confirmation
+→ EQUITY/COMMODITY → HL synthetic perps in SECTION A for futures; SECTION C for cash/spot
+→ FOREX → SECTION C only (no HL forex perpetuals)
+→ If SECTION A and SECTION C differ by >0.5% → flag the basis difference, trust SECTION A
+→ "n/a" or missing HL data → state data unavailable; use SECTION C with "est" caveat
 
 CONFLUENCE ENGINE:
 Score: ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Win Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
