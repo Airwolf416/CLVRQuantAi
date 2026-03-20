@@ -1636,14 +1636,19 @@ Minimum R:R at TP1 on macro event days: 1.5:1 (never 1:1 when macro risk is pres
 STEP 6 — FLAGS (NEVER BLANK)
 ⚠️ Flags REQUIRED. "None" only if: no macro within 6h + stop matches TF + R:R≥1.5:1 + volume confirms + funding neutral.
 
-STEP 7 — MACRO CALENDAR FILTER
-Check MACRO EVENTS block before approving any asset:
+STEP 7 — MACRO CALENDAR FILTER [TIMEFRAME: ${aiTimeframe.toUpperCase()}]
+${aiTimeframe==="today"?`INTRADAY MODE — check for quiet-day filters:
 • HIGH-impact event within 2h → factor event direction into all trade biases
-• QUIET day (no HIGH-impact within 8h): auto-filter as low-probability:
+• QUIET day (no HIGH-impact within 8h): auto-filter low-probability intraday plays:
   → FX pairs (EUR, GBP, JPY, CAD) → ❌ QUIET DAY FILTER (replace with crypto alt)
   → Gold/Silver → ❌ QUIET DAY FILTER (replace with large-cap alt)
   → Blue-chip stocks (NVDA, AAPL, MSFT) → ⚠️ CONFIRM CATALYST before including
-• Crypto and large-cap alts always approved regardless of macro calendar
+• Crypto and large-cap alts always approved regardless of macro calendar`:`${aiTimeframe==="midterm"?"SWING MODE (1-4 WEEKS)":"POSITION MODE (1-3 MONTHS)"} — quiet-day intraday filter does NOT apply here.
+Instead, evaluate macro over the ${aiTimeframe==="midterm"?"next 1-4 weeks":"next 1-3 months"}:
+• Rate decisions, CPI trend, central bank posture → drives FX and gold direction on this horizon
+• FX pairs (EUR/USD, USD/JPY) and Gold/Silver ARE valid for ${aiTimeframe==="midterm"?"swing":"position"} trades — use weekly/monthly trend structure
+• Focus on macro regime shifts, sector rotation, and policy divergence between central banks
+• Upcoming HIGH-impact events in MACRO EVENTS block → consider as catalysts that confirm or deny the swing thesis`}
 
 STEP 8 — VOLATILITY SUITABILITY MATRIX
 For each of the 4 trade slots, validate the asset fits the timeframe:
@@ -1677,15 +1682,28 @@ Before finalizing the 4-trade portfolio:
 • Ideal 4-trade portfolio: 1 crypto + 1 equity + 1 commodity + 1 forex (on news days) OR 2 crypto + 1 equity + 1 commodity (quiet days)
 • State correlation verdict: "Portfolio is [diversified / partially correlated / over-concentrated] — [action]"
 
-STEP 12 — PRE-MARKET CHECKLIST (output at top of response)
+STEP 12 — SESSION CHECKLIST (output at top of response)
 Always start your response with:
-━━━ PRE-MARKET CHECKLIST ━━━
+${aiTimeframe==="today"?`━━━ PRE-MARKET CHECKLIST ━━━
 ✅/❌ Macro calendar: [HIGH-impact events next 8h or "Clear"]
 ✅/❌ Market regime: [RISK ON / RISK OFF / NEUTRAL — from intelligence data]
 ✅/❌ Funding rates: [crowded longs / short squeeze risk / neutral]
 ✅/❌ Quiet-day filters: [assets filtered or "None filtered"]
 ✅/❌ Portfolio correlation: [diversified / flag if over-concentrated]
-━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━`:aiTimeframe==="midterm"?`━━━ SWING TRADE CHECKLIST (1-4 WEEKS) ━━━
+✅/❌ Macro regime: [rate cycle direction, DXY trend, risk-on/off from intelligence data]
+✅/❌ Upcoming catalysts: [any HIGH-impact events in next 1-4 weeks that affect these trades?]
+✅/❌ Funding rates trend: [sustained positive/negative = crowded positioning]
+✅/❌ Sector rotation: [which sectors are gaining/losing institutional flow?]
+✅/❌ Portfolio correlation: [diversified / flag if over-concentrated]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`:
+`━━━ POSITION TRADE CHECKLIST (1-3 MONTHS) ━━━
+✅/❌ Macro regime: [Fed posture, global rate cycle, recession/expansion signals]
+✅/❌ Secular catalysts: [structural tailwinds/headwinds for each asset over 1-3 months]
+✅/❌ Central bank divergence: [USD vs EUR/JPY/GBP policy trajectory]
+✅/❌ Commodity supercycle: [energy/metals macro backdrop]
+✅/❌ Portfolio correlation: [diversified / flag if over-concentrated]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`}
 
 STEP 13 — TRADE OUTPUT FORMAT
 For EACH of the 4 trades (one per asset class: crypto, equity, commodity, forex):
