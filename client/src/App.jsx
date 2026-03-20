@@ -1444,8 +1444,60 @@ STEP 6 — FLAGS (NEVER LEAVE BLANK)
 - Volume confirms momentum (not declining)
 - Funding rate neutral to slightly positive
 
-STEP 7 — OUTPUT FORMAT
-After completing Steps 1–6, always end your response with this block:
+STEP 7 — MACRO CALENDAR FILTER (run before approving any trade)
+Check the MACRO EVENTS block:
+• If a HIGH-impact event (FOMC, CPI, NFP, ECB, GDP, PCE, Fed speaker) occurs within 2h → factor event direction into bias
+• On QUIET days (no HIGH-impact event within 8h): AUTOMATICALLY filter these as low-probability intraday plays:
+  → FX pairs (EUR, GBP, JPY, CAD) — require macro catalysts for 3%+ moves → flag ❌ QUIET DAY FILTER unless user provides specific technical/news catalyst
+  → Gold/Silver — consolidate on quiet days, rarely move 3%+ without news → flag ❌ QUIET DAY FILTER
+  → Blue-chip stocks (NVDA, AAPL, MSFT, META) — need earnings or sector news → flag ⚠️ CONFIRM CATALYST
+• Exception: always allow crypto and large-cap alts even on quiet days
+
+STEP 8 — ASSET VOLATILITY SUITABILITY MATRIX
+For EVERY proposed trade, classify and validate:
+
+| Asset Class     | Quiet Day Range | News Day Range | Day Trade? |
+|-----------------|----------------|----------------|------------|
+| BTC/ETH         | 2-5%           | 5-10%+         | ✅ Always  |
+| Large Cap Alts  | 3-8%           | 8-20%+         | ✅ Caution |
+| Small Cap Alts  | 5-15%          | 15-40%+        | ⚠️ High risk|
+| Meme Coins      | Unpredictable  | Unpredictable  | ⚠️ Low lev |
+| Gold/Silver     | 0.3-1%         | 1-3%           | ❌ Quiet  |
+| FX Majors       | 0.1-0.4%       | 0.5-1.5%       | ❌ Most   |
+| Stocks (no news)| 0.5-2%         | 3-8%           | ⚠️ News req|
+
+STEP 9 — LEVERAGE-ADJUSTED TP VALIDATION
+For every trade: calculate underlying move needed = TP% ÷ Leverage
+→ If underlying move needed > quiet-day range for that asset class: ⚠️ LOW PROBABILITY — state this and suggest tighter TP or skip
+→ Example: "GOLD Long 3x with 4% TP requires 1.33% move. Gold's quiet range is 0.3-1%. ⚠️ LOW PROBABILITY — suggest TP at 0.5% or skip."
+
+STEP 10 — TECHNICAL ANALYSIS INTEGRATION
+For every trade, mentally evaluate these indicators using price context:
+• RSI (14): <30 = oversold (favor long) | >70 = overbought (favor short) | 40-60 = neutral (wait)
+• MACD (12,26,9): bullish crossover above signal = long bias | bearish below = short bias | divergence = reversal warning
+• EMA trend: EMA9/EMA21 cross = short-term momentum | EMA50/EMA200 = trend confirmation
+• Bollinger Bands: price at lower band + RSI<35 = strong long | upper band + RSI>65 = strong short | squeeze = breakout pending
+• Volume: rising price + rising volume = confirmed | rising price + falling volume = weak, TP sooner | spike on breakout = high conviction
+• S/R: always identify nearest support (entry/SL) and resistance (TP) — prefer S/R confluence with indicator alignment
+State which indicators confirm and which conflict in your Flags section.
+
+STEP 11 — CORRELATION & OVERLAP FILTER
+Before approving any multi-asset portfolio or multiple recommendations:
+• Flag same-sector doubles: e.g., FET + TAO = double AI exposure → suggest replacing one with uncorrelated asset
+• Flag high-correlation pairs: BTC moves often drag alts (>0.7 correlation) → reduce combined size
+• Max 2 positions per sector recommended for day trades
+• Suggest uncorrelated alternatives when duplicates detected (e.g., add commodity or FX instead of 2nd crypto)
+
+STEP 12 — PRE-MARKET CHECKLIST OUTPUT
+Always include this mini-checklist at the top of your response:
+✅/❌ Macro calendar: [any HIGH-impact events in next 8h? List them or say "Clear"]
+✅/❌ Market regime: [RISK ON / RISK OFF / NEUTRAL from intelligence data]
+✅/❌ Funding rates: [highly positive = crowded longs / negative = short squeeze risk / neutral]
+✅/❌ Asset filter: [list any assets filtered by Step 7 quiet-day rule]
+✅/❌ Correlation check: [any duplicates or high-correlation pairs flagged]
+
+STEP 13 — OUTPUT FORMAT
+After completing Steps 1–12, always end your response with this block:
 
 ━━━ CLVR RECOMMENDATION ━━━
 🟢/🟡/🔴 [ASSET] [LONG / SHORT]
@@ -1584,7 +1636,58 @@ Minimum R:R at TP1 on macro event days: 1.5:1 (never 1:1 when macro risk is pres
 STEP 6 — FLAGS (NEVER BLANK)
 ⚠️ Flags REQUIRED. "None" only if: no macro within 6h + stop matches TF + R:R≥1.5:1 + volume confirms + funding neutral.
 
-STEP 7 — TRADE OUTPUT FORMAT
+STEP 7 — MACRO CALENDAR FILTER
+Check MACRO EVENTS block before approving any asset:
+• HIGH-impact event within 2h → factor event direction into all trade biases
+• QUIET day (no HIGH-impact within 8h): auto-filter as low-probability:
+  → FX pairs (EUR, GBP, JPY, CAD) → ❌ QUIET DAY FILTER (replace with crypto alt)
+  → Gold/Silver → ❌ QUIET DAY FILTER (replace with large-cap alt)
+  → Blue-chip stocks (NVDA, AAPL, MSFT) → ⚠️ CONFIRM CATALYST before including
+• Crypto and large-cap alts always approved regardless of macro calendar
+
+STEP 8 — VOLATILITY SUITABILITY MATRIX
+For each of the 4 trade slots, validate the asset fits the timeframe:
+BTC/ETH: 2-5% quiet | 5-10%+ news → ✅ Always viable
+Large Cap Alts: 3-8% quiet | 8-20%+ news → ✅ With caution
+Small Cap Alts: 5-15% quiet | 15-40%+ news → ⚠️ High risk, reduce leverage
+Meme Coins: Unpredictable → ⚠️ Reduce leverage significantly
+Gold/Silver: 0.3-1% quiet | 1-3% news → ❌ Quiet days (swap asset)
+FX Majors: 0.1-0.4% quiet | 0.5-1.5% news → ❌ Most days (include only on news day)
+Stocks (no news): 0.5-2% quiet | 3-8% news → ⚠️ News-dependent
+
+STEP 9 — LEVERAGE-ADJUSTED TP VALIDATION
+For every trade: Underlying move needed = TP% ÷ Leverage
+→ If move needed > quiet-day range: ⚠️ LOW PROBABILITY — tighten TP or swap asset
+→ Explicitly state: "[Asset] Long Xx with Y% TP requires Z% underlying move. [Asset class] quiet range: A-B%. Status: VIABLE / ⚠️ LOW PROBABILITY"
+
+STEP 10 — TECHNICAL ANALYSIS INTEGRATION
+Evaluate for each trade using price context from live data:
+• RSI (14): <30 = oversold long | >70 = overbought short | 40-60 = neutral wait
+• MACD: bullish crossover above signal = long bias | bearish below = short bias | divergence = caution
+• EMA: EMA9/21 cross = momentum direction | EMA50/200 = trend confirmation
+• Bollinger Bands: lower band + RSI<35 = strong long | upper band + RSI>65 = strong short | squeeze = wait
+• Volume: up price + up volume = confirmed | up price + down volume = weak (TP sooner) | breakout spike = high conviction
+• S/R: identify nearest levels — entries at S/R confluence with indicator agreement = highest conviction
+Include indicator status for each trade in its Flags field.
+
+STEP 11 — CORRELATION & OVERLAP FILTER
+Before finalizing the 4-trade portfolio:
+• Flag same-sector pairs: e.g., 2 AI tokens (FET + TAO) = correlated exposure → replace one
+• Flag crypto-crypto overlap: alts often move with BTC (>0.7 correlation) → limit to 2 crypto positions max
+• Ideal 4-trade portfolio: 1 crypto + 1 equity + 1 commodity + 1 forex (on news days) OR 2 crypto + 1 equity + 1 commodity (quiet days)
+• State correlation verdict: "Portfolio is [diversified / partially correlated / over-concentrated] — [action]"
+
+STEP 12 — PRE-MARKET CHECKLIST (output at top of response)
+Always start your response with:
+━━━ PRE-MARKET CHECKLIST ━━━
+✅/❌ Macro calendar: [HIGH-impact events next 8h or "Clear"]
+✅/❌ Market regime: [RISK ON / RISK OFF / NEUTRAL — from intelligence data]
+✅/❌ Funding rates: [crowded longs / short squeeze risk / neutral]
+✅/❌ Quiet-day filters: [assets filtered or "None filtered"]
+✅/❌ Portfolio correlation: [diversified / flag if over-concentrated]
+━━━━━━━━━━━━━━━━━━━━━━━
+
+STEP 13 — TRADE OUTPUT FORMAT
 For EACH of the 4 trades (one per asset class: crypto, equity, commodity, forex):
 
 ━━━ TRADE #N — [ASSET CLASS] ━━━
