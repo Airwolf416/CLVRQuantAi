@@ -22,18 +22,50 @@ process.on('SIGINT', () => { shuttingDown = true; });
 const app = express();
 const httpServer = createServer(app);
 
+// ── Stripe webhook — MUST be registered before app.use(express.json()) ───────
+// express.raw() captures the unmodified body buffer Stripe needs for HMAC verification.
+// Any JSON body parser applied first will break the signature check.
 app.post(
   '/api/stripe/webhook',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
-    const signature = req.headers['stripe-signature'];
-    if (!signature) return res.status(400).json({ error: 'Missing signature' });
-    const sig = Array.isArray(signature) ? signature[0] : signature;
+    const signatureHeader = req.headers['stripe-signature'];
+    if (!signatureHeader) {
+      console.error('[stripe] Webhook rejected: missing stripe-signature header');
+      return res.status(400).json({ error: 'Missing stripe-signature header' });
+    }
+    const sig = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
+
+    // Guard: STRIPE_WEBHOOK_SECRET must be set
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error('[stripe] Webhook rejected: STRIPE_WEBHOOK_SECRET env var is not set');
+      return res.status(400).json({ error: 'Server webhook secret not configured' });
+    }
+
+    // Verify the payload is a raw Buffer (confirms express.raw() ran before express.json())
+    if (!Buffer.isBuffer(req.body)) {
+      console.error('[stripe] Webhook rejected: body is not a Buffer — express.json() may have run first');
+      return res.status(400).json({ error: 'Webhook body must be raw Buffer' });
+    }
+
     try {
-      await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+      // Step 1: Verify signature directly using process.env.STRIPE_WEBHOOK_SECRET
+      const { getUncachableStripeClient } = await import('./stripeClient');
+      const stripe = await getUncachableStripeClient();
+      const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+      console.log(`[stripe] Webhook verified: ${event.type} (id: ${event.id})`);
+
+      // Step 2: Sync event data to DB via stripe-replit-sync (non-fatal if it fails)
+      try {
+        await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+      } catch (syncErr: any) {
+        console.warn('[stripe] DB sync warning (non-fatal):', syncErr.message);
+      }
+
       res.status(200).json({ received: true });
     } catch (e: any) {
-      console.error('Webhook error:', e.message);
+      console.error('[stripe] Webhook signature verification failed:', e.message);
       res.status(400).json({ error: e.message });
     }
   }
