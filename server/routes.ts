@@ -14,9 +14,8 @@ const VAPID_PRIVATE_KEY = "JYSHjiS26v9DWkwQ-kc-fdoBjn2sBlaTyJOo8JPttoI";
 webpush.setVapidDetails("mailto:noreply@clvrquantai.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 // Helper: send a web push to all subscriptions of a user
-const PUSH_ORIGIN = process.env.REPLIT_DOMAINS
-  ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}`
-  : "https://clvrquantai.com";
+const PUSH_ORIGIN = process.env.APP_URL
+  || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}` : "https://clvrquantai.com");
 
 async function sendWebPushToUser(userId: string, title: string, body: string, tag = "clvrquant") {
   try {
@@ -2224,8 +2223,8 @@ export async function registerRoutes(
 
     try {
       const stripe = await getUncachableStripeClient();
-      const domains = process.env.REPLIT_DOMAINS?.split(',') || [];
-      const baseUrl = domains.length > 0 ? `https://${domains[0]}` : 'http://localhost:5000';
+      const baseUrl = process.env.APP_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : 'http://localhost:5000');
 
       const sessionParams: any = {
         mode: 'subscription',
@@ -2279,8 +2278,8 @@ export async function registerRoutes(
       if (!customerId) return res.status(400).json({ error: "No Stripe customer found" });
 
       const stripe = await getUncachableStripeClient();
-      const domains = process.env.REPLIT_DOMAINS?.split(',') || [];
-      const baseUrl = domains.length > 0 ? `https://${domains[0]}` : 'http://localhost:5000';
+      const baseUrl = process.env.APP_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : 'http://localhost:5000');
 
       const portal = await stripe.billingPortal.sessions.create({
         customer: customerId,

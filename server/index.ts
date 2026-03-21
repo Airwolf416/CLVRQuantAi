@@ -146,13 +146,15 @@ async function initStripe() {
 
     const stripeSync = await getStripeSync();
 
-    const domains = process.env.REPLIT_DOMAINS?.split(',') || [];
-    if (domains.length > 0) {
-      const webhookBaseUrl = `https://${domains[0]}`;
+    const webhookBaseUrl = process.env.APP_URL
+      || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : null);
+    if (webhookBaseUrl) {
       await stripeSync.findOrCreateManagedWebhook(
         `${webhookBaseUrl}/api/stripe/webhook`
       );
       log('Stripe webhook configured', 'stripe');
+    } else {
+      log('No APP_URL or REPLIT_DOMAINS set — skipping webhook registration', 'stripe');
     }
 
     await ensureStripeProducts();
