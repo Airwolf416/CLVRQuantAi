@@ -2217,6 +2217,49 @@ export async function registerRoutes(
     }
   });
 
+  // ── /api/prices — fetch live price IDs by lookup_key ──────────────────────
+  app.get("/api/prices", async (_req, res) => {
+    try {
+      const stripe = await getUncachableStripeClient();
+
+      // Primary: fetch directly by lookup_key — always returns the correct IDs
+      const { data: byKey } = await stripe.prices.list({
+        lookup_keys: ['pro_monthly', 'pro_yearly'],
+        active: true,
+        expand: ['data.product'],
+      });
+
+      const monthly = byKey.find(p => p.lookup_key === 'pro_monthly');
+      const yearly  = byKey.find(p => p.lookup_key === 'pro_yearly');
+
+      if (monthly && yearly) {
+        return res.json({
+          monthly: { price_id: monthly.id, unit_amount: monthly.unit_amount, interval: 'month', lookup_key: monthly.lookup_key },
+          yearly:  { price_id: yearly.id,  unit_amount: yearly.unit_amount,  interval: 'year',  lookup_key: yearly.lookup_key },
+        });
+      }
+
+      // Fallback: search by product metadata + match by interval
+      const products = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
+      if (products.data.length > 0) {
+        const { data: prices } = await stripe.prices.list({ product: products.data[0].id, active: true });
+        const m = prices.find(p => p.recurring?.interval === 'month');
+        const y = prices.find(p => p.recurring?.interval === 'year');
+        if (m && y) {
+          return res.json({
+            monthly: { price_id: m.id, unit_amount: m.unit_amount, interval: 'month', lookup_key: m.lookup_key ?? null },
+            yearly:  { price_id: y.id, unit_amount: y.unit_amount, interval: 'year',  lookup_key: y.lookup_key ?? null },
+          });
+        }
+      }
+
+      res.status(404).json({ error: 'No active prices found — ensure pro_monthly and pro_yearly lookup_keys exist in Stripe' });
+    } catch (e: any) {
+      console.error('[stripe] /api/prices error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/stripe/checkout", async (req, res) => {
     const { priceId, email } = req.body;
     if (!priceId) return res.status(400).json({ error: "priceId required" });

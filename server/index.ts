@@ -109,26 +109,53 @@ async function ensureStripeProducts() {
   try {
     const { getUncachableStripeClient } = await import('./stripeClient');
     const stripe = await getUncachableStripeClient();
-    const existing = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
-    if (existing.data.length > 0) {
-      const prices = await stripe.prices.list({ product: existing.data[0].id, active: true });
-      log(`Stripe products OK: ${existing.data[0].id} with ${prices.data.length} prices`, 'stripe');
+
+    // Check if prices with the required lookup_keys already exist
+    const existing = await stripe.prices.list({
+      lookup_keys: ['pro_monthly', 'pro_yearly'],
+      active: true,
+    });
+    if (existing.data.length >= 2) {
+      log(`Stripe prices OK: found pro_monthly + pro_yearly by lookup_key`, 'stripe');
       return;
     }
-    const product = await stripe.products.create({
-      name: 'CLVRQuant Pro',
-      description: 'Full access to CLVRQuant AI trading intelligence: AI analyst, trade ideas, morning briefs, unlimited alerts, signals, liquidation heatmap, volume & funding monitors.',
-      metadata: { tier: 'pro', app: 'clvrquant' },
-    });
-    await stripe.prices.create({
-      product: product.id, unit_amount: 2900, currency: 'usd',
-      recurring: { interval: 'month' }, metadata: { plan: 'pro_monthly' },
-    });
-    await stripe.prices.create({
-      product: product.id, unit_amount: 19900, currency: 'usd',
-      recurring: { interval: 'year' }, metadata: { plan: 'pro_yearly' },
-    });
-    log(`Created Stripe product ${product.id} with monthly + yearly prices`, 'stripe');
+
+    // Find or create the product
+    const productSearch = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
+    let product = productSearch.data[0];
+    if (!product) {
+      product = await stripe.products.create({
+        name: 'CLVRQuant Pro',
+        description: 'Full access to CLVRQuant AI trading intelligence: AI analyst, trade ideas, morning briefs, unlimited alerts, signals, liquidation heatmap, volume & funding monitors.',
+        metadata: { tier: 'pro', app: 'clvrquant' },
+      });
+      log(`Created Stripe product ${product.id}`, 'stripe');
+    }
+
+    // Create missing prices with lookup_keys
+    const hasMonthly = existing.data.some(p => p.lookup_key === 'pro_monthly');
+    const hasYearly  = existing.data.some(p => p.lookup_key === 'pro_yearly');
+
+    if (!hasMonthly) {
+      await stripe.prices.create({
+        product: product.id, unit_amount: 2900, currency: 'usd',
+        recurring: { interval: 'month' },
+        lookup_key: 'pro_monthly',
+        transfer_lookup_key: true,
+        metadata: { plan: 'pro_monthly' },
+      });
+      log('Created price: pro_monthly ($29/month)', 'stripe');
+    }
+    if (!hasYearly) {
+      await stripe.prices.create({
+        product: product.id, unit_amount: 19900, currency: 'usd',
+        recurring: { interval: 'year' },
+        lookup_key: 'pro_yearly',
+        transfer_lookup_key: true,
+        metadata: { plan: 'pro_yearly' },
+      });
+      log('Created price: pro_yearly ($199/year)', 'stripe');
+    }
   } catch (e: any) {
     console.error('[stripe] Product setup error:', e.message);
   }

@@ -844,7 +844,7 @@ function Dashboard({user,setUser}){
   const [changePwLoading,setChangePwLoading]=useState(false);
   const [changePwError,setChangePwError]=useState("");
   const [biometricRegistering,setBiometricRegistering]=useState(false);
-  const [stripePrices,setStripePrices]=useState([]);
+  const [stripePrices,setStripePrices]=useState({monthly:null,yearly:null});
   const [checkoutLoading,setCheckoutLoading]=useState(false);
   const isPro=userTier==="pro";
 
@@ -1126,8 +1126,8 @@ function Dashboard({user,setUser}){
   },[]);
 
   useEffect(()=>{
-    fetch("/api/stripe/products").then(r=>r.json()).then(data=>{
-      if(Array.isArray(data))setStripePrices(data);
+    fetch("/api/prices").then(r=>r.json()).then(data=>{
+      if(data?.monthly&&data?.yearly)setStripePrices(data);
     }).catch(()=>{});
   },[]);
 
@@ -2039,17 +2039,17 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             </div>
             <div style={{display:"flex",gap:8,marginBottom:16}}>
               {(()=>{
-                const monthlyPrice=stripePrices.find(p=>p.interval==="month");
-                const yearlyPrice=stripePrices.find(p=>p.interval==="year");
-                const pricesReady=monthlyPrice&&yearlyPrice;
+                const monthlyPrice=stripePrices.monthly;
+                const yearlyPrice=stripePrices.yearly;
+                const pricesReady=!!(monthlyPrice?.price_id&&yearlyPrice?.price_id);
                 return<>
                   <button data-testid="btn-checkout-monthly" onClick={()=>pricesReady?handleCheckout(monthlyPrice.price_id):setToast("Prices loading, try again in a moment")} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer"}}>
-                    <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.gold2}}>$29</div>
+                    <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.gold2}}>${monthlyPrice?((monthlyPrice.unit_amount||2900)/100).toFixed(0):"29"}</div>
                     <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER MONTH</div>
                   </button>
                   <button data-testid="btn-checkout-yearly" onClick={()=>pricesReady?handleCheckout(yearlyPrice.price_id):setToast("Prices loading, try again in a moment")} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
                     <div style={{position:"absolute",top:-8,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:700}}>SAVE 43%</div>
-                    <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.green}}>$199</div>
+                    <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.green}}>${yearlyPrice?((yearlyPrice.unit_amount||19900)/100).toFixed(0):"199"}</div>
                     <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER YEAR</div>
                   </button>
                 </>;
