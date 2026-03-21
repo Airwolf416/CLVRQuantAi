@@ -1,61 +1,27 @@
 import Stripe from 'stripe';
 
-async function getCredentials() {
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY
-    ? 'repl ' + process.env.REPL_IDENTITY
-    : process.env.WEB_REPL_RENEWAL
-      ? 'depl ' + process.env.WEB_REPL_RENEWAL
-      : null;
-
-  if (!xReplitToken) {
-    throw new Error('X-Replit-Token not found for repl/depl');
-  }
-
-  const connectorName = 'stripe';
-  const isProduction = process.env.REPLIT_DEPLOYMENT === '1';
-  const targetEnvironment = isProduction ? 'production' : 'development';
-
-  const url = new URL(`https://${hostname}/api/v2/connection`);
-  url.searchParams.set('include_secrets', 'true');
-  url.searchParams.set('connector_names', connectorName);
-  url.searchParams.set('environment', targetEnvironment);
-
-  const response = await fetch(url.toString(), {
-    headers: {
-      'Accept': 'application/json',
-      'X-Replit-Token': xReplitToken
-    }
-  });
-
-  const data = await response.json();
-  const connectionSettings = data.items?.[0];
-
-  if (!connectionSettings || (!connectionSettings.settings.publishable || !connectionSettings.settings.secret)) {
-    throw new Error(`Stripe ${targetEnvironment} connection not found`);
-  }
-
-  return {
-    publishableKey: connectionSettings.settings.publishable,
-    secretKey: connectionSettings.settings.secret,
-  };
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn('[stripe] STRIPE_SECRET_KEY not set — Stripe features will be disabled');
 }
 
 export async function getUncachableStripeClient() {
-  const { secretKey } = await getCredentials();
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) throw new Error('STRIPE_SECRET_KEY environment variable is not set');
   return new Stripe(secretKey, {
     apiVersion: '2025-08-27.basil' as any,
   });
 }
 
 export async function getStripePublishableKey() {
-  const { publishableKey } = await getCredentials();
-  return publishableKey;
+  const key = process.env.STRIPE_PUBLISHABLE_KEY;
+  if (!key) throw new Error('STRIPE_PUBLISHABLE_KEY environment variable is not set');
+  return key;
 }
 
 export async function getStripeSecretKey() {
-  const { secretKey } = await getCredentials();
-  return secretKey;
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error('STRIPE_SECRET_KEY environment variable is not set');
+  return key;
 }
 
 let stripeSync: any = null;
@@ -70,6 +36,10 @@ export async function getStripeSync() {
         max: 2,
       },
       stripeSecretKey: secretKey,
+      // Pass webhook secret directly so signature verification works without DB lookup
+      ...(process.env.STRIPE_WEBHOOK_SECRET
+        ? { stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET }
+        : {}),
     });
   }
   return stripeSync;
