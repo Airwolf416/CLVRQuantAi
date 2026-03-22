@@ -121,32 +121,35 @@ async function fetchTickerMentions(): Promise<Record<string, any>> {
 
 // ── Overall market sentiment (aggregate all symbols) ─────────────────────────
 function buildOverallSentiment(mentions: Record<string, any>) {
+  // Use weighted-average of per-ticker sentimentScore so BTC/ETH bearishness
+  // isn't drowned out by small-cap DOGE having many bullish posts.
+  // Each ticker's sentimentScore (0-100%) is weighted; BTC=3x, ETH=2x, others=1x.
+  let wScoreSum = 0, wTotal = 0;
   let totalBull = 0, totalBear = 0, totalPosts = 0;
-  let wBull = 0, wBear = 0;
 
   for (const sym of Object.values(mentions)) {
-    totalBull  += sym.bullishCount  || 0;
-    totalBear  += sym.bearishCount  || 0;
-    totalPosts += sym.count1h       || 0;
-    // Weight BTC and ETH more heavily
-    const w = sym.ticker === "$BTC" ? 2 : sym.ticker === "$ETH" ? 1.5 : 1;
-    wBull += (sym.bullishCount || 0) * w;
-    wBear += (sym.bearishCount || 0) * w;
+    const score = sym.sentimentScore ?? 50;
+    const posts = sym.count1h || 0;
+    // Skip tickers with fewer than 2 posts — not statistically meaningful
+    if (posts < 2) continue;
+    const w = sym.ticker === "$BTC" ? 3 : sym.ticker === "$ETH" ? 2 : 1;
+    wScoreSum += score * w;
+    wTotal    += w;
+    totalBull  += sym.bullishCount || 0;
+    totalBear  += sym.bearishCount || 0;
+    totalPosts += posts;
   }
 
-  const total   = Math.max(totalBull + totalBear, 1);
-  const score   = Math.round((totalBull / total) * 100);
-  const wTotal  = Math.max(wBull + wBear, 1);
-  const wScore  = Math.round((wBull / wTotal) * 100);
+  const overallScore = wTotal > 0 ? Math.round(wScoreSum / wTotal) : 50;
 
   return {
-    score,
-    weightedScore: wScore,
+    score:         overallScore,
+    weightedScore: overallScore,
     label:
-      score > 65 ? "VERY BULLISH" :
-      score > 55 ? "BULLISH"      :
-      score < 35 ? "VERY BEARISH" :
-      score < 45 ? "BEARISH"      : "NEUTRAL",
+      overallScore > 65 ? "VERY BULLISH" :
+      overallScore > 55 ? "BULLISH"      :
+      overallScore < 35 ? "VERY BEARISH" :
+      overallScore < 45 ? "BEARISH"      : "NEUTRAL",
     bullishCount:  totalBull,
     bearishCount:  totalBear,
     totalTweets:   totalPosts,

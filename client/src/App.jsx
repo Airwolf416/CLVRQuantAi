@@ -2312,15 +2312,29 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
               <div style={{fontFamily:MONO,fontSize:9,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>{i18n.volumeMonitor}</div>
-              {["BTC","ETH","SOL","DOGE","XRP","AVAX"].map(sym=>{const d=cryptoPrices[sym];const vh=d?.volHistory||[];const last=vh[vh.length-1]||0;const avg=vh.length>=3?vh.slice(-5).reduce((a,b)=>a+b,0)/Math.min(vh.length,5):0;const ratio=avg>0?last/avg:0;const hot=ratio>3;return(
-                <div key={sym} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
-                  <span style={{fontFamily:MONO,fontSize:10,color:hot?C.cyan:C.muted2}}>{sym}</span>
-                  <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    <div style={{width:44,height:5,background:"rgba(0,212,255,.1)",borderRadius:1,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(ratio/5*100,100)}%`,background:hot?"rgba(0,212,255,.7)":"rgba(0,212,255,.25)",borderRadius:1}}/></div>
-                    <span style={{fontFamily:MONO,fontSize:9,color:hot?C.cyan:C.muted,width:28,textAlign:"right"}}>{ratio>0?ratio.toFixed(1)+"x":"--"}</span>
-                  </div>
-                </div>
-              );})}
+              {(()=>{
+                const VOL_BASE={BTC:3e9,ETH:1e9,SOL:4e8,DOGE:1.5e8,XRP:1.2e8,AVAX:8e7};
+                const fmtVol=v=>v>=1e9?`$${(v/1e9).toFixed(1)}B`:v>=1e6?`$${(v/1e6).toFixed(0)}M`:v>=1e3?`$${(v/1e3).toFixed(0)}K`:"--";
+                return ["BTC","ETH","SOL","DOGE","XRP","AVAX"].map(sym=>{
+                  const vol=storePerps[sym]?.volume24h||cryptoPrices[sym]?.volume||0;
+                  const base=VOL_BASE[sym]||1e8;
+                  const ratio=vol>0?vol/base:0;
+                  const hot=ratio>1.8;
+                  const veryHot=ratio>3;
+                  const barW=vol>0?Math.min(ratio/4*100,100):0;
+                  const col=veryHot?C.orange:hot?C.cyan:"rgba(0,212,255,.3)";
+                  return(
+                    <div key={sym} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+                      <span style={{fontFamily:MONO,fontSize:10,color:veryHot?C.orange:hot?C.cyan:C.muted2}}>{sym}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:5}}>
+                        <div style={{width:40,height:5,background:"rgba(0,212,255,.08)",borderRadius:1,overflow:"hidden"}}><div style={{height:"100%",width:`${barW}%`,background:col,borderRadius:1,transition:"width 1s"}}/></div>
+                        <span style={{fontFamily:MONO,fontSize:9,color:C.muted,width:32,textAlign:"right"}}>{fmtVol(vol)}</span>
+                        {veryHot&&<span style={{fontFamily:MONO,fontSize:8,color:C.orange,fontWeight:700}}>HOT</span>}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
 
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"10px 12px"}}>
