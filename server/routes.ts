@@ -2652,6 +2652,71 @@ export async function registerRoutes(
     res.json({ code, expiresAt });
   });
 
+  // ── Admin: Export all users as CSV (owner only) ──────────────────────────
+  app.get("/api/admin/users/export", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId || !(await isOwner(userId))) return res.status(403).json({ error: "Unauthorized" });
+    try {
+      const result = await pool.query(
+        `SELECT id, name, email, tier, email_verified, subscribe_to_brief, promo_code, promo_expires_at, created_at
+         FROM users ORDER BY created_at DESC`
+      );
+      const rows = result.rows;
+      const headers = ["id","name","email","tier","email_verified","subscribe_to_brief","promo_code","promo_expires_at","created_at"];
+      const csv = [
+        headers.join(","),
+        ...rows.map(r => headers.map(h => {
+          const v = r[h] ?? "";
+          return `"${String(v).replace(/"/g,'""')}"`;
+        }).join(","))
+      ].join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="clvrquant-users-${new Date().toISOString().slice(0,10)}.csv"`);
+      res.send(csv);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Admin: List all users as JSON (owner only) ────────────────────────────
+  app.get("/api/admin/users/list", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId || !(await isOwner(userId))) return res.status(403).json({ error: "Unauthorized" });
+    try {
+      const result = await pool.query(
+        `SELECT id, name, email, tier, email_verified, subscribe_to_brief, promo_code, promo_expires_at, created_at
+         FROM users ORDER BY created_at DESC`
+      );
+      res.json({ count: result.rows.length, users: result.rows });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Admin: Restore a user by email (owner only, for recovery) ────────────
+  app.post("/api/admin/users/restore", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId || !(await isOwner(userId))) return res.status(403).json({ error: "Unauthorized" });
+    const { name, email, tier = "free", emailVerified = true } = req.body;
+    if (!email || !name) return res.status(400).json({ error: "name and email required" });
+    try {
+      const bcrypt = await import("bcrypt");
+      const tempPwd = Math.random().toString(36).slice(2, 10);
+      const hashed = await bcrypt.hash(tempPwd, 12);
+      const crypto = await import("crypto");
+      const id = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO users (id, name, email, password, tier, email_verified, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (email) DO NOTHING`,
+        [id, name.trim(), email.toLowerCase().trim(), hashed, tier, emailVerified]
+      );
+      res.json({ ok: true, tempPassword: tempPwd, note: "Send this temp password to the user so they can sign in and reset it." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── Downgrade to free (cancel Stripe sub + clear promo tier) ─────────────
   app.post("/api/stripe/downgrade", async (req, res) => {
     const userId = (req.session as any)?.userId;
