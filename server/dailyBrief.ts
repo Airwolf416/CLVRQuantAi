@@ -552,11 +552,33 @@ async function sendDailyBriefEmails() {
       if (i > 0) await new Promise(r => setTimeout(r, 600));
       try {
         const html = buildEmailHtml(briefJson, today, marketData, isPro, sub.email);
+        const briefText = [
+          `CLVRQuant Morning Brief — ${today}`,
+          ``,
+          briefJson.headline || "",
+          briefJson.summary || "",
+          ``,
+          `TOP THEMES:`,
+          ...(briefJson.themes || []).map((t: any) => `• ${t}`),
+          ``,
+          `MARKET SNAPSHOT:`,
+          ...(briefJson.marketSnapshot || []).map((m: any) => `  ${m.label}: ${m.value} ${m.change || ""}`),
+          ``,
+          `Visit https://clvrquantai.com for live data and AI analysis.`,
+          ``,
+          `© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+          `To unsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}`,
+        ].join("\n");
         const resp = await client.emails.send({
-          from: "CLVRQuant <noreply@clvrquantai.com>",
+          from: "CLVRQuant <hello@clvrquantai.com>",
           to: sub.email,
           reply_to: "MikeClaver@CLVRQuantAI.com",
-          subject: `📊 CLVRQuant Morning Brief — ${today}`,
+          subject: `CLVRQuant Morning Brief — ${today}`,
+          headers: {
+            "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
+          text: briefText,
           html,
         });
         if ((resp as any).error) {
