@@ -6,7 +6,7 @@ if (!process.env.RESEND_API_KEY) {
 
 export async function getUncachableResendClient() {
   const apiKey = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.RESEND_FROM_EMAIL || 'CLVRQuant <noreply@clvrquantai.com>';
+  const fromEmail = process.env.RESEND_FROM_EMAIL || 'CLVRQuant <hello@clvrquantai.com>';
 
   if (!apiKey) {
     throw new Error('RESEND_API_KEY environment variable is not set');

@@ -82,12 +82,13 @@ app.post(
 
           if (toEmail) {
             const { getUncachableResendClient } = await import('./resendClient');
-            const { client: resend } = await getUncachableResendClient();
+            const { client: resend, fromEmail: payFrom } = await getUncachableResendClient();
             await resend.emails.send({
-              from: 'CLVRQuantAI <noreply@clvrquantai.com>',
+              from: payFrom,
               to: toEmail,
               reply_to: 'MikeClaver@CLVRQuantAI.com',
               subject: 'Your CLVRQuantAI Payment Confirmation',
+              text: `Payment Confirmed — CLVRQuantAI\n\nThank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- 4 AI trade ideas per morning brief\n- Unlimited price alerts\n- Real-time signals with AI reasoning\n- Liquidation heatmap & whale tracker\n- Volume & funding rate monitors\n\nOpen your dashboard: https://clvrquantai.com\n\nQuestions? MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI`,
               html: `
 <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:0;margin:0">
   <div style="max-width:600px;margin:0 auto;padding:32px 24px">

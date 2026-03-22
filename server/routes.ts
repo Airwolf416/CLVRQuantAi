@@ -298,11 +298,15 @@ async function checkAndGrantReferralReward(userId: string) {
     }
     try {
       const { client: resend, fromEmail } = await getUncachableResendClient();
-      const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
       await resend.emails.send({
-        from: senderAddress, to: referrer.email,
+        from: fromEmail, to: referrer.email,
         reply_to: "MikeClaver@CLVRQuantAI.com",
         subject: "CLVRQuant — You earned 1 week of Pro!",
+        headers: {
+          "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
+        text: `Congratulations, ${referrer.name}!\n\nYour referral just subscribed to CLVRQuant Pro. You've earned 1 week of free Pro access as a thank you!\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com\nTo unsubscribe: MikeClaver@CLVRQuantAI.com`,
         html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
           <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
           <div style="border-top:1px solid #141e35;padding-top:20px">
@@ -325,12 +329,16 @@ async function checkPromoExpiryReminders() {
     for (const u of users14) {
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
-        const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
         const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
         await resend.emails.send({
-          from: senderAddress, to: u.email,
+          from: fromEmail, to: u.email,
           reply_to: "MikeClaver@CLVRQuantAI.com",
           subject: "CLVRQuant — Your Pro access expires in 2 weeks",
+          headers: {
+            "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
+          text: `Hey ${u.name},\n\nYour CLVRQuant Pro access (promo code: ${u.promoCode}) expires on ${expiryDate}.\n\nTo keep uninterrupted access to AI analysis, signals, and all Pro features, subscribe before it expires at https://clvrquantai.com\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
             <div style="border-top:1px solid #141e35;padding-top:20px">
@@ -2677,8 +2685,8 @@ export async function registerRoutes(
       const allUsers = targets && Array.isArray(targets) && targets.length > 0
         ? { rows: targets }
         : await pool.query("SELECT id, name, email, tier, subscribe_to_brief FROM users WHERE email LIKE '%@%' ORDER BY email");
-      const { client: resend } = await getUncachableResendClient();
-      const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
+      const { client: resend, fromEmail: blastFrom } = await getUncachableResendClient();
+      const senderAddress = blastFrom;
       const results: any[] = [];
       for (const u of allUsers.rows) {
         try {
@@ -2688,6 +2696,11 @@ export async function registerRoutes(
             reply_to: "MikeClaver@CLVRQuantAI.com",
             to: u.email,
             subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
+            headers: {
+              "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
+            text: `Welcome to CLVRQuant, ${u.name}!\n\nYour account is now live at https://clvrquantai.com\n\nWhat you have access to:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n${dailyEmail ? "- Daily 6AM Brief — Subscribed\n" : ""}\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com\nTo unsubscribe reply with "unsubscribe"`,
             html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
               <div style="text-align:center;margin-bottom:24px">
                 <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
@@ -2769,7 +2782,7 @@ export async function registerRoutes(
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
         console.log(`[signup] Resend fromEmail configured as: "${fromEmail}"`);
-        const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
+        const senderAddress = fromEmail;
         console.log(`[signup] Sending welcome email to ${email.toLowerCase().trim()} from ${senderAddress}`);
         const verifyUrl = `https://clvrquantai.com?verify=${verifyToken}`;
         const emailResult = await resend.emails.send({
@@ -2777,6 +2790,11 @@ export async function registerRoutes(
           reply_to: "MikeClaver@CLVRQuantAI.com",
           to: email.toLowerCase().trim(),
           subject: "Verify your CLVRQuant account",
+          headers: {
+            "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
+          text: `Welcome to CLVRQuant, ${name.trim()}!\n\nVerify your email to activate your account:\n${verifyUrl}\n\nFeatures included:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas (Pro)\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:28px">
               <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
@@ -2923,23 +2941,29 @@ export async function registerRoutes(
       const token = crypto.randomBytes(24).toString("hex");
       await storage.setEmailVerificationToken(userId, token);
       const verifyUrl = `https://clvrquantai.com?verify=${token}`;
-      const { client: resend } = await getUncachableResendClient();
+      const { client: resend, fromEmail: resendFrom } = await getUncachableResendClient();
       await resend.emails.send({
-        from: "CLVRQuant <noreply@clvrquantai.com>",
+        from: resendFrom,
         reply_to: "MikeClaver@CLVRQuantAI.com",
         to: user.email,
         subject: "Verify your CLVRQuant email",
+        headers: {
+          "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
+        text: `Hi ${user.name},\n\nClick the link below to verify your email and activate your CLVRQuant account:\n${verifyUrl}\n\nIf you didn't sign up, you can ignore this email.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
         html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
           <div style="text-align:center;margin-bottom:24px">
             <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
             <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">AI · MARKET INTELLIGENCE</div>
           </div>
           <p style="font-size:15px;color:#f0f4ff">Hi <strong>${user.name}</strong>,</p>
-          <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:28px">Here's your verification link. Click the button below to confirm your email and activate your account.</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:28px">Click the button below to confirm your email and activate your account.</p>
           <div style="text-align:center;margin:28px 0">
-            <a href="${verifyUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-style:italic;font-weight:700;font-size:16px;padding:16px 40px;border-radius:6px;text-decoration:none">✦ Verify My Email</a>
+            <a href="${verifyUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-style:italic;font-weight:700;font-size:16px;padding:16px 40px;border-radius:6px;text-decoration:none">Verify My Email</a>
           </div>
-          <p style="font-size:11px;color:#4a5d80;text-align:center">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a> · Not financial advice</p>
+          <p style="font-size:11px;color:#4a5d80;text-align:center;margin-bottom:6px">Or copy this link:<br><span style="font-family:monospace;font-size:10px;color:#6b7fa8;word-break:break-all">${verifyUrl}</span></p>
+          <p style="font-size:10px;color:#3a4d68;text-align:center;margin-top:20px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
         </div>`,
       });
       res.json({ ok: true });
@@ -3025,12 +3049,12 @@ export async function registerRoutes(
       const resetLink = `${APP_URL}?reset=${token}`;
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
-        const senderAddress = "CLVRQuant <noreply@clvrquantai.com>";
         await resend.emails.send({
-          from: senderAddress,
+          from: fromEmail,
           reply_to: "MikeClaver@CLVRQuantAI.com",
           to: email.toLowerCase().trim(),
           subject: "CLVRQuant — Password Reset",
+          text: `Hello ${user.name},\n\nYou requested a password reset.\n\nTemporary password: ${tempPassword}\n\nOr reset via link (expires in 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:24px">
               <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
