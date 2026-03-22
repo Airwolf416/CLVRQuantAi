@@ -56,7 +56,121 @@ app.post(
       const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
       console.log(`[stripe] Webhook verified: ${event.type} (id: ${event.id})`);
 
-      // Step 2: Sync event data to DB via stripe-replit-sync (non-fatal if it fails)
+      // Step 2: Payment confirmation email for checkout.session.completed
+      if (event.type === 'checkout.session.completed') {
+        try {
+          const session = event.data.object as any;
+          const toEmail = session.customer_details?.email;
+          const customerName = session.customer_details?.name || 'Valued Member';
+          const amountCents = session.amount_total || 0;
+          const txDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+          const txId = (session.payment_intent || session.id || '').toString().substring(0, 20);
+
+          let planName = 'CLVRQuantAI Pro';
+          let planInterval = '';
+          let planColor = '#e8c96d';
+          if (amountCents === 2900) {
+            planName = 'Pro Plan — Monthly';
+            planInterval = '$29.00 / month';
+          } else if (amountCents === 19900) {
+            planName = 'Pro Plan — Annual';
+            planInterval = '$199.00 / year';
+            planColor = '#00c787';
+          } else {
+            planInterval = `$${(amountCents / 100).toFixed(2)} ${(session.currency || 'usd').toUpperCase()}`;
+          }
+
+          if (toEmail) {
+            const { getUncachableResendClient } = await import('./resendClient');
+            const { client: resend } = await getUncachableResendClient();
+            await resend.emails.send({
+              from: 'CLVRQuantAI <noreply@clvrquantai.com>',
+              to: toEmail,
+              reply_to: 'MikeClaver@CLVRQuantAI.com',
+              subject: 'Your CLVRQuantAI Payment Confirmation',
+              html: `
+<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:0;margin:0">
+  <div style="max-width:600px;margin:0 auto;padding:32px 24px">
+
+    <!-- Header -->
+    <div style="text-align:center;margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid #141e35">
+      <div style="font-family:Georgia,serif;font-size:34px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuantAI</div>
+      <div style="font-family:'Courier New',monospace;font-size:9px;color:#4a5d80;letter-spacing:0.25em;margin-top:4px">MARKET INTELLIGENCE PLATFORM</div>
+    </div>
+
+    <!-- Body -->
+    <p style="font-size:15px;color:#f0f4ff;margin-bottom:6px">Payment Confirmed</p>
+    <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:20px">
+      Thank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active. Below is your receipt for your records.
+    </p>
+
+    <!-- Invoice box -->
+    <div style="background:#0a1020;border:1px solid #1a2840;border-radius:4px;padding:20px;margin-bottom:24px">
+      <div style="font-family:'Courier New',monospace;font-size:9px;color:#4a5d80;letter-spacing:0.2em;margin-bottom:14px">PAYMENT RECEIPT</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tr style="border-bottom:1px solid #141e35">
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.08em">PLAN</td>
+          <td style="padding:10px 0;font-size:13px;color:#f0f4ff;text-align:right;font-weight:600">${planName}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #141e35">
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.08em">AMOUNT</td>
+          <td style="padding:10px 0;font-size:13px;text-align:right;font-weight:700;color:${planColor}">${planInterval}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #141e35">
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.08em">DATE</td>
+          <td style="padding:10px 0;font-size:12px;color:#c8d4ee;text-align:right">${txDate}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.08em">TRANSACTION</td>
+          <td style="padding:10px 0;font-size:11px;color:#4a5d80;text-align:right;font-family:'Courier New',monospace">${txId}...</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- Pro features -->
+    <div style="background:#0a1020;border:1px solid #1a2840;border-left:3px solid #e8c96d;border-radius:4px;padding:16px;margin-bottom:24px">
+      <div style="font-family:'Courier New',monospace;font-size:9px;color:#e8c96d;letter-spacing:0.2em;margin-bottom:10px">YOUR PRO FEATURES</div>
+      <div style="font-size:12px;color:#6b7fa8;line-height:2">
+        ✦ CLVR AI — Full Claude-powered market analyst<br>
+        ✦ 4 AI trade ideas per morning brief<br>
+        ✦ Unlimited price alerts<br>
+        ✦ Real-time signals with AI reasoning<br>
+        ✦ Liquidation heatmap &amp; whale tracker<br>
+        ✦ Volume &amp; funding rate monitors
+      </div>
+    </div>
+
+    <!-- CTA -->
+    <div style="text-align:center;margin-bottom:28px">
+      <a href="https://clvrquantai.com" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:'Courier New',monospace;font-size:11px;font-weight:700;letter-spacing:0.15em;padding:14px 32px;border-radius:3px;text-decoration:none">OPEN DASHBOARD</a>
+    </div>
+
+    <!-- Note -->
+    <p style="font-size:12px;color:#4a5d80;line-height:1.8;text-align:center;margin-bottom:20px">
+      Questions or need help? Reply to this email or reach us at<br>
+      <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">MikeClaver@CLVRQuantAI.com</a>
+    </p>
+
+    <!-- Footer -->
+    <div style="border-top:1px solid #141e35;padding-top:16px;text-align:center">
+      <p style="font-size:11px;color:#2a3650;margin:0">© 2026 CLVRQuantAI · All rights reserved</p>
+      <p style="font-size:9px;color:#1e2c45;margin:6px 0 0">
+        You are receiving this because you subscribed to CLVRQuantAI.
+        <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(toEmail)}" style="color:#2a3650;text-decoration:underline">Unsubscribe</a>
+      </p>
+    </div>
+
+  </div>
+</div>`,
+            });
+            console.log(`[stripe] Payment confirmation email sent to ${toEmail} for ${planName}`);
+          }
+        } catch (emailErr: any) {
+          console.error('[stripe] Payment confirmation email error (non-fatal):', emailErr.message);
+        }
+      }
+
+      // Step 3: Sync event data to DB via stripe-replit-sync (non-fatal if it fails)
       try {
         await WebhookHandlers.processWebhook(req.body as Buffer, sig);
       } catch (syncErr: any) {
