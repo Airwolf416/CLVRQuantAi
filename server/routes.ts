@@ -1553,6 +1553,57 @@ export async function registerRoutes(
         console.error("CryptoPanic news error:", e.message);
       }
     }
+    // ── Stocktwits social posts → inject into news feed for SOCIAL filter ──
+    try {
+      const { getTwitterData } = await import("./twitter");
+      const twData = await getTwitterData();
+      if (twData && !twData.error) {
+        // Pull top posts from each ticker's Stocktwits feed
+        const seen = new Set<string>();
+        const allPosts: any[] = [];
+        for (const sym of Object.values(twData.mentions || {})) {
+          const m = sym as any;
+          for (const post of (m.topPosts || [])) {
+            if (post.text && !seen.has(post.text.slice(0, 60))) {
+              seen.add(post.text.slice(0, 60));
+              allPosts.push({ ...post, ticker: m.ticker });
+            }
+          }
+        }
+        // Also pull breaking posts
+        for (const post of (twData.breaking || [])) {
+          if (post.text && !seen.has(post.text.slice(0, 60))) {
+            seen.add(post.text.slice(0, 60));
+            allPosts.push({ ...post, ticker: post.assets?.[0] || "SOCIAL" });
+          }
+        }
+        allPosts.sort((a, b) => b.likes - a.likes);
+        for (const post of allPosts.slice(0, 12)) {
+          const sentNum = post.sentiment === "bullish" ? 0.6 : post.sentiment === "bearish" ? -0.6 : 0;
+          const { isPolitical, marketImpact } = classifyPolitical(post.text);
+          results.push({
+            id:          "st-" + (post.id || Math.random().toString(36).slice(2)),
+            source:      `@${post.handle} (Stocktwits)`,
+            icon:        "ST",
+            color:       "cyan",
+            title:       post.text.slice(0, 220),
+            body:        "",
+            sentiment:   sentNum,
+            score:       Math.min(10, 4 + Math.round(post.likes / 10)),
+            assets:      post.ticker ? [post.ticker.replace("$", "")] : [],
+            categories:  ["twitter", "social", ...(isPolitical ? ["political"] : [])],
+            political:   isPolitical,
+            marketImpact: isPolitical ? marketImpact : null,
+            ts:          post.createdAt ? new Date(post.createdAt).getTime() : Date.now() - 600_000,
+            url:         post.url || "#",
+            imageUrl:    null,
+          });
+        }
+      }
+    } catch (e: any) {
+      console.warn("[news] Stocktwits inject error:", e.message);
+    }
+
     // Apply political classification to all non-twitter news items
     for (const item of results) {
       if (!item.political) {

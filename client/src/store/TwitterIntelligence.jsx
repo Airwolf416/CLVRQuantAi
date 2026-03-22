@@ -3,7 +3,7 @@
 // Data source: Stocktwits (free, explicit user-tagged sentiment, no API key)
 // Backend route: /api/twitter  |  Cache: 4 minutes
 // ─────────────────────────────────────────────────────────────────────────────
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 const MONO  = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";

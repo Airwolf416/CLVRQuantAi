@@ -2679,30 +2679,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {tab==="alerts"&&<>
           <div style={{marginBottom:10}}><SLabel>Alerts & Anomalies</SLabel></div>
 
-          {/* ── Store auto-generated alerts ── */}
-          {storeAlerts&&storeAlerts.length>0&&(
-            <div style={{marginBottom:12}}>
-              <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.22em",marginBottom:7}}>⚡ LIVE AUTO-ALERTS ({storeAlerts.length})</div>
-              {storeAlerts.map((a,i)=>{
-                const colMap={high:"#ff2d55",moderate:"#f59e0b",low:"#6b7a99",info:"#3b82f6"};
-                const bgMap={high:"rgba(255,45,85,0.06)",moderate:"rgba(245,158,11,0.06)",low:"rgba(107,122,153,0.06)",info:"rgba(59,130,246,0.06)"};
-                const bMap={high:"rgba(255,45,85,0.2)",moderate:"rgba(245,158,11,0.2)",low:"rgba(255,255,255,0.07)",info:"rgba(59,130,246,0.2)"};
-                const col=colMap[a.severity]||C.muted2;
-                return(
-                  <div key={i} data-testid={`store-alert-${i}`} style={{background:bgMap[a.severity]||"transparent",border:`1px solid ${bMap[a.severity]||C.border}`,borderRadius:6,padding:"8px 11px",marginBottom:5,display:"flex",gap:9,alignItems:"flex-start"}}>
-                    <div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0,marginTop:3}}/>
-                    <div style={{flex:1}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
-                        <span style={{fontFamily:MONO,fontSize:10,fontWeight:800,color:C.text}}>{a.ticker}</span>
-                        <span style={{fontFamily:MONO,fontSize:7,color:col,letterSpacing:"0.1em"}}>{a.type.toUpperCase()}</span>
-                      </div>
-                      <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,lineHeight:1.5}}>{a.message}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {/* ── Store auto-generated alerts (internal only — hidden from users) ── */}
 
           <div style={panel}>
             <div style={ph}>
