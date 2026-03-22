@@ -6,6 +6,7 @@ import { WebhookHandlers } from "./webhookHandlers";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
 import { startDailyBriefScheduler } from "./dailyBrief";
+import { initializeDatabase } from "./initDb";
 
 let shuttingDown = false;
 const _origExit = process.exit;
@@ -340,6 +341,7 @@ async function initStripe() {
 }
 
 (async () => {
+  await initializeDatabase();
   await initStripe();
   await registerRoutes(httpServer, app);
   startDailyBriefScheduler();
