@@ -1,82 +1,40 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Twitter/X Intelligence — server-side handler for CLVRQuant
-// All Twitter135 API calls happen here. API key stays secure on the server.
-// Frontend calls /api/twitter — results cached 4 minutes
+// Social Intelligence — CLVRQuant
+// Replaced Twitter135/RapidAPI (broken) with Stocktwits free API
+// Stocktwits: explicit user-tagged Bullish/Bearish sentiment, no API key needed
+// Cache: 4 minutes
 // ─────────────────────────────────────────────────────────────────────────────
 
-const RAPIDAPI_HOST = "twitter135.p.rapidapi.com";
-const BASE_URL      = `https://${RAPIDAPI_HOST}`;
-const CACHE_MS      = 4 * 60 * 1000; // 4 minutes
+const CACHE_MS = 4 * 60 * 1000;
 
-// ── Whale accounts ────────────────────────────────────────────────────────────
-const WHALE_ACCOUNTS = [
-  { handle:"elonmusk",        name:"Elon Musk",          category:"crypto",    weight:10 },
-  { handle:"saylor",          name:"Michael Saylor",     category:"crypto",    weight:9  },
-  { handle:"cz_binance",      name:"CZ Binance",         category:"crypto",    weight:8  },
-  { handle:"VitalikButerin",  name:"Vitalik Buterin",    category:"crypto",    weight:8  },
-  { handle:"brian_armstrong", name:"Brian Armstrong",    category:"crypto",    weight:7  },
-  { handle:"tyler",           name:"Tyler Winklevoss",   category:"crypto",    weight:7  },
-  { handle:"chamath",         name:"Chamath Palihap.",   category:"macro",     weight:8  },
-  { handle:"RaoulGMI",        name:"Raoul Pal",          category:"macro",     weight:8  },
-  { handle:"PeterSchiff",     name:"Peter Schiff",       category:"commodity", weight:7  },
-  { handle:"federalreserve",  name:"Federal Reserve",    category:"macro",     weight:9  },
-  { handle:"KitcoNewsNOW",    name:"Kitco News",         category:"commodity", weight:7  },
-  { handle:"ZeroHedge",       name:"ZeroHedge",          category:"macro",     weight:6  },
+// Symbols: use .X suffix for crypto on Stocktwits
+const SYMBOLS = [
+  { ticker: "$BTC",  st: "BTC.X",  label: "Bitcoin"    },
+  { ticker: "$ETH",  st: "ETH.X",  label: "Ethereum"   },
+  { ticker: "$SOL",  st: "SOL.X",  label: "Solana"     },
+  { ticker: "$DOGE", st: "DOGE.X", label: "Dogecoin"   },
+  { ticker: "$MSTR", st: "MSTR",   label: "MicroStrategy" },
+  { ticker: "$NVDA", st: "NVDA",   label: "Nvidia"     },
+  { ticker: "$TSLA", st: "TSLA",   label: "Tesla"      },
+  { ticker: "$COIN", st: "COIN",   label: "Coinbase"   },
 ];
 
-// ── Sentiment classifier ──────────────────────────────────────────────────────
-const BULLISH_WORDS = [
-  "bull","bullish","moon","mooning","pump","rally","buy","long","breakout",
-  "ath","all time high","surge","rip","explode","🚀","🔥","📈","🟢",
-  "accumulate","hodl","hold","bullrun","up only","send it","massive",
-  "positive","gain","profit","green","higher","recovery","bounce",
+const SENTIMENT_KEYWORDS_BULL = [
+  "bull","bullish","moon","pump","rally","buy","long","breakout","ath",
+  "surge","green","higher","recovery","bounce","accumulate","📈","🚀","🟢",
 ];
-const BEARISH_WORDS = [
+const SENTIMENT_KEYWORDS_BEAR = [
   "bear","bearish","dump","crash","sell","short","collapse","drop","fall",
-  "rug","scam","dead","rekt","liquidated","📉","🔴","🩸","down",
-  "lower","recession","fear","panic","correction","plunge","tank",
-  "negative","loss","red","warning","danger","caution","bubble",
+  "correction","plunge","tank","red","lower","📉","🔴","rekt",
 ];
 
-function classifySentiment(text: string): "bullish"|"bearish"|"neutral" {
+function classifySentiment(text: string): "bullish" | "bearish" | "neutral" {
   if (!text) return "neutral";
   const t = text.toLowerCase();
   let bull = 0, bear = 0;
-  BULLISH_WORDS.forEach(w => { if (t.includes(w)) bull++; });
-  BEARISH_WORDS.forEach(w => { if (t.includes(w)) bear++; });
-  if (bull === 0 && bear === 0) return "neutral";
-  if (bull > bear) return "bullish";
-  if (bear > bull) return "bearish";
-  return "neutral";
-}
-
-const ASSET_MAP: Record<string,string> = {
-  "bitcoin":"BTC","btc":"BTC","$btc":"BTC",
-  "ethereum":"ETH","eth":"ETH","$eth":"ETH",
-  "solana":"SOL","sol":"SOL","$sol":"SOL",
-  "dogecoin":"DOGE","doge":"DOGE","$doge":"DOGE",
-  "nvidia":"NVDA","nvda":"NVDA","$nvda":"NVDA",
-  "tesla":"TSLA","tsla":"TSLA","$tsla":"TSLA",
-  "apple":"AAPL","aapl":"AAPL","$aapl":"AAPL",
-  "microsoft":"MSFT","msft":"MSFT","$msft":"MSFT",
-  "microstrategy":"MSTR","mstr":"MSTR","$mstr":"MSTR",
-  "coinbase":"COIN","$coin":"COIN",
-  "palantir":"PLTR","pltr":"PLTR","$pltr":"PLTR",
-  "meta":"META","$meta":"META",
-  "amd":"AMD","$amd":"AMD",
-  "gold":"XAU","xau":"XAU","$gold":"XAU",
-  "silver":"XAG","xag":"XAG","$silver":"XAG",
-  "oil":"OIL","crude":"OIL","$oil":"OIL",
-};
-
-function extractAssets(text: string): string[] {
-  if (!text) return [];
-  const t = text.toLowerCase();
-  const found: string[] = [];
-  Object.entries(ASSET_MAP).forEach(([k, v]) => {
-    if (t.includes(k) && !found.includes(v)) found.push(v);
-  });
-  return found;
+  SENTIMENT_KEYWORDS_BULL.forEach(w => { if (t.includes(w)) bull++; });
+  SENTIMENT_KEYWORDS_BEAR.forEach(w => { if (t.includes(w)) bear++; });
+  return bull > bear ? "bullish" : bear > bull ? "bearish" : "neutral";
 }
 
 function isWithinHours(dateStr: string, hours: number): boolean {
@@ -85,202 +43,187 @@ function isWithinHours(dateStr: string, hours: number): boolean {
   return !isNaN(ts) && (Date.now() - ts) < hours * 3_600_000;
 }
 
-// ── API helper ────────────────────────────────────────────────────────────────
-async function twitterGet(endpoint: string, params: Record<string,string> = {}): Promise<any> {
-  const apiKey = process.env.RAPIDAPI_KEY;
-  if (!apiKey) return null;
+// ── Stocktwits fetch helper ───────────────────────────────────────────────────
+async function stFetch(symbol: string): Promise<any[]> {
   try {
-    const url = new URL(`${BASE_URL}${endpoint}`);
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-    const r = await fetch(url.toString(), {
-      headers: {
-        "x-rapidapi-key":  apiKey,
-        "x-rapidapi-host": RAPIDAPI_HOST,
-      },
+    const url = `https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json?limit=30`;
+    const r = await fetch(url, {
+      headers: { "Accept": "application/json", "User-Agent": "CLVRQuant/1.0" },
+      signal: AbortSignal.timeout(8000),
     });
     if (!r.ok) {
-      console.warn(`[twitter] ${endpoint} → HTTP ${r.status}`);
-      return null;
+      console.warn(`[stocktwits] ${symbol} → HTTP ${r.status}`);
+      return [];
     }
-    return await r.json();
+    const d: any = await r.json();
+    return d?.messages || [];
   } catch (e: any) {
-    console.warn(`[twitter] ${endpoint} error:`, e.message);
-    return null;
+    console.warn(`[stocktwits] ${symbol} error:`, e.message);
+    return [];
   }
 }
 
-// ── Tweet extractor ───────────────────────────────────────────────────────────
-function extractTweets(data: any): any[] {
-  return (
-    data?.result?.timeline?.instructions
-      ?.flatMap((i: any) => i.entries || [])
-      ?.filter((e: any) => e.content?.itemContent?.tweet_results?.result)
-      ?.map((e: any) => {
-        const t    = e.content.itemContent.tweet_results.result;
-        const user = t.core?.user_results?.result?.legacy;
-        return {
-          id:        t.legacy?.id_str           || "",
-          text:      t.legacy?.full_text         || "",
-          likes:     t.legacy?.favorite_count    || 0,
-          retweets:  t.legacy?.retweet_count     || 0,
-          createdAt: t.legacy?.created_at        || "",
-          author:    user?.name                  || "Unknown",
-          handle:    user?.screen_name           || "",
-        };
-      }) || []
-  );
-}
+// ── Per-symbol sentiment ──────────────────────────────────────────────────────
+async function fetchTickerMentions(): Promise<Record<string, any>> {
+  const results: Record<string, any> = {};
 
-// ── Stream 1: Whale activity ──────────────────────────────────────────────────
-async function fetchWhaleActivity() {
-  const top = WHALE_ACCOUNTS
-    .sort((a, b) => b.weight - a.weight)
-    .slice(0, 8);
+  await Promise.allSettled(SYMBOLS.map(async (sym) => {
+    const messages = await stFetch(sym.st);
+    const recent   = messages.filter(m => isWithinHours(m.created_at, 2));
 
-  const results: any[] = [];
-  await Promise.allSettled(top.map(async (whale) => {
-    const data   = await twitterGet("/UserTweets/", { username: whale.handle, count: "5" });
-    const tweets = extractTweets(data).slice(0, 3);
-    if (!tweets.length) return;
-    const latest    = tweets[0];
-    const sentiment = classifySentiment(latest.text);
-    results.push({
-      whale,
-      tweet: { ...latest, url: `https://twitter.com/${whale.handle}/status/${latest.id}` },
-      sentiment,
-      isRecent: isWithinHours(latest.createdAt, 4),
-      isViral:  latest.likes > 5000 || latest.retweets > 1000,
-      assets:   extractAssets(latest.text),
-    });
-  }));
+    let bull = 0, bear = 0, neutral = 0;
+    const posts: any[] = [];
 
-  return results.sort((a, b) => {
-    if (a.isViral  !== b.isViral)  return a.isViral  ? -1 : 1;
-    if (a.isRecent !== b.isRecent) return a.isRecent ? -1 : 1;
-    return b.whale.weight - a.whale.weight;
-  });
-}
+    for (const m of recent) {
+      // Stocktwits users can explicitly tag sentiment — trust that first
+      const tagged = m.entities?.sentiment?.basic;
+      let sent: "bullish" | "bearish" | "neutral";
+      if (tagged === "Bullish")       { sent = "bullish"; bull++; }
+      else if (tagged === "Bearish")  { sent = "bearish"; bear++; }
+      else {
+        sent = classifySentiment(m.body || "");
+        if (sent === "bullish")      bull++;
+        else if (sent === "bearish") bear++;
+        else                         neutral++;
+      }
+      posts.push({
+        id:        m.id,
+        text:      (m.body || "").slice(0, 200),
+        likes:     m.likes?.total || 0,
+        createdAt: m.created_at,
+        handle:    m.user?.username || "",
+        followers: m.user?.followers_count || 0,
+        sentiment: sent,
+        url:       `https://stocktwits.com/${m.user?.username}/message/${m.id}`,
+      });
+    }
 
-// ── Stream 2: Ticker mention volume ──────────────────────────────────────────
-async function fetchTickerMentions() {
-  const top = ["$BTC","$ETH","$SOL","$NVDA","$TSLA","$MSTR","$COIN","$GOLD"];
-  const results: Record<string,any> = {};
+    const total = Math.max(recent.length, 1);
+    const score = Math.round((bull / total) * 100);
 
-  await Promise.allSettled(top.map(async (ticker) => {
-    const data   = await twitterGet("/SearchV2/", {
-      query: `${ticker} lang:en -is:retweet`,
-      count: "25",
-      type:  "Latest",
-    });
-    const tweets = extractTweets(data);
-    const recent = tweets.filter(t => isWithinHours(t.createdAt, 1));
-    const bull   = recent.filter(t => classifySentiment(t.text) === "bullish").length;
-    const bear   = recent.filter(t => classifySentiment(t.text) === "bearish").length;
-    const engage = recent.reduce((s, t) => s + t.likes + t.retweets * 3, 0);
-    const score  = recent.length > 0 ? Math.round((bull / recent.length) * 100) : 50;
-    results[ticker] = {
-      ticker,
-      count1h:         recent.length,
-      bullishCount:    bull,
-      bearishCount:    bear,
-      neutralCount:    recent.length - bull - bear,
-      sentimentScore:  score,
-      totalEngagement: engage,
-      isSpiking:       recent.length > 15,
-      topTweet:        tweets.sort((a, b) => (b.likes + b.retweets) - (a.likes + a.retweets))[0] || null,
+    // Sort by engagement + followers as proxy for "whale"
+    posts.sort((a, b) => (b.likes + b.followers * 0.01) - (a.likes + a.followers * 0.01));
+
+    results[sym.ticker] = {
+      ticker:         sym.ticker,
+      count1h:        recent.length,
+      bullishCount:   bull,
+      bearishCount:   bear,
+      neutralCount:   neutral,
+      sentimentScore: score,
+      isSpiking:      recent.length > 12,
+      topPosts:       posts.slice(0, 3),
     };
   }));
 
   return results;
 }
 
-// ── Stream 3: Breaking / viral tweets ────────────────────────────────────────
-async function fetchBreakingTweets() {
-  const data = await twitterGet("/SearchV2/", {
-    query: "crypto market stocks bitcoin breaking lang:en -is:retweet min_faves:100",
-    count: "15",
-    type:  "Latest",
-  });
-  return extractTweets(data)
-    .filter(t => isWithinHours(t.createdAt, 2))
-    .map(t => ({
-      ...t,
-      sentiment: classifySentiment(t.text),
-      assets:    extractAssets(t.text),
-      isViral:   t.likes > 1000,
-      url:       `https://twitter.com/${t.handle}/status/${t.id}`,
-    }))
-    .sort((a, b) => (b.likes + b.retweets * 3) - (a.likes + a.retweets * 3))
-    .slice(0, 6);
-}
+// ── Overall market sentiment (aggregate all symbols) ─────────────────────────
+function buildOverallSentiment(mentions: Record<string, any>) {
+  let totalBull = 0, totalBear = 0, totalPosts = 0;
+  let wBull = 0, wBear = 0;
 
-// ── Stream 4: Overall sentiment ───────────────────────────────────────────────
-async function fetchOverallSentiment() {
-  const data   = await twitterGet("/SearchV2/", {
-    query: "crypto market stocks bitcoin ethereum lang:en -is:retweet",
-    count: "40",
-    type:  "Latest",
-  });
-  const tweets = extractTweets(data).filter(t => isWithinHours(t.createdAt, 2));
-  const total  = Math.max(tweets.length, 1);
-  const bull   = tweets.filter(t => classifySentiment(t.text) === "bullish").length;
-  const bear   = tweets.filter(t => classifySentiment(t.text) === "bearish").length;
-  const score  = Math.round((bull / total) * 100);
+  for (const sym of Object.values(mentions)) {
+    totalBull  += sym.bullishCount  || 0;
+    totalBear  += sym.bearishCount  || 0;
+    totalPosts += sym.count1h       || 0;
+    // Weight BTC and ETH more heavily
+    const w = sym.ticker === "$BTC" ? 2 : sym.ticker === "$ETH" ? 1.5 : 1;
+    wBull += (sym.bullishCount || 0) * w;
+    wBear += (sym.bearishCount || 0) * w;
+  }
 
-  const wBull  = tweets.filter(t => classifySentiment(t.text) === "bullish")
-    .reduce((s, t) => s + 1 + Math.log(t.likes + 1), 0);
-  const wBear  = tweets.filter(t => classifySentiment(t.text) === "bearish")
-    .reduce((s, t) => s + 1 + Math.log(t.likes + 1), 0);
-  const wTotal = wBull + wBear + 0.001;
+  const total   = Math.max(totalBull + totalBear, 1);
+  const score   = Math.round((totalBull / total) * 100);
+  const wTotal  = Math.max(wBull + wBear, 1);
+  const wScore  = Math.round((wBull / wTotal) * 100);
 
   return {
     score,
-    weightedScore: Math.round((wBull / wTotal) * 100),
+    weightedScore: wScore,
     label:
       score > 65 ? "VERY BULLISH" :
       score > 55 ? "BULLISH"      :
       score < 35 ? "VERY BEARISH" :
       score < 45 ? "BEARISH"      : "NEUTRAL",
-    bullishCount:  bull,
-    bearishCount:  bear,
-    totalTweets:   tweets.length,
-    sampleSize:    `${tweets.length} tweets (last 2h)`,
+    bullishCount:  totalBull,
+    bearishCount:  totalBear,
+    totalTweets:   totalPosts,
+    sampleSize:    `${totalPosts} posts across ${Object.keys(mentions).length} tickers (last 2h)`,
   };
+}
+
+// ── Whale posts = highest-engagement posts across all symbols ─────────────────
+function buildWhaleActivity(mentions: Record<string, any>) {
+  const all: any[] = [];
+  for (const sym of Object.values(mentions)) {
+    for (const post of (sym.topPosts || [])) {
+      all.push({
+        whale:    { handle: post.handle, name: `@${post.handle}`, category: "market", weight: post.followers > 10000 ? 8 : 5 },
+        tweet:    { ...post },
+        sentiment: post.sentiment,
+        isRecent:  isWithinHours(post.createdAt, 4),
+        isViral:   post.likes > 50,
+        assets:    [sym.ticker],
+      });
+    }
+  }
+  return all
+    .filter(w => w.isRecent)
+    .sort((a, b) => {
+      if (a.isViral !== b.isViral) return a.isViral ? -1 : 1;
+      return (b.tweet.likes + b.tweet.followers * 0.01) - (a.tweet.likes + a.tweet.followers * 0.01);
+    })
+    .slice(0, 8);
+}
+
+// ── Breaking = top bullish/bearish posts with high engagement ─────────────────
+function buildBreaking(mentions: Record<string, any>) {
+  const all: any[] = [];
+  for (const sym of Object.values(mentions)) {
+    for (const post of (sym.topPosts || [])) {
+      if (post.sentiment !== "neutral" && post.likes > 5) {
+        all.push({ ...post, assets: [sym.ticker] });
+      }
+    }
+  }
+  return all
+    .sort((a, b) => b.likes - a.likes)
+    .slice(0, 6);
 }
 
 // ── AI context builder ────────────────────────────────────────────────────────
 function buildAIContext(data: any): string {
   if (!data) return "";
-  const { whales, mentions, breaking, sentiment } = data;
-  const lines: string[] = ["\n── TWITTER/X SOCIAL INTELLIGENCE ──"];
+  const { mentions, breaking, sentiment } = data;
+  const lines: string[] = ["\n── STOCKTWITS SOCIAL INTELLIGENCE ──"];
 
   lines.push(`Overall Sentiment: ${sentiment.label} (${sentiment.score}% bullish, weighted: ${sentiment.weightedScore}%)`);
   lines.push(`Sample: ${sentiment.sampleSize}`);
 
-  const recentWhales = whales.filter((w: any) => w.isRecent);
-  if (recentWhales.length) {
-    lines.push("WHALE ACTIVITY (last 4h):");
-    recentWhales.slice(0, 4).forEach((w: any) => {
-      lines.push(`  @${w.whale.handle}${w.isViral ? " [VIRAL]" : ""}: "${w.tweet.text.slice(0, 120)}"`);
-      lines.push(`  → ${w.sentiment.toUpperCase()} | ${w.tweet.likes} likes${w.assets.length ? ` | ${w.assets.join(",")}` : ""}`);
-    });
-  }
-
   const spikes = Object.values(mentions).filter((m: any) => m.isSpiking);
   if (spikes.length) {
-    lines.push("MENTION SPIKES (unusual 1h activity):");
-    (spikes as any[]).forEach(m => lines.push(`  ${m.ticker}: ${m.count1h} mentions | ${m.sentimentScore}% bullish`));
+    lines.push("MENTION SPIKES:");
+    (spikes as any[]).forEach(m =>
+      lines.push(`  ${m.ticker}: ${m.count1h} posts | ${m.sentimentScore}% bullish | 🟢${m.bullishCount} 🔴${m.bearishCount}`)
+    );
   }
 
   if (breaking.length) {
-    lines.push("BREAKING / VIRAL TWEETS:");
-    breaking.slice(0, 3).forEach((t: any) => {
-      lines.push(`  @${t.handle}: "${t.text.slice(0, 100)}"`);
-      lines.push(`  → ${t.sentiment.toUpperCase()} | ${t.likes} likes | ${t.assets.join(",") || "general"}`);
+    lines.push("TOP POSTS BY ENGAGEMENT:");
+    breaking.slice(0, 4).forEach((t: any) => {
+      lines.push(`  @${t.handle} [${t.sentiment?.toUpperCase()}]: "${t.text.slice(0, 100)}" (${t.likes} likes) ${t.assets.join(",")}`);
     });
   }
 
-  lines.push("── END TWITTER INTELLIGENCE ──");
+  const byTicker = Object.values(mentions).slice(0, 6) as any[];
+  lines.push("TICKER SENTIMENT:");
+  byTicker.forEach(m =>
+    lines.push(`  ${m.ticker}: ${m.sentimentScore}% bullish (${m.count1h} posts, 🟢${m.bullishCount} 🔴${m.bearishCount})`)
+  );
+
+  lines.push("── END SOCIAL INTELLIGENCE ──");
   return lines.join("\n");
 }
 
@@ -294,41 +237,35 @@ export async function getTwitterData(): Promise<any> {
   }
   if (_fetching) return _cache?.data || null;
 
-  const apiKey = process.env.RAPIDAPI_KEY;
-  if (!apiKey) {
-    return { error: "RAPIDAPI_KEY not configured", hasKey: false };
-  }
-
   _fetching = true;
   try {
-    console.log("[twitter] Fetching fresh data...");
-    const [whales, sentiment] = await Promise.all([
-      fetchWhaleActivity(),
-      fetchOverallSentiment(),
-    ]);
-    await new Promise(r => setTimeout(r, 600));
-    const [mentions, breaking] = await Promise.all([
-      fetchTickerMentions(),
-      fetchBreakingTweets(),
-    ]);
+    console.log("[stocktwits] Fetching fresh social intelligence...");
+    const mentions = await fetchTickerMentions();
+
+    const sentiment = buildOverallSentiment(mentions);
+    const whales    = buildWhaleActivity(mentions);
+    const breaking  = buildBreaking(mentions);
 
     const data = {
       whales,
       mentions,
       breaking,
       sentiment,
-      hasKey: true,
+      hasKey:       true,
+      source:       "Stocktwits",
       fetchedAt:    Date.now(),
-      fetchedAtStr: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/New_York" }) + " ET",
-      aiContext:    buildAIContext({ whales, mentions, breaking, sentiment }),
+      fetchedAtStr: new Date().toLocaleTimeString("en-US", {
+        hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/New_York",
+      }) + " ET",
+      aiContext: buildAIContext({ mentions, breaking, sentiment }),
     };
 
     _cache = { data, ts: Date.now() };
-    console.log(`[twitter] Done — ${whales.length} whales, ${Object.keys(mentions).length} tickers, ${breaking.length} breaking, sentiment=${sentiment.score}%`);
+    console.log(`[stocktwits] Done — ${Object.keys(mentions).length} tickers, sentiment=${sentiment.score}% (${sentiment.label}), ${whales.length} whale posts, ${breaking.length} breaking`);
     return data;
   } catch (e: any) {
-    console.error("[twitter] Error:", e.message);
-    return _cache?.data || { error: e.message, hasKey: true };
+    console.error("[stocktwits] Error:", e.message);
+    return _cache?.data || { error: e.message, hasKey: true, sentiment: { score: 50, label: "NEUTRAL", totalTweets: 0, weightedScore: 50, sampleSize: "error — retrying..." } };
   } finally {
     _fetching = false;
   }

@@ -1553,61 +1553,6 @@ export async function registerRoutes(
         console.error("CryptoPanic news error:", e.message);
       }
     }
-    const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "";
-    if (RAPIDAPI_KEY) {
-      // Crypto/market accounts + Political Alpha accounts interleaved by priority
-      const TWITTER_ACCOUNTS = [
-        // Political / macro — always fetch these for Political Alpha section
-        { handle: "Breaking911",      label: "Breaking911",  icon: "🔴", color: "red",    political: true },
-        { handle: "unusual_whales",   label: "Unusual Whales",icon: "🐋", color: "cyan",  political: true },
-        { handle: "ReutersWorld",     label: "Reuters",       icon: "R",  color: "orange", political: true },
-        // Crypto/market intelligence
-        { handle: "whale_alert",      label: "Whale Alert",   icon: "W",  color: "cyan",  political: false },
-        { handle: "lookonchain",      label: "Lookonchain",   icon: "L",  color: "blue",  political: false },
-        { handle: "tier10k",          label: "Tier10K",       icon: "T",  color: "gold",  political: false },
-      ];
-      for (const acc of TWITTER_ACCOUNTS) {
-        try {
-          const r = await fetch(`https://twitter-api45.p.rapidapi.com/timeline.php?screenname=${acc.handle}&count=3`, {
-            headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "twitter-api45.p.rapidapi.com" },
-            signal: AbortSignal.timeout(6000),
-          });
-          if (r.ok) {
-            const data: any = await r.json();
-            const tweets = data?.timeline || [];
-            for (const tw of tweets.slice(0, 3)) {
-              if (!tw.text) continue;
-              const cleanText = tw.text.replace(/https:\/\/t\.co\/\S+/g, "").trim().substring(0, 220);
-              const assets = matchAssets(tw.text);
-              const favs = parseInt(tw.favorites) || 0;
-              const rts = parseInt(tw.retweets) || 0;
-              const engagement = favs + rts;
-              const { isPolitical, marketImpact } = classifyPolitical(cleanText);
-              results.push({
-                id: "tw-" + tw.tweet_id,
-                source: `@${acc.handle}`,
-                icon: acc.icon,
-                color: acc.color,
-                title: cleanText,
-                body: "",
-                sentiment: engagement > 500 ? 0.75 : engagement > 100 ? 0.5 : 0.3,
-                score: Math.min(10, Math.round(engagement / 500) + 4),
-                assets,
-                categories: ["twitter", ...(acc.political ? ["political"] : [])],
-                political: acc.political || isPolitical,
-                marketImpact: acc.political ? marketImpact : (isPolitical ? marketImpact : null),
-                ts: new Date(tw.created_at || Date.now()).getTime(),
-                url: `https://x.com/${acc.handle}/status/${tw.tweet_id}`,
-                imageUrl: null,
-              });
-            }
-          }
-        } catch (e: any) {
-          console.error(`Twitter fetch error (${acc.handle}):`, e.message);
-        }
-      }
-    }
-
     // Apply political classification to all non-twitter news items
     for (const item of results) {
       if (!item.political) {

@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // TwitterIntelligence.jsx — CLVRQuant Social Intelligence Layer
-// Fetches Twitter/X data from the secure backend (/api/twitter)
-// API key lives on the server — never exposed to the browser
+// Data source: Stocktwits (free, explicit user-tagged sentiment, no API key)
+// Backend route: /api/twitter  |  Cache: 4 minutes
 // ─────────────────────────────────────────────────────────────────────────────
 import { useState, useEffect, useRef } from "react";
 
@@ -167,8 +167,8 @@ export function TwitterMarketModeStrip() {
   const col = sentColor(sentiment.score);
   if (loading && !sentiment.totalTweets) return (
     <div data-testid="twitter-market-strip" style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:4, padding:"7px 11px", display:"flex", alignItems:"center", gap:9, marginBottom:10, opacity:0.5 }}>
-      <span style={{ fontSize:12, color:"#e8e0d0" }}>𝕏</span>
-      <span style={{ fontSize:7, color:"#3a4560", fontFamily:MONO }}>Twitter/X intelligence loading…</span>
+      <span style={{ fontSize:10, color:"#c9a84c", fontFamily:MONO, fontWeight:700 }}>ST</span>
+      <span style={{ fontSize:7, color:"#3a4560", fontFamily:MONO }}>Social intelligence loading…</span>
     </div>
   );
   const spikes = Object.values(mentions).filter(m => m.isSpiking);
@@ -176,7 +176,7 @@ export function TwitterMarketModeStrip() {
   return (
     <div data-testid="twitter-market-strip" style={{ background:"rgba(255,255,255,0.02)", border:`1px solid rgba(${sentiment.score>55?"0,199,135":sentiment.score<45?"255,64,96":"201,168,76"},0.15)`, borderRadius:4, padding:"7px 11px", display:"flex", alignItems:"center", gap:9, flexWrap:"wrap", marginBottom:10 }}>
       <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-        <span style={{ fontSize:12, color:"#e8e0d0" }}>𝕏</span>
+        <span style={{ fontSize:8, fontWeight:800, color:"#c9a84c", fontFamily:MONO }}>SOCIAL</span>
         <span style={{ fontSize:8, fontWeight:700, color:col, fontFamily:MONO }}>{sentLabel(sentiment.score)}</span>
         <span style={{ fontSize:8, color:"#4a5d80", fontFamily:MONO }}>{sentiment.score}%</span>
       </div>
@@ -210,7 +210,7 @@ export function TwitterSignalPanel({ ticker }) {
         <div style={{ display:"flex", alignItems:"center", gap:7 }}>
           <span style={{ fontSize:12, color:"#e8e0d0" }}>𝕏</span>
           <div>
-            <div style={{ fontSize:8, color:"#c9a84c", letterSpacing:"0.15em", fontFamily:MONO, fontWeight:700 }}>TWITTER INTELLIGENCE · {ticker}</div>
+            <div style={{ fontSize:8, color:"#c9a84c", letterSpacing:"0.15em", fontFamily:MONO, fontWeight:700 }}>SOCIAL INTELLIGENCE · {ticker}</div>
             <div style={{ fontSize:7, color:"#3a4560", fontFamily:MONO, marginTop:1 }}>
               {loading ? "Fetching…" : `${sentiment.sampleSize} · ${sentLabel(sentiment.score)} · refreshes 4 min`}
             </div>
@@ -276,7 +276,7 @@ export function TwitterSignalPanel({ ticker }) {
             </div>
           )}
           <div style={{ background:"rgba(255,255,255,0.02)", borderRadius:3, padding:"7px 10px" }}>
-            <div style={{ fontSize:7, color:"#4a5d80", fontFamily:MONO, marginBottom:2 }}>OVERALL X/TWITTER MOOD</div>
+            <div style={{ fontSize:7, color:"#4a5d80", fontFamily:MONO, marginBottom:2 }}>OVERALL SOCIAL MOOD (STOCKTWITS)</div>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <span style={{ fontSize:10, fontWeight:700, color:col, fontFamily:MONO }}>{sentLabel(sentiment.score)}</span>
               <span style={{ fontSize:8, color:"#5a6a8a", fontFamily:MONO }}>{sentiment.score}% bullish · {sentiment.sampleSize}</span>
@@ -298,7 +298,7 @@ export function TwitterMorningBrief() {
 
   if (loading && !sentiment.totalTweets) return (
     <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:4, padding:14 }}>
-      <div style={{ fontSize:9, color:"#3a4560", fontFamily:MONO }}>↻ Loading Twitter/X intelligence…</div>
+      <div style={{ fontSize:9, color:"#3a4560", fontFamily:MONO }}>↻ Loading social intelligence…</div>
     </div>
   );
 
@@ -309,8 +309,8 @@ export function TwitterMorningBrief() {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
           <div>
             <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:4 }}>
-              <span style={{ fontSize:14, color:"#e8e0d0" }}>𝕏</span>
-              <span style={{ fontSize:8, color:"#c9a84c", letterSpacing:"0.15em", fontFamily:MONO, fontWeight:700 }}>TWITTER · MARKET INTELLIGENCE</span>
+              <span style={{ fontSize:9, fontWeight:800, color:"#c9a84c", fontFamily:MONO }}>STOCKTWITS</span>
+              <span style={{ fontSize:8, color:"#c9a84c", letterSpacing:"0.15em", fontFamily:MONO, fontWeight:700 }}>SOCIAL INTELLIGENCE</span>
             </div>
             <div style={{ fontSize:18, fontWeight:900, color:col, fontFamily:MONO }}>{sentLabel(sentiment.score)}</div>
             <div style={{ fontSize:7, color:"#5a6a8a", fontFamily:MONO, marginTop:2 }}>{sentiment.sampleSize} · {fetchedAtStr} · updates every 4 min</div>
