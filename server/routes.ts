@@ -1433,9 +1433,29 @@ export async function registerRoutes(
     res.json(data);
   });
 
+  // ── Political keyword sets for market impact classification ─────────────────
+  const POLITICAL_KEYWORDS = [
+    "trump","tariff","tariffs","trade war","trade deal","china","sanctions","executive order",
+    "white house","fed rate","powell","federal reserve","rate cut","rate hike","interest rate",
+    "congress","senate","treasury","dollar","oil","opec","embargo","deregulation","stimulus",
+    "crypto regulation","sec","gensler","bitcoin reserve","strategic reserve","deficit","debt ceiling",
+  ];
+  const BEARISH_POLITICAL = ["tariff","tariffs","sanction","sanctions","rate hike","ban","crackdown","trade war","restrict","embargo","aggressive fed"];
+  const BULLISH_POLITICAL = ["rate cut","stimulus","deregulation","pro-crypto","bitcoin reserve","strategic reserve","executive order","adoption","dovish","deal signed","trade deal"];
+
+  function classifyPolitical(text: string): { isPolitical: boolean; marketImpact: "bullish"|"bearish"|"neutral" } {
+    const lower = text.toLowerCase();
+    const isPolitical = POLITICAL_KEYWORDS.some(k => lower.includes(k));
+    if (!isPolitical) return { isPolitical: false, marketImpact: "neutral" };
+    const isBullish = BULLISH_POLITICAL.some(k => lower.includes(k));
+    const isBearish = BEARISH_POLITICAL.some(k => lower.includes(k));
+    const marketImpact = isBullish && !isBearish ? "bullish" : isBearish && !isBullish ? "bearish" : "neutral";
+    return { isPolitical: true, marketImpact };
+  }
+
   app.get("/api/news", async (_req, res) => {
     const cached = cache["news"];
-    if (cached && Date.now() - cached.ts < 120000) {
+    if (cached && Date.now() - cached.ts < 60000) {
       return res.json(cached.data);
     }
     const results: any[] = [];
@@ -1535,14 +1555,18 @@ export async function registerRoutes(
     }
     const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "";
     if (RAPIDAPI_KEY) {
+      // Crypto/market accounts + Political Alpha accounts interleaved by priority
       const TWITTER_ACCOUNTS = [
-        { handle: "whale_alert", label: "Whale Alert", icon: "W", color: "cyan" },
-        { handle: "lookonchain", label: "Lookonchain", icon: "L", color: "blue" },
-        { handle: "tier10k", label: "Tier10K", icon: "T", color: "gold" },
-        { handle: "CryptoKaleo", label: "CryptoKaleo", icon: "K", color: "teal" },
-        { handle: "zaborowskim", label: "Zack", icon: "Z", color: "orange" },
+        // Political / macro — always fetch these for Political Alpha section
+        { handle: "Breaking911",      label: "Breaking911",  icon: "🔴", color: "red",    political: true },
+        { handle: "unusual_whales",   label: "Unusual Whales",icon: "🐋", color: "cyan",  political: true },
+        { handle: "ReutersWorld",     label: "Reuters",       icon: "R",  color: "orange", political: true },
+        // Crypto/market intelligence
+        { handle: "whale_alert",      label: "Whale Alert",   icon: "W",  color: "cyan",  political: false },
+        { handle: "lookonchain",      label: "Lookonchain",   icon: "L",  color: "blue",  political: false },
+        { handle: "tier10k",          label: "Tier10K",       icon: "T",  color: "gold",  political: false },
       ];
-      for (const acc of TWITTER_ACCOUNTS.slice(0, 3)) {
+      for (const acc of TWITTER_ACCOUNTS) {
         try {
           const r = await fetch(`https://twitter-api45.p.rapidapi.com/timeline.php?screenname=${acc.handle}&count=3`, {
             headers: { "X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "twitter-api45.p.rapidapi.com" },
@@ -1553,21 +1577,25 @@ export async function registerRoutes(
             const tweets = data?.timeline || [];
             for (const tw of tweets.slice(0, 3)) {
               if (!tw.text) continue;
+              const cleanText = tw.text.replace(/https:\/\/t\.co\/\S+/g, "").trim().substring(0, 220);
               const assets = matchAssets(tw.text);
               const favs = parseInt(tw.favorites) || 0;
               const rts = parseInt(tw.retweets) || 0;
               const engagement = favs + rts;
+              const { isPolitical, marketImpact } = classifyPolitical(cleanText);
               results.push({
                 id: "tw-" + tw.tweet_id,
                 source: `@${acc.handle}`,
                 icon: acc.icon,
                 color: acc.color,
-                title: tw.text.replace(/https:\/\/t\.co\/\S+/g, "").trim().substring(0, 200),
+                title: cleanText,
                 body: "",
                 sentiment: engagement > 500 ? 0.75 : engagement > 100 ? 0.5 : 0.3,
                 score: Math.min(10, Math.round(engagement / 500) + 4),
                 assets,
-                categories: ["twitter"],
+                categories: ["twitter", ...(acc.political ? ["political"] : [])],
+                political: acc.political || isPolitical,
+                marketImpact: acc.political ? marketImpact : (isPolitical ? marketImpact : null),
                 ts: new Date(tw.created_at || Date.now()).getTime(),
                 url: `https://x.com/${acc.handle}/status/${tw.tweet_id}`,
                 imageUrl: null,
@@ -1579,10 +1607,23 @@ export async function registerRoutes(
         }
       }
     }
+
+    // Apply political classification to all non-twitter news items
+    for (const item of results) {
+      if (!item.political) {
+        const { isPolitical, marketImpact } = classifyPolitical(item.title);
+        if (isPolitical) {
+          item.political = true;
+          item.marketImpact = marketImpact;
+          if (!item.categories.includes("political")) item.categories.push("political");
+        }
+      }
+    }
+
     results.sort((a, b) => b.ts - a.ts);
     const deduped = results.filter((item, index, self) =>
       index === self.findIndex(t => t.title === item.title)
-    ).slice(0, 25);
+    ).slice(0, 35);
     cache["news"] = { data: deduped, ts: Date.now() };
     res.json(deduped);
   });

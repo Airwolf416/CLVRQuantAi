@@ -1052,11 +1052,11 @@ function Dashboard({user,setUser}){
     return()=>clearInterval(iv);
   },[]);
 
-  // ── News Feed ───────────────────────────────────────
+  // ── News Feed — auto-refreshes every 60 seconds ─────────────────────────
   useEffect(()=>{
     const doNews=async()=>{try{const data=await fetchNews();if(Array.isArray(data)&&data.length>0)setNewsFeed(data);}catch{}};
     doNews();
-    const iv=setInterval(doNews,120000);
+    const iv=setInterval(doNews,60000);
     return()=>clearInterval(iv);
   },[]);
 
@@ -2209,6 +2209,43 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               </div>
             );})}
           </div>}
+
+          {(()=>{
+            const politicalFeed=newsFeed.filter(n=>n.political).slice(0,6);
+            if(politicalFeed.length===0)return null;
+            const impactColors={"bullish":C.green,"bearish":C.red,"neutral":C.gold};
+            const impactLabels={"bullish":"BULLISH","bearish":"BEARISH","neutral":"NEUTRAL"};
+            return(
+              <div style={{marginBottom:14}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:"#ff4060",boxShadow:"0 0 6px #ff406080"}}/>
+                    <div style={{fontFamily:MONO,fontSize:10,color:"#ff6b6b",letterSpacing:"0.15em"}}>POLITICAL ALPHA</div>
+                  </div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{politicalFeed.length} SIGNALS</div>
+                </div>
+                {politicalFeed.map(n=>{
+                  const impact=n.marketImpact||"neutral";
+                  const ic=impactColors[impact]||C.muted;
+                  const ago=((Date.now()-n.ts)/60000);const agoStr=ago<60?`${Math.floor(ago)}m`:ago<1440?`${Math.floor(ago/60)}h`:`${Math.floor(ago/1440)}d`;
+                  return(
+                    <div key={n.id} data-testid={`political-${n.id}`} style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.15)`,borderLeft:`3px solid ${ic}`,borderRadius:3,padding:"10px 12px",marginBottom:5,cursor:"pointer"}} onClick={()=>{if(n.url&&n.url!=="#")window.open(n.url,"_blank");}}>
+                      <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontFamily:SANS,fontSize:12,color:C.text,lineHeight:1.4,marginBottom:5,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{n.title}</div>
+                          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                            <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{n.source}</span>
+                            <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{agoStr} ago</span>
+                            <span style={{fontFamily:MONO,fontSize:8,fontWeight:700,color:ic,background:`${ic}15`,border:`1px solid ${ic}30`,borderRadius:2,padding:"2px 7px",letterSpacing:"0.1em"}}>{impactLabels[impact]}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {newsFeed.length>0&&<div style={{marginBottom:12}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
