@@ -1,0 +1,80 @@
+import React, { useState, useEffect, useCallback } from 'react';
+
+const SquawkBox = ({ latestSignal }) => {
+  const [isMuted, setIsMuted] = useState(true);
+  const [voice, setVoice] = useState(null);
+
+  // 1. Initialize voices (Browsers load these asynchronously)
+  useEffect(() => {
+    const loadVoices = () => {
+      const availableVoices = window.speechSynthesis.getVoices();
+      // Look for a professional-sounding Google or Premium voice
+      const preferredVoice = availableVoices.find(
+        (v) => v.lang === 'en-US' && (v.name.includes('Google') || v.name.includes('Enhanced'))
+      );
+      setVoice(preferredVoice || availableVoices[0]);
+    };
+
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+  }, []);
+
+  // 2. The Core "Squawk" Function
+  const triggerSquawk = useCallback((text) => {
+    if (isMuted || !window.speechSynthesis) return;
+
+    // Cancel any current speech to avoid a backlog during high volatility
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.voice = voice;
+    utterance.rate = 1.05; // Quick, professional pace
+    utterance.pitch = 0.95; // Slightly deeper for authority
+    utterance.volume = 1.0;
+
+    window.speechSynthesis.speak(utterance);
+  }, [isMuted, voice]);
+
+  // 3. Listen for new Hyperliquid Signals
+  useEffect(() => {
+    if (latestSignal && !isMuted) {
+      // Example logic: Only squawk high-impact signals
+      if (latestSignal.clvrScore >= 8.0 || Math.abs(latestSignal.fundingRate) > 0.01) {
+        triggerSquawk(latestSignal.message);
+      }
+    }
+  }, [latestSignal, isMuted, triggerSquawk]);
+
+  return (
+    <div style={{
+      padding: '10px',
+      border: '1px solid #333',
+      borderRadius: '8px',
+      backgroundColor: isMuted ? '#1a1a1a' : '#003300',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px',
+      transition: 'all 0.3s ease'
+    }}>
+      <button 
+        onClick={() => setIsMuted(!isMuted)}
+        style={{
+          padding: '8px 16px',
+          cursor: 'pointer',
+          borderRadius: '4px',
+          border: 'none',
+          backgroundColor: isMuted ? '#ff4d4d' : '#4CAF50',
+          color: 'white',
+          fontWeight: 'bold'
+        }}
+      >
+        {isMuted ? '🔈 SQUAWK OFF' : '🔊 SQUAWK LIVE'}
+      </button>
+      <span style={{ fontSize: '12px', color: '#ccc' }}>
+        {isMuted ? 'Audio Alerts Paused' : 'Monitoring Hyperliquid Feed...'}
+      </span>
+    </div>
+  );
+};
+
+export default SquawkBox;
