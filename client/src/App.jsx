@@ -1940,6 +1940,10 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     }
     // ── Granted but disabled → RE-ENABLE ────────────────────────────────────
     if(notifPerm==="granted"&&pushDisabled){
+      // Always clear the disabled flag first — in-app alerts will work regardless
+      setPushDisabled(false);
+      try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
+      // Then attempt to re-subscribe to OS push (best effort — non-blocking)
       try{
         const swReg=await navigator.serviceWorker.ready;
         const keyRes=await fetch("/api/push/public-key");
@@ -1950,10 +1954,11 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         if(existing) await existing.unsubscribe().catch(()=>{});
         const sub=await swReg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:raw});
         await fetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
-        setPushDisabled(false);
-        try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
         setToast("🔔 Push notifications re-enabled");
-      }catch(e){setToast("In-app alerts active");}
+      }catch(e){
+        // Push subscription failed but in-app alerts are active
+        setToast("🔔 Alerts re-enabled — in-app notifications active");
+      }
       return;
     }
     // ── Not granted → REQUEST PERMISSION ────────────────────────────────────
