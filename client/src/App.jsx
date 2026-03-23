@@ -13,6 +13,8 @@ import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
+import InsiderTab from "./tabs/InsiderTab";
+import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
 
@@ -762,6 +764,7 @@ function Dashboard({user,setUser}){
   const [liveSignals,setLiveSignals]=useState([]);
   const [newsFeed,setNewsFeed]=useState([]);
   const [newsFilter,setNewsFilter]=useState("ALL");
+  const [insiderData,setInsiderData]=useState([]);
   const [sigTracking,setSigTracking]=useState(32);
   const [flashSigId,setFlashSigId]=useState(null);
   const [sigCount,setSigCount]=useState(0);
@@ -1059,6 +1062,16 @@ function Dashboard({user,setUser}){
     const iv=setInterval(doNews,60000);
     return()=>clearInterval(iv);
   },[]);
+
+  // ── Insider Feed — auto-refreshes every 15 minutes (Pro only) ──────────
+  useEffect(()=>{
+    const userIsPro=userTier==="pro";
+    if(!userIsPro)return;
+    const doInsider=async()=>{try{const r=await fetch("/api/insider",{credentials:"include"});if(r.ok){const d=await r.json();setInsiderData(d.trades||[]);}}catch{}};
+    doInsider();
+    const iv=setInterval(doInsider,15*60*1000);
+    return()=>clearInterval(iv);
+  },[userTier]);
 
   // ── Finnhub ──────────────────────────────────────────
   const doFH=useCallback(async()=>{
@@ -1366,6 +1379,10 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
     const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO}]: ${newsFeed.filter(n=>!n.political).slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)} (${n.assets?.join(",")}) sent:${(n.sentiment*100).toFixed(0)}%`).join(" | ")}`:"";
     const politicalItems=newsFeed.filter(n=>n.political);
     const politicalSnap=politicalItems.length>0?`\nPOLITICAL ALPHA [fetched:${nowISO}] — Market-moving political/macro news. Apply to risk assessment and asset-class bias:\n  ${politicalItems.slice(0,6).map(n=>`[${n.marketImpact?.toUpperCase()||"NEUTRAL"}] [${n.source}] ${n.title.substring(0,100)} (assets:${n.assets?.join(",")||"macro"})`).join("\n  ")}`:"";
+    const conflictItems=newsFeed.filter(n=>n.isConflict);
+    const conflictSnap=conflictItems.length>0?`\nCONFLICT & GEOPOLITICAL EVENTS [fetched:${nowISO}] — Active military, sanctions, and supply chain events. Factor into Oil, Gold, and defense bias:\n  ${conflictItems.slice(0,6).map(n=>`[${n.source}] ${n.title.substring(0,110)} (market impact: ${n.marketImpact||"BEARISH"})`).join("\n  ")}`:"";
+    // SEC Insider buying signals
+    const insiderSnap=insiderData.length>0?(()=>{const byTicker={};for(const t of insiderData){if(!byTicker[t.ticker])byTicker[t.ticker]=[];byTicker[t.ticker].push(t);}const sorted=Object.entries(byTicker).sort(([,a],[,b])=>b.reduce((s,x)=>s+(x.value||0),0)-a.reduce((s,x)=>s+(x.value||0),0)).slice(0,5);const lines=sorted.map(([tk,ins])=>{const tot=ins.reduce((s,x)=>s+(x.value||0),0);const fv=tot>=1e6?`$${(tot/1e6).toFixed(1)}M`:`$${(tot/1e3).toFixed(0)}K`;const cluster=ins.length>=2?" [CLUSTER BUY ⚠️]":"";return`  ${tk}: ${ins.length} insider${ins.length>1?"s":""} bought ${fv}${cluster}`;});return`\nSEC INSIDER BUYING SIGNALS (last 7 days, $100K+ purchases):\n${lines.join("\n")}`;})():"";
     const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO}]: ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
     const storeModeSnap=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
     // Fetch Polymarket prediction odds live and inject into AI context
@@ -1397,7 +1414,7 @@ CRYPTO spot (CoinGecko): ${cryptoSnap}
 EQUITIES (Finnhub): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap}${storeModeSnap}
-${macroAiSnap}${polySnap}${twAiContext||""}
+${macroAiSnap}${polySnap}${twAiContext||""}${conflictSnap}${insiderSnap}
 
 ⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
 → PERP/futures question → use SECTION A (HL mark price + funding + OI are definitive)
@@ -1923,6 +1940,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
+    {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
@@ -2256,33 +2274,100 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               <div style={{fontFamily:MONO,fontSize:10,color:C.blue,letterSpacing:"0.15em"}}>{i18n.newsIntel}</div>
               <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{newsFeed.length} STORIES</div>
             </div>
-            <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto"}}>
-              {["ALL","SOCIAL","BTC","ETH","SOL","XRP","EQUITIES"].map(f=>(
-                <button key={f} data-testid={`news-filter-${f}`} onClick={()=>setNewsFilter(f)} style={{background:newsFilter===f?"rgba(59,130,246,.15)":"transparent",border:`1px solid ${newsFilter===f?C.blue:C.border}`,borderRadius:2,padding:"4px 10px",fontFamily:MONO,fontSize:9,color:newsFilter===f?C.blue:C.muted,cursor:"pointer",letterSpacing:"0.08em",flexShrink:0}}>{f}</button>
+            <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+              {[
+                {k:"ALL",label:"ALL",col:C.blue},
+                {k:"CONFLICT",label:"⚡ CONFLICT",col:C.red},
+                {k:"SOCIAL",label:"SOCIAL",col:C.cyan},
+                {k:"BTC",label:"BTC",col:C.gold},
+                {k:"ETH",label:"ETH",col:C.purple},
+                {k:"SOL",label:"SOL",col:C.green},
+                {k:"XRP",label:"XRP",col:C.blue},
+                {k:"EQUITIES",label:"STOCKS",col:C.green},
+              ].map(f=>(
+                <button key={f.k} data-testid={`news-filter-${f.k}`} onClick={()=>setNewsFilter(f.k)} style={{background:newsFilter===f.k?`${f.col}18`:"transparent",border:`1px solid ${newsFilter===f.k?f.col:C.border}`,borderRadius:2,padding:"4px 10px",fontFamily:MONO,fontSize:9,color:newsFilter===f.k?f.col:C.muted,cursor:"pointer",letterSpacing:"0.08em",flexShrink:0,whiteSpace:"nowrap"}}>{f.label}</button>
               ))}
             </div>
-            {(newsFilter==="ALL"?newsFeed:newsFeed.filter(n=>{if(newsFilter==="SOCIAL")return n.categories?.includes("twitter");if(newsFilter==="EQUITIES")return n.assets?.some(a=>["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"].includes(a));return n.assets?.includes(newsFilter);})).slice(0,8).map(n=>{
+
+            {/* Conflict events special section */}
+            {newsFilter==="CONFLICT"&&(()=>{
+              const conflictFeed=newsFeed.filter(n=>n.isConflict);
+              if(conflictFeed.length===0)return(
+                <div style={{textAlign:"center",padding:"24px 14px",fontFamily:MONO,fontSize:9,color:C.muted,background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.15)`,borderRadius:4}}>
+                  <div style={{fontSize:20,marginBottom:8}}>🌐</div>
+                  No active conflict or geopolitical events detected in current news cycle.
+                  <div style={{marginTop:6,color:C.muted,fontSize:8}}>Feed auto-updates every 60 seconds · Sources: Reuters, BBC, DW</div>
+                </div>
+              );
+              return(
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10,padding:"8px 12px",background:"rgba(255,64,96,.05)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:4}}>
+                    <div style={{width:7,height:7,borderRadius:"50%",background:C.red,boxShadow:`0 0 8px ${C.red}`,flexShrink:0}}/>
+                    <div style={{fontFamily:MONO,fontSize:9,color:C.red,letterSpacing:"0.15em"}}>{conflictFeed.length} ACTIVE GEOPOLITICAL ALERTS</div>
+                    <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,flex:1,textAlign:"right"}}>Feeds into AI context automatically</div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
+                    {["OIL LONG BIAS","GOLD SAFE HAVEN","DEFENSE RISK"].map((tag,i)=>(
+                      <div key={tag} style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.15)`,borderRadius:3,padding:"7px 8px",textAlign:"center"}}>
+                        <div style={{fontFamily:MONO,fontSize:7,color:i===0?C.orange:i===1?C.gold:C.red,letterSpacing:"0.1em",fontWeight:700}}>{tag}</div>
+                        <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:3}}>{i===0?"↑ Conflict →Oil":i===1?"↑ Risk-off →XAU":"⚠ Monitor"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {conflictFeed.map(n=>{
+                    const ago=((Date.now()-n.ts)/60000);const agoStr=ago<60?`${Math.floor(ago)}m`:ago<1440?`${Math.floor(ago/60)}h`:`${Math.floor(ago/1440)}d`;
+                    const oilTag=n.assets?.includes("WTI")||n.assets?.includes("BRENT");
+                    const goldTag=n.assets?.includes("XAU");
+                    return(
+                      <div key={n.id} data-testid={`conflict-${n.id}`} style={{background:"rgba(255,64,96,.03)",border:`1px solid rgba(255,64,96,.18)`,borderLeft:`3px solid ${C.red}`,borderRadius:3,padding:"10px 12px",marginBottom:6,cursor:"pointer"}} onClick={()=>{if(n.url&&n.url!=="#")window.open(n.url,"_blank");}}>
+                        <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                          <div style={{flexShrink:0,width:22,height:22,borderRadius:3,background:"rgba(255,64,96,.12)",border:`1px solid rgba(255,64,96,.25)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12}}>🌐</div>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontFamily:SANS,fontSize:13,color:C.text,lineHeight:1.4,marginBottom:5,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{n.title}</div>
+                            <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                              <span style={{fontFamily:MONO,fontSize:8,color:C.muted2,fontWeight:600}}>{n.source}</span>
+                              <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{agoStr} ago</span>
+                              <span style={{fontFamily:MONO,fontSize:7,fontWeight:800,padding:"2px 7px",borderRadius:2,background:"rgba(255,64,96,.12)",color:C.red,border:`1px solid rgba(255,64,96,.3)`,letterSpacing:"0.1em"}}>HIGH IMPACT</span>
+                              {oilTag&&<span style={{fontFamily:MONO,fontSize:7,padding:"2px 6px",borderRadius:2,background:"rgba(255,140,0,.1)",color:C.orange,border:`1px solid rgba(255,140,0,.25)`}}>⛽ OIL</span>}
+                              {goldTag&&<span style={{fontFamily:MONO,fontSize:7,padding:"2px 6px",borderRadius:2,background:"rgba(201,168,76,.1)",color:C.gold,border:`1px solid rgba(201,168,76,.25)`}}>Au GOLD</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            {/* Regular news feed (non-conflict filters) */}
+            {newsFilter!=="CONFLICT"&&(newsFilter==="ALL"?newsFeed:newsFeed.filter(n=>{if(newsFilter==="SOCIAL")return n.categories?.includes("twitter");if(newsFilter==="EQUITIES")return n.assets?.some(a=>["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"].includes(a));return n.assets?.includes(newsFilter);})).slice(0,12).map(n=>{
               const sentColor=n.sentiment>0.3?C.green:n.sentiment<-0.3?C.red:C.muted2;
               const srcColor={blue:C.blue,cyan:C.cyan,orange:C.orange,green:C.green,gold:C.gold}[n.color]||C.blue;
               const ago=((Date.now()-n.ts)/60000);const agoStr=ago<60?`${Math.floor(ago)}m`:ago<1440?`${Math.floor(ago/60)}h`:`${Math.floor(ago/1440)}d`;
+              const impactColor=n.isConflict?C.red:n.political?C.orange:n.sentiment>0.3?C.green:n.sentiment<-0.3?C.red:null;
+              const impactLabel=n.isConflict?"HIGH":n.political?n.marketImpact?.toUpperCase()||"POLITICAL":n.sentiment>0.4?"BULLISH":n.sentiment<-0.4?"BEARISH":null;
               return(
-                <div key={n.id} data-testid={`news-${n.id}`} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:3,padding:"10px 12px",marginBottom:4,cursor:"pointer"}} onClick={()=>{if(n.url&&n.url!=="#")window.open(n.url,"_blank");}}>
+                <div key={n.id} data-testid={`news-${n.id}`} style={{background:C.panel,border:`1px solid ${n.isConflict?"rgba(255,64,96,.2)":n.political?"rgba(255,140,0,.12)":C.border}`,borderLeft:impactColor?`2px solid ${impactColor}`:"none",borderRadius:3,padding:"10px 12px",marginBottom:4,cursor:"pointer"}} onClick={()=>{if(n.url&&n.url!=="#")window.open(n.url,"_blank");}}>
                   <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
-                    <div style={{flexShrink:0,width:20,height:20,borderRadius:2,background:`${srcColor}15`,border:`1px solid ${srcColor}30`,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:MONO,fontSize:7,fontWeight:900,color:srcColor}}>{n.icon}</span></div>
+                    <div style={{flexShrink:0,width:22,height:22,borderRadius:3,background:`${srcColor}15`,border:`1px solid ${srcColor}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:n.icon?.length>2?12:undefined}}>
+                      {n.icon?.length>2?<span style={{fontSize:12}}>{n.icon}</span>:<span style={{fontFamily:MONO,fontSize:7,fontWeight:900,color:srcColor}}>{n.icon}</span>}
+                    </div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontFamily:SANS,fontSize:13,color:C.text,lineHeight:1.4,marginBottom:4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{n.title}</div>
-                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                        <span style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{n.source}</span>
-                        <span style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{agoStr} ago</span>
-                        {n.sentiment!==0&&<span style={{fontFamily:MONO,fontSize:9,color:sentColor,fontWeight:600}}>{n.sentiment>0?"+":""}{(n.sentiment*100).toFixed(0)}%</span>}
-                        {n.assets?.length>0&&n.assets.slice(0,3).map(a=><span key={a} style={{fontFamily:MONO,fontSize:8,color:srcColor,background:`${srcColor}12`,border:`1px solid ${srcColor}25`,borderRadius:2,padding:"2px 6px"}}>{a}</span>)}
+                      <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                        <span style={{fontFamily:MONO,fontSize:8,color:C.muted,fontWeight:600}}>{n.source}</span>
+                        <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{agoStr} ago</span>
+                        {impactLabel&&<span style={{fontFamily:MONO,fontSize:7,fontWeight:800,padding:"2px 6px",borderRadius:2,background:`${impactColor}12`,color:impactColor,border:`1px solid ${impactColor}30`,letterSpacing:"0.08em"}}>{impactLabel}</span>}
+                        {n.sentiment!==0&&!impactLabel&&<span style={{fontFamily:MONO,fontSize:8,color:sentColor,fontWeight:600}}>{n.sentiment>0?"+":""}{(n.sentiment*100).toFixed(0)}%</span>}
+                        {n.assets?.length>0&&n.assets.filter(a=>a!=="CONFLICT").slice(0,3).map(a=><span key={a} style={{fontFamily:MONO,fontSize:7,color:srcColor,background:`${srcColor}10`,border:`1px solid ${srcColor}22`,borderRadius:2,padding:"2px 5px"}}>{a}</span>)}
                       </div>
                     </div>
                   </div>
                 </div>
               );
             })}
-            {newsFeed.length>8&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,textAlign:"center",padding:"6px 0",letterSpacing:"0.1em"}}>{newsFeed.length-8} MORE STORIES</div>}
+            {newsFilter!=="CONFLICT"&&newsFeed.length>12&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,textAlign:"center",padding:"6px 0",letterSpacing:"0.1em"}}>{newsFeed.length-12} MORE STORIES</div>}
           </div>}
 
           {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
@@ -2689,6 +2774,15 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           })()}
         </>}
 
+        {/* ══ INSIDER ══ */}
+        {tab==="insider"&&<>
+          <InsiderTab
+            isPro={isPro}
+            onUpgrade={onUpgrade}
+            onAskAI={(q)=>{setAiInput(q);setTab("ai");}}
+          />
+        </>}
+
         {/* ══ ALERTS ══ */}
         {tab==="alerts"&&<>
           <div style={{marginBottom:10}}><SLabel>Alerts & Anomalies</SLabel></div>
@@ -2870,6 +2964,22 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             </div>
           </div>
           </ProGate>
+
+          {/* ── MY BASKET — Personalised Scalper/Swing Tool ── */}
+          <div style={{marginBottom:6}}><SLabel>My Basket</SLabel></div>
+          <MyBasket
+            isPro={isPro}
+            onUpgrade={onUpgrade}
+            aiLoading={aiLoading}
+            setAiLoading={setAiLoading}
+            setAiOutput={setAiOutput}
+            storePerps={storePerps}
+            storeSpot={storeSpot}
+            cryptoPrices={cryptoPrices}
+            equityPrices={equityPrices}
+            metalPrices={metalPrices}
+          />
+
           <div style={{...panel,border:`1px solid rgba(255,140,0,.12)`}}>
             <div style={{padding:"11px 14px",background:"rgba(255,140,0,.03)"}}>
               <div style={{fontFamily:MONO,fontSize:9,color:C.orange,letterSpacing:"0.22em",marginBottom:5}}>LEGAL DISCLAIMER</div>
