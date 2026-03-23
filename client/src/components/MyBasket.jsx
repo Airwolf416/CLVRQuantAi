@@ -1,5 +1,5 @@
-// ── MyBasket — Personalised Scalper & Swing AI Trading Tool ──────────────
-import { useState, useCallback } from "react";
+// ── MyBasket — Global Asset Coverage · Personalised Scalper & Swing AI ───────
+import { useState, useCallback, useMemo } from "react";
 
 const C = {
   bg:"#050709", navy:"#080d18", panel:"#0c1220",
@@ -8,70 +8,170 @@ const C = {
   text:"#c8d4ee", muted:"#4a5d80", muted2:"#6b7fa8", white:"#f0f4ff",
   green:"#00c787", red:"#ff4060", orange:"#ff8c00",
   cyan:"#00d4ff", blue:"#3b82f6", teal:"#14b8a6", purple:"#a855f7",
+  halal:"#22c55e",
 };
 const MONO  = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
 const SANS  = "'Barlow', system-ui, sans-serif";
 
-const BASKET_ASSETS = {
-  crypto: [
-    { sym: "BTC",  label: "Bitcoin",   icon: "₿" },
-    { sym: "ETH",  label: "Ethereum",  icon: "Ξ" },
-    { sym: "SOL",  label: "Solana",    icon: "◎" },
-    { sym: "HYPE", label: "Hyperliquid", icon: "H" },
-    { sym: "XRP",  label: "XRP",       icon: "✕" },
-    { sym: "DOGE", label: "Dogecoin",  icon: "Ð" },
-    { sym: "AVAX", label: "Avalanche", icon: "A" },
-    { sym: "LINK", label: "Chainlink", icon: "L" },
-  ],
-  equities: [
-    { sym: "AAPL",  label: "Apple",        icon: "" },
-    { sym: "NVDA",  label: "Nvidia",       icon: "" },
-    { sym: "TSLA",  label: "Tesla",        icon: "T" },
-    { sym: "MSFT",  label: "Microsoft",    icon: "" },
-    { sym: "GOOGL", label: "Alphabet",     icon: "G" },
-    { sym: "META",  label: "Meta",         icon: "f" },
-    { sym: "AMZN",  label: "Amazon",       icon: "a" },
-    { sym: "MSTR",  label: "MicroStrategy",icon: "M" },
-    { sym: "AMD",   label: "AMD",          icon: "A" },
-    { sym: "PLTR",  label: "Palantir",     icon: "P" },
-    { sym: "COIN",  label: "Coinbase",     icon: "C" },
-    { sym: "NFLX",  label: "Netflix",      icon: "N" },
-  ],
-  commodities: [
-    { sym: "XAU",      label: "Gold",        icon: "Au" },
-    { sym: "XAG",      label: "Silver",      icon: "Ag" },
-    { sym: "WTI",      label: "WTI Oil",     icon: "⛽" },
-    { sym: "BRENT",    label: "Brent Oil",   icon: "🛢" },
-    { sym: "NATGAS",   label: "Natural Gas", icon: "🔥" },
-    { sym: "COPPER",   label: "Copper",      icon: "Cu" },
-    { sym: "PLATINUM", label: "Platinum",    icon: "Pt" },
-    { sym: "WHEAT",    label: "Wheat",       icon: "🌾" },
-  ],
-};
+const MAX_ASSETS = 5;
 
-const STYLES = [
-  { key: "scalp",  label: "Scalp",  desc: "Minutes to hours · High freq · Tight stops",  color: C.cyan   },
-  { key: "swing",  label: "Swing",  desc: "Days to weeks · Trend following · Wider stops", color: C.purple },
-  { key: "day",    label: "Day",    desc: "Intraday · Close flat · Momentum-driven",       color: C.green  },
+// ── Asset Database ─────────────────────────────────────────────────────────────
+const CRYPTO_ASSETS = [
+  { sym:"BTC",  label:"Bitcoin",       icon:"₿",  cat:"crypto", region:"global" },
+  { sym:"ETH",  label:"Ethereum",      icon:"Ξ",  cat:"crypto", region:"global" },
+  { sym:"SOL",  label:"Solana",        icon:"◎",  cat:"crypto", region:"global" },
+  { sym:"HYPE", label:"Hyperliquid",   icon:"H",  cat:"crypto", region:"global" },
+  { sym:"XRP",  label:"XRP",           icon:"✕",  cat:"crypto", region:"global" },
+  { sym:"DOGE", label:"Dogecoin",      icon:"Ð",  cat:"crypto", region:"global" },
+  { sym:"AVAX", label:"Avalanche",     icon:"A",  cat:"crypto", region:"global" },
+  { sym:"LINK", label:"Chainlink",     icon:"L",  cat:"crypto", region:"global" },
+  { sym:"BNB",  label:"BNB",           icon:"B",  cat:"crypto", region:"global" },
+  { sym:"ADA",  label:"Cardano",       icon:"₳",  cat:"crypto", region:"global" },
+  { sym:"SUI",  label:"Sui",           icon:"S",  cat:"crypto", region:"global" },
+  { sym:"DOT",  label:"Polkadot",      icon:"●",  cat:"crypto", region:"global" },
 ];
 
-export default function MyBasket({ isPro, onUpgrade, aiLoading, setAiLoading, setAiOutput, storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices }) {
-  const [selected, setSelected]   = useState(new Set(["BTC", "ETH", "NVDA"]));
-  const [style, setStyle]         = useState("swing");
-  const [category, setCategory]   = useState("crypto");
+const EQUITY_ASSETS = [
+  // North America — S&P 500 top stocks
+  { sym:"AAPL",  label:"Apple",          icon:"🍎", cat:"equities", region:"namerica" },
+  { sym:"NVDA",  label:"Nvidia",         icon:"N",  cat:"equities", region:"namerica" },
+  { sym:"MSFT",  label:"Microsoft",      icon:"W",  cat:"equities", region:"namerica" },
+  { sym:"GOOGL", label:"Alphabet",       icon:"G",  cat:"equities", region:"namerica" },
+  { sym:"AMZN",  label:"Amazon",         icon:"A",  cat:"equities", region:"namerica" },
+  { sym:"META",  label:"Meta",           icon:"f",  cat:"equities", region:"namerica" },
+  { sym:"TSLA",  label:"Tesla",          icon:"T",  cat:"equities", region:"namerica" },
+  { sym:"MSTR",  label:"MicroStrategy", icon:"M",  cat:"equities", region:"namerica" },
+  { sym:"AMD",   label:"AMD",            icon:"A",  cat:"equities", region:"namerica" },
+  { sym:"PLTR",  label:"Palantir",       icon:"P",  cat:"equities", region:"namerica" },
+  { sym:"COIN",  label:"Coinbase",       icon:"C",  cat:"equities", region:"namerica" },
+  { sym:"NFLX",  label:"Netflix",        icon:"N",  cat:"equities", region:"namerica" },
+  { sym:"JPM",   label:"JPMorgan",       icon:"J",  cat:"equities", region:"namerica" },
+  { sym:"V",     label:"Visa",           icon:"V",  cat:"equities", region:"namerica" },
+  { sym:"XOM",   label:"ExxonMobil",     icon:"X",  cat:"equities", region:"namerica" },
+  { sym:"WMT",   label:"Walmart",        icon:"W",  cat:"equities", region:"namerica" },
+  { sym:"BAC",   label:"Bank of America",icon:"B",  cat:"equities", region:"namerica" },
+  { sym:"UNH",   label:"UnitedHealth",   icon:"U",  cat:"equities", region:"namerica" },
+  { sym:"DIS",   label:"Disney",         icon:"D",  cat:"equities", region:"namerica" },
+  { sym:"CRM",   label:"Salesforce",     icon:"S",  cat:"equities", region:"namerica" },
+  // Canada — TSX
+  { sym:"RY",    label:"Royal Bank CA",  icon:"R",  cat:"equities", region:"namerica" },
+  { sym:"TD",    label:"TD Bank",        icon:"T",  cat:"equities", region:"namerica" },
+  { sym:"CNQ",   label:"Canadian Nat.",  icon:"C",  cat:"equities", region:"namerica" },
+  { sym:"SU",    label:"Suncor Energy",  icon:"S",  cat:"equities", region:"namerica" },
+  { sym:"BCE",   label:"BCE Inc.",       icon:"B",  cat:"equities", region:"namerica" },
+  // Europe — FTSE 100, DAX, CAC 40
+  { sym:"ASML",  label:"ASML",          icon:"A",  cat:"equities", region:"europe" },
+  { sym:"SAP",   label:"SAP SE",        icon:"S",  cat:"equities", region:"europe" },
+  { sym:"NESN",  label:"Nestlé",        icon:"N",  cat:"equities", region:"europe", halal:false },
+  { sym:"LVMH",  label:"LVMH",          icon:"L",  cat:"equities", region:"europe", halal:false },
+  { sym:"SHEL",  label:"Shell",         icon:"S",  cat:"equities", region:"europe" },
+  { sym:"HSBA",  label:"HSBC",          icon:"H",  cat:"equities", region:"europe", halal:false },
+  { sym:"AZN",   label:"AstraZeneca",   icon:"A",  cat:"equities", region:"europe" },
+  { sym:"NVO",   label:"Novo Nordisk",  icon:"N",  cat:"equities", region:"europe" },
+  { sym:"SIEGY", label:"Siemens",       icon:"S",  cat:"equities", region:"europe" },
+  { sym:"TTE",   label:"TotalEnergies", icon:"T",  cat:"equities", region:"europe" },
+  { sym:"BP",    label:"BP plc",        icon:"B",  cat:"equities", region:"europe" },
+  { sym:"ULVR",  label:"Unilever",      icon:"U",  cat:"equities", region:"europe" },
+  // Middle East
+  { sym:"2222.SR", label:"Saudi Aramco", icon:"🛢", cat:"equities", region:"mideast", halal:true },
+  { sym:"2010.SR", label:"SABIC",        icon:"S",  cat:"equities", region:"mideast", halal:true },
+  { sym:"EMIRATESNBD", label:"Emirates NBD", icon:"E", cat:"equities", region:"mideast", halal:true },
+  { sym:"QNBK",  label:"QNB Group",     icon:"Q",  cat:"equities", region:"mideast", halal:true },
+  { sym:"ADNOCDIST", label:"ADNOC Dist.", icon:"A", cat:"equities", region:"mideast", halal:true },
+  { sym:"ETISALAT", label:"e& (Etisalat)",icon:"e", cat:"equities", region:"mideast", halal:true },
+  // Asia — Nikkei, Hang Seng
+  { sym:"TSM",   label:"TSMC",          icon:"T",  cat:"equities", region:"asia" },
+  { sym:"BABA",  label:"Alibaba",       icon:"A",  cat:"equities", region:"asia" },
+  { sym:"TCEHY", label:"Tencent",       icon:"T",  cat:"equities", region:"asia" },
+  { sym:"005930", label:"Samsung Elec.", icon:"S",  cat:"equities", region:"asia" },
+  { sym:"9984.T", label:"SoftBank",     icon:"S",  cat:"equities", region:"asia" },
+  { sym:"7203.T", label:"Toyota",       icon:"T",  cat:"equities", region:"asia" },
+  { sym:"7974.T", label:"Nintendo",     icon:"N",  cat:"equities", region:"asia" },
+  { sym:"0700.HK", label:"Tencent HK",  icon:"T",  cat:"equities", region:"asia" },
+  { sym:"PDD",   label:"PDD Holdings",  icon:"P",  cat:"equities", region:"asia" },
+  { sym:"JD",    label:"JD.com",        icon:"J",  cat:"equities", region:"asia" },
+  { sym:"RELIANCE", label:"Reliance Ind.",icon:"R", cat:"equities", region:"asia" },
+  { sym:"INFY",  label:"Infosys",       icon:"I",  cat:"equities", region:"asia" },
+];
+
+const COMMODITY_ASSETS = [
+  // Metals
+  { sym:"XAU",      label:"Gold",         icon:"Au",  cat:"commodities", region:"global", halal:true },
+  { sym:"XAG",      label:"Silver",       icon:"Ag",  cat:"commodities", region:"global", halal:true },
+  { sym:"COPPER",   label:"Copper",       icon:"Cu",  cat:"commodities", region:"global" },
+  { sym:"PLATINUM", label:"Platinum",     icon:"Pt",  cat:"commodities", region:"global", halal:true },
+  { sym:"PALLADIUM",label:"Palladium",    icon:"Pd",  cat:"commodities", region:"global", halal:true },
+  // Energy
+  { sym:"WTI",      label:"WTI Crude",    icon:"⛽",  cat:"commodities", region:"mideast" },
+  { sym:"BRENT",    label:"Brent Crude",  icon:"🛢",  cat:"commodities", region:"mideast" },
+  { sym:"NATGAS",   label:"Natural Gas",  icon:"🔥",  cat:"commodities", region:"global" },
+  { sym:"URANIUM",  label:"Uranium",      icon:"☢",  cat:"commodities", region:"global" },
+  { sym:"DUBAI",    label:"Dubai Crude",  icon:"🏙",  cat:"commodities", region:"mideast" },
+  { sym:"LNG",      label:"LNG",          icon:"🚢",  cat:"commodities", region:"mideast" },
+  // Agriculture
+  { sym:"WHEAT",    label:"Wheat",        icon:"🌾",  cat:"commodities", region:"global", halal:true },
+  { sym:"CORN",     label:"Corn",         icon:"🌽",  cat:"commodities", region:"global", halal:true },
+  { sym:"SOYBEANS", label:"Soybeans",     icon:"🫘",  cat:"commodities", region:"global", halal:true },
+  { sym:"COFFEE",   label:"Coffee",       icon:"☕",  cat:"commodities", region:"global", halal:true },
+  { sym:"SUGAR",    label:"Sugar",        icon:"🍬",  cat:"commodities", region:"global", halal:true },
+];
+
+const ALL_ASSETS = [...CRYPTO_ASSETS, ...EQUITY_ASSETS, ...COMMODITY_ASSETS];
+
+const STYLES = [
+  { key:"scalp", label:"Scalp",  desc:"Minutes–hours · Tight stops",   color:C.cyan   },
+  { key:"day",   label:"Day",    desc:"Intraday · Close flat",          color:C.green  },
+  { key:"swing", label:"Swing",  desc:"Days–weeks · Trend follow",      color:C.purple },
+];
+
+const REGIONS = [
+  { k:"all",      label:"All",         flag:"🌍" },
+  { k:"namerica", label:"N. America",  flag:"🇺🇸" },
+  { k:"europe",   label:"Europe",      flag:"🇪🇺" },
+  { k:"mideast",  label:"Mid East",    flag:"🌙" },
+  { k:"asia",     label:"Asia",        flag:"🌏" },
+  { k:"global",   label:"Global",      flag:"🔗" },
+];
+
+const CATS = [
+  { k:"all",        label:"All"         },
+  { k:"crypto",     label:"Crypto"      },
+  { k:"equities",   label:"Equities"    },
+  { k:"commodities",label:"Commodities" },
+];
+
+export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices }) {
+  const [selected, setSelected]     = useState(new Set(["BTC","ETH","XAU"]));
+  const [style, setStyle]           = useState("swing");
+  const [cat, setCat]               = useState("all");
+  const [region, setRegion]         = useState("all");
+  const [search, setSearch]         = useState("");
   const [basketResult, setBasketResult] = useState("");
   const [basketLoading, setBasketLoading] = useState(false);
-  const [openPanel, setOpenPanel] = useState(true);
+  const [openPanel, setOpenPanel]   = useState(true);
+  const [showHalalOnly, setShowHalalOnly] = useState(false);
 
   const toggleAsset = useCallback((sym) => {
     setSelected(prev => {
       const next = new Set(prev);
       if (next.has(sym)) { next.delete(sym); }
-      else { if (next.size >= 8) return prev; next.add(sym); }
+      else { if (next.size >= MAX_ASSETS) return prev; next.add(sym); }
       return next;
     });
   }, []);
+
+  const filtered = useMemo(() => {
+    let list = ALL_ASSETS;
+    if (cat !== "all") list = list.filter(a => a.cat === cat);
+    if (region !== "all") list = list.filter(a => a.region === region);
+    if (showHalalOnly) list = list.filter(a => a.halal === true);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(a => a.sym.toLowerCase().includes(q) || a.label.toLowerCase().includes(q));
+    }
+    return list;
+  }, [cat, region, search, showHalalOnly]);
 
   const getPriceSnap = useCallback((sym) => {
     const perp = storePerps?.[sym];
@@ -89,7 +189,6 @@ export default function MyBasket({ isPro, onUpgrade, aiLoading, setAiLoading, se
     if (selected.size === 0 || basketLoading) return;
     setBasketLoading(true);
     setBasketResult("");
-
     const syms = [...selected];
     const priceData = syms.map(sym => `${sym}: ${getPriceSnap(sym)}`).join(" | ");
     const styleObj = STYLES.find(s => s.key === style);
@@ -117,7 +216,7 @@ Then at the end, provide:
 
 Format clearly with each asset as a header. Be direct and numerical.`;
 
-    const system = `You are CLVR AI's Basket Analyst — specialist in multi-asset portfolio construction and ${styleDesc} trading. You receive a user's custom basket of assets and generate personalized, style-specific trade recommendations. Use live price data provided. For scalp trades: stops 1–1.5%, leverage up to 10x. For day trades: stops 1.5–3%, leverage up to 5x. For swing trades: stops 4–7%, leverage up to 3x. Always account for correlation risk across the basket. Be specific, numerical, and direct.`;
+    const system = `You are CLVR AI's Basket Analyst — specialist in multi-asset portfolio construction and ${styleDesc} trading across global markets including US equities, European stocks, Asian markets, Middle East equities, commodities, and crypto. You receive a user's custom basket and generate personalized, style-specific trade recommendations. Use live price data provided. For scalp trades: stops 1–1.5%, leverage up to 10x. For day trades: stops 1.5–3%, leverage up to 5x. For swing trades: stops 4–7%, leverage up to 3x. Account for correlation risk across the basket and any geographic/sector concentration. Be specific, numerical, and direct.`;
 
     try {
       const r = await fetch("/api/ai/analyze", {
@@ -127,11 +226,7 @@ Format clearly with each asset as a header. Be direct and numerical.`;
         body: JSON.stringify({ system, userMessage }),
       });
       const data = await r.json();
-      if (!r.ok) {
-        setBasketResult(data.error || `Error ${r.status}`);
-      } else {
-        setBasketResult(data.text || "No response.");
-      }
+      setBasketResult(r.ok ? (data.text || "No response.") : (data.error || `Error ${r.status}`));
     } catch (e) {
       setBasketResult(`Error: ${e.message}`);
     } finally {
@@ -141,19 +236,21 @@ Format clearly with each asset as a header. Be direct and numerical.`;
 
   if (!isPro) {
     return (
-      <div data-testid="progate-my-basket" style={{ position: "relative" }}>
-        <div style={{ filter: "blur(4px)", opacity: 0.3, pointerEvents: "none", maxHeight: 160, overflow: "hidden" }}>
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, padding: 14 }}>
-            <div style={{ fontFamily: MONO, fontSize: 10, color: C.purple, letterSpacing: "0.15em", marginBottom: 8 }}>MY BASKET · PERSONALISED AI</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {["BTC","ETH","NVDA","XAU"].map(s => <div key={s} style={{ padding: "6px 12px", background: C.border, borderRadius: 4, fontFamily: MONO, fontSize: 10, color: C.muted }}>{s}</div>)}
+      <div data-testid="progate-my-basket" style={{ position:"relative" }}>
+        <div style={{ filter:"blur(4px)", opacity:0.3, pointerEvents:"none", maxHeight:160, overflow:"hidden" }}>
+          <div style={{ background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:14 }}>
+            <div style={{ fontFamily:MONO, fontSize:10, color:C.purple, letterSpacing:"0.15em", marginBottom:8 }}>MY BASKET · GLOBAL AI</div>
+            <div style={{ display:"flex", gap:6 }}>
+              {["BTC","NVDA","XAU","2222.SR","ASML"].map(s => (
+                <div key={s} style={{ padding:"6px 12px", background:C.border, borderRadius:4, fontFamily:MONO, fontSize:10, color:C.muted }}>{s}</div>
+              ))}
             </div>
           </div>
         </div>
-        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(5,7,9,.85)", backdropFilter: "blur(8px)", borderRadius: 4 }}>
-          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 16, color: C.gold2, marginBottom: 4 }}>Pro Feature</div>
-          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted2, letterSpacing: "0.12em", marginBottom: 12, textTransform: "uppercase" }}>My Basket · Personalised AI</div>
-          <button data-testid="btn-upgrade-my-basket" onClick={onUpgrade} style={{ background: "rgba(201,168,76,.12)", border: `1px solid rgba(201,168,76,.35)`, borderRadius: 2, padding: "8px 20px", fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 13, color: C.gold2, cursor: "pointer" }}>Upgrade to Pro</button>
+        <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", background:"rgba(5,7,9,.85)", backdropFilter:"blur(8px)", borderRadius:4 }}>
+          <div style={{ fontFamily:SERIF, fontWeight:900, fontSize:16, color:C.gold2, marginBottom:4 }}>Pro Feature</div>
+          <div style={{ fontFamily:MONO, fontSize:9, color:C.muted2, letterSpacing:"0.12em", marginBottom:12, textTransform:"uppercase" }}>My Basket · Global AI · 140+ Assets</div>
+          <button data-testid="btn-upgrade-my-basket" onClick={onUpgrade} style={{ background:"rgba(201,168,76,.12)", border:`1px solid rgba(201,168,76,.35)`, borderRadius:2, padding:"8px 20px", fontFamily:SERIF, fontStyle:"italic", fontWeight:700, fontSize:13, color:C.gold2, cursor:"pointer" }}>Upgrade to Pro</button>
         </div>
       </div>
     );
@@ -162,75 +259,138 @@ Format clearly with each asset as a header. Be direct and numerical.`;
   const selList = [...selected];
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 4, marginBottom: 10, overflow: "hidden" }}>
+    <div style={{ background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, marginBottom:10, overflow:"hidden" }}>
       {/* Header */}
-      <div onClick={() => setOpenPanel(o => !o)} style={{ padding: "11px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontFamily: MONO, fontSize: 9, color: C.purple, letterSpacing: "0.18em" }}>MY BASKET</span>
-          <span style={{ fontFamily: MONO, fontSize: 8, color: C.muted, background: "rgba(168,85,247,.08)", border: `1px solid rgba(168,85,247,.2)`, borderRadius: 2, padding: "2px 7px" }}>PERSONALISED AI</span>
-          {selList.length > 0 && <span style={{ fontFamily: MONO, fontSize: 8, color: C.purple }}>{selList.length} assets</span>}
+      <div onClick={() => setOpenPanel(o => !o)} style={{ padding:"11px 14px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.18em" }}>MY BASKET</span>
+          <span style={{ fontFamily:MONO, fontSize:8, color:C.muted, background:"rgba(168,85,247,.08)", border:`1px solid rgba(168,85,247,.2)`, borderRadius:2, padding:"2px 7px" }}>GLOBAL AI · 140+ ASSETS</span>
+          {selList.length > 0 && (
+            <span style={{ fontFamily:MONO, fontSize:8, color:C.purple }}>{selList.length}/{MAX_ASSETS}</span>
+          )}
         </div>
-        <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>{openPanel ? "▲" : "▼"}</span>
+        <span style={{ fontFamily:MONO, fontSize:9, color:C.muted }}>{openPanel ? "▲" : "▼"}</span>
       </div>
 
       {openPanel && (
-        <div style={{ padding: 14 }}>
-          {/* Category tabs */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
-            {Object.keys(BASKET_ASSETS).map(cat => (
-              <button key={cat} data-testid={`basket-cat-${cat}`} onClick={() => setCategory(cat)} style={{ flex: 1, padding: "5px 6px", borderRadius: 2, border: `1px solid ${category === cat ? C.purple : C.border}`, background: category === cat ? "rgba(168,85,247,.08)" : "transparent", color: category === cat ? C.purple : C.muted, fontFamily: MONO, fontSize: 8, cursor: "pointer", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                {cat}
+        <div style={{ padding:14 }}>
+
+          {/* ── Search bar ── */}
+          <div style={{ position:"relative", marginBottom:10 }}>
+            <input
+              data-testid="basket-search"
+              type="text"
+              placeholder="Search ticker or name… e.g. ASML, Gold, Samsung"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ width:"100%", background:"rgba(8,13,24,.8)", border:`1px solid ${search ? C.purple : C.border}`, borderRadius:3, padding:"8px 32px 8px 10px", fontFamily:MONO, fontSize:10, color:C.text, letterSpacing:"0.04em", outline:"none", boxSizing:"border-box" }}
+            />
+            {search && (
+              <button onClick={() => setSearch("")} style={{ position:"absolute", right:8, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:C.muted, fontSize:14, cursor:"pointer", padding:0, lineHeight:1 }}>×</button>
+            )}
+          </div>
+
+          {/* ── Category + Region filters ── */}
+          <div style={{ display:"flex", gap:4, marginBottom:6, overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
+            {CATS.map(c => (
+              <button key={c.k} data-testid={`basket-cat-${c.k}`} onClick={() => setCat(c.k)} style={{ flexShrink:0, padding:"4px 10px", borderRadius:2, border:`1px solid ${cat===c.k ? C.purple : C.border}`, background:cat===c.k ? "rgba(168,85,247,.1)" : "transparent", color:cat===c.k ? C.purple : C.muted, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
+                {c.label}
               </button>
             ))}
           </div>
 
-          {/* Asset grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5, marginBottom: 12 }}>
-            {BASKET_ASSETS[category].map(({ sym, label, icon }) => {
+          <div style={{ display:"flex", gap:4, marginBottom:8, overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
+            {REGIONS.map(r => (
+              <button key={r.k} data-testid={`basket-region-${r.k}`} onClick={() => setRegion(r.k)} style={{ flexShrink:0, padding:"4px 10px", borderRadius:2, border:`1px solid ${region===r.k ? C.blue : C.border}`, background:region===r.k ? "rgba(59,130,246,.1)" : "transparent", color:region===r.k ? C.blue : C.muted, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
+                {r.flag} {r.label}
+              </button>
+            ))}
+            <button data-testid="basket-halal-toggle" onClick={() => setShowHalalOnly(h => !h)} style={{ flexShrink:0, padding:"4px 10px", borderRadius:2, border:`1px solid ${showHalalOnly ? C.halal : C.border}`, background:showHalalOnly ? "rgba(34,197,94,.1)" : "transparent", color:showHalalOnly ? C.halal : C.muted, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
+              ☪ Halal
+            </button>
+          </div>
+
+          {/* ── Asset grid ── */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:4, marginBottom:12, maxHeight:280, overflowY:"auto", WebkitOverflowScrolling:"touch" }}>
+            {filtered.length === 0 && (
+              <div style={{ gridColumn:"1 / -1", textAlign:"center", padding:"18px 0", fontFamily:MONO, fontSize:9, color:C.muted }}>
+                No assets match your filters
+              </div>
+            )}
+            {filtered.map(({ sym, label, cat:assetCat, halal }) => {
               const active = selected.has(sym);
+              const blocked = !active && selected.size >= MAX_ASSETS;
+              const catColor = assetCat === "crypto" ? C.cyan : assetCat === "equities" ? C.blue : C.gold;
               return (
-                <button key={sym} data-testid={`basket-asset-${sym}`} onClick={() => toggleAsset(sym)} style={{ padding: "7px 4px", borderRadius: 3, border: `1px solid ${active ? C.purple : C.border}`, background: active ? "rgba(168,85,247,.1)" : "rgba(8,13,24,.6)", cursor: "pointer", textAlign: "center", transition: "all .15s", position: "relative" }}>
-                  {active && <div style={{ position: "absolute", top: 3, right: 4, width: 5, height: 5, borderRadius: "50%", background: C.purple }} />}
-                  <div style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, color: active ? C.purple : C.muted2 }}>{sym}</div>
-                  <div style={{ fontFamily: SANS, fontSize: 8, color: C.muted, marginTop: 1, lineHeight: 1.2 }}>{label.length > 9 ? label.slice(0, 9) : label}</div>
+                <button key={sym} data-testid={`basket-asset-${sym}`} onClick={() => !blocked && toggleAsset(sym)}
+                  style={{ padding:"7px 4px", borderRadius:3, border:`1px solid ${active ? C.purple : C.border}`, background:active ? "rgba(168,85,247,.12)" : blocked ? "rgba(8,13,24,.3)" : "rgba(8,13,24,.6)", cursor:blocked ? "not-allowed" : "pointer", textAlign:"center", position:"relative", opacity:blocked ? 0.45 : 1 }}>
+                  {active && <div style={{ position:"absolute", top:3, right:4, width:5, height:5, borderRadius:"50%", background:C.purple }} />}
+                  {halal === true && (
+                    <div style={{ position:"absolute", top:2, left:3, fontFamily:MONO, fontSize:6, color:C.halal, letterSpacing:"-0.02em", lineHeight:1 }}>☪</div>
+                  )}
+                  <div style={{ fontFamily:MONO, fontSize:8, fontWeight:700, color:active ? C.purple : C.muted2, lineHeight:1.2 }}>{sym.length > 7 ? sym.slice(0,7) : sym}</div>
+                  <div style={{ fontFamily:SANS, fontSize:7, color:blocked ? C.muted : active ? `${C.purple}bb` : C.muted, marginTop:2, lineHeight:1.2, display:"-webkit-box", WebkitLineClamp:1, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{label}</div>
+                  <div style={{ width:16, height:2, background:catColor, borderRadius:1, margin:"3px auto 0", opacity:0.5 }} />
                 </button>
               );
             })}
           </div>
 
-          {/* Selected basket pills */}
+          {/* ── Legend ── */}
+          <div style={{ display:"flex", gap:10, marginBottom:10, flexWrap:"wrap" }}>
+            {[["crypto",C.cyan],["equities",C.blue],["commodities",C.gold]].map(([l,c]) => (
+              <div key={l} style={{ display:"flex", alignItems:"center", gap:4 }}>
+                <div style={{ width:12, height:3, background:c, borderRadius:1 }} />
+                <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, textTransform:"uppercase" }}>{l}</span>
+              </div>
+            ))}
+            <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+              <span style={{ fontSize:8, color:C.halal }}>☪</span>
+              <span style={{ fontFamily:MONO, fontSize:7, color:C.muted }}>Shariah-compliant</span>
+            </div>
+          </div>
+
+          {/* ── Selected basket pills ── */}
           {selList.length > 0 && (
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "rgba(168,85,247,.04)", border: `1px solid rgba(168,85,247,.15)`, borderRadius: 3 }}>
-              <span style={{ fontFamily: MONO, fontSize: 8, color: C.muted, alignSelf: "center" }}>BASKET:</span>
-              {selList.map(sym => (
-                <span key={sym} onClick={() => toggleAsset(sym)} style={{ fontFamily: MONO, fontSize: 8, color: C.purple, background: "rgba(168,85,247,.1)", border: `1px solid rgba(168,85,247,.3)`, borderRadius: 2, padding: "2px 8px", cursor: "pointer" }}>
-                  {sym} ×
-                </span>
-              ))}
+            <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:10, padding:"8px 10px", background:"rgba(168,85,247,.04)", border:`1px solid rgba(168,85,247,.15)`, borderRadius:3 }}>
+              <span style={{ fontFamily:MONO, fontSize:8, color:C.muted, alignSelf:"center" }}>BASKET ({selList.length}/{MAX_ASSETS}):</span>
+              {selList.map(sym => {
+                const asset = ALL_ASSETS.find(a => a.sym === sym);
+                return (
+                  <span key={sym} onClick={() => toggleAsset(sym)} style={{ fontFamily:MONO, fontSize:8, color:C.purple, background:"rgba(168,85,247,.12)", border:`1px solid rgba(168,85,247,.3)`, borderRadius:2, padding:"2px 8px", cursor:"pointer", display:"flex", alignItems:"center", gap:3 }}>
+                    {asset?.halal === true && <span style={{ fontSize:7, color:C.halal }}>☪</span>}
+                    {sym} ×
+                  </span>
+                );
+              })}
+              {selected.size < MAX_ASSETS && (
+                <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, alignSelf:"center" }}>{MAX_ASSETS - selected.size} more</span>
+              )}
             </div>
           )}
 
-          {/* Style selector */}
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, letterSpacing: "0.12em", marginBottom: 6 }}>TRADING STYLE</div>
-            <div style={{ display: "flex", gap: 5 }}>
+          {/* ── Style selector ── */}
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontFamily:MONO, fontSize:8, color:C.muted, letterSpacing:"0.12em", marginBottom:6 }}>TRADING STYLE</div>
+            <div style={{ display:"flex", gap:5 }}>
               {STYLES.map(s => (
-                <button key={s.key} data-testid={`basket-style-${s.key}`} onClick={() => setStyle(s.key)} style={{ flex: 1, padding: "8px 6px", borderRadius: 3, border: `1px solid ${style === s.key ? s.color : C.border}`, background: style === s.key ? `${s.color}12` : "transparent", cursor: "pointer", textAlign: "center" }}>
-                  <div style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, color: style === s.key ? s.color : C.muted }}>{s.label}</div>
-                  <div style={{ fontFamily: SANS, fontSize: 8, color: C.muted, marginTop: 2, lineHeight: 1.3 }}>{s.desc.split("·")[0].trim()}</div>
+                <button key={s.key} data-testid={`basket-style-${s.key}`} onClick={() => setStyle(s.key)} style={{ flex:1, padding:"8px 6px", borderRadius:3, border:`1px solid ${style===s.key ? s.color : C.border}`, background:style===s.key ? `${s.color}12` : "transparent", cursor:"pointer", textAlign:"center" }}>
+                  <div style={{ fontFamily:MONO, fontSize:9, fontWeight:700, color:style===s.key ? s.color : C.muted }}>{s.label}</div>
+                  <div style={{ fontFamily:SANS, fontSize:7, color:C.muted, marginTop:2, lineHeight:1.3 }}>{s.desc.split("·")[0].trim()}</div>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Run button */}
-          <button data-testid="btn-run-basket" onClick={runBasket} disabled={basketLoading || selected.size === 0} style={{ width: "100%", padding: "13px 14px", borderRadius: 3, border: `1px solid ${selected.size === 0 ? C.border : "rgba(168,85,247,.4)"}`, background: selected.size === 0 ? "transparent" : "rgba(168,85,247,.08)", color: basketLoading || selected.size === 0 ? C.muted : C.purple, fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 14, cursor: basketLoading || selected.size === 0 ? "not-allowed" : "pointer", letterSpacing: "0.02em" }}>
-            {basketLoading ? "Analyzing Your Basket..." : selected.size === 0 ? "Select assets above" : `Analyze My ${STYLES.find(s => s.key === style)?.label} Basket (${selList.length} assets) ✦`}
+          {/* ── Run button ── */}
+          <button data-testid="btn-run-basket" onClick={runBasket} disabled={basketLoading || selected.size === 0}
+            style={{ width:"100%", padding:"13px 14px", borderRadius:3, border:`1px solid ${selected.size===0 ? C.border : "rgba(168,85,247,.4)"}`, background:selected.size===0 ? "transparent" : "rgba(168,85,247,.08)", color:basketLoading || selected.size===0 ? C.muted : C.purple, fontFamily:SERIF, fontStyle:"italic", fontWeight:700, fontSize:14, cursor:basketLoading || selected.size===0 ? "not-allowed" : "pointer", letterSpacing:"0.02em" }}>
+            {basketLoading ? "Analyzing Global Basket…" : selected.size===0 ? "Select up to 5 assets above" : `Analyze My ${STYLES.find(s=>s.key===style)?.label} Basket (${selList.length} asset${selList.length!==1?"s":""}) ✦`}
           </button>
 
-          {/* Result */}
+          {/* ── Result ── */}
           {basketResult && (
-            <div data-testid="text-basket-result" style={{ marginTop: 12, background: "#080d18", border: `1px solid ${C.border}`, borderRadius: 3, padding: 14, fontSize: 13, lineHeight: 1.9, color: C.text, whiteSpace: "pre-wrap", overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+            <div data-testid="text-basket-result" style={{ marginTop:12, background:"#080d18", border:`1px solid ${C.border}`, borderRadius:3, padding:14, fontSize:12, lineHeight:1.9, color:C.text, whiteSpace:"pre-wrap", overflowY:"auto", WebkitOverflowScrolling:"touch", maxHeight:520 }}>
               {basketResult}
             </div>
           )}

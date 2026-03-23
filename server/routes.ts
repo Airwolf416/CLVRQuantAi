@@ -1644,14 +1644,14 @@ export async function registerRoutes(
       }
       return items;
     }
-    const conflictFetchPromises = CONFLICT_RSS.map(url =>
-      fetch(url, {
+    const conflictFetchPromises = CONFLICT_RSS.map(rssUrl =>
+      fetch(rssUrl, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; CLVRQuant/2.0)", "Accept": "application/rss+xml, text/xml, */*" },
         signal: AbortSignal.timeout(7000),
-      }).then(r => r.ok ? r.text() : "").catch(() => "")
+      }).then(r => r.ok ? r.text() : "").catch(() => "").then(text => ({ rssUrl, text }))
     );
     const conflictTexts = await Promise.all(conflictFetchPromises);
-    for (const xml of conflictTexts) {
+    for (const { rssUrl, text: xml } of conflictTexts) {
       if (!xml) continue;
       const rssItems = parseRSSXML(xml);
       for (const item of rssItems.slice(0, 15)) {
@@ -1667,7 +1667,7 @@ export async function registerRoutes(
         ];
         results.push({
           id: "geo-" + Buffer.from(item.title.slice(0, 60)).toString("base64").slice(0, 16),
-          source: url.includes("reuters") ? "Reuters" : url.includes("bbc") ? "BBC" : "DW World",
+          source: rssUrl.includes("reuters") ? "Reuters" : rssUrl.includes("bbc") ? "BBC" : "DW World",
           icon: "🌐",
           color: "orange",
           title: item.title,
