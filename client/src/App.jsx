@@ -2277,13 +2277,48 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:20,color:C.gold2,letterSpacing:"0.04em",lineHeight:1,textShadow:"0 0 24px rgba(201,168,76,.25)"}}>CLVRQuant</div>
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.25em",marginTop:2}}>TRADE SMARTER WITH AI · v2</div>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2}}>📷</button>
-            <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound alerts ON":"Sound alerts OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
-            {isPro&&<button data-testid="btn-squawk-toggle" onClick={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})} title={!squawkMuted&&soundEnabled?"Squawk Box LIVE — voice reads HL signals":"Squawk Box OFF"} style={{background:"none",border:`1px solid ${!squawkMuted&&soundEnabled?"rgba(201,168,76,.5)":C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:9,color:!squawkMuted&&soundEnabled?C.gold:C.muted2,letterSpacing:"0.06em"}}>{!squawkMuted&&soundEnabled?"📣":"📣"}</button>}
-            <div style={{position:"relative",display:"inline-flex"}}>
-              <button data-testid="btn-push-notif" onClick={requestPush} title={notifPerm==="granted"&&!pushDisabled?"Notifications ON — tap to disable":notifPerm==="granted"&&pushDisabled?"Notifications paused — tap to re-enable":"Tap to enable push notifications"} style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red}}>{notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}</button>
-              {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            {/* ── QR Code ── */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>QR CODE</span>
+              <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2}}>📷</button>
+            </div>
+            {/* ── Sound ── */}
+            <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound ON":"Sound OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
+            {/* ── Squawk Box (Pro only) ── */}
+            {isPro&&(()=>{
+              const sqActive=!squawkMuted&&soundEnabled;
+              const toggleSq=()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;});
+              return(
+                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                  <span style={{fontFamily:MONO,fontSize:6,color:sqActive?C.gold:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>SQUAWK</span>
+                  <div style={{position:"relative",display:"inline-flex"}}>
+                    <button data-testid="btn-squawk-toggle" onClick={toggleSq}
+                      title={sqActive?"Squawk Box LIVE — tap to mute":"Squawk Box OFF — tap to enable"}
+                      style={{background:sqActive?"rgba(201,168,76,.07)":"none",border:`1px solid ${sqActive?"rgba(201,168,76,.5)":C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:sqActive?C.gold:C.muted2}}>
+                      📣
+                    </button>
+                    {/* Red diagonal slash when disabled */}
+                    {!sqActive&&(
+                      <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}} viewBox="0 0 30 24">
+                        <line x1="4" y1="20" x2="26" y2="4" stroke="#ff4060" strokeWidth="2.2" strokeLinecap="round"/>
+                      </svg>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+            {/* ── Alerts / Push ── */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              <span style={{fontFamily:MONO,fontSize:6,color:notifPerm==="granted"&&!pushDisabled?C.gold:C.red,letterSpacing:"0.1em",textTransform:"uppercase"}}>ALERTS</span>
+              <div style={{position:"relative",display:"inline-flex"}}>
+                <button data-testid="btn-push-notif" onClick={requestPush}
+                  title={notifPerm==="granted"&&!pushDisabled?"Alerts ON — tap to pause":notifPerm==="granted"&&pushDisabled?"Alerts paused — tap to re-enable":"Tap to enable alerts"}
+                  style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red}}>
+                  {notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}
+                </button>
+                {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
+              </div>
             </div>
             {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
             :<button data-testid="btn-upgrade-header" onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
