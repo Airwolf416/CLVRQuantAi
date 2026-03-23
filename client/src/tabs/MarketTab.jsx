@@ -6,6 +6,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import useMarketData from "../store/MarketDataStore.jsx";
+import { getET, getNYSEStatus } from "../utils/marketBell.js";
 
 const MONO  = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
@@ -78,59 +79,7 @@ function fmtOI(openInterest, price) {
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MARKET BELL (Web Audio — no external file)
-// Plays resonant bell tones — count=3 for open, count=4 for close (NYSE tradition)
-// ─────────────────────────────────────────────────────────────────────────────
-function playMarketBell(volume = 0.6, count = 3) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const bellTone = (freq, startAt) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = "sine";
-      o.frequency.setValueAtTime(freq, ctx.currentTime + startAt);
-      // Bell decay envelope: sharp attack, long exponential decay
-      g.gain.setValueAtTime(0, ctx.currentTime + startAt);
-      g.gain.linearRampToValueAtTime(volume, ctx.currentTime + startAt + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startAt + 2.5);
-      // Add a shimmer overtone at 2x frequency
-      const o2 = ctx.createOscillator();
-      const g2 = ctx.createGain();
-      o2.type = "sine";
-      o2.frequency.setValueAtTime(freq * 2, ctx.currentTime + startAt);
-      g2.gain.setValueAtTime(0, ctx.currentTime + startAt);
-      g2.gain.linearRampToValueAtTime(volume * 0.2, ctx.currentTime + startAt + 0.01);
-      g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startAt + 1.5);
-      o.connect(g); g.connect(ctx.destination);
-      o2.connect(g2); g2.connect(ctx.destination);
-      o.start(ctx.currentTime + startAt);
-      o.stop(ctx.currentTime + startAt + 2.5);
-      o2.start(ctx.currentTime + startAt);
-      o2.stop(ctx.currentTime + startAt + 1.5);
-    };
-    for (let i = 0; i < count; i++) bellTone(880, i * 0.75);
-    // Auto-close context after sounds finish
-    setTimeout(() => { try { ctx.close(); } catch(e) {} }, count * 750 + 2800);
-  } catch (e) {}
-}
-
-// Helper — get current ET date object
-function getET() {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-}
-
-// NYSE trading hours: Mon–Fri 9:30 AM – 4:00 PM ET
-function getNYSEStatus() {
-  const et = getET();
-  const d = et.getDay(), h = et.getHours(), m = et.getMinutes();
-  const isWeekday = d >= 1 && d <= 5;
-  const minsSinceMidnight = h * 60 + m;
-  if (!isWeekday) return "closed";
-  if (minsSinceMidnight < 9 * 60 + 30) return "pre";      // before 9:30 AM
-  if (minsSinceMidnight < 16 * 60)      return "open";    // 9:30 AM – 4:00 PM
-  return "after";                                          // after 4:00 PM
-}
+// getET and getNYSEStatus are imported from ../utils/marketBell.js
 
 // ── Bloomberg-style blink keyframes (injected once) ──────────────────────────
 const BLINK_CSS = `
@@ -438,64 +387,18 @@ function CryptoTab({ cryptoPrices, flashes, storePerps, storeByClass }) {
 function EquitiesTab({ equityPrices, flashes, storePerps }) {
   const [sub, setSub] = useState("spot");
 
-  // ── Clock & Bell state ─────────────────────────────────────────────────────
-  const [clockTick, setClockTick]       = useState(0);
-  const [bellFlash, setBellFlash]       = useState(null); // "open" | "close" | null
-  const bellOpenFiredRef  = useRef("");  // tracks date string "YYYY-MM-DD" when last fired
-  const bellCloseFiredRef = useRef("");
-  const bellFlashTimer    = useRef(null);
-
-  // Live 1-second clock tick
+  // ── Clock tick (local display only — bell firing lives in App.jsx globally) ──
+  const [clockTick, setClockTick] = useState(0);
   useEffect(() => {
     const iv = setInterval(() => setClockTick(t => t + 1), 1000);
     return () => clearInterval(iv);
   }, []);
 
-  // Bell trigger — runs every second tick
-  useEffect(() => {
-    const soundOn = (() => { try { return localStorage.getItem("clvr_sound") !== "off"; } catch(e) { return true; } })();
-    if (!soundOn) return;
-
-    const et  = getET();
-    const day = `${et.getFullYear()}-${et.getMonth()}-${et.getDate()}`;
-    const h   = et.getHours();
-    const m   = et.getMinutes();
-    const s   = et.getSeconds();
-    const isWeekday = et.getDay() >= 1 && et.getDay() <= 5;
-
-    // 9:30:00 AM ET — opening bell (fires within first 10 s of 9:30 AM to survive clock drift)
-    if (isWeekday && h === 9 && m === 30 && s <= 10 && bellOpenFiredRef.current !== day) {
-      bellOpenFiredRef.current = day;
-      playMarketBell(0.7, 3);           // 3 dings — market open
-      setBellFlash("open");
-      clearTimeout(bellFlashTimer.current);
-      bellFlashTimer.current = setTimeout(() => setBellFlash(null), 5000);
-    }
-
-    // 4:00:00 PM ET — closing bell (fires within first 10 s of 4:00 PM to survive clock drift / late tab navigation)
-    if (isWeekday && h === 16 && m === 0 && s <= 10 && bellCloseFiredRef.current !== day) {
-      bellCloseFiredRef.current = day;
-      playMarketBell(0.7, 4);           // 4 dings — NYSE closing bell tradition
-      setBellFlash("close");
-      clearTimeout(bellFlashTimer.current);
-      bellFlashTimer.current = setTimeout(() => setBellFlash(null), 6000);
-    }
-  }, [clockTick]);
-
   // Derived clock values (recomputed on every tick)
-  const nowLocal  = new Date();
-  const etObj     = getET();
+  const nowLocal   = new Date();
+  const etObj      = getET();
   const nyseStatus = getNYSEStatus();
-  const live      = nyseStatus === "open";
-
-  // Countdown seconds before close (3:59–4:00 PM ET)
-  const etH = etObj.getHours(), etM = etObj.getMinutes(), etS = etObj.getSeconds();
-  const isWeekday = etObj.getDay() >= 1 && etObj.getDay() <= 5;
-  const secsToClose = isWeekday
-    ? (etH === 15 && etM === 59) ? (60 - etS)
-    : (etH === 16 && etM === 0 && etS === 0) ? 0
-    : null
-    : null;
+  const live       = nyseStatus === "open";
 
   const fmtTimeAMPM = (d) =>
     d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
@@ -513,24 +416,10 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
 
       {/* ── Market Clock Widget ─────────────────────────────────────────────── */}
       <div data-testid="market-clock" style={{
-        background: bellFlash === "open"  ? "rgba(0,199,135,0.1)"
-                  : bellFlash === "close" ? "rgba(255,64,96,0.1)"
-                  : "rgba(12,18,32,0.9)",
-        border: `1px solid ${bellFlash ? (bellFlash === "open" ? C.green : C.red) : C.border2}`,
+        background: "rgba(12,18,32,0.9)",
+        border: `1px solid ${C.border2}`,
         borderRadius: 6, padding: "12px 14px", marginBottom: 10,
-        transition: "background 0.4s, border-color 0.4s",
       }}>
-        {/* Bell flash banner */}
-        {bellFlash && (
-          <div style={{
-            textAlign: "center", fontFamily: MONO, fontSize: 13, fontWeight: 700,
-            color: bellFlash === "open" ? C.green : C.red,
-            letterSpacing: "0.2em", marginBottom: 8,
-            animation: "clvrBellPulse 0.6s ease-in-out 3",
-          }}>
-            {bellFlash === "open" ? "🔔 NYSE MARKET OPEN 🔔" : "🔔 NYSE MARKET CLOSED 🔔"}
-          </div>
-        )}
 
         {/* Clock rows */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -560,33 +449,6 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
             </div>
           </div>
         </div>
-
-        {/* Countdown bar — last 60 seconds before close */}
-        {secsToClose !== null && secsToClose > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ fontFamily: MONO, fontSize: 8, color: C.red, letterSpacing: "0.12em" }}>MARKET CLOSE IN</span>
-              <span data-testid="countdown-secs" style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: C.red }}>
-                {secsToClose}s
-              </span>
-            </div>
-            <div style={{ height: 4, background: "rgba(255,64,96,0.15)", borderRadius: 2, overflow: "hidden" }}>
-              <div style={{
-                height: "100%",
-                width: `${(secsToClose / 60) * 100}%`,
-                background: C.red,
-                borderRadius: 2,
-                transition: "width 1s linear",
-                boxShadow: `0 0 8px ${C.red}`,
-              }} />
-            </div>
-          </div>
-        )}
-        {secsToClose === 0 && (
-          <div style={{ marginTop: 8, textAlign: "center", fontFamily: MONO, fontSize: 11, color: C.red, letterSpacing: "0.15em", fontWeight: 700 }}>
-            🔔 MARKET CLOSED — 4:00 PM ET
-          </div>
-        )}
 
         {/* NYSE hours reminder */}
         <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 7, color: C.muted, letterSpacing: "0.08em", textAlign: "center" }}>
