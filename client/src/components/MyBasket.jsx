@@ -1,5 +1,5 @@
 // ── MyBasket — Global Asset Coverage · Personalised Scalper & Swing AI ───────
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 
 const C = {
   bg:"#050709", navy:"#080d18", panel:"#0c1220",
@@ -152,6 +152,37 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   const [openPanel, setOpenPanel]   = useState(true);
   const [showHalalOnly, setShowHalalOnly] = useState(false);
 
+  // ── Live prices for ALL 140+ basket assets ──────────────────────────────────
+  const [bPrices, setBPrices]       = useState({});  // { sym: { price, chg, currency, live } }
+  const [pricesLoading, setPricesLoading] = useState(false);
+  const [lastPriceFetch, setLastPriceFetch] = useState(null);
+  const isFetchingRef = useRef(false);
+
+  useEffect(() => {
+    const doFetch = async () => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+      setPricesLoading(true);
+      try {
+        const allSyms = ALL_ASSETS.map(a => a.sym).join(",");
+        const r = await fetch(`/api/basket-prices?syms=${encodeURIComponent(allSyms)}`, { credentials:"include" });
+        if (r.ok) {
+          const data = await r.json();
+          setBPrices(data);
+          setLastPriceFetch(Date.now());
+        }
+      } catch(e) {
+        console.warn("[MyBasket] price fetch failed:", e.message);
+      } finally {
+        setPricesLoading(false);
+        isFetchingRef.current = false;
+      }
+    };
+    doFetch();
+    const interval = setInterval(doFetch, 60000);
+    return () => clearInterval(interval);
+  }, []);  // run once on mount, refresh every 60s
+
   const toggleAsset = useCallback((sym) => {
     setSelected(prev => {
       const next = new Set(prev);
@@ -173,17 +204,35 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
     return list;
   }, [cat, region, search, showHalalOnly]);
 
+  const fmtPrice = useCallback((price, currency) => {
+    if (!price || price === 0) return null;
+    const symbol = currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency === "CAD" ? "CA$" : "$";
+    if (price >= 1000) return `${symbol}${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    if (price >= 1)    return `${symbol}${price.toFixed(2)}`;
+    if (price >= 0.01) return `${symbol}${price.toFixed(4)}`;
+    return `${symbol}${price.toFixed(6)}`;
+  }, []);
+
   const getPriceSnap = useCallback((sym) => {
+    // 1. Hyperliquid perp (most real-time for crypto)
     const perp = storePerps?.[sym];
     if (perp?.price) {
       const chg = perp.change24h != null ? ` (${perp.change24h >= 0 ? "+" : ""}${perp.change24h.toFixed(2)}%)` : "";
       const fund = perp.funding != null ? ` Fund:${(perp.funding * 100).toFixed(4)}%/8h` : "";
       return `$${perp.price.toFixed(perp.price >= 100 ? 0 : perp.price >= 1 ? 2 : 4)}${chg}${fund} [LIVE]`;
     }
+    // 2. Yahoo Finance basket price (covers all 140+ assets)
+    const bp = bPrices?.[sym];
+    if (bp?.price && bp.price > 0) {
+      const chg = bp.chg != null ? ` (${bp.chg >= 0 ? "+" : ""}${bp.chg.toFixed(2)}%)` : "";
+      const liveTag = bp.live ? " [LIVE]" : " [est]";
+      return `${fmtPrice(bp.price, bp.currency)}${chg}${liveTag}`;
+    }
+    // 3. Existing store fallbacks
     const spot = storeSpot?.[sym]?.price || cryptoPrices?.[sym]?.price || equityPrices?.[sym]?.price || metalPrices?.[sym]?.price;
     if (spot) return `$${spot.toFixed(spot >= 100 ? 0 : 2)} [est]`;
-    return "n/a";
-  }, [storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices]);
+    return "loading…";
+  }, [storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, bPrices, fmtPrice]);
 
   const runBasket = useCallback(async () => {
     if (selected.size === 0 || basketLoading) return;
@@ -262,12 +311,17 @@ Format clearly with each asset as a header. Be direct and numerical.`;
     <div style={{ background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, marginBottom:10, overflow:"hidden" }}>
       {/* Header */}
       <div onClick={() => setOpenPanel(o => !o)} style={{ padding:"11px 14px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <span style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.18em" }}>MY BASKET</span>
           <span style={{ fontFamily:MONO, fontSize:8, color:C.muted, background:"rgba(168,85,247,.08)", border:`1px solid rgba(168,85,247,.2)`, borderRadius:2, padding:"2px 7px" }}>GLOBAL AI · 140+ ASSETS</span>
           {selList.length > 0 && (
             <span style={{ fontFamily:MONO, fontSize:8, color:C.purple }}>{selList.length}/{MAX_ASSETS}</span>
           )}
+          {pricesLoading ? (
+            <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, letterSpacing:"0.1em" }}>⟳ LOADING PRICES…</span>
+          ) : lastPriceFetch ? (
+            <span style={{ fontFamily:MONO, fontSize:7, color:C.green, letterSpacing:"0.1em" }}>● LIVE</span>
+          ) : null}
         </div>
         <span style={{ fontFamily:MONO, fontSize:9, color:C.muted }}>{openPanel ? "▲" : "▼"}</span>
       </div>
@@ -321,16 +375,32 @@ Format clearly with each asset as a header. Be direct and numerical.`;
               const active = selected.has(sym);
               const blocked = !active && selected.size >= MAX_ASSETS;
               const catColor = assetCat === "crypto" ? C.cyan : assetCat === "equities" ? C.blue : C.gold;
+              // Live price from basket prices endpoint
+              const bp = bPrices?.[sym];
+              const perp = storePerps?.[sym];
+              const rawPrice = perp?.price || bp?.price || storeSpot?.[sym]?.price || cryptoPrices?.[sym]?.price || equityPrices?.[sym]?.price || metalPrices?.[sym]?.price;
+              const rawChg = perp?.change24h ?? bp?.chg ?? 0;
+              const currency = bp?.currency || "USD";
+              const isLive = !!(perp?.price || bp?.live);
+              const priceStr = rawPrice ? fmtPrice(rawPrice, currency) : (pricesLoading ? "…" : "—");
+              const chgColor = rawChg > 0 ? C.green : rawChg < 0 ? C.red : C.muted;
               return (
                 <button key={sym} data-testid={`basket-asset-${sym}`} onClick={() => !blocked && toggleAsset(sym)}
-                  style={{ padding:"7px 4px", borderRadius:3, border:`1px solid ${active ? C.purple : C.border}`, background:active ? "rgba(168,85,247,.12)" : blocked ? "rgba(8,13,24,.3)" : "rgba(8,13,24,.6)", cursor:blocked ? "not-allowed" : "pointer", textAlign:"center", position:"relative", opacity:blocked ? 0.45 : 1 }}>
+                  style={{ padding:"6px 4px 5px", borderRadius:3, border:`1px solid ${active ? C.purple : C.border}`, background:active ? "rgba(168,85,247,.12)" : blocked ? "rgba(8,13,24,.3)" : "rgba(8,13,24,.6)", cursor:blocked ? "not-allowed" : "pointer", textAlign:"center", position:"relative", opacity:blocked ? 0.45 : 1 }}>
                   {active && <div style={{ position:"absolute", top:3, right:4, width:5, height:5, borderRadius:"50%", background:C.purple }} />}
+                  {isLive && !active && <div style={{ position:"absolute", top:3, right:4, width:4, height:4, borderRadius:"50%", background:C.green, opacity:0.7 }} />}
                   {halal === true && (
                     <div style={{ position:"absolute", top:2, left:3, fontFamily:MONO, fontSize:6, color:C.halal, letterSpacing:"-0.02em", lineHeight:1 }}>☪</div>
                   )}
                   <div style={{ fontFamily:MONO, fontSize:8, fontWeight:700, color:active ? C.purple : C.muted2, lineHeight:1.2 }}>{sym.length > 7 ? sym.slice(0,7) : sym}</div>
-                  <div style={{ fontFamily:SANS, fontSize:7, color:blocked ? C.muted : active ? `${C.purple}bb` : C.muted, marginTop:2, lineHeight:1.2, display:"-webkit-box", WebkitLineClamp:1, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{label}</div>
-                  <div style={{ width:16, height:2, background:catColor, borderRadius:1, margin:"3px auto 0", opacity:0.5 }} />
+                  <div style={{ fontFamily:SANS, fontSize:6.5, color:blocked ? C.muted : active ? `${C.purple}bb` : C.muted, marginTop:1, lineHeight:1.2, display:"-webkit-box", WebkitLineClamp:1, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{label}</div>
+                  {priceStr && priceStr !== "—" ? (
+                    <div style={{ fontFamily:MONO, fontSize:7, color:active ? C.purple : C.text, marginTop:2, lineHeight:1, letterSpacing:"-0.02em" }}>{priceStr}</div>
+                  ) : null}
+                  {rawChg !== 0 ? (
+                    <div style={{ fontFamily:MONO, fontSize:6, color:chgColor, lineHeight:1, marginTop:1 }}>{rawChg >= 0 ? "+" : ""}{rawChg.toFixed(2)}%</div>
+                  ) : null}
+                  <div style={{ width:14, height:2, background:catColor, borderRadius:1, margin:"3px auto 0", opacity:0.5 }} />
                 </button>
               );
             })}

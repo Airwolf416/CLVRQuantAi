@@ -67,6 +67,40 @@ const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:15
 const EQUITY_FH_MAP: Record<string, string> = { SQ: "XYZ" };
 
 const METALS_BASE: Record<string, number> = {XAU:5160,XAG:84,WTI:91,BRENT:93,NATGAS:4,COPPER:5.8,PLATINUM:2150};
+
+// ── Basket Prices: Yahoo Finance ticker map for ALL 140+ basket assets ───────
+const BASKET_YAHOO_MAP: Record<string, string> = {
+  // Crypto
+  BTC:"BTC-USD",ETH:"ETH-USD",SOL:"SOL-USD",XRP:"XRP-USD",DOGE:"DOGE-USD",
+  AVAX:"AVAX-USD",LINK:"LINK-USD",BNB:"BNB-USD",ADA:"ADA-USD",SUI:"SUI-USD",
+  DOT:"DOT-USD",HYPE:"HYPE11-USD",
+  // US Equities (N.America)
+  AAPL:"AAPL",NVDA:"NVDA",MSFT:"MSFT",GOOGL:"GOOGL",AMZN:"AMZN",
+  META:"META",TSLA:"TSLA",MSTR:"MSTR",AMD:"AMD",PLTR:"PLTR",
+  COIN:"COIN",NFLX:"NFLX",JPM:"JPM",V:"V",XOM:"XOM",
+  WMT:"WMT",BAC:"BAC",UNH:"UNH",DIS:"DIS",CRM:"CRM",
+  // Canada TSX
+  RY:"RY.TO",TD:"TD.TO",CNQ:"CNQ.TO",SU:"SU.TO",BCE:"BCE.TO",
+  // Europe
+  ASML:"ASML",SAP:"SAP",NESN:"NESN.SW",LVMH:"MC.PA",
+  SHEL:"SHEL",HSBA:"HSBA.L",AZN:"AZN",NVO:"NVO",
+  SIEGY:"SIEGY",TTE:"TTE",BP:"BP",ULVR:"ULVR.L",
+  // Middle East
+  "2222.SR":"2222.SR","2010.SR":"2010.SR",
+  QNBK:"QNBK.QA",EMIRATESNBD:"ENBD.DU",ADNOCDIST:"ADNOCDIST.AD",ETISALAT:"ETISALAT.AD",
+  // Asia
+  TSM:"TSM",BABA:"BABA",TCEHY:"TCEHY",
+  "005930":"005930.KS","9984.T":"9984.T","7203.T":"7203.T",
+  "7974.T":"7974.T","0700.HK":"0700.HK",
+  PDD:"PDD",JD:"JD",RELIANCE:"RELIANCE.NS",INFY:"INFY",
+  // Commodities (futures / ETFs)
+  XAU:"GC=F",XAG:"SI=F",WTI:"CL=F",BRENT:"BZ=F",
+  NATGAS:"NG=F",COPPER:"HG=F",PLATINUM:"PL=F",PALLADIUM:"PA=F",
+  WHEAT:"ZW=F",CORN:"ZC=F",SOYBEANS:"ZS=F",
+  COFFEE:"KC=F",SUGAR:"SB=F",
+  URANIUM:"URA",DUBAI:"BZ=F",LNG:"UNG",
+};
+const BASKET_PRICE_TTL = 5 * 60 * 1000; // 5-min cache
 const metalsRef: Record<string, {price:number,ts:number}> = {};
 
 const ENERGY_ETF_MAP: Record<string, {etfSym: string, factor: number}> = {
@@ -1024,6 +1058,14 @@ async function fetchMetals(): Promise<Record<string, any>> {
 const FH_WS_SYMS: Record<string, string> = {};
 EQUITY_SYMS.forEach(sym => { FH_WS_SYMS[EQUITY_FH_MAP[sym] || sym] = `eq:${sym}`; });
 Object.entries(ENERGY_ETF_MAP).forEach(([appSym, cfg]) => { FH_WS_SYMS[cfg.etfSym] = `etf:${appSym}:${cfg.factor}`; });
+// Extended basket equities — 15 extra slots (50 limit - 16 equity - 3 ETF - 14 forex - 2 buffer = 15)
+const BASKET_EXTRA_SYMS = [
+  "JPM","V","XOM","WMT","BAC",                // Additional S&P 500 (5)
+  "ASML","AZN","NVO","TSM","BABA",            // Top ADRs on US markets (5)
+  "URA","WEAT","CORN",                        // Key commodity ETFs (3)
+  "RY","TD",                                  // TSX dual-listed (2) = 15 total
+];
+BASKET_EXTRA_SYMS.forEach(sym => { if (!FH_WS_SYMS[sym]) FH_WS_SYMS[sym] = `eq:${sym}`; });
 const FOREX_FH_SYMS: Record<string, string> = {
   "OANDA:EUR_USD":"EURUSD","OANDA:GBP_USD":"GBPUSD","OANDA:USD_JPY":"USDJPY",
   "OANDA:USD_CHF":"USDCHF","OANDA:AUD_USD":"AUDUSD","OANDA:USD_CAD":"USDCAD",
@@ -1113,17 +1155,26 @@ function startFinnhubWebSocket() {
   if (!FINNHUB_KEY) return;
   let retries = 0;
   const connect = () => {
+    // 429 guard: don't reconnect more than once every 10s in back-off states
     const ws = new WebSocket(`wss://ws.finnhub.io?token=${FINNHUB_KEY}`);
     ws.on("open", () => {
       fhWsConnected = true;
       retries = 0;
-      for (const sym of Object.keys(FH_WS_SYMS)) {
-        ws.send(JSON.stringify({ type: "subscribe", symbol: sym }));
-      }
-      for (const sym of Object.keys(FOREX_FH_SYMS)) {
-        ws.send(JSON.stringify({ type: "subscribe", symbol: sym }));
-      }
-      console.log(`[finnhub-ws] connected, subscribed to ${Object.keys(FH_WS_SYMS).length} equities/ETFs + ${Object.keys(FOREX_FH_SYMS).length} forex`);
+      // Throttle subscriptions: send in batches of 10 with 400ms delay to avoid 1006 force-close
+      const allSubs = [
+        ...Object.keys(FH_WS_SYMS),
+        ...Object.keys(FOREX_FH_SYMS),
+      ];
+      const BATCH = 10;
+      const sendBatch = (i: number) => {
+        if (i >= allSubs.length || ws.readyState !== 1 /* OPEN */) return;
+        for (let j = i; j < Math.min(i + BATCH, allSubs.length); j++) {
+          ws.send(JSON.stringify({ type: "subscribe", symbol: allSubs[j] }));
+        }
+        setTimeout(() => sendBatch(i + BATCH), 400);
+      };
+      sendBatch(0);
+      console.log(`[finnhub-ws] connected, subscribing to ${Object.keys(FH_WS_SYMS).length} equities/ETFs + ${Object.keys(FOREX_FH_SYMS).length} forex`);
     });
     ws.on("message", (raw: any) => {
       try {
@@ -1167,12 +1218,14 @@ function startFinnhubWebSocket() {
         }
       } catch {}
     });
-    ws.on("error", () => { fhWsConnected = false; });
-    ws.on("close", () => {
+    ws.on("error", (err: any) => { fhWsConnected = false; console.warn("[finnhub-ws] error:", err?.message || err); });
+    ws.on("close", (code: number, reason: Buffer) => {
       fhWsConnected = false;
       retries++;
-      const backoff = Math.min(retries * 3000, 30000);
-      console.log(`[finnhub-ws] disconnected, retrying in ${backoff / 1000}s`);
+      // Start at 10s min backoff, cap at 5min — prevents 429 on rapid reconnects
+      const backoff = Math.min(10000 + (retries - 1) * 5000, 300000);
+      const msg = reason?.toString?.() || "";
+      console.log(`[finnhub-ws] disconnected (code=${code}${msg ? " reason=" + msg : ""}), retrying in ${(backoff / 1000).toFixed(0)}s`);
       setTimeout(connect, backoff);
     });
   };
@@ -1270,7 +1323,8 @@ export async function registerRoutes(
   await seedAccessCodes();
   startStockRefreshLoop();
   startHyperliquidRefreshLoop();
-  startFinnhubWebSocket();
+  // Delay WS startup by 5s to let server settle and avoid 429 on rapid restarts
+  setTimeout(startFinnhubWebSocket, 5000);
 
   app.get("/api/stream", (req, res) => {
     if (sseClients.size >= 50) {
@@ -1748,6 +1802,143 @@ export async function registerRoutes(
     const forex: Record<string, any> = {};
     Object.entries(FOREX_BASE).forEach(([sym, price]) => { forex[sym] = { price, chg: 0, live: false }; });
     res.json({ stocks, metals, forex });
+  });
+
+  // ── /api/basket-prices — live prices for ALL 140+ basket assets ─────────────
+  // Pattern: always serve from cache instantly; refresh in background every 5 min
+  const COINGECKO_IDS: Record<string, string> = {
+    BTC:"bitcoin",ETH:"ethereum",SOL:"solana",XRP:"ripple",DOGE:"dogecoin",
+    AVAX:"avalanche-2",LINK:"chainlink",BNB:"binancecoin",ADA:"cardano",
+    SUI:"sui",DOT:"polkadot",HYPE:"hyperliquid",
+  };
+  const BASKET_EQUITIES_US = [
+    "AAPL","NVDA","MSFT","GOOGL","AMZN","META","TSLA","MSTR","AMD","PLTR",
+    "COIN","NFLX","JPM","V","XOM","WMT","BAC","UNH","DIS","CRM",
+    "RY","TD","CNQ","SU","BCE",
+    "ASML","SAP","AZN","NVO","SHEL","TTE","BP","SIEGY","TCEHY",
+    "TSM","BABA","PDD","JD","INFY",
+  ];
+  const BASKET_INTL_FH: Record<string, { fhTick: string; currency: string }> = {
+    NESN:{fhTick:"NESN.SW",currency:"CHF"},LVMH:{fhTick:"MC.PA",currency:"EUR"},
+    HSBA:{fhTick:"HSBA.L",currency:"GBP"},ULVR:{fhTick:"ULVR.L",currency:"GBP"},
+    "2222.SR":{fhTick:"2222.SR",currency:"SAR"},"2010.SR":{fhTick:"2010.SR",currency:"SAR"},
+    QNBK:{fhTick:"QNBK.QA",currency:"QAR"},EMIRATESNBD:{fhTick:"ENBD.DU",currency:"AED"},
+    ADNOCDIST:{fhTick:"ADNOCDIST.AD",currency:"AED"},ETISALAT:{fhTick:"ETISALAT.AD",currency:"AED"},
+    "005930":{fhTick:"005930.KS",currency:"KRW"},"9984.T":{fhTick:"9984.T",currency:"JPY"},
+    "7203.T":{fhTick:"7203.T",currency:"JPY"},"7974.T":{fhTick:"7974.T",currency:"JPY"},
+    "0700.HK":{fhTick:"0700.HK",currency:"HKD"},RELIANCE:{fhTick:"RELIANCE.NS",currency:"INR"},
+  };
+  const BASKET_COMMODITIES: Record<string, { metalsKey?: string; etfSym?: string; base: number }> = {
+    XAU:{metalsKey:"XAU",base:3100},XAG:{metalsKey:"XAG",base:35},
+    PLATINUM:{metalsKey:"PLATINUM",base:920},PALLADIUM:{metalsKey:"PALLADIUM",base:1000},
+    COPPER:{metalsKey:"COPPER",base:5.8},WTI:{metalsKey:"WTI",base:70},
+    BRENT:{metalsKey:"BRENT",base:72},NATGAS:{metalsKey:"NATGAS",base:4},
+    WHEAT:{etfSym:"WEAT",base:5.8},CORN:{etfSym:"CORN",base:22},
+    SOYBEANS:{etfSym:"SOYB",base:24},COFFEE:{etfSym:"JO",base:45},
+    SUGAR:{etfSym:"SGG",base:35},URANIUM:{etfSym:"URA",base:28},
+    DUBAI:{etfSym:"BNO",base:35},LNG:{etfSym:"UNG",base:10},
+  };
+
+  // Seed initial basket price cache with base prices so first request is instant
+  (function seedBasketCache() {
+    const init: Record<string, any> = {};
+    for (const sym of Object.keys(COINGECKO_IDS)) init[sym] = { price: CRYPTO_BASE[sym] || 0, chg: 0, currency: "USD", live: false };
+    for (const sym of BASKET_EQUITIES_US) init[sym] = { price: EQUITY_BASE[sym] || 0, chg: 0, currency: "USD", live: false };
+    for (const [sym, { currency }] of Object.entries(BASKET_INTL_FH)) init[sym] = { price: 0, chg: 0, currency, live: false };
+    for (const [sym, { base }] of Object.entries(BASKET_COMMODITIES)) init[sym] = { price: base, chg: 0, currency: "USD", live: false };
+    cache["basketPricesAll"] = { data: init, ts: 0 }; // ts=0 forces refresh on first request
+  })();
+
+  let basketRefreshRunning = false;
+  async function refreshBasketPrices() {
+    if (basketRefreshRunning) return;
+    basketRefreshRunning = true;
+    const results: Record<string, any> = { ...(cache["basketPricesAll"]?.data || {}) };
+
+    try {
+      // 1. Crypto: CoinGecko batch (single fast call)
+      try {
+        const ids = Object.values(COINGECKO_IDS).join(",");
+        const r = await fetch(
+          `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
+          { signal: AbortSignal.timeout(10000) }
+        );
+        if (r.ok) {
+          const data: any = await r.json();
+          for (const [appSym, geckoId] of Object.entries(COINGECKO_IDS)) {
+            const d = (data as any)[geckoId];
+            if (d?.usd) results[appSym] = { price: d.usd, chg: d.usd_24h_change ?? 0, currency: "USD", live: true };
+          }
+        }
+      } catch (e: any) { console.warn("[basket] CoinGecko:", e.message); }
+
+      // 2. US equities: use livePrices + finnhub cache (no extra API calls needed)
+      const fhCached = cache["finnhub"]?.data;
+      for (const sym of BASKET_EQUITIES_US) {
+        const lp = livePrices[sym];
+        if (lp?.price && lp.price > 0) {
+          results[sym] = { price: lp.price, chg: lp.chg, currency: "USD", live: true };
+        } else {
+          const cs = fhCached?.stocks?.[sym];
+          if (cs?.price && cs.price > 0) results[sym] = { price: cs.price, chg: cs.chg ?? 0, currency: "USD", live: cs.live ?? false };
+        }
+      }
+
+      // 3. International equities: parallel Finnhub calls (4 concurrent max)
+      if (FINNHUB_KEY) {
+        const intlEntries = Object.entries(BASKET_INTL_FH).filter(([sym]) => !(results[sym]?.live));
+        const CONCURRENCY = 4;
+        for (let i = 0; i < intlEntries.length; i += CONCURRENCY) {
+          const batch = intlEntries.slice(i, i + CONCURRENCY);
+          await Promise.all(batch.map(async ([appSym, { fhTick, currency }]) => {
+            try {
+              const q = await fhQuoteSafe(fhTick);
+              if (q.price > 0) results[appSym] = { price: q.price, chg: q.chg, currency, live: q.live };
+            } catch {}
+          }));
+          await new Promise(r => setTimeout(r, 1200)); // stay under 60/min
+        }
+      }
+
+      // 4. Commodities: metals cache + livePrices for ETFs
+      const metalCache = fhCached?.metals || {};
+      for (const [appSym, { metalsKey, etfSym, base }] of Object.entries(BASKET_COMMODITIES)) {
+        if (metalsKey && metalCache[metalsKey]?.price) {
+          const m = metalCache[metalsKey];
+          results[appSym] = { price: m.price, chg: m.chg ?? 0, currency: "USD", live: m.live ?? false };
+        } else if (etfSym) {
+          const lp = livePrices[etfSym];
+          if (lp?.price && lp.price > 0) {
+            results[appSym] = { price: lp.price, chg: lp.chg, currency: "USD", live: true };
+          } else if (FINNHUB_KEY) {
+            try {
+              const q = await fhQuoteSafe(etfSym);
+              if (q.price > 0) results[appSym] = { price: q.price, chg: q.chg, currency: "USD", live: q.live };
+            } catch {}
+          }
+          if (!results[appSym] || !results[appSym].price) results[appSym] = { price: base, chg: 0, currency: "USD", live: false };
+        }
+      }
+    } finally {
+      cache["basketPricesAll"] = { data: results, ts: Date.now() };
+      const liveCount = Object.values(results).filter((r: any) => r.live).length;
+      console.log(`[basket-prices] refresh complete: ${Object.keys(results).length} symbols, ${liveCount} live`);
+      basketRefreshRunning = false;
+    }
+  }
+
+  // Kick off first refresh after 3s (let other data sources warm up first)
+  setTimeout(refreshBasketPrices, 3000);
+  setInterval(refreshBasketPrices, BASKET_PRICE_TTL);
+
+  app.get("/api/basket-prices", (_req, res) => {
+    const cached = cache["basketPricesAll"];
+    if (!cached) return res.json({});
+    // Trigger background refresh if stale (non-blocking)
+    if (Date.now() - cached.ts > BASKET_PRICE_TTL) {
+      refreshBasketPrices().catch(() => {});
+    }
+    res.json(cached.data);
   });
 
   app.post("/api/ai/analyze", async (req, res) => {
