@@ -120,16 +120,29 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
 
   useEffect(() => {
-    fetch("/api/account", { credentials: "include" }).then(r => {
-      if (r.status === 401) { setLoading(false); return null; } // session expired — don't auto-logout, just show signed-out state
-      return r.json();
-    }).then(data => {
-      if (!data) return;
-      if (data.error) { setLoading(false); return; }
-      setAcct(data);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, []);
+    if (user?.guest) { setLoading(false); return; } // guest users have no server session
+    let cancelled = false;
+    let attempts = 0;
+    const tryLoad = () => {
+      if (cancelled) return;
+      fetch("/api/account", { credentials: "include" }).then(r => {
+        if (cancelled) return null;
+        if (r.status === 401) {
+          if (attempts++ < 3) setTimeout(tryLoad, 1500); // retry — session may not be ready yet
+          else setLoading(false);
+          return null;
+        }
+        return r.json();
+      }).then(data => {
+        if (cancelled || !data) return;
+        if (data.error) { setLoading(false); return; }
+        setAcct(data);
+        setLoading(false);
+      }).catch(() => { if (!cancelled) setLoading(false); });
+    };
+    tryLoad();
+    return () => { cancelled = true; }; // cancel stale retries on unmount
+  }, [user?.id]);
 
   const plan = PLAN_INFO[acct?.tier || "free"] || PLAN_INFO.free;
 
@@ -305,9 +318,32 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
   }
 
   if (!acct) {
+    const isGuest = user?.guest;
     return (
       <div style={{ textAlign:"center", padding:60 }}>
-        <div style={{ fontFamily:MONO, fontSize:11, color:C.red, letterSpacing:"0.1em" }}>COULD NOT LOAD ACCOUNT DATA</div>
+        <div style={{ fontFamily:SERIF, fontSize:18, fontWeight:700, color:C.gold2, marginBottom:12 }}>
+          {isGuest ? "Sign In to View Account" : "Account Unavailable"}
+        </div>
+        <div style={{ fontFamily:MONO, fontSize:11, color:C.muted2, marginBottom:20, lineHeight:1.6 }}>
+          {isGuest
+            ? "Create a free account or sign in to access your profile, subscription, and settings."
+            : "Your session may have expired. Sign out and back in to reload your account."}
+        </div>
+        {!isGuest && (
+          <button
+            onClick={() => { setLoading(true); setAcct(null); window.location.reload(); }}
+            style={{ background:"rgba(201,168,76,.1)", border:`1px solid rgba(201,168,76,.3)`, borderRadius:4, padding:"10px 20px", fontFamily:MONO, fontSize:10, color:C.gold, cursor:"pointer", letterSpacing:"0.1em" }}
+          >
+            SIGN OUT & RETRY
+          </button>
+        )}
+        {onSignOut && (
+          <div style={{ marginTop:12 }}>
+            <button onClick={onSignOut} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:4, padding:"8px 16px", fontFamily:MONO, fontSize:9, color:C.muted, cursor:"pointer" }}>
+              {isGuest ? "SIGN IN / REGISTER" : "SIGN OUT"}
+            </button>
+          </div>
+        )}
       </div>
     );
   }
