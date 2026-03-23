@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import WebSocket from "ws";
 import webpush from "web-push";
+import { fetchInsiderData } from "./insider";
 
 // ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
 const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
@@ -1612,6 +1613,79 @@ export async function registerRoutes(
       console.warn("[news] Stocktwits inject error:", e.message);
     }
 
+    // ── Geopolitical/Conflict RSS feeds ─────────────────────────────────────
+    const CONFLICT_RSS = [
+      "https://feeds.reuters.com/reuters/worldnews",
+      "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "https://rss.dw.com/xml/rss-en-world",
+    ];
+    const CONFLICT_KEYWORDS = [
+      "war","military","troops","missile","nuclear","airstrike","air strike","bombing","bomb","attack","combat",
+      "invasion","invade","offensive","casualties","rebels","conflict","ceasefire","cease-fire","battle","siege",
+      "sanctions","sanction","blockade","embargo","chokepoint","strait","pipeline","oil supply","supply chain disruption",
+      "coup","uprising","emergency","martial law","escalation","escalate",
+      "ukraine","russia","taiwan","iran","north korea","middle east","red sea","suez","hormuz","black sea",
+      "gaza","hamas","hezbollah","nato","warship","fighter jet","drone strike","ballistic",
+      "central bank emergency","rate emergency","financial crisis","bank collapse",
+    ];
+    function isConflictItem(title: string, body = ""): boolean {
+      const text = (title + " " + body).toLowerCase();
+      return CONFLICT_KEYWORDS.some(kw => text.includes(kw));
+    }
+    function parseRSSXML(xml: string): Array<{title:string,link:string,pubDate:string,description:string}> {
+      const items: any[] = [];
+      const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+      for (const block of itemMatches) {
+        const get = (tag: string) => {
+          const m = block.match(new RegExp(`<${tag}[^>]*>\\s*(?:<\\!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*<\\/${tag}>`, "i"));
+          return m ? m[1].trim() : "";
+        };
+        items.push({ title: get("title"), link: get("link"), pubDate: get("pubDate"), description: get("description") });
+      }
+      return items;
+    }
+    const conflictFetchPromises = CONFLICT_RSS.map(url =>
+      fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; CLVRQuant/2.0)", "Accept": "application/rss+xml, text/xml, */*" },
+        signal: AbortSignal.timeout(7000),
+      }).then(r => r.ok ? r.text() : "").catch(() => "")
+    );
+    const conflictTexts = await Promise.all(conflictFetchPromises);
+    for (const xml of conflictTexts) {
+      if (!xml) continue;
+      const rssItems = parseRSSXML(xml);
+      for (const item of rssItems.slice(0, 15)) {
+        if (!item.title) continue;
+        if (!isConflictItem(item.title, item.description)) continue;
+        const titleLow = item.title.toLowerCase();
+        const oilRelated = ["oil","opec","petroleum","energy","pipeline","refinery","strait","hormuz","red sea"].some(k => titleLow.includes(k));
+        const goldRelated = ["gold","haven","safe","treasury","bond"].some(k => titleLow.includes(k));
+        const assets = [
+          ...(oilRelated ? ["WTI","BRENT"] : []),
+          ...(goldRelated ? ["XAU"] : []),
+          "CONFLICT",
+        ];
+        results.push({
+          id: "geo-" + Buffer.from(item.title.slice(0, 60)).toString("base64").slice(0, 16),
+          source: url.includes("reuters") ? "Reuters" : url.includes("bbc") ? "BBC" : "DW World",
+          icon: "🌐",
+          color: "orange",
+          title: item.title,
+          body: item.description?.replace(/<[^>]+>/g, "").slice(0, 200) || "",
+          sentiment: -0.3,
+          score: 8,
+          assets,
+          categories: ["conflict", "geopolitical"],
+          political: true,
+          isConflict: true,
+          marketImpact: "bearish",
+          ts: item.pubDate ? new Date(item.pubDate).getTime() : Date.now() - 3600_000,
+          url: item.link || "#",
+          imageUrl: null,
+        });
+      }
+    }
+
     // Apply political classification to all non-twitter news items
     for (const item of results) {
       if (!item.political) {
@@ -1622,14 +1696,30 @@ export async function registerRoutes(
           if (!item.categories.includes("political")) item.categories.push("political");
         }
       }
+      // Conflict classification
+      if (!item.isConflict && isConflictItem(item.title, item.body || "")) {
+        item.isConflict = true;
+        if (!item.categories.includes("conflict")) item.categories.push("conflict");
+      }
     }
 
     results.sort((a, b) => b.ts - a.ts);
     const deduped = results.filter((item, index, self) =>
       index === self.findIndex(t => t.title === item.title)
-    ).slice(0, 35);
+    ).slice(0, 60);
     cache["news"] = { data: deduped, ts: Date.now() };
     res.json(deduped);
+  });
+
+  // ── INSIDER TRADING FEED ────────────────────────────────────────────────────
+  app.get("/api/insider", async (_req, res) => {
+    try {
+      const data = await fetchInsiderData();
+      res.json({ trades: data, fetchedAt: Date.now() });
+    } catch (e: any) {
+      console.error("[insider] route error:", e.message);
+      res.status(500).json({ trades: [], fetchedAt: Date.now(), error: e.message });
+    }
   });
 
   app.get("/api/finnhub", async (_req, res) => {
