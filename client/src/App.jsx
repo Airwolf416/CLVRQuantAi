@@ -17,6 +17,7 @@ import InsiderTab from "./tabs/InsiderTab";
 import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
+import { playMarketBell, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -393,6 +394,73 @@ function ProGate({feature,isPro,onUpgrade,children}){
   );
 }
 
+// ─── GLOBAL BELL OVERLAY ─────────────────────────────────────────────────────
+// Shows NYSE open/close banner + 60-second countdown anywhere on the app
+function GlobalBellOverlay({bellFlash,secsToClose}){
+  const C2={red:"#ff4060",green:"#00c787",gold:"#c9a84c",white:"#f0f4ff",muted:"#4a5d80"};
+  const MONO2="'IBM Plex Mono',monospace";
+  if(!bellFlash&&secsToClose===null)return null;
+  return(
+    <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,pointerEvents:"none"}}>
+      {/* 60-second countdown bar before market close */}
+      {secsToClose!==null&&secsToClose>0&&(
+        <div style={{background:"rgba(5,7,9,.92)",borderBottom:"1px solid rgba(255,64,96,.3)",padding:"6px 14px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <span style={{fontFamily:MONO2,fontSize:9,color:C2.red,letterSpacing:"0.14em",fontWeight:700}}>⏱ MARKET CLOSE IN</span>
+          <span data-testid="global-countdown-secs" style={{fontFamily:MONO2,fontSize:13,fontWeight:800,color:C2.red}}>{secsToClose}s</span>
+          <div style={{position:"absolute",bottom:0,left:0,height:2,background:C2.red,width:`${(secsToClose/60)*100}%`,transition:"width 1s linear",boxShadow:`0 0 6px ${C2.red}`}}/>
+        </div>
+      )}
+      {/* Bell flash banner — NYSE open or close */}
+      {bellFlash&&(
+        <div style={{
+          background:bellFlash==="open"?"rgba(0,199,135,.15)":"rgba(255,64,96,.15)",
+          borderBottom:`1px solid ${bellFlash==="open"?"rgba(0,199,135,.5)":"rgba(255,64,96,.5)"}`,
+          padding:"10px 14px",textAlign:"center",
+          fontFamily:MONO2,fontSize:14,fontWeight:800,letterSpacing:"0.2em",
+          color:bellFlash==="open"?C2.green:C2.red,
+          animation:"clvrBellPulse 0.6s ease-in-out 3",
+        }}>
+          {bellFlash==="open"?"🔔 NYSE MARKET OPEN 🔔":"🔔 NYSE MARKET CLOSED 🔔"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SQUAWK BOX (Pro-only TTS signal announcer) ───────────────────────────────
+function SquawkBox({signals,soundEnabled,isPro,muted,onToggle}){
+  const lastAnnouncedRef=useRef(null);
+  const voiceRef=useRef(null);
+
+  useEffect(()=>{
+    const load=()=>{
+      const voices=window.speechSynthesis?.getVoices()||[];
+      voiceRef.current=voices.find(v=>v.lang==="en-US"&&(v.name.includes("Google")||v.name.includes("Enhanced")||v.name.includes("Samantha")))||voices[0]||null;
+    };
+    load();
+    if(window.speechSynthesis)window.speechSynthesis.onvoiceschanged=load;
+  },[]);
+
+  useEffect(()=>{
+    if(!isPro||muted||!soundEnabled)return;
+    const sig=signals?.[0];
+    if(!sig||sig.id===lastAnnouncedRef.current)return;
+    lastAnnouncedRef.current=sig.id;
+    const score=sig.masterScore?`Master score ${sig.masterScore}.`:"";
+    const dir=sig.dir==="LONG"?"long":"short";
+    const text=`${sig.token} ${dir} signal. ${score}`;
+    try{
+      window.speechSynthesis.cancel();
+      const utt=new SpeechSynthesisUtterance(text);
+      utt.voice=voiceRef.current;
+      utt.rate=1.05;utt.pitch=0.95;utt.volume=1.0;
+      window.speechSynthesis.speak(utt);
+    }catch(e){}
+  },[signals,isPro,muted,soundEnabled]);
+
+  return null; // audio only — button is rendered in the header
+}
+
 // ─── AI INPUT (stable, memoized to prevent mobile keyboard retraction) ──
 const AIInput=memo(function AIInput({value,onChange,placeholder}){
   const ref=useRef(null);
@@ -739,6 +807,13 @@ export default function App(){
 function Dashboard({user,setUser}){
   const [tab,setTab]=useState("radar");
   const [clockTick,setClockTick]=useState(0);
+  // ── Global market bell state ───────────────────────────────────────────────
+  const [bellFlash,setBellFlash]=useState(null); // "open"|"close"|null
+  const bellOpenFiredRef=useRef("");
+  const bellCloseFiredRef=useRef("");
+  const bellFlashTimerRef=useRef(null);
+  // ── Squawk Box ─────────────────────────────────────────────────────────────
+  const [squawkMuted,setSquawkMuted]=useState(()=>{try{return localStorage.getItem("clvr_squawk")==="off";}catch(e){return false;}});
   const [priceTab,setPriceTab]=useState("crypto");
   const [sigSubTab,setSigSubTab]=useState("all");
   const [sigSort,setSigSort]=useState("recent");
@@ -1228,6 +1303,47 @@ function Dashboard({user,setUser}){
   useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,30000);return()=>clearInterval(iv);},[fetchMacro]);
   // Tick every 30s so nextEvents recomputes and hides the countdown box once an event passes
   useEffect(()=>{const iv=setInterval(()=>setClockTick(t=>t+1),30000);return()=>clearInterval(iv);},[]);
+
+  // ── Global bell & countdown: 1-second tick ─────────────────────────────────
+  const [bellSecTick,setBellSecTick]=useState(0);
+  useEffect(()=>{const iv=setInterval(()=>setBellSecTick(t=>t+1),1000);return()=>clearInterval(iv);},[]);
+
+  // Bell trigger — fires regardless of which tab the user is on
+  useEffect(()=>{
+    const soundOn=soundEnabledRef.current;
+    if(!soundOn)return;
+    const et=getBellET();
+    const day=`${et.getFullYear()}-${et.getMonth()}-${et.getDate()}`;
+    const h=et.getHours(),m=et.getMinutes(),s=et.getSeconds();
+    const isWkd=et.getDay()>=1&&et.getDay()<=5;
+    // Opening bell — 9:30 AM ET, within first 10 s
+    if(isWkd&&h===9&&m===30&&s<=10&&bellOpenFiredRef.current!==day){
+      bellOpenFiredRef.current=day;
+      playMarketBell(0.7,3);
+      setBellFlash("open");
+      clearTimeout(bellFlashTimerRef.current);
+      bellFlashTimerRef.current=setTimeout(()=>setBellFlash(null),5000);
+    }
+    // Closing bell — 4:00 PM ET, within first 10 s
+    if(isWkd&&h===16&&m===0&&s<=10&&bellCloseFiredRef.current!==day){
+      bellCloseFiredRef.current=day;
+      playMarketBell(0.7,4);
+      setBellFlash("close");
+      clearTimeout(bellFlashTimerRef.current);
+      bellFlashTimerRef.current=setTimeout(()=>setBellFlash(null),6000);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[bellSecTick]);
+
+  // Global secsToClose — last 60 s before market close
+  const _bellEt=getBellET();
+  const _bH=_bellEt.getHours(),_bM=_bellEt.getMinutes(),_bS=_bellEt.getSeconds();
+  const _isWkd=_bellEt.getDay()>=1&&_bellEt.getDay()<=5;
+  const globalSecsToClose=_isWkd
+    ?(_bH===15&&_bM===59)?(60-_bS)
+    :(_bH===16&&_bM===0&&_bS===0)?0
+    :null
+    :null;
 
   const fetchRegime=useCallback(async()=>{
     try{const r=await fetch("/api/regime");if(r.ok){const d=await r.json();setRegimeData(d);}}catch{}
@@ -2028,6 +2144,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         .high-confidence-glow{border:1px solid #F59E0B !important;animation:gold-pulse 2s infinite;}
         .capital-protection-pulse{background:linear-gradient(90deg,rgba(255,45,85,.15),rgba(245,158,11,.15));animation:cap-pulse 1.5s infinite;}
         @keyframes cap-pulse{0%,100%{opacity:.7}50%{opacity:1}}
+        @keyframes clvrBellPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.7;transform:scale(1.02)}}
       `}</style>
 
       {/* QR Scanner overlay */}
@@ -2102,8 +2219,10 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </div>
       </div>}
 
+      <GlobalBellOverlay bellFlash={bellFlash} secsToClose={globalSecsToClose}/>
       {activeAlerts.length>0&&<div style={{animation:"slideDown .3s ease"}}><AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} C={C}/></div>}
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
+      <SquawkBox signals={liveSignals} soundEnabled={soundEnabled} isPro={isPro} muted={squawkMuted} onToggle={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})}/>
       {tradeModalSig&&<TradeConfirmationModal sig={tradeModalSig} currentPrice={(cryptoPrices[tradeModalSig.token]||{}).price} masterScore={tradeModalSig.masterScore||50} riskOn={tradeModalSig.riskOn||50} onApprove={()=>{setToast(`Trade approved: ${tradeModalSig.token} ${tradeModalSig.dir}`);setTradeModalSig(null);}} onCancel={()=>setTradeModalSig(null)} C={C}/>}
 
       {showUpgrade&&<div style={{position:"fixed",inset:0,zIndex:300,background:"rgba(0,0,0,.85)",backdropFilter:"blur(12px)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowUpgrade(false)}>
@@ -2161,6 +2280,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2}}>📷</button>
             <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound alerts ON":"Sound alerts OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
+            {isPro&&<button data-testid="btn-squawk-toggle" onClick={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})} title={!squawkMuted&&soundEnabled?"Squawk Box LIVE — voice reads HL signals":"Squawk Box OFF"} style={{background:"none",border:`1px solid ${!squawkMuted&&soundEnabled?"rgba(201,168,76,.5)":C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:9,color:!squawkMuted&&soundEnabled?C.gold:C.muted2,letterSpacing:"0.06em"}}>{!squawkMuted&&soundEnabled?"📣":"📣"}</button>}
             <div style={{position:"relative",display:"inline-flex"}}>
               <button data-testid="btn-push-notif" onClick={requestPush} title={notifPerm==="granted"&&!pushDisabled?"Notifications ON — tap to disable":notifPerm==="granted"&&pushDisabled?"Notifications paused — tap to re-enable":"Tap to enable push notifications"} style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red}}>{notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}</button>
               {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
