@@ -428,19 +428,42 @@ function GlobalBellOverlay({bellFlash,secsToClose}){
 }
 
 // ─── SQUAWK BOX (Pro-only TTS signal announcer) ───────────────────────────────
-function SquawkBox({signals,soundEnabled,isPro,muted,onToggle}){
+// Unlock helper — must be called inside a user gesture handler
+function unlockSpeechSynthesis(){
+  try{
+    const ss=window.speechSynthesis;
+    if(!ss)return;
+    ss.cancel();
+    const u=new SpeechSynthesisUtterance("");
+    u.volume=0;
+    ss.speak(u);
+  }catch(e){}
+}
+
+function SquawkBox({signals,soundEnabled,isPro,muted}){
   const lastAnnouncedRef=useRef(null);
   const voiceRef=useRef(null);
 
+  // Load best available voice
   useEffect(()=>{
     const load=()=>{
       const voices=window.speechSynthesis?.getVoices()||[];
-      voiceRef.current=voices.find(v=>v.lang==="en-US"&&(v.name.includes("Google")||v.name.includes("Enhanced")||v.name.includes("Samantha")))||voices[0]||null;
+      voiceRef.current=voices.find(v=>v.lang==="en-US"&&(v.name.includes("Google")||v.name.includes("Enhanced")||v.name.includes("Samantha")))||voices.find(v=>v.lang.startsWith("en"))||voices[0]||null;
     };
     load();
     if(window.speechSynthesis)window.speechSynthesis.onvoiceschanged=load;
   },[]);
 
+  // Chrome keep-alive: resume speechSynthesis every 10s so it never silently pauses
+  useEffect(()=>{
+    if(!isPro||muted||!soundEnabled)return;
+    const id=setInterval(()=>{
+      try{if(window.speechSynthesis?.paused)window.speechSynthesis.resume();}catch(e){}
+    },10000);
+    return()=>clearInterval(id);
+  },[isPro,muted,soundEnabled]);
+
+  // Announce new signals
   useEffect(()=>{
     if(!isPro||muted||!soundEnabled)return;
     const sig=signals?.[0];
@@ -450,15 +473,19 @@ function SquawkBox({signals,soundEnabled,isPro,muted,onToggle}){
     const dir=sig.dir==="LONG"?"long":"short";
     const text=`${sig.token} ${dir} signal. ${score}`;
     try{
-      window.speechSynthesis.cancel();
+      const ss=window.speechSynthesis;
+      if(!ss)return;
+      // Resume in case Chrome paused it
+      if(ss.paused)ss.resume();
+      ss.cancel();
       const utt=new SpeechSynthesisUtterance(text);
       utt.voice=voiceRef.current;
       utt.rate=1.05;utt.pitch=0.95;utt.volume=1.0;
-      window.speechSynthesis.speak(utt);
+      ss.speak(utt);
     }catch(e){}
   },[signals,isPro,muted,soundEnabled]);
 
-  return null; // audio only — button is rendered in the header
+  return null;
 }
 
 // ─── AI INPUT (stable, memoized to prevent mobile keyboard retraction) ──
@@ -2288,7 +2315,15 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             {/* ── Squawk Box (Pro only) ── */}
             {isPro&&(()=>{
               const sqActive=!squawkMuted&&soundEnabled;
-              const toggleSq=()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;});
+              const toggleSq=()=>{
+                setSquawkMuted(v=>{
+                  const nv=!v;
+                  try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}
+                  // Unlock speech synthesis on the enabling tap (must be inside a user gesture)
+                  if(!nv) unlockSpeechSynthesis();
+                  return nv;
+                });
+              };
               return(
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
                   <span style={{fontFamily:MONO,fontSize:6,color:sqActive?C.gold:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>SQUAWK</span>
