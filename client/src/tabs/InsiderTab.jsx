@@ -70,7 +70,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
   const [lastFetch, setLastFetch]   = useState(null);
   const [error, setError]           = useState(null);
   const [view, setView]             = useState("cluster"); // cluster | list
-  const [filterMin, setFilterMin]   = useState(100000);
+  const [filterMin, setFilterMin]   = useState(25000);
   const [lastRefresh, setLastRefresh] = useState(null);
 
   const [scanLoading, setScanLoading] = useState(false); // EDGAR scan still running server-side
@@ -96,7 +96,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
   useEffect(() => {
     if (isPro) {
       loadInsider();
-      const interval = setInterval(loadInsider, 15 * 60 * 1000);
+      const interval = setInterval(loadInsider, 20 * 60 * 1000);
       return () => clearInterval(interval);
     }
   }, [isPro, loadInsider]);
@@ -104,7 +104,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
   // Auto-retry every 20s if EDGAR scan is still warming
   useEffect(() => {
     if (!isPro || !scanLoading) return;
-    const t = setTimeout(() => loadInsider(), 20000);
+    const t = setTimeout(() => loadInsider(), 60000);
     return () => clearTimeout(t);
   }, [isPro, scanLoading, loadInsider]);
 
@@ -155,7 +155,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
 
       {lastRefresh && (
         <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginBottom: 10, letterSpacing: "0.1em" }}>
-          LAST UPDATED {lastRefresh.toLocaleTimeString()} · AUTO-REFRESH EVERY 15 MIN · SEC FILINGS ≥$100K · LAST 7 DAYS
+          LAST UPDATED {lastRefresh.toLocaleTimeString()} · AUTO-REFRESH EVERY 20 MIN · SEC FILINGS ≥$25K · LAST 14 DAYS
         </div>
       )}
 
@@ -190,9 +190,9 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
         ))}
         <div style={{ flex: 1 }} />
         <div style={{ display: "flex", gap: 4 }}>
-          {[100000, 500000, 1000000].map(min => (
+          {[25000, 100000, 500000].map(min => (
             <button key={min} onClick={() => setFilterMin(min)} style={{ padding: "4px 8px", borderRadius: 2, border: `1px solid ${filterMin === min ? C.cyan : C.border}`, background: filterMin === min ? "rgba(0,212,255,.06)" : "transparent", color: filterMin === min ? C.cyan : C.muted, fontFamily: MONO, fontSize: 8, cursor: "pointer" }}>
-              {min === 100000 ? "$100K+" : min === 500000 ? "$500K+" : "$1M+"}
+              {min === 25000 ? "$25K+" : min === 100000 ? "$100K+" : "$500K+"}
             </button>
           ))}
         </div>
@@ -201,13 +201,14 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       {(loading || scanLoading) && trades.length === 0 && (
         <div style={{ textAlign: "center", padding: 40, fontFamily: MONO, fontSize: 11, color: C.muted }}>
           <div style={{ fontSize: 24, marginBottom: 12 }}>⟳</div>
-          Scanning SEC EDGAR Form 4 filings... (~60s on first load)
+          Scanning SEC EDGAR Form 4 filings across 56 companies...
+          <div style={{ fontSize: 9, color: C.muted, marginTop: 6, opacity: 0.7 }}>First load takes ~4 min · SEC rate-limited</div>
         </div>
       )}
 
       {!loading && !scanLoading && filtered.length === 0 && !error && (
         <div style={{ textAlign: "center", padding: 40, fontFamily: MONO, fontSize: 10, color: C.muted }}>
-          No insider purchases ≥${(filterMin / 1000).toFixed(0)}K found in the last 7 days.
+          No insider purchases ≥${(filterMin / 1000).toFixed(0)}K found in the last 14 days for watchlist companies.
         </div>
       )}
 
@@ -219,7 +220,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                 <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.gold, boxShadow: `0 0 8px ${C.gold}` }} />
                 <div style={{ fontFamily: MONO, fontSize: 10, color: C.gold, letterSpacing: "0.18em" }}>CLUSTER BUYS · {clusters.length} TICKERS</div>
-                <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted }}>(2+ insiders buying same stock within 7 days)</div>
+                <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted }}>(2+ insiders buying same stock within 14 days)</div>
               </div>
               {clusters.map(g => (
                 <ClusterCard key={g.ticker} group={g} onAskAI={onAskAI} />
@@ -255,7 +256,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       </div>
 
       <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 10, textAlign: "center", lineHeight: 1.8 }}>
-        Data sourced from SEC EDGAR · Form 4 filings · Purchases ≥$50K in last 7 days
+        Data sourced from SEC EDGAR · Form 4 filings · 56 watchlist companies · Purchases ≥$25K in last 14 days
         <br />Not investment advice. Insider activity does not guarantee future performance.
       </div>
     </div>
