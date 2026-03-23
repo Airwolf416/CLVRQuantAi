@@ -375,13 +375,18 @@ Format clearly with each asset as a header. Be direct and numerical.`;
               const active = selected.has(sym);
               const blocked = !active && selected.size >= MAX_ASSETS;
               const catColor = assetCat === "crypto" ? C.cyan : assetCat === "equities" ? C.blue : C.gold;
-              // Live price from basket prices endpoint
+              // Live price — store real-time sources first, basket-api as fallback
               const bp = bPrices?.[sym];
               const perp = storePerps?.[sym];
-              const rawPrice = perp?.price || bp?.price || storeSpot?.[sym]?.price || cryptoPrices?.[sym]?.price || equityPrices?.[sym]?.price || metalPrices?.[sym]?.price;
-              const rawChg = perp?.change24h ?? bp?.chg ?? 0;
+              const spot = storeSpot?.[sym];
+              const crypto = cryptoPrices?.[sym];
+              const equity = equityPrices?.[sym];
+              const metal = metalPrices?.[sym];
+              // Priority: HL perp > store spot > crypto store > equity store > metal store > basket API
+              const rawPrice = perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.price;
+              const rawChg = perp?.change24h ?? crypto?.chg ?? spot?.chg ?? equity?.chg ?? metal?.chg ?? bp?.chg ?? 0;
               const currency = bp?.currency || "USD";
-              const isLive = !!(perp?.price || bp?.live);
+              const isLive = !!(perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.live);
               const priceStr = rawPrice ? fmtPrice(rawPrice, currency) : (pricesLoading ? "…" : "—");
               const chgColor = rawChg > 0 ? C.green : rawChg < 0 ? C.red : C.muted;
               return (

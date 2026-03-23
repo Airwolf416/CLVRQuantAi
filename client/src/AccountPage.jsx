@@ -113,6 +113,9 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
   const [actionLoading, setActionLoading] = useState(false);
   const [trialCode, setTrialCode] = useState(null);
   const [trialLoading, setTrialLoading] = useState(false);
+  const [proCodeDuration, setProCodeDuration] = useState(1);
+  const [proCodeResult, setProCodeResult] = useState(null);
+  const [proCodeLoading, setProCodeLoading] = useState(false);
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
 
@@ -260,6 +263,23 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
       } else { showToast(data.error || "Failed to generate"); }
     } catch { showToast("Failed to generate"); }
     setTrialLoading(false);
+  };
+
+  const generateProAccessCode = async () => {
+    setProCodeLoading(true);
+    try {
+      const res = await fetch("/api/admin/generate-access-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ durationMonths: proCodeDuration }),
+      });
+      const data = await res.json();
+      if (data.code) {
+        setProCodeResult(data);
+        showToast(`${proCodeDuration}-month Pro code generated!`);
+      } else { showToast(data.error || "Failed to generate"); }
+    } catch { showToast("Failed to generate code"); }
+    setProCodeLoading(false);
   };
 
   useEffect(() => {
@@ -698,6 +718,52 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
                   Generate Trial Code
                 </button>
               </div>
+            )}
+          </div>
+
+          {/* ── 1–3 Month Pro Access Code Generator ── */}
+          <div style={{ ...S.card, borderColor:"rgba(155,89,182,.35)" }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.2em", marginBottom:14 }}>PRO ACCESS CODES · 1–3 MONTH</div>
+            <div style={{ fontFamily:SERIF, fontSize:15, fontWeight:700, color:C.white, marginBottom:4 }}>Single-Use Pro Codes</div>
+            <div style={{ fontSize:11, color:C.muted2, lineHeight:1.7, marginBottom:16, fontFamily:MONO }}>
+              Generate a single-use code granting full Pro access for 1, 2, or 3 months. Each code can only be redeemed once.
+            </div>
+            {/* Duration selector */}
+            <div style={{ display:"flex", gap:8, marginBottom:16 }}>
+              {[1,2,3].map(m => (
+                <button key={m} data-testid={`btn-duration-${m}`} onClick={() => { setProCodeDuration(m); setProCodeResult(null); }}
+                  style={{ flex:1, padding:"8px 0", borderRadius:3, border:`1px solid ${proCodeDuration===m ? C.gold : C.border}`, background:proCodeDuration===m ? "rgba(218,165,32,.1)" : "transparent", color:proCodeDuration===m ? C.gold : C.muted2, fontFamily:MONO, fontSize:11, fontWeight:proCodeDuration===m ? 700 : 400, cursor:"pointer", letterSpacing:"0.06em" }}>
+                  {m} MONTH{m>1?"S":""}
+                </button>
+              ))}
+            </div>
+            {proCodeResult ? (
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:14 }}>
+                <QRCode data={proCodeResult.code} size={190} />
+                <div style={{ textAlign:"center" }}>
+                  <div style={{ fontFamily:MONO, fontSize:17, fontWeight:700, color:C.gold2, letterSpacing:"0.1em", marginBottom:5 }}>
+                    {proCodeResult.code}
+                  </div>
+                  <div style={{ fontSize:10, color:C.muted2, fontFamily:MONO }}>
+                    {proCodeResult.durationMonths}-month Pro · Single use · Expires {new Date(proCodeResult.expiresAt).toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" })}
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:10, width:"100%" }}>
+                  <button data-testid="btn-copy-pro-code" onClick={() => navigator.clipboard.writeText(proCodeResult.code).then(() => showToast("Pro code copied!")).catch(() => showToast("Copy failed"))}
+                    style={{ ...S.goldBtn, flex:1 }}>
+                    COPY CODE
+                  </button>
+                  <button data-testid="btn-generate-another-pro-code" onClick={() => setProCodeResult(null)}
+                    style={{ ...S.ghostBtn, flex:1 }}>
+                    New Code
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button data-testid="btn-generate-pro-code" onClick={generateProAccessCode} disabled={proCodeLoading}
+                style={{ ...S.goldBtn, width:"100%", opacity:proCodeLoading ? 0.7 : 1 }}>
+                {proCodeLoading ? "Generating..." : `Generate ${proCodeDuration}-Month Pro Code`}
+              </button>
             )}
           </div>
 

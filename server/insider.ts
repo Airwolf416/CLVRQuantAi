@@ -1,9 +1,13 @@
-// ─── OpenInsider.com SEC insider trading scraper ───────────────────────────
-// Fetches cluster buys and large individual purchases ($100K+, last 7 days)
-// Cached for 15 minutes to avoid hammering the site
+// ─── SEC EDGAR Form 4 Insider Purchase Tracker ────────────────────────────────
+// Uses SEC EDGAR company submissions API to find insider purchases (code "P")
+// in 50+ popular companies over the last 14 days.
+// - Fetches submissions.json for each company (fast, one API call per company)
+// - Downloads and parses only the qualifying Form 4 XML documents
+// - Caches results for 20 minutes, refreshes in background
 
 let insiderCache: { data: InsiderTrade[]; ts: number } | null = null;
-const CACHE_TTL = 15 * 60 * 1000;
+const CACHE_TTL = 20 * 60 * 1000;
+let scanInProgress = false;
 
 export interface InsiderTrade {
   id: string;
@@ -20,29 +24,43 @@ export interface InsiderTrade {
   clusterCount: number;
 }
 
-function parseCSVLine(line: string): string[] {
-  const result: string[] = [];
-  let cur = "";
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') { inQ = !inQ; continue; }
-    if (c === "," && !inQ) { result.push(cur.trim()); cur = ""; continue; }
-    cur += c;
-  }
-  result.push(cur.trim());
-  return result;
-}
+const DATA_API = "https://data.sec.gov/submissions";
+const EDGAR_FILES = "https://www.sec.gov/Archives/edgar/data";
+const UA = "CLVRQuant market-intelligence@clvrquant.com";
 
-function parseCSV(text: string): string[][] {
-  return text.split("\n").filter(l => l.trim().length > 3).map(parseCSVLine);
-}
+// 50+ popular companies with their SEC CIKs (10-digit padded)
+const WATCHLIST: { ticker: string; cik: string }[] = [
+  { ticker: "AAPL",  cik: "0000320193" }, { ticker: "MSFT",  cik: "0000789019" },
+  { ticker: "GOOGL", cik: "0001652044" }, { ticker: "AMZN",  cik: "0001018724" },
+  { ticker: "META",  cik: "0001326801" }, { ticker: "NVDA",  cik: "0001045810" },
+  { ticker: "TSLA",  cik: "0001318605" }, { ticker: "NFLX",  cik: "0001065280" },
+  { ticker: "AMD",   cik: "0000002488" }, { ticker: "PLTR",  cik: "0001321655" },
+  { ticker: "COIN",  cik: "0001679273" }, { ticker: "MSTR",  cik: "0001050446" },
+  { ticker: "HOOD",  cik: "0001783398" }, { ticker: "GME",   cik: "0001326380" },
+  { ticker: "RIVN",  cik: "0001874178" }, { ticker: "HIMS",  cik: "0001643953" },
+  { ticker: "ORCL",  cik: "0001341439" }, { ticker: "JPM",   cik: "0000019617" },
+  { ticker: "BAC",   cik: "0000070858" }, { ticker: "GS",    cik: "0000886982" },
+  { ticker: "WMT",   cik: "0000104169" }, { ticker: "XOM",   cik: "0000034088" },
+  { ticker: "DIS",   cik: "0001001039" }, { ticker: "CRM",   cik: "0001108524" },
+  { ticker: "SHOP",  cik: "0001594805" }, { ticker: "SQ",    cik: "0001512673" },
+  { ticker: "UBER",  cik: "0001543151" }, { ticker: "LYFT",  cik: "0001759509" },
+  { ticker: "SNAP",  cik: "0001564408" }, { ticker: "RBLX",  cik: "0001854815" },
+  { ticker: "AFRM",  cik: "0001821144" }, { ticker: "SOFI",  cik: "0001818201" },
+  { ticker: "LCID",  cik: "0001841209" }, { ticker: "NIO",   cik: "0001690820" },
+  { ticker: "ARM",   cik: "0001728117" }, { ticker: "SMCI",  cik: "0001375365" },
+  { ticker: "VRT",   cik: "0001091818" }, { ticker: "DKNG",  cik: "0001801144" },
+  { ticker: "PENN",  cik: "0000921738" }, { ticker: "SPOT",  cik: "0001639920" },
+  { ticker: "INTC",  cik: "0000050863" }, { ticker: "T",     cik: "0000732717" },
+  { ticker: "BA",    cik: "0000012927" }, { ticker: "LMT",   cik: "0000936468" },
+  { ticker: "PFE",   cik: "0000078003" }, { ticker: "JNJ",   cik: "0000200406" },
+  { ticker: "MRNA",  cik: "0001682852" }, { ticker: "BNTX",  cik: "0001776985" },
+  { ticker: "ABBV",  cik: "0001551152" }, { ticker: "NVO",   cik: "0001065280" },
+  { ticker: "V",     cik: "0001403161" }, { ticker: "MA",    cik: "0001141391" },
+  { ticker: "PYPL",  cik: "0001633917" }, { ticker: "AAON",  cik: "0000824142" },
+  { ticker: "SOUN",  cik: "0001840292" }, { ticker: "BBAI",  cik: "0001820175" },
+];
 
-function parseValue(s: string): number {
-  if (!s) return 0;
-  const n = parseFloat(s.replace(/[$,\s]/g, ""));
-  return isNaN(n) ? 0 : n;
-}
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 function normalizeTitle(t: string): string {
   if (!t) return "Insider";
@@ -54,138 +72,197 @@ function normalizeTitle(t: string): string {
   if (u.includes("CHAIRMAN")) return "Chairman";
   if (u.includes("PRESIDENT")) return "President";
   if (u.includes("DIRECTOR")) return "Director";
-  if (u.includes("10%") || u.includes("TEN PERCENT") || u.includes("OWNER")) return "10%+ Owner";
+  if (u.includes("10%") || u.includes("TEN PERCENT") || u.includes("MAJOR OWNER")) return "10%+ Owner";
   if (u.includes("OFFICER")) return "Officer";
   return t.split(",")[0].trim().substring(0, 22) || "Insider";
 }
 
-function parseRows(rows: string[][]): InsiderTrade[] {
-  if (rows.length < 2) return [];
-  const header = rows[0].map(h => h.toLowerCase());
+function parseFloat2(s: string): number {
+  if (!s) return 0;
+  const n = parseFloat(s.replace(/[$,\s]/g, ""));
+  return isNaN(n) ? 0 : n;
+}
 
-  const idx = (names: string[]) => {
-    for (const n of names) {
-      const i = header.findIndex(h => h.includes(n));
-      if (i !== -1) return i;
-    }
-    return -1;
-  };
+// Parse a Form 4 XML document for purchase transactions
+function parseForm4Xml(xml: string, ticker: string, company: string, adsh: string): InsiderTrade[] {
+  const ownerName = xml.match(/<rptOwnerName>([^<]*)<\/rptOwnerName>/)?.[1]?.trim() || "Insider";
+  const rawTitle = xml.match(/<officerTitle>([^<]*)<\/officerTitle>/)?.[1]?.trim() || "";
+  const periodRaw = xml.match(/<periodOfReport>([^<]*)<\/periodOfReport>/)?.[1]?.trim() || "";
+  const filedRaw = xml.match(/FILED AS OF DATE:\s*(\d{8})/)?.[1] || periodRaw.replace(/-/g, "");
+  const tradeDate = periodRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") || periodRaw;
+  const filingDate = filedRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
 
-  // OpenInsider CSV columns: X, Filing Date, Trade Date, Ticker, CIK, Insider Name, Title, Trade Type, Price, Qty, Owned, ΔOwned, Value, 1d, 1w, 1m, 6m
-  const filingIdx  = idx(["filing date", "filing"]);
-  const tradeIdx   = idx(["trade date"]);
-  const tickerIdx  = idx(["ticker"]);
-  const compIdx    = idx(["company", "issuer"]);
-  const nameIdx    = idx(["insider name", "insider", "name"]);
-  const titleIdx   = idx(["title"]);
-  const typeIdx    = idx(["trade type", "type"]);
-  const priceIdx   = idx(["price"]);
-  const qtyIdx     = idx(["qty", "shares"]);
-  const valueIdx   = idx(["value"]);
-
+  const txnBlocks = xml.match(/<nonDerivativeTransaction>[\s\S]*?<\/nonDerivativeTransaction>/g) || [];
   const trades: InsiderTrade[] = [];
-  for (const row of rows.slice(1)) {
-    if (row.length < 5) continue;
 
-    const tradeType = (row[typeIdx] || "").trim();
-    if (!tradeType.startsWith("P") && !tradeType.toUpperCase().includes("PURCHASE")) continue;
+  for (const block of txnBlocks) {
+    const code = block.match(/<transactionCode>([^<]+)<\/transactionCode>/)?.[1]?.trim();
+    if (code !== "P") continue;
 
-    const ticker = (row[tickerIdx] || "").trim().toUpperCase().replace(/[^A-Z]/g, "");
-    if (!ticker || ticker.length > 6) continue;
+    const sharesRaw = block.match(/<transactionShares>\s*<value>([^<]+)<\/value>/)?.[1];
+    const priceRaw  = block.match(/<transactionPricePerShare>\s*<value>([^<]+)<\/value>/)?.[1];
+    const shares = parseFloat2(sharesRaw || "0");
+    const price  = parseFloat2(priceRaw  || "0");
+    const value  = shares * price;
 
-    const value = parseValue(row[valueIdx]);
-    if (value < 100000) continue;
-
-    const qty   = Math.round(parseValue((row[qtyIdx] || "").replace(/,/g, "")));
-    const price = parseValue(row[priceIdx]);
-    const name  = (row[nameIdx] || "").trim();
-    const filing = (row[filingIdx] || "").trim();
-    const traded = (row[tradeIdx] || filing).trim();
+    if (value < 25000) continue; // $25K minimum
 
     trades.push({
-      id: `${ticker}-${name}-${filing}`.replace(/[\s\/]/g, ""),
+      id: `${ticker}-${ownerName}-${adsh}`.replace(/[\s\/]/g, "").substring(0, 60),
       ticker,
-      company: (row[compIdx] || ticker).trim().substring(0, 40),
-      insiderName: name,
-      title: normalizeTitle(row[titleIdx] || ""),
+      company: company.substring(0, 40),
+      insiderName: ownerName,
+      title: normalizeTitle(rawTitle),
       price,
-      qty,
+      qty: Math.round(shares),
       value,
-      filingDate: filing,
-      tradeDate:  traded,
-      isCluster:  false,
+      filingDate,
+      tradeDate,
+      isCluster: false,
       clusterCount: 1,
     });
   }
   return trades;
 }
 
-async function fetchCSV(url: string): Promise<InsiderTrade[]> {
+// Fetch Form 4 XML for a specific filing
+async function fetchForm4Xml(
+  filerCik: string, adsh: string, primaryDoc: string, ticker: string, company: string
+): Promise<InsiderTrade[]> {
   try {
-    const r = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,text/csv,application/csv,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://openinsider.com/",
-      },
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!r.ok) return [];
-    const text = await r.text();
-    if (!text.includes(",") || text.trim().startsWith("<!DOCTYPE")) return [];
-    const rows = parseCSV(text);
-    return parseRows(rows);
-  } catch (e: any) {
-    console.error("[insider] fetch error:", e.message?.substring(0, 80));
+    const accNoDash = adsh.replace(/-/g, "");
+    // Prefer the primary document (XML), fall back to the .txt wrapper
+    const urls = primaryDoc.endsWith(".xml")
+      ? [`${EDGAR_FILES}/${filerCik}/${accNoDash}/${primaryDoc}`,
+         `${EDGAR_FILES}/${filerCik}/${accNoDash}/${adsh}.txt`]
+      : [`${EDGAR_FILES}/${filerCik}/${accNoDash}/${adsh}.txt`];
+
+    for (const url of urls) {
+      try {
+        const r = await fetch(url, {
+          headers: { "User-Agent": UA },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) continue;
+        const text = await r.text();
+        if (text.startsWith("<!") || text.startsWith("<html") || text.includes("Rate Threshold")) continue;
+        const trades = parseForm4Xml(text, ticker, company, adsh);
+        if (trades.length > 0 || text.includes("ownershipDocument")) return trades;
+      } catch { continue; }
+    }
+    return [];
+  } catch {
     return [];
   }
 }
 
+// Fetch recent Form 4 accession numbers for a company from EDGAR submissions API
+async function fetchCompanyForm4s(
+  ticker: string, cik: string, sevenAgo: string
+): Promise<{ adsh: string; filerCik: string; primaryDoc: string }[]> {
+  try {
+    const r = await fetch(`${DATA_API}/CIK${cik}.json`, {
+      headers: { "User-Agent": UA },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) return [];
+    const d: any = await r.json();
+    const forms: string[]  = d?.filings?.recent?.form || [];
+    const dates: string[]  = d?.filings?.recent?.filingDate || [];
+    const accNums: string[] = d?.filings?.recent?.accessionNumber || [];
+    const primaryDocs: string[] = d?.filings?.recent?.primaryDocument || [];
+
+    const results: { adsh: string; filerCik: string; primaryDoc: string }[] = [];
+    for (let i = 0; i < forms.length; i++) {
+      if (forms[i] !== "4" && forms[i] !== "4/A") continue;
+      if (dates[i] < sevenAgo) break; // filings sorted newest first, stop when old
+      const adsh = accNums[i].replace(/(\d{10})-(\d{2})-(\d{6})/, "$1-$2-$3");
+      const filerCik = accNums[i].replace(/-/g, "").substring(0, 10).replace(/^0+/, "");
+      results.push({ adsh, filerCik, primaryDoc: primaryDocs[i] || `${adsh}.txt` });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+async function runEdgarScan(): Promise<void> {
+  if (scanInProgress) return;
+  scanInProgress = true;
+  const startMs = Date.now();
+  try {
+    const sevenAgo = new Date(Date.now() - 14 * 86400000).toISOString().split("T")[0]; // 14-day window
+
+    // Step 1: Fetch submissions for all watchlist companies (parallel, 8 at a time)
+    const CONCURRENCY = 8;
+    type FilingInfo = { ticker: string; company: string; adsh: string; filerCik: string; primaryDoc: string };
+    const allFilings: FilingInfo[] = [];
+
+    for (let i = 0; i < WATCHLIST.length; i += CONCURRENCY) {
+      const batch = WATCHLIST.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map(async ({ ticker, cik }) => {
+          const filings = await fetchCompanyForm4s(ticker, cik, sevenAgo);
+          return filings.map(f => ({ ticker, company: ticker, ...f }));
+        })
+      );
+      batchResults.forEach(r => allFilings.push(...r));
+      await sleep(300);
+    }
+
+    console.log(`[insider] ${allFilings.length} recent Form 4s found for watchlist companies; fetching XMLs...`);
+
+    // Step 2: Download and parse Form 4 XMLs sequentially (1s gap = SEC-compliant)
+    const allTrades: InsiderTrade[] = [];
+    for (const f of allFilings) {
+      const trades = await fetchForm4Xml(f.filerCik, f.adsh, f.primaryDoc, f.ticker, f.company);
+      allTrades.push(...trades);
+      await sleep(1000);
+    }
+
+    // Deduplicate
+    const seen = new Set<string>();
+    const deduped: InsiderTrade[] = [];
+    for (const t of allTrades) {
+      if (!seen.has(t.id)) { seen.add(t.id); deduped.push(t); }
+    }
+
+    // Cluster detection
+    const tickerCounts: Record<string, number> = {};
+    for (const t of deduped) tickerCounts[t.ticker] = (tickerCounts[t.ticker] || 0) + 1;
+    for (const t of deduped) {
+      t.clusterCount = tickerCounts[t.ticker] || 1;
+      t.isCluster = t.clusterCount >= 2;
+    }
+
+    deduped.sort((a, b) => (b.isCluster ? 1 : 0) - (a.isCluster ? 1 : 0) || b.value - a.value);
+    const data = deduped.slice(0, 60);
+    insiderCache = { data, ts: Date.now() };
+    const elapsed = ((Date.now() - startMs) / 1000).toFixed(0);
+    console.log(`[insider] EDGAR scan done in ${elapsed}s: ${data.length} purchases ≥$25K in last 14 days (${data.filter(t => t.isCluster).length} cluster)`);
+  } catch (e: any) {
+    console.error("[insider] scan failed:", e.message);
+  } finally {
+    scanInProgress = false;
+  }
+}
+
+// Public API: returns cached data immediately; triggers background refresh if stale
 export async function fetchInsiderData(): Promise<InsiderTrade[]> {
-  if (insiderCache && Date.now() - insiderCache.ts < CACHE_TTL) {
-    return insiderCache.data;
+  const stale = !insiderCache || (Date.now() - insiderCache.ts > CACHE_TTL);
+  if (stale && !scanInProgress) {
+    runEdgarScan().catch(e => console.error("[insider] bg scan error:", e.message));
   }
+  return insiderCache?.data ?? [];
+}
 
-  // Fetch from two endpoints: cluster buys page + large screener buys
-  const [clusterRaw, screenerRaw] = await Promise.all([
-    fetchCSV("https://openinsider.com/latest-cluster-buys?csv=1"),
-    fetchCSV(
-      "https://openinsider.com/screener?s=&o=&pl=&ph=&ll=&lh=&fd=7&td=&tdr=&fdlyl=&fdlyh=&daysago=&xp=1&xs=1&xd=1&xa=1&xg=1&xf=1&xn=1&po=1&oo=&io=&iod=&fil=0&vl=100&vh=&sortcol=0&cnt=100&page=1&csv=1"
-    ),
-  ]);
-
-  // Mark cluster buys
-  const clusterSet = new Set(clusterRaw.map(t => t.ticker));
-  for (const t of clusterRaw) t.isCluster = true;
-
-  // Merge and deduplicate by id
-  const seen = new Set<string>();
-  const all: InsiderTrade[] = [];
-  for (const t of [...clusterRaw, ...screenerRaw]) {
-    if (seen.has(t.id)) continue;
-    seen.add(t.id);
-    if (clusterSet.has(t.ticker)) t.isCluster = true;
-    all.push(t);
-  }
-
-  // Count insiders per ticker to set clusterCount
-  const tickerCounts: Record<string, number> = {};
-  for (const t of all) tickerCounts[t.ticker] = (tickerCounts[t.ticker] || 0) + 1;
-  for (const t of all) {
-    t.clusterCount = tickerCounts[t.ticker] || 1;
-    if (t.clusterCount >= 2) t.isCluster = true;
-  }
-
-  all.sort((a, b) => {
-    if (b.isCluster !== a.isCluster) return b.isCluster ? 1 : -1;
-    return b.value - a.value;
-  });
-
-  const data = all.slice(0, 60);
-  insiderCache = { data, ts: Date.now() };
-  console.log(`[insider] Loaded ${data.length} insider trades (${data.filter(t => t.isCluster).length} cluster)`);
-  return data;
+// Called once at server startup to warm the cache
+export function startInsiderRefresh(): void {
+  console.log("[insider] starting background EDGAR company scan...");
+  runEdgarScan().catch(e => console.error("[insider] startup scan error:", e.message));
+  setInterval(() => {
+    runEdgarScan().catch(e => console.error("[insider] periodic scan error:", e.message));
+  }, CACHE_TTL);
 }
 
 export function buildInsiderAIContext(trades: InsiderTrade[]): string {
@@ -199,7 +276,7 @@ export function buildInsiderAIContext(trades: InsiderTrade[]): string {
     .sort(([, a], [, b]) => b.reduce((s, x) => s + x.value, 0) - a.reduce((s, x) => s + x.value, 0))
     .slice(0, 6);
 
-  const lines: string[] = ["INSIDER BUYING SIGNALS (SEC filings, last 7 days, $100K+ buys):"];
+  const lines: string[] = ["INSIDER BUYING SIGNALS (SEC Form 4, last 14 days, $25K+ buys):"];
   for (const [ticker, ins] of sorted) {
     const total = ins.reduce((s, x) => s + x.value, 0);
     const fmtV = total >= 1e6 ? `$${(total / 1e6).toFixed(1)}M` : `$${(total / 1e3).toFixed(0)}K`;
