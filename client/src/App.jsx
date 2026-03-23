@@ -747,6 +747,7 @@ function Dashboard({user,setUser}){
   const [cryptoSubTab,setCryptoSubTab]=useState("spot");
   const [liqSym,setLiqSym]=useState("BTC");
   const [notifPerm,setNotifPerm]=useState(()=>{try{return typeof Notification!=="undefined"?Notification.permission:"default";}catch(e){return"default";}});
+  const [pushDisabled,setPushDisabled]=useState(()=>{try{return localStorage.getItem("clvr_push_disabled")==="1";}catch(e){return false;}});
   const [soundEnabled,setSoundEnabled]=useState(()=>{try{return localStorage.getItem("clvr_sound")!=="off";}catch(e){return true;}});
   const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,volume:0,live:false,oiHistory:[],volHistory:[],fundHistory:[]}])));
   const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false}])));
@@ -1389,6 +1390,10 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
     const insiderSnap=insiderData.length>0?(()=>{const byTicker={};for(const t of insiderData){if(!byTicker[t.ticker])byTicker[t.ticker]=[];byTicker[t.ticker].push(t);}const sorted=Object.entries(byTicker).sort(([,a],[,b])=>b.reduce((s,x)=>s+(x.value||0),0)-a.reduce((s,x)=>s+(x.value||0),0)).slice(0,5);const lines=sorted.map(([tk,ins])=>{const tot=ins.reduce((s,x)=>s+(x.value||0),0);const fv=tot>=1e6?`$${(tot/1e6).toFixed(1)}M`:`$${(tot/1e3).toFixed(0)}K`;const cluster=ins.length>=2?" [CLUSTER BUY ⚠️]":"";return`  ${tk}: ${ins.length} insider${ins.length>1?"s":""} bought ${fv}${cluster}`;});return`\nSEC INSIDER BUYING SIGNALS (last 7 days, $100K+ purchases):\n${lines.join("\n")}`;})():"";
     const macroAiSnap=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO}]: ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
     const storeModeSnap=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
+    // Detailed regime + crash risk + liquidity conditions (Command Center data)
+    const regimeSnap=regimeData?`\nCOMMAND CENTER — RISK ENGINE: CrashProb=${regimeData.crash?.probability||0}% (${regimeData.crash?.probability>80?"⚠️ EXTREME":regimeData.crash?.probability>60?"⚠️ HIGH":regimeData.crash?.probability>40?"ELEVATED":"LOW"}) | Liquidity=${regimeData.liquidity?.mode||"N/A"} Score=${regimeData.liquidity?.score||50}/100 | Regime=${regimeData.regime?.regime||"N/A"} Score=${regimeData.regime?.score||50}/100${regimeData.regime?.components?` | Components: ${Object.entries(regimeData.regime.components).slice(0,4).map(([k,v])=>`${k}=${v}`).join(", ")}`:""}`:"";
+    // Liquidation heatmap context (key price levels with estimated liq clusters)
+    const liqHeatSnap=(()=>{const p=cryptoPrices;const liqCtx=["BTC","ETH","SOL"].map(sym=>{const d=p[sym];if(!d?.price)return null;const price=d.price;const oiM=(d.oi||0)/1e6;return`${sym}: mark=$${price.toLocaleString()} OI=$${oiM.toFixed(0)}M funding=${(d.funding||0).toFixed(4)}%`;}).filter(Boolean).join(" | ");return liqCtx?`\nLIQUIDATION HEATMAP CONTEXT (estimated from OI+funding — actual levels in SECTION A): ${liqCtx}`:""})();
     // Fetch Polymarket prediction odds live and inject into AI context
     let polySnap="";
     try{
@@ -1417,7 +1422,7 @@ ${hlSpotSnap}
 CRYPTO spot (CoinGecko): ${cryptoSnap}
 EQUITIES (Finnhub): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap}${storeModeSnap}
+FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap}${storeModeSnap}${regimeSnap}${liqHeatSnap}
 ${macroAiSnap}${polySnap}${twAiContext||""}${conflictSnap}${insiderSnap}
 
 ⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
@@ -1601,6 +1606,8 @@ Be direct, specific, and numerical. Use exact live prices from the data above.`;
     const politicalSnap2=politicalItems2.length>0?`\nPOLITICAL ALPHA [fetched:${nowISO2}] — Factor into trade bias, risk sizing, and macro overlay:\n  ${politicalItems2.slice(0,6).map(n=>`[${n.marketImpact?.toUpperCase()||"NEUTRAL"}] [${n.source}] ${n.title.substring(0,100)} (assets:${n.assets?.join(",")||"macro"})`).join("\n  ")}`:"";
     const macroSnap2=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO2}]:\n  ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
     const storeModeSnap2=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
+    const regimeSnap2=regimeData?`\nCOMMAND CENTER — RISK ENGINE: CrashProb=${regimeData.crash?.probability||0}% (${regimeData.crash?.probability>80?"⚠️ EXTREME":regimeData.crash?.probability>60?"⚠️ HIGH":regimeData.crash?.probability>40?"ELEVATED":"LOW"}) | Liquidity=${regimeData.liquidity?.mode||"N/A"} Score=${regimeData.liquidity?.score||50}/100 | Regime=${regimeData.regime?.regime||"N/A"} Score=${regimeData.regime?.score||50}/100${regimeData.regime?.components?` | Components: ${Object.entries(regimeData.regime.components).slice(0,4).map(([k,v])=>`${k}=${v}`).join(", ")}`:""}`:"";
+    const liqHeatSnap2=(()=>{const liqCtx=["BTC","ETH","SOL"].map(sym=>{const d=cryptoPrices[sym];if(!d?.price)return null;const oiM=(d.oi||0)/1e6;return`${sym}: mark=$${d.price.toLocaleString()} OI=$${oiM.toFixed(0)}M funding=${(d.funding||0).toFixed(4)}%`;}).filter(Boolean).join(" | ");return liqCtx?`\nLIQUIDATION HEATMAP CONTEXT: ${liqCtx}`:""})();
     const sys=`You are CLVR AI — elite quantitative trading analyst for CLVRQuant, powered by Claude. You apply a strict 7-step analysis framework before every trade recommendation. All data is REAL and LIVE.
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET time: ${nowET2}
@@ -1618,7 +1625,7 @@ ${hlSpotSnap2}
 CRYPTO spot (CoinGecko): ${cryptoSnap}
 EQUITIES (Finnhub): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap2}${storeModeSnap2}
+FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap2}${storeModeSnap2}${regimeSnap2}${liqHeatSnap2}
 ${macroSnap2}${twAiContext||""}
 
 ⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
@@ -1904,6 +1911,40 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
   const macroNextPending=macroSortedForNext[0]||null;
 
   const requestPush=async()=>{
+    // ── Already granted + active → DISABLE ──────────────────────────────────
+    if(notifPerm==="granted"&&!pushDisabled){
+      try{
+        if(typeof navigator!=="undefined"&&navigator.serviceWorker){
+          const swReg=await navigator.serviceWorker.ready;
+          const sub=await swReg.pushManager.getSubscription();
+          if(sub) await sub.unsubscribe().catch(()=>{});
+        }
+      }catch(e){}
+      try{await fetch("/api/push/unsubscribe",{method:"POST",credentials:"include"});}catch(e){}
+      setPushDisabled(true);
+      try{localStorage.setItem("clvr_push_disabled","1");}catch(e){}
+      setToast("🔕 Push notifications disabled");
+      return;
+    }
+    // ── Granted but disabled → RE-ENABLE ────────────────────────────────────
+    if(notifPerm==="granted"&&pushDisabled){
+      try{
+        const swReg=await navigator.serviceWorker.ready;
+        const keyRes=await fetch("/api/push/public-key");
+        const{publicKey}=await keyRes.json();
+        const b64=publicKey.replace(/-/g,"+").replace(/_/g,"/");
+        const raw=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+        const existing=await swReg.pushManager.getSubscription();
+        if(existing) await existing.unsubscribe().catch(()=>{});
+        const sub=await swReg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:raw});
+        await fetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
+        setPushDisabled(false);
+        try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
+        setToast("🔔 Push notifications re-enabled");
+      }catch(e){setToast("In-app alerts active");}
+      return;
+    }
+    // ── Not granted → REQUEST PERMISSION ────────────────────────────────────
     if(typeof Notification==="undefined"){setNotifPerm("granted");setToast("In-app alerts enabled");return;}
     try{
       const perm=await Notification.requestPermission();
@@ -1913,18 +1954,16 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           const swReg=await navigator.serviceWorker.ready;
           const keyRes=await fetch("/api/push/public-key");
           const{publicKey}=await keyRes.json();
-          // Convert base64url → Uint8Array for full iOS Safari compatibility
           const b64=publicKey.replace(/-/g,"+").replace(/_/g,"/");
           const raw=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
-          // Unsubscribe any stale subscription first (avoids iOS endpoint mismatch)
           const existing=await swReg.pushManager.getSubscription();
           if(existing) await existing.unsubscribe().catch(()=>{});
           const sub=await swReg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:raw});
           await fetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
+          setPushDisabled(false);
+          try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
           setToast("🔔 Push notifications enabled — alerts will appear on your lock screen");
-        }catch(e){
-          setToast("Alerts enabled (in-app only)");
-        }
+        }catch(e){setToast("Alerts enabled (in-app only)");}
         return;
       }
     }catch(e){}
@@ -2106,8 +2145,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2}}>📷</button>
             <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound alerts ON":"Sound alerts OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
             <div style={{position:"relative",display:"inline-flex"}}>
-              <button data-testid="btn-push-notif" onClick={requestPush} title={notifPerm==="granted"?"Notifications ON — tap to manage":"Tap to enable push notifications"} style={{background:notifPerm==="granted"?"none":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"?C.gold:"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"?C.gold:C.red}}>{notifPerm==="granted"?"🔔":"🔕"}</button>
-              {notifPerm!=="granted"&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
+              <button data-testid="btn-push-notif" onClick={requestPush} title={notifPerm==="granted"&&!pushDisabled?"Notifications ON — tap to disable":notifPerm==="granted"&&pushDisabled?"Notifications paused — tap to re-enable":"Tap to enable push notifications"} style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 8px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red}}>{notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}</button>
+              {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
             </div>
             {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
             :<button data-testid="btn-upgrade-header" onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
@@ -2208,11 +2247,11 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           </div>
           </>}
 
-          {notifPerm!=="granted"&&<div data-testid="push-prompt" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontFamily:MONO,fontSize:20,color:C.gold}}>!</span>
+          {(notifPerm!=="granted"||pushDisabled)&&<div data-testid="push-prompt" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontFamily:MONO,fontSize:20,color:C.gold}}>{pushDisabled?"⏸":"!"}</span>
             <div style={{flex:1}}>
-              <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>{i18n.liveAlerts}</div>
-              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.5}}>Enable in-app alerts for macro events, volume spikes, funding flips, and price targets.</div>
+              <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>{pushDisabled?"ALERTS PAUSED":i18n.liveAlerts}</div>
+              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.5}}>{pushDisabled?"Push notifications are disabled. Tap ENABLE to re-activate alerts on your lock screen.":"Enable in-app alerts for macro events, volume spikes, funding flips, and price targets."}</div>
             </div>
             <button data-testid="btn-enable-push" onClick={requestPush} style={{background:C.gold,border:"none",borderRadius:2,padding:"6px 14px",fontFamily:MONO,fontSize:9,color:C.bg,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>ENABLE</button>
           </div>}
