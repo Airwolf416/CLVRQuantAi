@@ -172,6 +172,144 @@ app.post(
         }
       }
 
+      // ── invoice.paid — recurring monthly/yearly billing receipt ─────────────
+      if (event.type === 'invoice.paid') {
+        try {
+          const invoice = event.data.object as any;
+          const toEmail   = invoice.customer_email;
+          const custName  = invoice.customer_name || 'Valued Member';
+          const amountCents = invoice.amount_paid || 0;
+          const currency  = (invoice.currency || 'usd').toUpperCase();
+          const amountFmt = `$${(amountCents / 100).toFixed(2)} ${currency}`;
+          const invoiceNum = invoice.number || invoice.id?.slice(-8).toUpperCase() || '—';
+          const periodEnd  = invoice.period_end
+            ? new Date(invoice.period_end * 1000).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })
+            : '—';
+          const nextBill   = invoice.next_payment_attempt
+            ? new Date(invoice.next_payment_attempt * 1000).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })
+            : '—';
+          const txDate     = new Date((invoice.created || Date.now()/1000) * 1000).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+          const invoiceUrl = invoice.hosted_invoice_url || 'https://clvrquantai.com';
+
+          // Determine plan from amount
+          let planName = 'CLVRQuantAI Pro';
+          let planInterval = amountFmt;
+          let planColor = '#e8c96d';
+          let billingCycle = '';
+          if (amountCents >= 19000 && amountCents < 22000) {
+            planName = 'Pro Plan — Annual';
+            planInterval = `$199.00 CAD/year`;
+            planColor = '#00c787';
+            billingCycle = 'Annual subscription — next renewal in 12 months';
+          } else if (amountCents >= 2500 && amountCents < 3500) {
+            planName = 'Pro Plan — Monthly';
+            planInterval = `$29.00 CAD/month`;
+            billingCycle = 'Monthly subscription — next renewal in 30 days';
+          }
+
+          if (toEmail) {
+            const { getUncachableResendClient } = await import('./resendClient');
+            const { client: resend, fromEmail: billFrom } = await getUncachableResendClient();
+            const unsubUrl = `https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(toEmail)}`;
+            await resend.emails.send({
+              from: billFrom,
+              to: toEmail,
+              reply_to: 'MikeClaver@CLVRQuantAI.com',
+              subject: `CLVRQuantAI — Billing Receipt ${invoiceNum}`,
+              headers: {
+                'List-Unsubscribe': `<${unsubUrl}>`,
+                'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+              },
+              text: `CLVRQuantAI — Billing Receipt\n\nHello ${custName},\n\nYour CLVRQuantAI subscription has been renewed successfully. Thank you!\n\nInvoice: ${invoiceNum}\nPlan: ${planName}\nAmount charged: ${planInterval}\nDate: ${txDate}\nPeriod end: ${periodEnd}\nNext billing: ${nextBill}\n\nView full invoice: ${invoiceUrl}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- Real-time signals with AI reasoning\n- Unlimited price alerts\n- Liquidation heatmap & whale tracker\n- Insider trading feed\n- Global asset basket (140+ assets)\n\nQuestions? Reply to this email or contact MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI · 1 Place Ville-Marie, Montréal, QC, Canada\nThis email was sent because you have an active CLVRQuantAI Pro subscription.\nTo unsubscribe from billing receipts: ${unsubUrl}`,
+              html: `
+<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:0;margin:0">
+  <div style="max-width:600px;margin:0 auto;padding:32px 24px">
+
+    <!-- Header -->
+    <div style="text-align:center;margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid #141e35">
+      <div style="font-family:Georgia,serif;font-size:34px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuantAI</div>
+      <div style="font-family:'Courier New',monospace;font-size:9px;color:#4a5d80;letter-spacing:0.25em;margin-top:4px">BILLING RECEIPT · SUBSCRIPTION RENEWED</div>
+    </div>
+
+    <p style="font-size:15px;color:#f0f4ff;margin-bottom:6px">Hello ${custName},</p>
+    <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:20px">
+      Your CLVRQuantAI Pro subscription has been renewed. Here is your receipt for your records.
+    </p>
+
+    <!-- Invoice table -->
+    <div style="background:#0a1020;border:1px solid #1a2840;border-radius:4px;padding:20px;margin-bottom:24px">
+      <div style="font-family:'Courier New',monospace;font-size:9px;color:#4a5d80;letter-spacing:0.2em;margin-bottom:14px">INVOICE ${invoiceNum}</div>
+      <table style="width:100%;border-collapse:collapse">
+        <tr style="border-bottom:1px solid #141e35">
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.06em">PLAN</td>
+          <td style="padding:10px 0;font-size:13px;color:#f0f4ff;text-align:right;font-weight:600">${planName}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #141e35">
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.06em">AMOUNT CHARGED</td>
+          <td style="padding:10px 0;font-size:14px;text-align:right;font-weight:700;color:${planColor}">${planInterval}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #141e35">
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.06em">DATE</td>
+          <td style="padding:10px 0;font-size:12px;color:#c8d4ee;text-align:right">${txDate}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #141e35">
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.06em">PERIOD END</td>
+          <td style="padding:10px 0;font-size:12px;color:#c8d4ee;text-align:right">${periodEnd}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 0;font-size:12px;color:#6b7fa8;font-family:'Courier New',monospace;letter-spacing:0.06em">NEXT BILLING</td>
+          <td style="padding:10px 0;font-size:12px;color:#c8d4ee;text-align:right">${nextBill}</td>
+        </tr>
+      </table>
+    </div>
+
+    ${billingCycle ? `<div style="background:rgba(201,168,76,0.06);border:1px solid rgba(201,168,76,0.2);border-radius:4px;padding:10px 14px;margin-bottom:20px;font-size:11px;color:#c9a84c;font-family:'Courier New',monospace;letter-spacing:0.06em">${billingCycle}</div>` : ''}
+
+    <!-- View invoice CTA -->
+    <div style="text-align:center;margin-bottom:24px">
+      <a href="${invoiceUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:'Courier New',monospace;font-size:10px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none;margin-right:8px">VIEW INVOICE</a>
+      <a href="https://clvrquantai.com" style="display:inline-block;background:transparent;border:1px solid #c9a84c;color:#c9a84c;font-family:'Courier New',monospace;font-size:10px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none">OPEN DASHBOARD</a>
+    </div>
+
+    <!-- Pro features reminder -->
+    <div style="background:#0a1020;border:1px solid #1a2840;border-left:3px solid #e8c96d;border-radius:4px;padding:14px;margin-bottom:24px">
+      <div style="font-family:'Courier New',monospace;font-size:9px;color:#e8c96d;letter-spacing:0.2em;margin-bottom:10px">YOUR ACTIVE PRO FEATURES</div>
+      <div style="font-size:11px;color:#6b7fa8;line-height:2">
+        ✦ CLVR AI — Full Claude-powered market analyst<br>
+        ✦ Real-time signals with AI reasoning<br>
+        ✦ Unlimited price alerts &amp; push notifications<br>
+        ✦ Insider trading feed (SEC filings, $100K+ buys)<br>
+        ✦ Global asset basket — 140+ assets, Halal screened<br>
+        ✦ Daily 6 AM Morning Brief
+      </div>
+    </div>
+
+    <p style="font-size:12px;color:#4a5d80;line-height:1.8;text-align:center;margin-bottom:20px">
+      Questions about your billing? Reply to this email or contact<br>
+      <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">MikeClaver@CLVRQuantAI.com</a>
+    </p>
+
+    <!-- CASL/CAN-SPAM footer -->
+    <div style="border-top:1px solid #141e35;padding-top:16px;text-align:center">
+      <p style="font-size:10px;color:#2a3650;margin:0">© 2026 CLVRQuantAI · 1 Place Ville-Marie, Montréal, QC H3B 4A9, Canada</p>
+      <p style="font-size:9px;color:#1e2c45;margin:6px 0 0;line-height:1.8">
+        You are receiving this billing receipt because you have an active CLVRQuantAI Pro subscription.<br>
+        To stop receiving billing receipts, cancel your subscription in the 
+        <a href="https://clvrquantai.com" style="color:#2a3650;text-decoration:underline">Account</a> tab
+        or <a href="${unsubUrl}" style="color:#2a3650;text-decoration:underline">Unsubscribe</a> from all emails.
+      </p>
+    </div>
+
+  </div>
+</div>`,
+            });
+            console.log(`[stripe] Billing receipt sent to ${toEmail} for ${planName} (${amountFmt})`);
+          }
+        } catch (billErr: any) {
+          console.error('[stripe] Billing receipt email error (non-fatal):', billErr.message);
+        }
+      }
+
       // Step 3: Sync event data to DB via stripe-replit-sync (non-fatal if it fails)
       try {
         await WebhookHandlers.processWebhook(req.body as Buffer, sig);
