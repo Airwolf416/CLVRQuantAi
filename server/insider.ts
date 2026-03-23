@@ -83,14 +83,21 @@ function parseFloat2(s: string): number {
   return isNaN(n) ? 0 : n;
 }
 
+function resolveTitle(xml: string): string {
+  const officerTitle = xml.match(/<officerTitle>([^<]+)<\/officerTitle>/)?.[1]?.trim();
+  if (officerTitle) return normalizeTitle(officerTitle);
+  const isDirector = xml.match(/<isDirector>([^<]+)<\/isDirector>/)?.[1]?.trim();
+  if (isDirector === "1") return "Director";
+  const isTen = xml.match(/<isTenPercentOwner>([^<]+)<\/isTenPercentOwner>/)?.[1]?.trim();
+  if (isTen === "1") return "10%+ Owner";
+  return "Insider";
+}
+
 // Parse a Form 4 XML document for purchase transactions
-function parseForm4Xml(xml: string, ticker: string, company: string, adsh: string): InsiderTrade[] {
+function parseForm4Xml(xml: string, ticker: string, filingDate: string, adsh: string): InsiderTrade[] {
   const ownerName = xml.match(/<rptOwnerName>([^<]*)<\/rptOwnerName>/)?.[1]?.trim() || "Insider";
-  const rawTitle = xml.match(/<officerTitle>([^<]*)<\/officerTitle>/)?.[1]?.trim() || "";
-  const periodRaw = xml.match(/<periodOfReport>([^<]*)<\/periodOfReport>/)?.[1]?.trim() || "";
-  const filedRaw = xml.match(/FILED AS OF DATE:\s*(\d{8})/)?.[1] || periodRaw.replace(/-/g, "");
-  const tradeDate = periodRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3") || periodRaw;
-  const filingDate = filedRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3");
+  const issuerName = xml.match(/<issuerName>([^<]*)<\/issuerName>/)?.[1]?.trim() || ticker;
+  const title = resolveTitle(xml);
 
   const txnBlocks = xml.match(/<nonDerivativeTransaction>[\s\S]*?<\/nonDerivativeTransaction>/g) || [];
   const trades: InsiderTrade[] = [];
@@ -98,6 +105,9 @@ function parseForm4Xml(xml: string, ticker: string, company: string, adsh: strin
   for (const block of txnBlocks) {
     const code = block.match(/<transactionCode>([^<]+)<\/transactionCode>/)?.[1]?.trim();
     if (code !== "P") continue;
+
+    // Trade date from <transactionDate><value>
+    const tradeDateRaw = block.match(/<transactionDate>\s*<value>([^<]+)<\/value>/)?.[1]?.trim() || filingDate;
 
     const sharesRaw = block.match(/<transactionShares>\s*<value>([^<]+)<\/value>/)?.[1];
     const priceRaw  = block.match(/<transactionPricePerShare>\s*<value>([^<]+)<\/value>/)?.[1];
@@ -110,14 +120,14 @@ function parseForm4Xml(xml: string, ticker: string, company: string, adsh: strin
     trades.push({
       id: `${ticker}-${ownerName}-${adsh}`.replace(/[\s\/]/g, "").substring(0, 60),
       ticker,
-      company: company.substring(0, 40),
+      company: issuerName.substring(0, 40),
       insiderName: ownerName,
-      title: normalizeTitle(rawTitle),
+      title,
       price,
       qty: Math.round(shares),
       value,
       filingDate,
-      tradeDate,
+      tradeDate: tradeDateRaw,
       isCluster: false,
       clusterCount: 1,
     });
@@ -126,16 +136,18 @@ function parseForm4Xml(xml: string, ticker: string, company: string, adsh: strin
 }
 
 // Fetch Form 4 XML for a specific filing
+// Raw XML is always at form4.xml in the accession root (primaryDoc may be xslF345X06/form4.xml)
 async function fetchForm4Xml(
-  filerCik: string, adsh: string, primaryDoc: string, ticker: string, company: string
+  filerCik: string, adsh: string, filingDate: string, ticker: string
 ): Promise<InsiderTrade[]> {
   try {
     const accNoDash = adsh.replace(/-/g, "");
-    // Prefer the primary document (XML), fall back to the .txt wrapper
-    const urls = primaryDoc.endsWith(".xml")
-      ? [`${EDGAR_FILES}/${filerCik}/${accNoDash}/${primaryDoc}`,
-         `${EDGAR_FILES}/${filerCik}/${accNoDash}/${adsh}.txt`]
-      : [`${EDGAR_FILES}/${filerCik}/${accNoDash}/${adsh}.txt`];
+    // Always try raw form4.xml at root first; fall back to .txt submission wrapper
+    const urls = [
+      `${EDGAR_FILES}/${filerCik}/${accNoDash}/form4.xml`,
+      `${EDGAR_FILES}/${filerCik}/${accNoDash}/form4.htm`,
+      `${EDGAR_FILES}/${filerCik}/${accNoDash}/${adsh}.txt`,
+    ];
 
     for (const url of urls) {
       try {
@@ -146,7 +158,7 @@ async function fetchForm4Xml(
         if (!r.ok) continue;
         const text = await r.text();
         if (text.startsWith("<!") || text.startsWith("<html") || text.includes("Rate Threshold")) continue;
-        const trades = parseForm4Xml(text, ticker, company, adsh);
+        const trades = parseForm4Xml(text, ticker, filingDate, adsh);
         if (trades.length > 0 || text.includes("ownershipDocument")) return trades;
       } catch { continue; }
     }
@@ -158,8 +170,8 @@ async function fetchForm4Xml(
 
 // Fetch recent Form 4 accession numbers for a company from EDGAR submissions API
 async function fetchCompanyForm4s(
-  ticker: string, cik: string, sevenAgo: string
-): Promise<{ adsh: string; filerCik: string; primaryDoc: string }[]> {
+  ticker: string, cik: string, cutoff: string
+): Promise<{ adsh: string; filerCik: string; filingDate: string }[]> {
   try {
     const r = await fetch(`${DATA_API}/CIK${cik}.json`, {
       headers: { "User-Agent": UA },
@@ -167,18 +179,18 @@ async function fetchCompanyForm4s(
     });
     if (!r.ok) return [];
     const d: any = await r.json();
-    const forms: string[]  = d?.filings?.recent?.form || [];
-    const dates: string[]  = d?.filings?.recent?.filingDate || [];
+    const forms: string[]   = d?.filings?.recent?.form || [];
+    const dates: string[]   = d?.filings?.recent?.filingDate || [];
     const accNums: string[] = d?.filings?.recent?.accessionNumber || [];
-    const primaryDocs: string[] = d?.filings?.recent?.primaryDocument || [];
 
-    const results: { adsh: string; filerCik: string; primaryDoc: string }[] = [];
+    const results: { adsh: string; filerCik: string; filingDate: string }[] = [];
     for (let i = 0; i < forms.length; i++) {
       if (forms[i] !== "4" && forms[i] !== "4/A") continue;
-      if (dates[i] < sevenAgo) break; // filings sorted newest first, stop when old
-      const adsh = accNums[i].replace(/(\d{10})-(\d{2})-(\d{6})/, "$1-$2-$3");
-      const filerCik = accNums[i].replace(/-/g, "").substring(0, 10).replace(/^0+/, "");
-      results.push({ adsh, filerCik, primaryDoc: primaryDocs[i] || `${adsh}.txt` });
+      if (dates[i] < cutoff) break; // filings sorted newest first, stop when too old
+      const rawAcc = accNums[i]; // e.g. "0001108524-26-000066"
+      const adsh = rawAcc; // keep formatted with dashes
+      const filerCik = rawAcc.replace(/-/g, "").substring(0, 10).replace(/^0+/, "");
+      results.push({ adsh, filerCik, filingDate: dates[i] });
     }
     return results;
   } catch {
@@ -195,7 +207,7 @@ async function runEdgarScan(): Promise<void> {
 
     // Step 1: Fetch submissions for all watchlist companies (parallel, 8 at a time)
     const CONCURRENCY = 8;
-    type FilingInfo = { ticker: string; company: string; adsh: string; filerCik: string; primaryDoc: string };
+    type FilingInfo = { ticker: string; adsh: string; filerCik: string; filingDate: string };
     const allFilings: FilingInfo[] = [];
 
     for (let i = 0; i < WATCHLIST.length; i += CONCURRENCY) {
@@ -203,7 +215,7 @@ async function runEdgarScan(): Promise<void> {
       const batchResults = await Promise.all(
         batch.map(async ({ ticker, cik }) => {
           const filings = await fetchCompanyForm4s(ticker, cik, sevenAgo);
-          return filings.map(f => ({ ticker, company: ticker, ...f }));
+          return filings.map(f => ({ ticker, ...f }));
         })
       );
       batchResults.forEach(r => allFilings.push(...r));
@@ -215,7 +227,7 @@ async function runEdgarScan(): Promise<void> {
     // Step 2: Download and parse Form 4 XMLs sequentially (1s gap = SEC-compliant)
     const allTrades: InsiderTrade[] = [];
     for (const f of allFilings) {
-      const trades = await fetchForm4Xml(f.filerCik, f.adsh, f.primaryDoc, f.ticker, f.company);
+      const trades = await fetchForm4Xml(f.filerCik, f.adsh, f.filingDate, f.ticker);
       allTrades.push(...trades);
       await sleep(1000);
     }
