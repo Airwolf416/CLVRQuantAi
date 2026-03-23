@@ -87,13 +87,14 @@ const STEPS = [
 export default function OnboardingTour({ onClose, onNavigateTab, isPro }) {
   const [step, setStep] = useState(0);
   const [exiting, setExiting] = useState(false);
+  const [dontShow, setDontShow] = useState(true); // default checked — any close suppresses future shows
   const total = STEPS.length;
   const current = STEPS[step];
 
   const finish = () => {
     setExiting(true);
     setTimeout(() => {
-      try { localStorage.setItem(TOUR_KEY, "1"); } catch {}
+      try { if (dontShow) localStorage.setItem(TOUR_KEY, "1"); } catch {}
       onClose();
     }, 300);
   };
@@ -251,16 +252,25 @@ export default function OnboardingTour({ onClose, onNavigateTab, isPro }) {
           </button>
         )}
 
-        {/* Step counter */}
-        <div style={{ textAlign: "center", marginTop: 14, fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: "0.15em" }}>
-          {step + 1} / {total}
+        {/* Step counter + don't show again */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: "0.15em" }}>
+            {step + 1} / {total}
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", userSelect: "none" }}>
+            <input
+              type="checkbox"
+              checked={dontShow}
+              onChange={e => setDontShow(e.target.checked)}
+              style={{ accentColor: C.gold, width: 11, height: 11, cursor: "pointer" }}
+            />
+            <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: "0.1em" }}>
+              DON'T SHOW AGAIN
+            </span>
+          </label>
         </div>
       </div>
     </div>
   );
 }
 
-// Helper: should we show the tour?
-export function shouldShowTour() {
-  try { return !localStorage.getItem(TOUR_KEY); } catch { return false; }
-}

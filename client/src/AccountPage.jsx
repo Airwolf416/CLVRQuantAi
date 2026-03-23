@@ -120,8 +120,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
 
   useEffect(() => {
-    fetch("/api/account").then(r => {
-      if (r.status === 401) { if (onSignOut) onSignOut(); return null; }
+    fetch("/api/account", { credentials: "include" }).then(r => {
+      if (r.status === 401) { setLoading(false); return null; } // session expired — don't auto-logout, just show signed-out state
       return r.json();
     }).then(data => {
       if (!data) return;
