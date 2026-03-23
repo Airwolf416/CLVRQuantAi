@@ -80,9 +80,9 @@ function fmtOI(openInterest, price) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARKET BELL (Web Audio — no external file)
-// Plays 3 resonant bell tones spaced 0.7s apart
+// Plays resonant bell tones — count=3 for open, count=4 for close (NYSE tradition)
 // ─────────────────────────────────────────────────────────────────────────────
-function playMarketBell(volume = 0.6) {
+function playMarketBell(volume = 0.6, count = 3) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const bellTone = (freq, startAt) => {
@@ -109,12 +109,9 @@ function playMarketBell(volume = 0.6) {
       o2.start(ctx.currentTime + startAt);
       o2.stop(ctx.currentTime + startAt + 1.5);
     };
-    // Three dings: classic NYSE bell pattern
-    bellTone(880, 0);
-    bellTone(880, 0.75);
-    bellTone(880, 1.5);
+    for (let i = 0; i < count; i++) bellTone(880, i * 0.75);
     // Auto-close context after sounds finish
-    setTimeout(() => { try { ctx.close(); } catch(e) {} }, 4500);
+    setTimeout(() => { try { ctx.close(); } catch(e) {} }, count * 750 + 2800);
   } catch (e) {}
 }
 
@@ -466,22 +463,22 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
     const s   = et.getSeconds();
     const isWeekday = et.getDay() >= 1 && et.getDay() <= 5;
 
-    // 9:30:00 AM ET — opening bell
-    if (isWeekday && h === 9 && m === 30 && s === 0 && bellOpenFiredRef.current !== day) {
+    // 9:30:00 AM ET — opening bell (fires within first 10 s of 9:30 AM to survive clock drift)
+    if (isWeekday && h === 9 && m === 30 && s <= 10 && bellOpenFiredRef.current !== day) {
       bellOpenFiredRef.current = day;
-      playMarketBell(0.7);
+      playMarketBell(0.7, 3);           // 3 dings — market open
       setBellFlash("open");
       clearTimeout(bellFlashTimer.current);
-      bellFlashTimer.current = setTimeout(() => setBellFlash(null), 4000);
+      bellFlashTimer.current = setTimeout(() => setBellFlash(null), 5000);
     }
 
-    // 4:00:00 PM ET — closing bell
-    if (isWeekday && h === 16 && m === 0 && s === 0 && bellCloseFiredRef.current !== day) {
+    // 4:00:00 PM ET — closing bell (fires within first 10 s of 4:00 PM to survive clock drift / late tab navigation)
+    if (isWeekday && h === 16 && m === 0 && s <= 10 && bellCloseFiredRef.current !== day) {
       bellCloseFiredRef.current = day;
-      playMarketBell(0.7);
+      playMarketBell(0.7, 4);           // 4 dings — NYSE closing bell tradition
       setBellFlash("close");
       clearTimeout(bellFlashTimer.current);
-      bellFlashTimer.current = setTimeout(() => setBellFlash(null), 4000);
+      bellFlashTimer.current = setTimeout(() => setBellFlash(null), 6000);
     }
   }, [clockTick]);
 
