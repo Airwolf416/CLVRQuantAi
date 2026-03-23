@@ -781,9 +781,10 @@ function Dashboard({user,setUser}){
   useEffect(()=>{
     if(!user||alertsLoaded.current)return;
     alertsLoaded.current=true;
+    let alertRetries=0;
     const loadAlerts=()=>{
-      fetch("/api/alerts").then(r=>{
-        if(r.status===401){setTimeout(loadAlerts,1000);return null;}
+      fetch("/api/alerts",{credentials:"include"}).then(r=>{
+        if(r.status===401){if(alertRetries++<3)setTimeout(loadAlerts,2000);return null;}
         return r.ok?r.json():null;
       }).then(data=>{
         if(!data)return;
@@ -831,8 +832,11 @@ function Dashboard({user,setUser}){
   const [showUpgrade,setShowUpgrade]=useState(false);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
   const [showTour,setShowTour]=useState(false);
-  // Only auto-show the tour for brand-new users (flagged at email verification sign-in)
-  useEffect(()=>{ if(user?.isNewUser) setTimeout(()=>setShowTour(true),800); },[user?.isNewUser]);
+  // Auto-show tour on first-ever login (localStorage-gated; any dismissal sets the key)
+  useEffect(()=>{
+    if(!user)return;
+    try{ if(!localStorage.getItem("clvr_tour_v1_done")) setTimeout(()=>setShowTour(true),800); }catch{}
+  },[user?.id]);
   const [resendLoading,setResendLoading]=useState(false);
   const [resendSent,setResendSent]=useState(false);
   const [verifyBannerDismissed,setVerifyBannerDismissed]=useState(false);
@@ -1031,7 +1035,7 @@ function Dashboard({user,setUser}){
           const newSigs=data.signals.filter(s=>!seenSigIds.current.has(s.id));
           if(newSigs.length>0){
             newSigs.forEach(s=>seenSigIds.current.add(s.id));
-            setLiveSignals(prev=>[...newSigs,...prev].slice(0,50));
+            setLiveSignals(prev=>{const existingIds=new Set(prev.map(s=>s.id));const fresh=newSigs.filter(s=>!existingIds.has(s.id));return[...fresh,...prev].slice(0,50);});
             setSigCount(c=>c+newSigs.length);
             setFlashSigId(newSigs[0].id);
             setTimeout(()=>setFlashSigId(null),3000);
