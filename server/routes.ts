@@ -7,7 +7,7 @@ import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import WebSocket from "ws";
 import webpush from "web-push";
-import { fetchInsiderData } from "./insider";
+import { fetchInsiderData, startInsiderRefresh } from "./insider";
 
 // ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
 const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
@@ -62,9 +62,15 @@ const HL_PERP_SYMS = ["BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","kPEPE"
 const HL_TO_APP: Record<string, string> = {kPEPE:"PEPE"};
 const APP_TO_HL: Record<string, string> = {PEPE:"kPEPE"};
 
-const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"];
-const EQUITY_BASE: Record<string, number> = {TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:66,SHOP:95,CRM:290,NFLX:850,DIS:105};
-const EQUITY_FH_MAP: Record<string, string> = { SQ: "XYZ" };
+// Must match the frontend MarketTab EQUITY_SYMS exactly so all rows get prices
+const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","NFLX","HOOD","ORCL","TSM","GME","RIVN","BABA","HIMS","CRCL"];
+const EQUITY_BASE: Record<string, number> = {
+  TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,NFLX:850,
+  HOOD:41,ORCL:148,TSM:180,GME:27,RIVN:13,BABA:131,HIMS:26,CRCL:25,
+  // basket-only extras kept for fallback
+  SQ:66,SHOP:95,CRM:290,DIS:105,JPM:240,V:328,XOM:113,WMT:90,BAC:44,
+};
+const EQUITY_FH_MAP: Record<string, string> = {}; // no special ticker remapping needed
 
 const METALS_BASE: Record<string, number> = {XAU:5160,XAG:84,WTI:91,BRENT:93,NATGAS:4,COPPER:5.8,PLATINUM:2150};
 
@@ -1058,12 +1064,12 @@ async function fetchMetals(): Promise<Record<string, any>> {
 const FH_WS_SYMS: Record<string, string> = {};
 EQUITY_SYMS.forEach(sym => { FH_WS_SYMS[EQUITY_FH_MAP[sym] || sym] = `eq:${sym}`; });
 Object.entries(ENERGY_ETF_MAP).forEach(([appSym, cfg]) => { FH_WS_SYMS[cfg.etfSym] = `etf:${appSym}:${cfg.factor}`; });
-// Extended basket equities — 15 extra slots (50 limit - 16 equity - 3 ETF - 14 forex - 2 buffer = 15)
+// Extra WS basket symbols — BABA & TSM now in EQUITY_SYMS; budget: 50-20-3-14=13 slots, use 12
 const BASKET_EXTRA_SYMS = [
-  "JPM","V","XOM","WMT","BAC",                // Additional S&P 500 (5)
-  "ASML","AZN","NVO","TSM","BABA",            // Top ADRs on US markets (5)
-  "URA","WEAT","CORN",                        // Key commodity ETFs (3)
-  "RY","TD",                                  // TSX dual-listed (2) = 15 total
+  "JPM","V","XOM","WMT","BAC",               // S&P 500 extras (5)
+  "ASML","AZN",                              // EU ADRs on NASDAQ (2)
+  "URA","WEAT","CORN",                       // Commodity ETFs (3)
+  "RY","TD",                                 // TSX dual-listed (2) = 12 total
 ];
 BASKET_EXTRA_SYMS.forEach(sym => { if (!FH_WS_SYMS[sym]) FH_WS_SYMS[sym] = `eq:${sym}`; });
 const FOREX_FH_SYMS: Record<string, string> = {
@@ -1769,10 +1775,11 @@ export async function registerRoutes(
   app.get("/api/insider", async (_req, res) => {
     try {
       const data = await fetchInsiderData();
-      res.json({ trades: data, fetchedAt: Date.now() });
+      // loading=true means the initial scan is still running (empty cache)
+      res.json({ trades: data, loading: data.length === 0, fetchedAt: Date.now() });
     } catch (e: any) {
       console.error("[insider] route error:", e.message);
-      res.status(500).json({ trades: [], fetchedAt: Date.now(), error: e.message });
+      res.status(500).json({ trades: [], loading: false, fetchedAt: Date.now(), error: e.message });
     }
   });
 
@@ -1930,6 +1937,9 @@ export async function registerRoutes(
   // Kick off first refresh after 3s (let other data sources warm up first)
   setTimeout(refreshBasketPrices, 3000);
   setInterval(refreshBasketPrices, BASKET_PRICE_TTL);
+
+  // Start EDGAR insider scan in background (non-blocking; takes ~60-90s to populate)
+  startInsiderRefresh();
 
   app.get("/api/basket-prices", (_req, res) => {
     const cached = cache["basketPricesAll"];
@@ -2931,6 +2941,28 @@ export async function registerRoutes(
     const code = await generateTrialCode();
     const expiresAt = new Date(Date.now() + 7*86400000).toISOString();
     res.json({ code, expiresAt });
+  });
+
+  // ── Admin: Generate single-use 1/2/3-month Pro access codes (owner only) ──
+  app.post("/api/admin/generate-access-code", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId || !(await isOwner(userId))) return res.status(403).json({ error: "Unauthorized" });
+    const { durationMonths, label: rawLabel } = req.body;
+    const months = parseInt(durationMonths, 10);
+    if (![1, 2, 3].includes(months)) return res.status(400).json({ error: "durationMonths must be 1, 2, or 3" });
+    try {
+      const code = `PRO-${Math.random().toString(36).substring(2, 7).toUpperCase()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+      const expiresAt = new Date(Date.now() + months * 30 * 86400000).toISOString();
+      const label = rawLabel?.trim() || `${months}-month Pro code`;
+      await pool.query(
+        `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses)
+         VALUES ($1, $2, 'pro', true, $3, 1)`,
+        [code, label, expiresAt]
+      );
+      res.json({ code, expiresAt, durationMonths: months, label });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // ── Admin: Export all users as CSV (owner only) ──────────────────────────

@@ -1,4 +1,4 @@
-// ── InsiderTab — OpenInsider SEC cluster buys & large purchases ────────────
+// ── InsiderTab — SEC EDGAR Form 4 insider cluster buys & large purchases ───
 import { useState, useEffect, useCallback } from "react";
 
 const C = {
@@ -73,6 +73,8 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
   const [filterMin, setFilterMin]   = useState(100000);
   const [lastRefresh, setLastRefresh] = useState(null);
 
+  const [scanLoading, setScanLoading] = useState(false); // EDGAR scan still running server-side
+
   const loadInsider = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -81,6 +83,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setTrades(data.trades || []);
+      setScanLoading(data.loading || false); // server says scan in progress
       setLastFetch(data.fetchedAt || Date.now());
       setLastRefresh(new Date());
     } catch (e) {
@@ -97,6 +100,13 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       return () => clearInterval(interval);
     }
   }, [isPro, loadInsider]);
+
+  // Auto-retry every 20s if EDGAR scan is still warming
+  useEffect(() => {
+    if (!isPro || !scanLoading) return;
+    const t = setTimeout(() => loadInsider(), 20000);
+    return () => clearTimeout(t);
+  }, [isPro, scanLoading, loadInsider]);
 
   const filtered = trades.filter(t => (t.value || 0) >= filterMin);
   const grouped  = groupByTicker(filtered);
@@ -151,7 +161,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
 
       {error && (
         <div style={{ background: "rgba(255,64,96,.08)", border: `1px solid rgba(255,64,96,.25)`, borderRadius: 4, padding: "10px 14px", marginBottom: 10, fontFamily: MONO, fontSize: 10, color: C.red }}>
-          ⚠ Unable to fetch insider data: {error}. OpenInsider.com may be temporarily unavailable.
+          ⚠ Unable to fetch insider data: {error}. SEC EDGAR may be temporarily unavailable.
         </div>
       )}
 
@@ -188,14 +198,14 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
         </div>
       </div>
 
-      {loading && trades.length === 0 && (
+      {(loading || scanLoading) && trades.length === 0 && (
         <div style={{ textAlign: "center", padding: 40, fontFamily: MONO, fontSize: 11, color: C.muted }}>
           <div style={{ fontSize: 24, marginBottom: 12 }}>⟳</div>
-          Fetching SEC insider filings from OpenInsider.com...
+          Scanning SEC EDGAR Form 4 filings... (~60s on first load)
         </div>
       )}
 
-      {!loading && filtered.length === 0 && !error && (
+      {!loading && !scanLoading && filtered.length === 0 && !error && (
         <div style={{ textAlign: "center", padding: 40, fontFamily: MONO, fontSize: 10, color: C.muted }}>
           No insider purchases ≥${(filterMin / 1000).toFixed(0)}K found in the last 7 days.
         </div>
@@ -245,7 +255,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       </div>
 
       <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 10, textAlign: "center", lineHeight: 1.8 }}>
-        Data sourced from OpenInsider.com · SEC Form 4 filings · Purchases ≥$100K only
+        Data sourced from SEC EDGAR · Form 4 filings · Purchases ≥$50K in last 7 days
         <br />Not investment advice. Insider activity does not guarantee future performance.
       </div>
     </div>
