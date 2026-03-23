@@ -163,7 +163,11 @@ function playBloombergPing(){
 }
 
 // ─── PUSH NOTIFICATIONS (via service worker → OS notification center) ──────
+// Module-level flag — synced from React component so sendPush respects the toggle
+let _pushDisabledFlag=false;
+
 function sendPush(title,body,tag="clvrquant"){
+  if(_pushDisabledFlag)return; // user toggled off — in-app banners only
   if(typeof Notification==="undefined"||Notification.permission!=="granted")return;
   // Route through service worker so notification appears in OS notification center
   if("serviceWorker"in navigator&&navigator.serviceWorker.controller){
@@ -802,6 +806,8 @@ function Dashboard({user,setUser}){
   const macroFired=useRef(new Set());
   const soundEnabledRef=useRef(soundEnabled);
   const toggleSound=useCallback(()=>{setSoundEnabled(v=>{const nv=!v;soundEnabledRef.current=nv;try{localStorage.setItem("clvr_sound",nv?"on":"off");}catch(e){}if(nv)playBloombergPing();return nv;});},[]);
+  // Sync pushDisabled state → module-level flag so sendPush respects toggle
+  useEffect(()=>{_pushDisabledFlag=pushDisabled;},[pushDisabled]);
   const [activeAlerts,setActiveAlerts]=useState([]); // floating banner — auto-dismisses after 5s
   const [alertHistory,setAlertHistory]=useState(()=>{try{const s=localStorage.getItem("clvr_alert_history");return s?JSON.parse(s):[];}catch{return[];}});
 
@@ -1259,14 +1265,20 @@ function Dashboard({user,setUser}){
       const val=vals[key];if(val===undefined)return a;
       const hit=a.condition==="above"?val>=a.threshold:val<=a.threshold;
       if(hit){
-        setToast(`✦ ALERT: ${a.label}`);
-        if(typeof Notification!=="undefined"&&Notification.permission==="granted")new Notification("CLVRQuant",{body:a.label});
+        // Show prominent in-app floating banner (visible even when push is off)
+        addAlert({
+          type:"price",
+          title:`✦ CLVR ALERT: ${a.sym}`,
+          body:a.label,
+          assets:[a.sym],
+          id:`user-alert-${a.id||a.sym}-${Math.floor(Date.now()/60000)}`,
+        });
         if(user&&a.id)fetch(`/api/alerts/${a.id}/trigger`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:a.label,sym:a.sym,threshold:a.threshold,condition:a.condition})}).catch(()=>{});
         return{...a,triggered:true};
       }
       return a;
     }));
-  },[cryptoPrices,equityPrices,metalPrices,forexPrices]);
+  },[cryptoPrices,equityPrices,metalPrices,forexPrices,addAlert]);
 
   // ── 1s tick (tickRef fix) ──────────────────────────────
   const tickRef=useRef(0);
