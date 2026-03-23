@@ -1952,6 +1952,69 @@ export async function registerRoutes(
     res.json(cached.data);
   });
 
+  // ── Yahoo Finance quote fetcher (global stocks, no API key) ─────────────────
+  async function fetchYahooQuote(rawTicker: string): Promise<{ ticker: string; price: number; currency: string; name: string; change: number; changePct: number; exchange: string } | { error: string }> {
+    // Normalise exchange suffixes: "FLT CN" → "FLT.TO", "VOD LN" → "VOD.L", etc.
+    const exchangeMap: Record<string, string> = {
+      "CN": ".TO", "CA": ".TO", "LN": ".L", "L": ".L",
+      "PA": ".PA", "FP": ".PA", "GR": ".DE", "XE": ".DE",
+      "HK": ".HK", "JP": ".T", "AU": ".AX", "AT": ".AX",
+      "SS": ".SS", "SZ": ".SZ", "SI": ".SI", "MI": ".MI",
+      "AX": ".AX", "TO": ".TO", "V": ".V",
+    };
+    let ticker = rawTicker.trim().toUpperCase();
+    // Handle "SYM EXCHANGE" format (e.g. "FLT CN" or "VOD LN")
+    const parts = ticker.split(/\s+/);
+    if (parts.length === 2) {
+      const suffix = exchangeMap[parts[1]];
+      ticker = suffix ? parts[0] + suffix : parts[0];
+    }
+    // Remove any "EQUITY" / "CORP" Bloomberg suffixes
+    ticker = ticker.replace(/\s+(EQUITY|CORP|LTD)$/i, "").trim();
+
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d&includePrePost=false`;
+    try {
+      const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" } });
+      if (!r.ok) return { error: `Yahoo Finance returned ${r.status} for ${ticker}` };
+      const data: any = await r.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta?.regularMarketPrice) return { error: `No price data found for ${ticker}` };
+      const price = meta.regularMarketPrice;
+      const prev  = meta.chartPreviousClose || meta.previousClose || price;
+      const change = price - prev;
+      const changePct = prev > 0 ? (change / prev) * 100 : 0;
+      return {
+        ticker,
+        price,
+        currency: meta.currency || "USD",
+        name: meta.shortName || meta.longName || ticker,
+        change: parseFloat(change.toFixed(4)),
+        changePct: parseFloat(changePct.toFixed(2)),
+        exchange: meta.fullExchangeName || meta.exchangeName || "",
+      };
+    } catch (e: any) {
+      return { error: e.message };
+    }
+  }
+
+  // Tool definitions for Claude tool use
+  const AI_TOOLS = [
+    {
+      name: "get_market_quote",
+      description: "Fetch the current real-time price, change, and basic info for ANY global stock, ETF, index, or asset using its ticker symbol. Supports US equities (AAPL, NVDA), Canadian stocks (FLT CN → FLT.TO), UK stocks (VOD LN → VOD.L), European, Asian, and Australian listings. Use this whenever the user asks about an asset whose price isn't in the system data feed.",
+      input_schema: {
+        type: "object",
+        properties: {
+          ticker: {
+            type: "string",
+            description: "The ticker symbol, optionally with exchange code. Examples: 'FLT CN', 'VOD LN', 'SHOP', 'AAPL', 'BMW GR', 'BHP AT', 'FLT.TO'. Pass exactly as the user gave it."
+          }
+        },
+        required: ["ticker"]
+      }
+    }
+  ];
+
   app.post("/api/ai/analyze", async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
@@ -1991,38 +2054,81 @@ export async function registerRoutes(
     // Pro users always get Claude Sonnet 4 for best quality analysis
     const model = "claude-sonnet-4-20250514";
 
-    try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const callClaude = async (messages: any[], withTools = true) => {
+      const body: any = {
+        model,
+        max_tokens: 1500,
+        system: system || "",
+        messages,
+      };
+      if (withTools) body.tools = AI_TOOLS;
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
           "x-api-key": apiKey,
         },
-        body: JSON.stringify({
-          model,
-          max_tokens: 1500,
-          system: system || "",
-          messages: [{ role: "user", content: userMessage }],
-        }),
+        body: JSON.stringify(body),
       });
+      return r;
+    };
+
+    try {
+      const messages: any[] = [{ role: "user", content: userMessage }];
+      let response = await callClaude(messages);
 
       if (!response.ok) {
         const errorText = await response.text();
-        // Hide technical API errors from the user — show a friendly maintenance message instead
         if (errorText.includes("credit balance") || errorText.includes("credit_balance") || response.status === 529) {
           return res.status(503).json({ error: "__MAINTENANCE__" });
         }
         return res.status(response.status).json({ error: `API Error ${response.status}: ${errorText}` });
       }
 
-      const data: any = await response.json();
+      let data: any = await response.json();
       if (data.error) {
         const msg = data.error.message || "";
         if (msg.includes("credit balance") || msg.includes("credit_balance")) {
           return res.status(503).json({ error: "__MAINTENANCE__" });
         }
         return res.status(400).json({ error: msg });
+      }
+
+      // ── Tool use loop (max 3 tool calls to prevent runaway) ─────────────────
+      let toolRounds = 0;
+      while (data.stop_reason === "tool_use" && toolRounds < 3) {
+        toolRounds++;
+        const toolUseBlocks = (data.content || []).filter((b: any) => b.type === "tool_use");
+        const toolResults: any[] = [];
+
+        for (const tb of toolUseBlocks) {
+          if (tb.name === "get_market_quote") {
+            const rawTicker = tb.input?.ticker || "";
+            console.log(`[ai-tools] get_market_quote called for: ${rawTicker}`);
+            const quote = await fetchYahooQuote(rawTicker);
+            const resultText = "error" in quote
+              ? `Could not fetch quote for "${rawTicker}": ${quote.error}`
+              : `LIVE QUOTE — ${quote.name} (${quote.ticker}) on ${quote.exchange}: ${quote.currency} ${quote.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} | Change: ${quote.change >= 0 ? "+" : ""}${quote.change.toFixed(4)} (${quote.changePct >= 0 ? "+" : ""}${quote.changePct.toFixed(2)}%) | [Source: Yahoo Finance — live data]`;
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: tb.id,
+              content: resultText,
+            });
+          }
+        }
+
+        // Append assistant message + tool results and continue
+        messages.push({ role: "assistant", content: data.content });
+        messages.push({ role: "user", content: toolResults });
+
+        response = await callClaude(messages, false); // no tools on follow-up — get final answer
+        if (!response.ok) {
+          const errorText = await response.text();
+          return res.status(response.status).json({ error: `API Error ${response.status}: ${errorText}` });
+        }
+        data = await response.json();
+        if (data.error) return res.status(400).json({ error: data.error.message || "AI error" });
       }
 
       const text = (data.content || []).map((b: any) => b.text || "").join("") || "No response.";
