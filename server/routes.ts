@@ -1543,7 +1543,8 @@ export async function registerRoutes(
       });
       if (r.ok) {
         const data: any = await r.json();
-        const posts = data?.Data || [];
+        const rawData = data?.Data;
+        const posts = Array.isArray(rawData) ? rawData : [];
         for (const p of posts.slice(0, 20)) {
           const cats = (p.categories || "").split("|").map((c: string) => c.trim()).filter(Boolean);
           const assets = matchAssets(p.title + " " + (p.tags || "") + " " + cats.join(" "));
@@ -1581,7 +1582,7 @@ export async function registerRoutes(
           const ct = r.headers.get("content-type") || "";
           if (ct.includes("json")) {
             const data: any = await r.json();
-            const posts = data?.results || [];
+            const posts = Array.isArray(data?.results) ? data.results : [];
             for (const p of posts.slice(0, 10)) {
               const currencies = (p.currencies || []).map((c: any) => c.code).filter(Boolean);
               const votes = p.votes || {};
