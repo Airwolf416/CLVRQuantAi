@@ -2015,6 +2015,269 @@ export async function registerRoutes(
     }
   ];
 
+  // ── Quant Engine: indicator computation + Claude structured analysis ──────────
+  const QUANT_RISK_PROFILES: Record<string, { label:string; slMultiplier:number; leverage:[number,number]; riskPct:number; minWinProb:number; tpRatios:[number,number]; holdHorizon:string }> = {
+    low:  { label:"CONSERVATIVE", slMultiplier:2.5, leverage:[1,3],   riskPct:1, minWinProb:85, tpRatios:[2.0,4.0], holdHorizon:"swing trade — 2 to 7 days" },
+    mid:  { label:"BALANCED",     slMultiplier:1.8, leverage:[3,7],   riskPct:2, minWinProb:80, tpRatios:[1.5,3.0], holdHorizon:"intraday to short swing — 4 hours to 3 days" },
+    high: { label:"AGGRESSIVE",   slMultiplier:1.2, leverage:[5,15],  riskPct:4, minWinProb:75, tpRatios:[1.2,2.5], holdHorizon:"scalp to intraday — 15 minutes to 8 hours" },
+  };
+  const QUANT_TIMEFRAMES: Record<string, { label:string; interval:string; count:number; binanceInterval:string }> = {
+    today: { label:"Today",     interval:"15m", count:200, binanceInterval:"15m" },
+    mid:   { label:"Mid-Term",  interval:"4h",  count:300, binanceInterval:"4h"  },
+    long:  { label:"Long-Term", interval:"1d",  count:200, binanceInterval:"1d"  },
+  };
+  const BINANCE_SYMBOLS: Record<string, string> = {
+    BTC:"BTCUSDT", ETH:"ETHUSDT", SOL:"SOLUSDT", AVAX:"AVAXUSDT",
+    ARB:"ARBUSDT", WIF:"WIFUSDT", DOGE:"DOGEUSDT", PEPE:"PEPEUSDT",
+    SUI:"SUIUSDT", LINK:"LINKUSDT", XRP:"XRPUSDT", ADA:"ADAUSDT",
+    HYPE:"HYPEUSDT", TRUMP:"TRUMPUSDT",
+  };
+  function quantIntervalToMs(interval: string): number {
+    const map: Record<string,number> = { "1m":60000,"5m":300000,"15m":900000,"1h":3600000,"4h":14400000,"1d":86400000 };
+    return map[interval] || 3600000;
+  }
+  async function fetchHLCandlesQuant(ticker: string, interval: string, count: number) {
+    try {
+      const endTime = Date.now();
+      const startTime = endTime - (count * quantIntervalToMs(interval));
+      const r = await fetch("https://api.hyperliquid.xyz/info", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ type:"candleSnapshot", req:{ coin:ticker, interval, startTime, endTime } }),
+      });
+      const data: any = await r.json();
+      if (!Array.isArray(data) || data.length === 0) return null;
+      return data.map((c: any) => ({ t:parseFloat(c.t), o:parseFloat(c.o), h:parseFloat(c.h), l:parseFloat(c.l), c:parseFloat(c.c), v:parseFloat(c.v||0) }));
+    } catch { return null; }
+  }
+  async function fetchBinanceCandlesQuant(ticker: string, interval: string, count: number) {
+    const symbol = BINANCE_SYMBOLS[ticker];
+    if (!symbol) return null;
+    try {
+      const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${Math.min(count,1000)}`);
+      const data: any = await r.json();
+      if (!Array.isArray(data)) return null;
+      return data.map((c: any) => ({ t:parseFloat(c[0]), o:parseFloat(c[1]), h:parseFloat(c[2]), l:parseFloat(c[3]), c:parseFloat(c[4]), v:parseFloat(c[5]) }));
+    } catch { return null; }
+  }
+  async function fetchFinnhubCandlesQuant(ticker: string, interval: string, count: number) {
+    const apiKey = process.env.FINNHUB_API_KEY;
+    if (!apiKey) return null;
+    try {
+      const resMap: Record<string,string> = { "15m":"15","1h":"60","4h":"240","1d":"D" };
+      const res = resMap[interval] || "60";
+      const to = Math.floor(Date.now() / 1000);
+      const from = to - (count * quantIntervalToMs(interval) / 1000);
+      const r = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=${res}&from=${from}&to=${to}&token=${apiKey}`);
+      const data: any = await r.json();
+      if (data.s !== "ok" || !data.c?.length) return null;
+      return data.t.map((t: number, i: number) => ({ t:t*1000, o:parseFloat(data.o[i]), h:parseFloat(data.h[i]), l:parseFloat(data.l[i]), c:parseFloat(data.c[i]), v:parseFloat(data.v?.[i]||0) }));
+    } catch { return null; }
+  }
+  async function fetchQuantCandles(ticker: string, assetClass: string, interval: string, count: number) {
+    if (assetClass === "crypto") {
+      const [hl, binance] = await Promise.all([
+        fetchHLCandlesQuant(ticker, interval, count),
+        fetchBinanceCandlesQuant(ticker, interval, Math.min(count*2, 1000)),
+      ]);
+      if (hl && binance) return binance.length > hl.length ? binance : hl;
+      return hl || binance;
+    }
+    const finnhub = await fetchFinnhubCandlesQuant(ticker, interval, count);
+    if (finnhub) return finnhub;
+    return fetchHLCandlesQuant(ticker, interval, count);
+  }
+  function computeQuantIndicators(candles: any[]) {
+    if (!candles || candles.length < 50) return null;
+    const closes  = candles.map((c: any) => c.c);
+    const highs   = candles.map((c: any) => c.h);
+    const lows    = candles.map((c: any) => c.l);
+    const volumes = candles.map((c: any) => c.v);
+    const n = closes.length;
+    function ema(data: number[], period: number): number[] {
+      if (data.length < period) return [data[data.length-1]];
+      const k = 2 / (period + 1);
+      let val = data.slice(0, period).reduce((a: number, b: number) => a+b, 0) / period;
+      const out = [val];
+      for (let i = period; i < data.length; i++) { val = data[i]*k + val*(1-k); out.push(val); }
+      return out;
+    }
+    const ema20arr  = ema(closes, 20);
+    const ema50arr  = ema(closes, 50);
+    const ema200arr = ema(closes, Math.min(200, n-1));
+    const ema12arr  = ema(closes, 12);
+    const ema26arr  = ema(closes, 26);
+    const currentEma20  = ema20arr[ema20arr.length-1];
+    const currentEma50  = ema50arr[ema50arr.length-1];
+    const currentEma200 = ema200arr[ema200arr.length-1];
+    const currentPrice  = closes[n-1];
+    let gains = 0, losses = 0;
+    for (let i = n-14; i < n; i++) {
+      const diff = closes[i] - closes[i-1];
+      if (diff > 0) gains += diff; else losses -= diff;
+    }
+    const rsi = Math.round(100 - 100 / (1 + (gains / Math.max(losses, 0.0001))));
+    const macdLine   = ema12arr.slice(ema12arr.length - ema26arr.length).map((v: number, i: number) => v - ema26arr[i]);
+    const signalLine = ema(macdLine, 9);
+    const macd     = macdLine[macdLine.length-1];
+    const macdSig  = signalLine[signalLine.length-1];
+    const macdHist = macd - macdSig;
+    const prevHist = macdLine[macdLine.length-2] - signalLine[signalLine.length-2];
+    const trVals: number[] = [];
+    for (let i = Math.max(1, n-30); i < n; i++) {
+      trVals.push(Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1])));
+    }
+    const atr14  = trVals.slice(-14).reduce((a: number, b: number) => a+b, 0) / 14;
+    const atrPct = (atr14 / currentPrice) * 100;
+    const recent50    = candles.slice(-50);
+    const recentHighs = recent50.map((c: any) => c.h).sort((a: number, b: number) => b-a);
+    const recentLows  = recent50.map((c: any) => c.l).sort((a: number, b: number) => a-b);
+    const resistance  = recentHighs.filter((v: number) => v > currentPrice).slice(0, 3);
+    const support     = recentLows.filter((v: number) => v < currentPrice).slice(0, 3);
+    const avgVol  = volumes.slice(-20).reduce((a: number, b: number) => a+b, 0) / 20;
+    const lastVol = volumes[n-1];
+    const volRatio = lastVol / Math.max(avgVol, 0.0001);
+    const volumeSignal = volRatio>2?"SURGE":volRatio>1.3?"ABOVE AVG":volRatio<0.7?"BELOW AVG":"NORMAL";
+    const trend =
+      currentPrice>currentEma20 && currentEma20>currentEma50 && currentEma50>currentEma200 ? "STRONG UPTREND" :
+      currentPrice<currentEma20 && currentEma20<currentEma50 && currentEma50<currentEma200 ? "STRONG DOWNTREND" :
+      currentPrice>currentEma50 ? "UPTREND" : currentPrice<currentEma50 ? "DOWNTREND" : "RANGING";
+    const high24 = Math.max(...candles.slice(-24).map((c: any) => c.h));
+    const low24  = Math.min(...candles.slice(-24).map((c: any) => c.l));
+    const high7d = Math.max(...candles.slice(-Math.min(168,n)).map((c: any) => c.h));
+    const low7d  = Math.min(...candles.slice(-Math.min(168,n)).map((c: any) => c.l));
+    const posInRange = Math.round((currentPrice-low24) / Math.max(high24-low24, 0.0001) * 100);
+    let momentum = 50;
+    if (rsi>60) momentum+=10; if (rsi<40) momentum-=10;
+    if (macdHist>0 && macdHist>prevHist) momentum+=10; if (macdHist<0 && macdHist<prevHist) momentum-=10;
+    if (currentPrice>currentEma20) momentum+=8; if (currentPrice<currentEma20) momentum-=8;
+    if (volumeSignal==="SURGE") momentum+=5;
+    momentum = Math.max(0, Math.min(100, momentum));
+    return {
+      currentPrice,
+      ema20:currentEma20, ema50:currentEma50, ema200:currentEma200,
+      priceVsEma20:((currentPrice-currentEma20)/currentEma20*100).toFixed(2),
+      priceVsEma50:((currentPrice-currentEma50)/currentEma50*100).toFixed(2),
+      priceVsEma200:((currentPrice-currentEma200)/currentEma200*100).toFixed(2),
+      rsi, rsiLabel:rsi>70?"OVERBOUGHT":rsi>60?"BULLISH":rsi<30?"OVERSOLD":rsi<40?"BEARISH":"NEUTRAL",
+      macd:parseFloat(macd.toFixed(4)), macdSignal:parseFloat(macdSig.toFixed(4)), macdHist:parseFloat(macdHist.toFixed(4)),
+      macdCrossing:macdHist>0&&prevHist<=0?"BULLISH_CROSS":macdHist<0&&prevHist>=0?"BEARISH_CROSS":macdHist>0?"BULLISH":"BEARISH",
+      atr14:parseFloat(atr14.toFixed(6)), atrPct:parseFloat(atrPct.toFixed(3)),
+      nearestResistance:resistance[0]||null, resistanceLevels:resistance,
+      nearestSupport:support[0]||null, supportLevels:support,
+      volumeSignal, volumeRatio:parseFloat(volRatio.toFixed(2)),
+      trend, momentumScore:momentum,
+      high24, low24, high7d, low7d, posInRange,
+      range24hPct:parseFloat(((high24-low24)/low24*100).toFixed(2)),
+    };
+  }
+
+  app.post("/api/quant", async (req, res) => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
+    try {
+      const { ticker, marketType, userQuery, riskId, timeframeId, assetClass, twitterContext } = req.body;
+      if (!ticker || !marketType || !riskId || !timeframeId) return res.status(400).json({ error: "Missing required parameters." });
+      const risk = QUANT_RISK_PROFILES[riskId];
+      const tf   = QUANT_TIMEFRAMES[timeframeId];
+      if (!risk || !tf) return res.status(400).json({ error: "Invalid risk or timeframe." });
+      const cls: string = assetClass || (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(ticker) ? "equity" : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(ticker) ? "commodity" : "crypto");
+      const candles = await fetchQuantCandles(ticker, cls, tf.interval, tf.count);
+      if (!candles) return res.status(502).json({ error: "Failed to fetch market data." });
+      const ind = computeQuantIndicators(candles);
+      if (!ind) return res.status(500).json({ error: "Insufficient candle data for indicators." });
+      const indContext = `
+TECHNICAL ANALYSIS — ${tf.label} (${tf.interval} candles, ${candles.length} bars):
+Current: $${ind.currentPrice.toFixed(4)}
+EMA20:   $${ind.ema20.toFixed(4)} (${ind.priceVsEma20}% ${parseFloat(ind.priceVsEma20)>0?"above":"below"})
+EMA50:   $${ind.ema50.toFixed(4)} (${ind.priceVsEma50}% ${parseFloat(ind.priceVsEma50)>0?"above":"below"})
+EMA200:  $${ind.ema200.toFixed(4)} (${ind.priceVsEma200}% ${parseFloat(ind.priceVsEma200)>0?"above":"below"})
+Trend: ${ind.trend}
+RSI(14): ${ind.rsi} → ${ind.rsiLabel}
+MACD(12,26,9) Histogram: ${ind.macdHist} → ${ind.macdCrossing}
+ATR(14): $${ind.atr14} (${ind.atrPct}% of price)
+→ ${risk.label} SL distance: $${(ind.atr14 * risk.slMultiplier).toFixed(4)} (${(ind.atrPct * risk.slMultiplier).toFixed(2)}%)
+Nearest Resistance: $${ind.nearestResistance?.toFixed(4)||"none above"}
+Nearest Support:    $${ind.nearestSupport?.toFixed(4)||"none below"}
+24h High: $${ind.high24.toFixed(4)} | 24h Low: $${ind.low24.toFixed(4)} | Range: ${ind.range24hPct}%
+7d  High: $${ind.high7d.toFixed(4)} | 7d  Low:  $${ind.low7d.toFixed(4)}
+Position in 24h range: ${ind.posInRange}% from bottom
+Volume: ${ind.volumeSignal} (${ind.volumeRatio}× average)
+Momentum Score: ${ind.momentumScore}/100`;
+
+      const system = `You are the most elite quantitative analyst and systematic trader on the planet. You think like a hybrid of Paul Tudor Jones + Stan Druckenmiller + a senior quant desk head. Capital preservation first. Never force a trade.
+
+PROFILE: ${risk.label}
+Stop Loss: exactly ${risk.slMultiplier}× ATR from entry OR nearest structural level (whichever is tighter)
+Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x maximum
+Risk per trade: ${risk.riskPct}% of portfolio
+Minimum win probability to issue trade: ${risk.minWinProb}%
+TP1 ratio: ${risk.tpRatios[0]}:1 minimum | TP2 ratio: ${risk.tpRatios[1]}:1 minimum
+Typical hold: ${risk.holdHorizon}
+
+ABSOLUTE RULES:
+1. If setup probability < ${risk.minWinProb}% → signal MUST be NEUTRAL. Never force a trade.
+2. SL must be at ${risk.slMultiplier}× ATR OR structural support/resistance — cite which and why.
+3. Every price level must be justified by specific technical data.
+4. Leverage must respect ${risk.leverage[0]}x–${risk.leverage[1]}x range.
+5. TP1 and TP2 must be at logical resistance levels or ATR multiples.
+6. Hold duration must respect the profile horizon: ${risk.holdHorizon}.
+7. If MACD, RSI, EMA, and volume all conflict → NEUTRAL. Confluence required.
+
+Respond ONLY with valid JSON. No markdown. No backticks.
+
+{
+  "signal": "STRONG_LONG"|"LONG"|"NEUTRAL"|"SHORT"|"STRONG_SHORT",
+  "win_probability": 0-100,
+  "opportunity_score": 0-100,
+  "entry": { "price": number, "zone_low": number, "zone_high": number, "rationale": "string" },
+  "stopLoss": { "price": number, "distance_pct": number, "rationale": "string" },
+  "tp1": { "price": number, "gain_pct": number, "rr_ratio": number, "rationale": "string" },
+  "tp2": { "price": number, "gain_pct": number, "rr_ratio": number, "rationale": "string" },
+  "leverage": { "recommended": number, "max": number, "rationale": "string" },
+  "hold": { "duration": "string", "key_events": ["string"], "exit_conditions": ["string"] },
+  "technical_summary": { "trend": "string", "key_levels": "string", "momentum": "string", "volume": "string", "pattern": "string" },
+  "quant_rationale": "string",
+  "risks": ["string"],
+  "invalidation": "string",
+  "hold_duration": "string"
+}`;
+
+      const userMsg = `ASSET: ${ticker} | MARKET: ${marketType} | CLASS: ${cls.toUpperCase()}
+USER QUERY: "${userQuery || `Analyze optimal ${risk.label} setup`}"
+
+${indContext}
+
+${twitterContext ? `TWITTER/X SOCIAL INTELLIGENCE:\n${twitterContext}` : ""}
+
+DATA SOURCES: HL candles (${candles.length} bars) + ${BINANCE_SYMBOLS[ticker] ? "Binance deeper history" : "Finnhub spot"} · All live
+
+Calculate the highest probability setup for the ${risk.label} profile.
+Every level must be technically defensible. Return JSON only.`;
+
+      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
+        body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:2000, system, messages:[{ role:"user", content:userMsg }] }),
+      });
+      if (!aiRes.ok) { const e = await aiRes.text(); console.error("[/api/quant]", e); return res.status(502).json({ error:"AI Engine failed." }); }
+      const aiData: any = await aiRes.json();
+      const rawText = aiData.content?.[0]?.text || "";
+      const clean = rawText.replace(/```json|```/g, "").trim();
+      let parsed: any;
+      try { parsed = JSON.parse(clean); } catch { console.error("[/api/quant parse]", clean.slice(0,200)); return res.status(500).json({ error:"AI returned malformed data." }); }
+      parsed.indicators = ind;
+      if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
+        const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
+        const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);
+        parsed.rr = rAmt > 0.000001 ? rwAmt / rAmt : 0;
+      }
+      res.json(parsed);
+    } catch (err: any) {
+      console.error("[Quant Engine]", err);
+      res.status(500).json({ error:"Internal server error in Quant Engine." });
+    }
+  });
+
   app.post("/api/ai/analyze", async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });

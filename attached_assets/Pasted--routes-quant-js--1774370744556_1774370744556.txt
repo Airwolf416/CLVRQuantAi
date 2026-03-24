@@ -1,0 +1,480 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// routes/quant.js  —  CLVRQuant AI · Secure Quant Engine Backend
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// COPY TO: routes/quant.js
+// Then in your main server file add:
+//   const quantRoutes = require(’./routes/quant’);
+//   app.use(’/api’, quantRoutes);
+//
+// What changed from your existing version:
+//   ✓ Kept your route architecture exactly (/api/quant POST)
+//   ✓ Kept your Hyperliquid candle fetch (PATH A)
+//   ✓ Kept your Finnhub candle fetch (PATH B)
+//   ✓ Added Binance as third source for deeper crypto history
+//   ✓ Added full indicator suite: EMA20/50/200, RSI, MACD, ATR, S/R, Volume
+//   ✓ Added Twitter context injection into AI prompt
+//   ✓ Added TP2, leverage rationale, hold events, pattern detection
+//   ✓ Updated model to claude-sonnet-4-20250514
+//   ✓ Updated AI system prompt to world-class quant level
+//   ✓ All 3 risk profiles with proper ATR-based SL calculation
+// ═══════════════════════════════════════════════════════════════════════════
+
+const express = require(‘express’);
+const router  = express.Router();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION
+// ─────────────────────────────────────────────────────────────────────────────
+const RISK_PROFILES = {
+low: {
+label:“CONSERVATIVE”, slMultiplier:2.5, leverage:[1,3],
+riskPct:1, minWinProb:85, tpRatios:[2.0,4.0],
+holdHorizon:“swing trade — 2 to 7 days”,
+},
+mid: {
+label:“BALANCED”, slMultiplier:1.8, leverage:[3,7],
+riskPct:2, minWinProb:80, tpRatios:[1.5,3.0],
+holdHorizon:“intraday to short swing — 4 hours to 3 days”,
+},
+high: {
+label:“AGGRESSIVE”, slMultiplier:1.2, leverage:[5,15],
+riskPct:4, minWinProb:75, tpRatios:[1.2,2.5],
+holdHorizon:“scalp to intraday — 15 minutes to 8 hours”,
+},
+};
+
+const TIMEFRAMES = {
+today: { label:“Today”,        interval:“15m”, count:200, binanceInterval:“15m” },
+mid:   { label:“Mid-Term”,     interval:“4h”,  count:300, binanceInterval:“4h”  },
+long:  { label:“Long-Term”,    interval:“1d”,  count:200, binanceInterval:“1d”  },
+};
+
+// Binance symbol map
+const BINANCE_SYMBOLS = {
+BTC:“BTCUSDT”, ETH:“ETHUSDT”, SOL:“SOLUSDT”, AVAX:“AVAXUSDT”,
+ARB:“ARBUSDT”, WIF:“WIFUSDT”, DOGE:“DOGEUSDT”, PEPE:“PEPEUSDT”,
+SUI:“SUIUSDT”, LINK:“LINKUSDT”, XRP:“XRPUSDT”, ADA:“ADAUSDT”,
+HYPE:“HYPEUSDT”, TRUMP:“TRUMPUSDT”,
+};
+
+function intervalToMs(interval) {
+const map = { “1m”:60000, “5m”:300000, “15m”:900000, “1h”:3600000, “4h”:14400000, “1d”:86400000 };
+return map[interval] || 3600000;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA FETCHERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// PATH A: Hyperliquid — crypto perps (free, no key)
+async function fetchHLCandles(ticker, interval, count) {
+try {
+const endTime   = Date.now();
+const startTime = endTime - (count * intervalToMs(interval));
+const r = await fetch(“https://api.hyperliquid.xyz/info”, {
+method:  “POST”,
+headers: { “Content-Type”: “application/json” },
+body: JSON.stringify({
+type: “candleSnapshot”,
+req:  { coin:ticker, interval, startTime, endTime },
+}),
+});
+const data = await r.json();
+if (!Array.isArray(data) || data.length === 0) return null;
+return data.map(c => ({
+t:parseFloat(c.t), o:parseFloat(c.o), h:parseFloat(c.h),
+l:parseFloat(c.l), c:parseFloat(c.c), v:parseFloat(c.v||0),
+}));
+} catch (e) {
+console.error(`[HL candles] ${ticker}:`, e.message);
+return null;
+}
+}
+
+// PATH B: Binance — deeper crypto history (free, no key)
+async function fetchBinanceCandles(ticker, interval, count) {
+const symbol = BINANCE_SYMBOLS[ticker];
+if (!symbol) return null;
+try {
+const r = await fetch(
+`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${Math.min(count,1000)}`
+);
+const data = await r.json();
+if (!Array.isArray(data)) return null;
+return data.map(c => ({
+t:parseFloat(c[0]), o:parseFloat(c[1]), h:parseFloat(c[2]),
+l:parseFloat(c[3]), c:parseFloat(c[4]), v:parseFloat(c[5]),
+}));
+} catch (e) {
+console.error(`[Binance candles] ${ticker}:`, e.message);
+return null;
+}
+}
+
+// PATH C: Finnhub — equities & commodities (uses FINNHUB_API_KEY secret)
+async function fetchFinnhubCandles(ticker, interval, count) {
+const apiKey     = process.env.FINNHUB_API_KEY || process.env.REACT_APP_FINNHUB_KEY;
+if (!apiKey) return null;
+try {
+const resMap = { “15m”:“15”,“1h”:“60”,“4h”:“240”,“1d”:“D” };
+const res    = resMap[interval] || “60”;
+const to     = Math.floor(Date.now() / 1000);
+const from   = to - (count * intervalToMs(interval) / 1000);
+const r = await fetch(
+`https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=${res}&from=${from}&to=${to}&token=${apiKey}`
+);
+const data = await r.json();
+if (data.s !== “ok” || !data.c?.length) return null;
+return data.t.map((t, i) => ({
+t:t*1000, o:parseFloat(data.o[i]), h:parseFloat(data.h[i]),
+l:parseFloat(data.l[i]), c:parseFloat(data.c[i]), v:parseFloat(data.v?.[i]||0),
+}));
+} catch (e) {
+console.error(`[Finnhub candles] ${ticker}:`, e.message);
+return null;
+}
+}
+
+// Smart fetch — tries best source for asset class, falls back automatically
+async function fetchCandles(ticker, assetClass, interval, count) {
+if (assetClass === “crypto”) {
+// Try HL first, then Binance for deeper history
+const [hl, binance] = await Promise.all([
+fetchHLCandles(ticker, interval, count),
+fetchBinanceCandles(ticker, interval, Math.min(count * 2, 1000)),
+]);
+// Return longer dataset (more history = better indicators)
+if (hl && binance) return binance.length > hl.length ? binance : hl;
+return hl || binance;
+}
+// Equities & commodities — Finnhub first, HL perp fallback
+const finnhub = await fetchFinnhubCandles(ticker, interval, count);
+if (finnhub) return finnhub;
+return fetchHLCandles(ticker, interval, count);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INDICATOR ENGINE — all computed server-side from OHLCV
+// ─────────────────────────────────────────────────────────────────────────────
+function computeIndicators(candles) {
+if (!candles || candles.length < 50) return null;
+
+const closes  = candles.map(c => c.c);
+const highs   = candles.map(c => c.h);
+const lows    = candles.map(c => c.l);
+const volumes = candles.map(c => c.v);
+const n       = closes.length;
+
+// EMA helper
+function ema(data, period) {
+if (data.length < period) return [data[data.length-1]];
+const k   = 2 / (period + 1);
+let val   = data.slice(0, period).reduce((a,b)=>a+b,0) / period;
+const out = [val];
+for (let i = period; i < data.length; i++) {
+val = data[i]*k + val*(1-k);
+out.push(val);
+}
+return out;
+}
+
+const ema20arr  = ema(closes, 20);
+const ema50arr  = ema(closes, 50);
+const ema200arr = ema(closes, Math.min(200, n-1));
+const ema12arr  = ema(closes, 12);
+const ema26arr  = ema(closes, 26);
+
+const currentEma20  = ema20arr[ema20arr.length-1];
+const currentEma50  = ema50arr[ema50arr.length-1];
+const currentEma200 = ema200arr[ema200arr.length-1];
+const currentPrice  = closes[n-1];
+
+// RSI(14)
+let gains=0, losses=0;
+for (let i=n-14; i<n; i++) {
+const diff = closes[i]-closes[i-1];
+if (diff>0) gains+=diff; else losses-=diff;
+}
+const rsi = Math.round(100-100/(1+(gains/Math.max(losses,0.0001))));
+
+// MACD(12,26,9)
+const macdLine   = ema12arr.slice(ema12arr.length-ema26arr.length).map((v,i)=>v-ema26arr[i]);
+const signalLine = ema(macdLine, 9);
+const macd       = macdLine[macdLine.length-1];
+const macdSig    = signalLine[signalLine.length-1];
+const macdHist   = macd - macdSig;
+const prevHist   = macdLine[macdLine.length-2] - signalLine[signalLine.length-2];
+
+// ATR(14)
+const trVals = [];
+for (let i=Math.max(1,n-30); i<n; i++) {
+trVals.push(Math.max(
+highs[i]-lows[i],
+Math.abs(highs[i]-closes[i-1]),
+Math.abs(lows[i]-closes[i-1]),
+));
+}
+const atr14  = trVals.slice(-14).reduce((a,b)=>a+b,0)/14;
+const atrPct = (atr14/currentPrice)*100;
+
+// Support & Resistance
+const recent50     = candles.slice(-50);
+const recentHighs  = recent50.map(c=>c.h).sort((a,b)=>b-a);
+const recentLows   = recent50.map(c=>c.l).sort((a,b)=>a-b);
+const resistance   = recentHighs.filter(v=>v>currentPrice).slice(0,3);
+const support      = recentLows.filter(v=>v<currentPrice).slice(0,3);
+
+// Volume
+const avgVol  = volumes.slice(-20).reduce((a,b)=>a+b,0)/20;
+const lastVol = volumes[n-1];
+const volRatio = lastVol/Math.max(avgVol,0.0001);
+const volumeSignal = volRatio>2?“SURGE”:volRatio>1.3?“ABOVE AVG”:volRatio<0.7?“BELOW AVG”:“NORMAL”;
+
+// Trend structure
+const trend =
+currentPrice>currentEma20 && currentEma20>currentEma50 && currentEma50>currentEma200 ? “STRONG UPTREND” :
+currentPrice<currentEma20 && currentEma20<currentEma50 && currentEma50<currentEma200 ? “STRONG DOWNTREND” :
+currentPrice>currentEma50 ? “UPTREND” :
+currentPrice<currentEma50 ? “DOWNTREND” : “RANGING”;
+
+// Ranges
+const high24  = Math.max(…candles.slice(-24).map(c=>c.h));
+const low24   = Math.min(…candles.slice(-24).map(c=>c.l));
+const high7d  = Math.max(…candles.slice(-Math.min(168,n)).map(c=>c.h));
+const low7d   = Math.min(…candles.slice(-Math.min(168,n)).map(c=>c.l));
+const posInRange = Math.round((currentPrice-low24)/Math.max(high24-low24,0.0001)*100);
+
+// Momentum composite
+let momentum = 50;
+if (rsi>60) momentum+=10; if (rsi<40) momentum-=10;
+if (macdHist>0&&macdHist>prevHist) momentum+=10; if (macdHist<0&&macdHist<prevHist) momentum-=10;
+if (currentPrice>currentEma20) momentum+=8; if (currentPrice<currentEma20) momentum-=8;
+if (volumeSignal===“SURGE”) momentum+=5;
+momentum = Math.max(0,Math.min(100,momentum));
+
+return {
+currentPrice,
+ema20:currentEma20, ema50:currentEma50, ema200:currentEma200,
+priceVsEma20:((currentPrice-currentEma20)/currentEma20*100).toFixed(2),
+priceVsEma50:((currentPrice-currentEma50)/currentEma50*100).toFixed(2),
+priceVsEma200:((currentPrice-currentEma200)/currentEma200*100).toFixed(2),
+rsi, rsiLabel:rsi>70?“OVERBOUGHT”:rsi>60?“BULLISH”:rsi<30?“OVERSOLD”:rsi<40?“BEARISH”:“NEUTRAL”,
+macd:parseFloat(macd.toFixed(4)), macdSignal:parseFloat(macdSig.toFixed(4)),
+macdHist:parseFloat(macdHist.toFixed(4)),
+macdCrossing: macdHist>0&&prevHist<=0?“BULLISH_CROSS”: macdHist<0&&prevHist>=0?“BEARISH_CROSS”: macdHist>0?“BULLISH”:“BEARISH”,
+atr14:parseFloat(atr14.toFixed(6)), atrPct:parseFloat(atrPct.toFixed(3)),
+nearestResistance:resistance[0]||null, resistanceLevels:resistance,
+nearestSupport:support[0]||null, supportLevels:support,
+volumeSignal, volumeRatio:parseFloat(volRatio.toFixed(2)),
+trend, momentumScore:momentum,
+high24, low24, high7d, low7d, posInRange,
+range24hPct:parseFloat(((high24-low24)/low24*100).toFixed(2)),
+};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ROUTE: POST /api/quant
+// ─────────────────────────────────────────────────────────────────────────────
+router.post(’/quant’, async (req, res) => {
+try {
+const { ticker, marketType, userQuery, riskId, timeframeId, assetClass, twitterContext } = req.body;
+
+```
+// Validate
+if (!ticker || !marketType || !riskId || !timeframeId) {
+  return res.status(400).json({ error:"Missing required parameters." });
+}
+const risk = RISK_PROFILES[riskId];
+const tf   = TIMEFRAMES[timeframeId];
+if (!risk || !tf) return res.status(400).json({ error:"Invalid risk or timeframe." });
+
+const cls = assetClass || (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(ticker) ? "equity" : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(ticker) ? "commodity" : "crypto");
+
+// Fetch candles
+const candles = await fetchCandles(ticker, cls, tf.interval, tf.count);
+if (!candles) return res.status(502).json({ error:"Failed to fetch market data." });
+
+// Compute indicators
+const ind = computeIndicators(candles);
+if (!ind) return res.status(500).json({ error:"Insufficient candle data for indicators." });
+
+// Format indicators for prompt
+const indContext = `
+```
+
+TECHNICAL ANALYSIS — ${tf.label} (${tf.interval} candles, ${candles.length} bars):
+
+Price vs EMAs:
+Current: $${ind.currentPrice.toFixed(4)}
+EMA20:   $${ind.ema20.toFixed(4)} (${ind.priceVsEma20}% ${parseFloat(ind.priceVsEma20)>0?“above”:“below”})
+EMA50:   $${ind.ema50.toFixed(4)} (${ind.priceVsEma50}% ${parseFloat(ind.priceVsEma50)>0?“above”:“below”})
+EMA200:  $${ind.ema200.toFixed(4)} (${ind.priceVsEma200}% ${parseFloat(ind.priceVsEma200)>0?“above”:“below”})
+Trend: ${ind.trend}
+
+RSI(14): ${ind.rsi} → ${ind.rsiLabel}
+
+MACD(12,26,9):
+Histogram: ${ind.macdHist} → ${ind.macdCrossing}
+
+ATR(14): $${ind.atr14} (${ind.atrPct}% of price)
+→ ${risk.label} SL distance: $${(ind.atr14 * risk.slMultiplier).toFixed(4)} (${(ind.atrPct * risk.slMultiplier).toFixed(2)}%)
+
+Key Levels:
+Nearest Resistance: $${ind.nearestResistance?.toFixed(4)||“none above”}
+Nearest Support:    $${ind.nearestSupport?.toFixed(4)||“none below”}
+24h High: $${ind.high24.toFixed(4)} | 24h Low: $${ind.low24.toFixed(4)} | Range: ${ind.range24hPct}%
+7d  High: $${ind.high7d.toFixed(4)} | 7d  Low:  $${ind.low7d.toFixed(4)}
+Position in 24h range: ${ind.posInRange}% from bottom
+
+Volume: ${ind.volumeSignal} (${ind.volumeRatio}× average)
+Momentum Score: ${ind.momentumScore}/100`;
+
+```
+// System prompt — world-class quant
+const system = `You are the most elite quantitative analyst and systematic trader on the planet.
+```
+
+You combine technical analysis, market microstructure, macro intelligence, and social sentiment.
+You think like a hedge fund quant — systematic, data-driven, zero emotion, 100% disciplined.
+
+PROFILE: ${risk.label}
+Stop Loss: exactly ${risk.slMultiplier}× ATR from entry OR nearest structural level (whichever is tighter)
+Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x maximum
+Risk per trade: ${risk.riskPct}% of portfolio
+Minimum win probability to issue trade: ${risk.minWinProb}%
+TP1 ratio: ${risk.tpRatios[0]}:1 minimum | TP2 ratio: ${risk.tpRatios[1]}:1 minimum
+Typical hold: ${risk.holdHorizon}
+
+ABSOLUTE RULES:
+
+1. If setup probability < ${risk.minWinProb}% → signal MUST be NEUTRAL. Never force a trade.
+1. SL must be at ${risk.slMultiplier}× ATR OR structural support/resistance — cite which one and why.
+1. Every price level must be justified by specific technical data — no arbitrary numbers.
+1. Leverage must respect ${risk.leverage[0]}x–${risk.leverage[1]}x range. Account for ATR volatility.
+1. TP1 and TP2 must be at logical resistance levels or ATR multiples — not arbitrary %.
+1. Hold duration must respect the profile horizon: ${risk.holdHorizon}.
+1. If MACD, RSI, EMA and volume all conflict → NEUTRAL. Confluence is required.
+
+Respond ONLY with valid JSON. No markdown. No backticks.
+
+{
+“signal”: “STRONG_LONG”|“LONG”|“NEUTRAL”|“SHORT”|“STRONG_SHORT”,
+“win_probability”: 0-100,
+“opportunity_score”: 0-100,
+“entry”: {
+“price”: number,
+“zone_low”: number,
+“zone_high”: number,
+“rationale”: “specific technical reason for this entry”
+},
+“stopLoss”: {
+“price”: number,
+“distance_pct”: number,
+“rationale”: “ATR-based or structural — cite exactly”
+},
+“tp1”: {
+“price”: number,
+“gain_pct”: number,
+“rr_ratio”: number,
+“rationale”: “resistance level or ATR multiple”
+},
+“tp2”: {
+“price”: number,
+“gain_pct”: number,
+“rr_ratio”: number,
+“rationale”: “final target rationale”
+},
+“leverage”: {
+“recommended”: number,
+“max”: number,
+“rationale”: “why this leverage given current ATR and volatility”
+},
+“hold”: {
+“duration”: “specific estimate e.g. 6-12 hours or 3-5 days”,
+“key_events”: [“catalyst to watch”, “risk event”],
+“exit_conditions”: [“early exit condition”, “hold longer condition”]
+},
+“technical_summary”: {
+“trend”: “trend assessment with EMA context”,
+“key_levels”: “support and resistance narrative”,
+“momentum”: “RSI + MACD synthesis”,
+“volume”: “volume interpretation”,
+“pattern”: “chart pattern if detected e.g. bull flag, ascending triangle, double bottom”
+},
+“quant_rationale”: “4-5 sentences. Cite specific indicator values. Sound like a hedge fund PM explaining the trade to an investor committee.”,
+“risks”: [“risk 1”, “risk 2”, “risk 3”],
+“invalidation”: “the exact price that proves this thesis wrong and why”,
+“hold_duration”: “same as hold.duration for backward compatibility”
+}`;
+
+```
+const userMsg = `ASSET: ${ticker} | MARKET: ${marketType} | CLASS: ${cls.toUpperCase()}
+```
+
+USER QUERY: “${userQuery || `Analyze optimal ${risk.label} setup`}”
+
+${indContext}
+
+${twitterContext ? `TWITTER/X SOCIAL INTELLIGENCE:\n${twitterContext}` : “”}
+
+DATA SOURCES: HL candles (${candles.length} bars) + ${BINANCE_SYMBOLS[ticker] ? “Binance deeper history” : “Finnhub spot”} · All live
+
+Calculate the highest probability setup for the ${risk.label} profile.
+Every level must be technically defensible. Return JSON only.`;
+
+```
+// Call Claude
+const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+  method:  "POST",
+  headers: {
+    "Content-Type":      "application/json",
+    "x-api-key":         process.env.ANTHROPIC_API_KEY,
+    "anthropic-version": "2023-06-01",
+  },
+  body: JSON.stringify({
+    model:      "claude-sonnet-4-20250514",
+    max_tokens: 2000,
+    system,
+    messages:   [{ role:"user", content:userMsg }],
+  }),
+});
+
+if (!aiRes.ok) {
+  const errText = await aiRes.text();
+  console.error("[Anthropic]", errText);
+  return res.status(502).json({ error:"AI Engine failed to process request." });
+}
+
+const aiData  = await aiRes.json();
+const rawText = aiData.content?.[0]?.text || "";
+const clean   = rawText.replace(/```json|```/g,"").trim();
+
+let parsed;
+try {
+  parsed = JSON.parse(clean);
+} catch (e) {
+  console.error("[Parse] Failed:", clean.slice(0, 200));
+  return res.status(500).json({ error:"AI returned malformed data." });
+}
+
+// Attach computed indicators for frontend display
+parsed.indicators = ind;
+
+// Safe R/R fallback
+if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
+  const riskAmt   = Math.abs(parsed.entry.price - parsed.stopLoss.price);
+  const rewardAmt = Math.abs(parsed.tp1.price   - parsed.entry.price);
+  parsed.rr = riskAmt > 0.000001 ? rewardAmt / riskAmt : 0;
+}
+
+res.json(parsed);
+```
+
+} catch (err) {
+console.error(”[Quant Engine]”, err);
+res.status(500).json({ error:“Internal server error in Quant Engine.” });
+}
+});
+
+module.exports = router;

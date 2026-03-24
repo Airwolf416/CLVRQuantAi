@@ -14,6 +14,7 @@ import QRScanner from "./QRScanner";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import InsiderTab from "./tabs/InsiderTab";
+import AIQuantTab from "./tabs/AITab";
 import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
@@ -884,6 +885,7 @@ function Dashboard({user,setUser}){
   const [aiOutput,setAiOutput]=useState("");
   const [aiLoading,setAiLoading]=useState(false);
   const [aiTimeframe,setAiTimeframe]=useState("today");
+  const [aiMode,setAiMode]=useState("chat");
   const idRef=useRef(300);
   useEffect(()=>{
     if(!user||alertsLoaded.current)return;
@@ -3205,7 +3207,17 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {/* ══ AI ══ */}
         {tab==="ai"&&<>
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
-          <ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}>
+          {/* AI Mode toggle */}
+          <div style={{display:"flex",gap:6,marginBottom:14}}>
+            <button data-testid="btn-ai-mode-chat" onClick={()=>setAiMode("chat")} style={{flex:1,padding:"9px 4px",borderRadius:3,border:`1px solid ${aiMode==="chat"?"rgba(201,168,76,.45)":C.border}`,background:aiMode==="chat"?"rgba(201,168,76,.08)":C.panel,color:aiMode==="chat"?C.gold2:C.muted2,fontFamily:MONO,fontSize:10,fontWeight:aiMode==="chat"?800:400,letterSpacing:"0.08em",cursor:"pointer",transition:"all .2s"}}>
+              ◆ AI ANALYST
+            </button>
+            <button data-testid="btn-ai-mode-quant" onClick={()=>setAiMode("quant")} style={{flex:1,padding:"9px 4px",borderRadius:3,border:`1px solid ${aiMode==="quant"?"rgba(0,255,136,.45)":C.border}`,background:aiMode==="quant"?"rgba(0,255,136,.08)":C.panel,color:aiMode==="quant"?"#00ff88":C.muted2,fontFamily:MONO,fontSize:10,fontWeight:aiMode==="quant"?800:400,letterSpacing:"0.08em",cursor:"pointer",transition:"all .2s"}}>
+              ⚡ QUANT ENGINE
+            </button>
+          </div>
+          {aiMode==="quant"&&<ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}><AIQuantTab/></ProGate>}
+          {aiMode==="chat"&&<ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}>
           <div style={{...panel,overflow:"visible"}}>
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="CLVR AI · Live" color="gold"/></div>
             <div style={{padding:16}}>
@@ -3276,7 +3288,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               </div>}
             </div>
           </div>
-          </ProGate>
+          </ProGate>}
 
           {/* ── MY BASKET — Personalised Scalper/Swing Tool ── */}
           <div style={{marginBottom:6}}><SLabel>My Basket</SLabel></div>
