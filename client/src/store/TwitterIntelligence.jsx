@@ -94,7 +94,7 @@ export function useTwitterIntelligence() {
 }
 
 // ── AI context builder for per-asset injection ────────────────────────────────
-function buildAssetTwitterContext(data, ticker) {
+export function buildAssetTwitterContext(data, ticker) {
   if (!data) return "";
   const { whales, mentions, breaking, sentiment } = data;
   const lines = [];
