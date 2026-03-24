@@ -1,0 +1,48 @@
+Please build a premium, dark-mode Pricing & Subscription UI for my app, CLVRQuant. I need two things: 
+1. A configuration file (`src/config/pricing.js`) that defines the tiers, prices, and feature limits.
+2. A stunning React component (`src/components/PricingModal.jsx`) that displays these plans with a Monthly/Yearly toggle.
+
+AESTHETIC REQUIREMENTS:
+- Institutional dark mode background (#060a13 or similar).
+- Fonts: 'Playfair Display' for headers, 'IBM Plex Mono' for data/features.
+- The "Elite" tier should be visually highlighted (e.g., gold borders or glowing effects) as the recommended premium plan.
+
+TIER & FEATURE SPECIFICATIONS:
+
+1. Free Tier (Basic)
+- Price: $0
+- Markets: View-only basic crypto/equities data.
+- QuantBrain AI: 0 requests (Locked).
+- News & Sentiment: Delayed or basic view.
+- Signals: Locked.
+- Macro Calendar: View only.
+- Elite Features: Locked.
+
+2. CLVR Pro
+- Target: "The Retail Advantage"
+- Monthly Price: $29.99
+- Yearly Price: $299.00
+- Markets: Crypto & Equities ONLY.
+- QuantBrain AI: Limited to 30 requests/day.
+- News & Sentiment: Full access to Twitter/Stocktwits tracking.
+- Signals: Access to the live anomaly detection (toast popups).
+- Macro Calendar: Full access to upcoming events.
+- Elite Features: Locked.
+
+3. CLVR Elite
+- Target: "The Institutional Edge"
+- Monthly Price: $129.00
+- Yearly Price: $1199.00
+- Markets: All Pro markets PLUS Forex & Commodities (Gold, Oil).
+- QuantBrain AI: Unlimited requests.
+- SEC Insider Flow: [Elite Exclusive] Tracking whales & injecting Form 4 filings into AI.
+- Basket Analysis: [Elite Exclusive] "Analyze My Swing Basket (3+ assets)".
+- Political Alpha: [Elite Exclusive] Deep news correlation.
+- Alerts: Custom SMS/Browser price and funding alerts.
+
+COMPONENT LOGIC:
+- Include a sleek toggle switch at the top to switch between "Monthly" and "Yearly" billing. 
+- When "Yearly" is selected, dynamically update the prices on the cards to show the discounted yearly rate, and add a small green badge showing "Save $60" for Pro and "Save $349" for Elite.
+- The button on the cards should say "Current Plan" if it's their active plan, or "Upgrade to [Plan Name]" if it's a higher tier.
+
+Please provide the complete code for both the config file and the React component in a modern, modular format.
