@@ -7,7 +7,7 @@ import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import WebSocket from "ws";
 import webpush from "web-push";
-import { fetchInsiderData, startInsiderRefresh } from "./insider";
+import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./insider";
 
 // ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
 const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
@@ -1773,11 +1773,23 @@ export async function registerRoutes(
   });
 
   // ── INSIDER TRADING FEED ────────────────────────────────────────────────────
+  app.get("/api/insider/status", (_req, res) => {
+    res.json(getInsiderScanStatus());
+  });
+
   app.get("/api/insider", async (_req, res) => {
     try {
       const data = await fetchInsiderData();
-      // loading=true means the initial scan is still running (empty cache)
-      res.json({ trades: data, loading: data.length === 0, fetchedAt: Date.now() });
+      const status = getInsiderScanStatus();
+      res.json({
+        trades: data,
+        loading: data.length === 0 && status.scanning,
+        scanning: status.scanning,
+        scanPhase: status.phase,
+        scanDone: status.done,
+        scanTotal: status.total,
+        fetchedAt: Date.now(),
+      });
     } catch (e: any) {
       console.error("[insider] route error:", e.message);
       res.status(500).json({ trades: [], loading: false, fetchedAt: Date.now(), error: e.message });

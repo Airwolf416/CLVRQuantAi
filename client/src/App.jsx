@@ -15,6 +15,7 @@ import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import InsiderTab from "./tabs/InsiderTab";
 import AIQuantTab from "./tabs/AITab";
+import PricingModal from "./components/PricingModal.jsx";
 import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
@@ -941,6 +942,7 @@ function Dashboard({user,setUser}){
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
   const [showQRScanner,setShowQRScanner]=useState(false);
   const [showUpgrade,setShowUpgrade]=useState(false);
+  const [showPricingModal,setShowPricingModal]=useState(false);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
   const [showTour,setShowTour]=useState(false);
   // Auto-show tour on first-ever login (localStorage-gated; any dismissal sets the key)
@@ -2011,7 +2013,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
   const panel={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,overflow:"hidden",marginBottom:10};
   const ph={display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",borderBottom:`1px solid ${C.border}`,background:"rgba(201,168,76,.03)"};
-  const onUpgrade=useCallback(()=>setShowUpgrade(true),[]);
+  const onUpgrade=useCallback(()=>setShowPricingModal(true),[]);
 
 
 
@@ -2313,6 +2315,17 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
       <SquawkBox signals={liveSignals} soundEnabled={soundEnabled} isPro={isPro} muted={squawkMuted} onToggle={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})}/>
       {tradeModalSig&&<TradeConfirmationModal sig={tradeModalSig} currentPrice={(cryptoPrices[tradeModalSig.token]||{}).price} masterScore={tradeModalSig.masterScore||50} riskOn={tradeModalSig.riskOn||50} onApprove={()=>{setToast(`Trade approved: ${tradeModalSig.token} ${tradeModalSig.dir}`);setTradeModalSig(null);}} onCancel={()=>setTradeModalSig(null)} C={C}/>}
+
+      <PricingModal
+        isOpen={showPricingModal}
+        onClose={()=>setShowPricingModal(false)}
+        userTier={isPro?"pro":"free"}
+        onUpgrade={async(tierId,billing)=>{
+          const price=billing==="yearly"?stripePrices.yearly:stripePrices.monthly;
+          if(price?.price_id){await handleCheckout(price.price_id);}
+          else{setShowPricingModal(false);setShowUpgrade(true);}
+        }}
+      />
 
       {showUpgrade&&<div style={{position:"fixed",inset:0,zIndex:300,background:"rgba(0,0,0,.85)",backdropFilter:"blur(12px)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowUpgrade(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,maxWidth:420,width:"100%",maxHeight:"90vh",overflowY:"auto",position:"relative"}}>

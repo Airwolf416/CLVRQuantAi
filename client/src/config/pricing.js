@@ -1,0 +1,74 @@
+export const TIERS = {
+  free: {
+    id: "free",
+    name: "Free",
+    tagline: "Start exploring markets",
+    monthlyPrice: 0,
+    yearlyPrice: 0,
+    yearlySavings: null,
+    color: "#6b7a99",
+    borderColor: "#1a2235",
+    features: [
+      { label: "Basic crypto & equities data",   locked: false },
+      { label: "Macro Calendar (view only)",      locked: false },
+      { label: "QuantBrain AI",                   locked: true,  note: "Locked" },
+      { label: "AI Quant Engine",                 locked: true,  note: "Locked" },
+      { label: "Live signals & anomaly alerts",   locked: true,  note: "Locked" },
+      { label: "Full news & sentiment feed",      locked: true,  note: "Locked" },
+      { label: "SEC Insider Flow",                locked: true,  note: "Elite only" },
+      { label: "Basket Analysis (3+ assets)",     locked: true,  note: "Elite only" },
+    ],
+  },
+  pro: {
+    id: "pro",
+    name: "CLVR Pro",
+    tagline: "The Retail Advantage",
+    monthlyPrice: 29.99,
+    yearlyPrice: 299.00,
+    yearlySavings: 60,
+    stripePriceMonthly: "price_pro_monthly",
+    stripePriceYearly:  "price_pro_yearly",
+    color: "#d4af37",
+    borderColor: "rgba(212,175,55,0.45)",
+    badge: null,
+    features: [
+      { label: "Crypto & Equities markets",              locked: false },
+      { label: "QuantBrain AI · 30 requests/day",        locked: false },
+      { label: "AI Quant Engine (PERP & SPOT)",           locked: false },
+      { label: "Live anomaly signals & toast alerts",    locked: false },
+      { label: "Full Twitter / Stocktwits sentiment",    locked: false },
+      { label: "Full Macro Calendar",                    locked: false },
+      { label: "SEC Insider Flow",                       locked: true,  note: "Elite only" },
+      { label: "Basket Analysis (3+ assets)",            locked: true,  note: "Elite only" },
+    ],
+  },
+  elite: {
+    id: "elite",
+    name: "CLVR Elite",
+    tagline: "The Institutional Edge",
+    monthlyPrice: 129.00,
+    yearlyPrice: 1199.00,
+    yearlySavings: 349,
+    stripePriceMonthly: "price_elite_monthly",
+    stripePriceYearly:  "price_elite_yearly",
+    color: "#00e5ff",
+    borderColor: "rgba(0,229,255,0.55)",
+    badge: "RECOMMENDED",
+    features: [
+      { label: "All Pro markets + Forex & Commodities", locked: false, elite: true },
+      { label: "QuantBrain AI · Unlimited requests",    locked: false, elite: true },
+      { label: "AI Quant Engine — full access",         locked: false, elite: true },
+      { label: "SEC Insider Flow · Whale tracking",     locked: false, elite: true, tag: "ELITE EXCLUSIVE" },
+      { label: "Basket Analysis (3+ assets)",           locked: false, elite: true, tag: "ELITE EXCLUSIVE" },
+      { label: "Political Alpha · Deep news correlation",locked: false, elite: true, tag: "ELITE EXCLUSIVE" },
+      { label: "Custom SMS & browser price alerts",     locked: false, elite: true },
+      { label: "Funding rate flip alerts",              locked: false, elite: true },
+    ],
+  },
+};
+
+export const TIER_ORDER = ["free", "pro", "elite"];
+
+export function canAccess(userTier, requiredTier) {
+  return TIER_ORDER.indexOf(userTier) >= TIER_ORDER.indexOf(requiredTier);
+}

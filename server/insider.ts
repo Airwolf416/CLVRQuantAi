@@ -8,6 +8,7 @@
 let insiderCache: { data: InsiderTrade[]; ts: number } | null = null;
 const CACHE_TTL = 20 * 60 * 1000;
 let scanInProgress = false;
+let scanProgress = { done: 0, total: 0, phase: "" };
 
 export interface InsiderTrade {
   id: string;
@@ -54,7 +55,7 @@ const WATCHLIST: { ticker: string; cik: string }[] = [
   { ticker: "BA",    cik: "0000012927" }, { ticker: "LMT",   cik: "0000936468" },
   { ticker: "PFE",   cik: "0000078003" }, { ticker: "JNJ",   cik: "0000200406" },
   { ticker: "MRNA",  cik: "0001682852" }, { ticker: "BNTX",  cik: "0001776985" },
-  { ticker: "ABBV",  cik: "0001551152" }, { ticker: "NVO",   cik: "0001065280" },
+  { ticker: "ABBV",  cik: "0001551152" }, { ticker: "BMY",   cik: "0000014272" },
   { ticker: "V",     cik: "0001403161" }, { ticker: "MA",    cik: "0001141391" },
   { ticker: "PYPL",  cik: "0001633917" }, { ticker: "AAON",  cik: "0000824142" },
   { ticker: "SOUN",  cik: "0001840292" }, { ticker: "BBAI",  cik: "0001820175" },
@@ -201,12 +202,13 @@ async function fetchCompanyForm4s(
 async function runEdgarScan(): Promise<void> {
   if (scanInProgress) return;
   scanInProgress = true;
+  scanProgress = { done: 0, total: WATCHLIST.length, phase: "submissions" };
   const startMs = Date.now();
   try {
-    const sevenAgo = new Date(Date.now() - 14 * 86400000).toISOString().split("T")[0]; // 14-day window
+    const cutoff = new Date(Date.now() - 14 * 86400000).toISOString().split("T")[0];
 
-    // Step 1: Fetch submissions for all watchlist companies (parallel, 8 at a time)
-    const CONCURRENCY = 8;
+    // Step 1: Fetch submissions for all watchlist companies (parallel, 6 at a time)
+    const CONCURRENCY = 6;
     type FilingInfo = { ticker: string; adsh: string; filerCik: string; filingDate: string };
     const allFilings: FilingInfo[] = [];
 
@@ -214,22 +216,26 @@ async function runEdgarScan(): Promise<void> {
       const batch = WATCHLIST.slice(i, i + CONCURRENCY);
       const batchResults = await Promise.all(
         batch.map(async ({ ticker, cik }) => {
-          const filings = await fetchCompanyForm4s(ticker, cik, sevenAgo);
+          const filings = await fetchCompanyForm4s(ticker, cik, cutoff);
           return filings.map(f => ({ ticker, ...f }));
         })
       );
       batchResults.forEach(r => allFilings.push(...r));
-      await sleep(300);
+      scanProgress.done = Math.min(i + CONCURRENCY, WATCHLIST.length);
+      await sleep(250);
     }
 
     console.log(`[insider] ${allFilings.length} recent Form 4s found for watchlist companies; fetching XMLs...`);
 
-    // Step 2: Download and parse Form 4 XMLs sequentially (1s gap = SEC-compliant)
+    // Step 2: Download and parse Form 4 XMLs sequentially (800ms gap = SEC-compliant)
+    scanProgress = { done: 0, total: allFilings.length, phase: "filings" };
     const allTrades: InsiderTrade[] = [];
-    for (const f of allFilings) {
+    for (let i = 0; i < allFilings.length; i++) {
+      const f = allFilings[i];
       const trades = await fetchForm4Xml(f.filerCik, f.adsh, f.filingDate, f.ticker);
       allTrades.push(...trades);
-      await sleep(1000);
+      scanProgress.done = i + 1;
+      await sleep(800);
     }
 
     // Deduplicate
@@ -266,6 +272,18 @@ export async function fetchInsiderData(): Promise<InsiderTrade[]> {
     runEdgarScan().catch(e => console.error("[insider] bg scan error:", e.message));
   }
   return insiderCache?.data ?? [];
+}
+
+export function getInsiderScanStatus() {
+  return {
+    scanning: scanInProgress,
+    phase: scanProgress.phase,
+    done: scanProgress.done,
+    total: scanProgress.total,
+    hasCachedData: (insiderCache?.data?.length ?? 0) > 0,
+    cachedCount: insiderCache?.data?.length ?? 0,
+    cachedAt: insiderCache?.ts ?? null,
+  };
 }
 
 // Called once at server startup to warm the cache
