@@ -73,7 +73,8 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
   const [filterMin, setFilterMin]   = useState(25000);
   const [lastRefresh, setLastRefresh] = useState(null);
 
-  const [scanLoading, setScanLoading] = useState(false); // EDGAR scan still running server-side
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanStatus, setScanStatus]   = useState(null); // { phase, done, total }
 
   const loadInsider = useCallback(async () => {
     setLoading(true);
@@ -83,7 +84,9 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setTrades(data.trades || []);
-      setScanLoading(data.loading || false); // server says scan in progress
+      const stillScanning = data.scanning || (data.loading && (data.trades || []).length === 0);
+      setScanLoading(stillScanning);
+      if (data.scanPhase) setScanStatus({ phase: data.scanPhase, done: data.scanDone || 0, total: data.scanTotal || 0 });
       setLastFetch(data.fetchedAt || Date.now());
       setLastRefresh(new Date());
     } catch (e) {
@@ -93,6 +96,24 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
     }
   }, []);
 
+  // Poll scan status every 8s while scan is in progress
+  useEffect(() => {
+    if (!isPro || !scanLoading) return;
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch("/api/insider/status", { credentials: "include" });
+        if (!r.ok) return;
+        const s = await r.json();
+        setScanStatus({ phase: s.phase, done: s.done, total: s.total });
+        if (!s.scanning) {
+          setScanLoading(false);
+          loadInsider();
+        }
+      } catch {}
+    }, 8000);
+    return () => clearInterval(poll);
+  }, [isPro, scanLoading, loadInsider]);
+
   useEffect(() => {
     if (isPro) {
       loadInsider();
@@ -100,13 +121,6 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       return () => clearInterval(interval);
     }
   }, [isPro, loadInsider]);
-
-  // Auto-retry every 20s if EDGAR scan is still warming
-  useEffect(() => {
-    if (!isPro || !scanLoading) return;
-    const t = setTimeout(() => loadInsider(), 60000);
-    return () => clearTimeout(t);
-  }, [isPro, scanLoading, loadInsider]);
 
   const filtered = trades.filter(t => (t.value || 0) >= filterMin);
   const grouped  = groupByTicker(filtered);
@@ -199,12 +213,36 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       </div>
 
       {(loading || scanLoading) && trades.length === 0 && (
-        <div style={{ textAlign: "center", padding: 40, fontFamily: MONO, fontSize: 11, color: C.muted }}>
-          <div style={{ fontSize: 24, marginBottom: 12 }}>⟳</div>
-          Scanning SEC EDGAR Form 4 filings across 56 companies...
-          <div style={{ fontSize: 9, color: C.muted, marginTop: 6, opacity: 0.7 }}>First load takes ~4 min · SEC rate-limited</div>
+        <div style={{ textAlign: "center", padding: 40, fontFamily: MONO, color: C.muted }}>
+          <div style={{ fontSize: 28, marginBottom: 14, animation: "spin 2s linear infinite", display: "inline-block" }}>⟳</div>
+          <div style={{ fontSize: 12, color: C.muted2, marginBottom: 6 }}>
+            {scanStatus?.phase === "submissions"
+              ? `Scanning ${scanStatus.total} companies — checking Form 4 submissions...`
+              : scanStatus?.phase === "filings"
+              ? `Reading Form 4 XMLs — ${scanStatus.done} of ${scanStatus.total} filings parsed...`
+              : "Scanning SEC EDGAR Form 4 filings..."}
+          </div>
+          {scanStatus && scanStatus.total > 0 && (
+            <div style={{ maxWidth: 240, margin: "10px auto" }}>
+              <div style={{ height: 3, background: C.border, borderRadius: 3, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${Math.round((scanStatus.done / scanStatus.total) * 100)}%`,
+                  background: `linear-gradient(90deg, ${C.gold}, ${C.gold2})`,
+                  borderRadius: 3, transition: "width 1s ease",
+                }}/>
+              </div>
+              <div style={{ fontSize: 8, color: C.muted, marginTop: 5 }}>
+                {scanStatus.done}/{scanStatus.total} · {Math.round((scanStatus.done / scanStatus.total) * 100)}%
+              </div>
+            </div>
+          )}
+          <div style={{ fontSize: 8, color: C.muted, marginTop: 8, opacity: 0.6 }}>
+            SEC EDGAR rate-limited · First load takes 2-4 min · Updates auto-refresh every 20 min
+          </div>
         </div>
       )}
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       {!loading && !scanLoading && filtered.length === 0 && !error && (
         <div style={{ textAlign: "center", padding: 40, fontFamily: MONO, fontSize: 10, color: C.muted }}>

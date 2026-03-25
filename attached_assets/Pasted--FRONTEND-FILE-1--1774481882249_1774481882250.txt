@@ -1,0 +1,351 @@
+// ============================================================================
+// FRONTEND FILE 1: src/components/MarketClock.jsx
+// Handles the 60-second dropdown and the "Silent Unlock" so the bell rings on iOS/Chrome
+// ============================================================================
+import React, { useState, useEffect, useRef } from 'react';
+
+const MarketClock = () => {
+  const [countdown, setCountdown] = useState(null);
+  const bellPlayed = useRef(false);
+  const bellAudio = useRef(typeof Audio !== "undefined" ? new Audio('/bell.mp3') : null);
+
+  useEffect(() => {
+    // SILENT UNLOCK: Forces browser to authorize audio on the first tap/click
+    const unlockAudio = () => {
+      if (bellAudio.current) {
+        bellAudio.current.volume = 0; 
+        bellAudio.current.play().then(() => {
+          bellAudio.current.pause();
+          bellAudio.current.currentTime = 0; 
+          bellAudio.current.volume = 1.0;    
+        }).catch(e => console.log("Audio unlock pending..."));
+      }
+      document.removeEventListener('click', unlockAudio);
+      document.removeEventListener('touchstart', unlockAudio);
+    };
+
+    document.addEventListener('click', unlockAudio);
+    document.addEventListener('touchstart', unlockAudio);
+
+    const checkTime = () => {
+      const now = new Date(new Date().toLocaleString("en-US", {timeZone: "America/New_York"}));
+      const day = now.getDay();
+      if (day === 0 || day === 6) return;
+
+      const hours = now.getHours();
+      const minutes = now.getMinutes();
+      const seconds = now.getSeconds();
+      const currentTimeInSeconds = (hours * 3600) + (minutes * 60) + seconds;
+
+      const openTime = (9 * 3600) + (30 * 60); // 9:30:00 AM ET
+      const closeTime = 16 * 3600;             // 4:00:00 PM ET
+
+      let targetTime = null;
+      let eventType = '';
+
+      if (currentTimeInSeconds < openTime) {
+        targetTime = openTime;
+        eventType = 'OPEN';
+      } else if (currentTimeInSeconds < closeTime) {
+        targetTime = closeTime;
+        eventType = 'CLOSE';
+      } else {
+        bellPlayed.current = false; 
+        return;
+      }
+
+      const diff = targetTime - currentTimeInSeconds;
+
+      if (diff <= 60 && diff > 0) {
+        setCountdown({ seconds: diff, type: eventType });
+        bellPlayed.current = false;
+      } else if (diff === 0 && !bellPlayed.current) {
+        setCountdown(null);
+        if (bellAudio.current) {
+          bellAudio.current.play().catch(e => console.log("Autoplay blocked.", e));
+        }
+        bellPlayed.current = true;
+      } else {
+        setCountdown(null);
+      }
+    };
+
+    const interval = setInterval(checkTime, 1000);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('click', unlockAudio);
+      document.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
+
+  if (!countdown) return null;
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, width: '100%', padding: '12px',
+      background: 'linear-gradient(135deg, #d4af37, #f5d062)', color: '#060a13',
+      fontWeight: '900', textAlign: 'center', fontFamily: "'IBM Plex Mono', monospace",
+      boxShadow: '0 4px 20px rgba(212,175,55,0.4)', zIndex: 9999,
+      animation: 'slideDown 0.4s ease-out'
+    }}>
+      🔔 WALL STREET WILL {countdown.type} IN {countdown.seconds} SECONDS 🔔
+      <style>{`@keyframes slideDown { from { transform: translateY(-100%); } to { transform: translateY(0); } }`}</style>
+    </div>
+  );
+};
+
+export default MarketClock;
+
+// ============================================================================
+// FRONTEND FILE 2: src/components/AITab.tsx
+// The premium dark-mode UI that connects securely to your backend
+// ============================================================================
+import React, { useState } from "react";
+import { fmtPrice } from "../store/MarketDataStore"; 
+
+const mono  = "'IBM Plex Mono', monospace";
+const serif = "'Playfair Display', serif";
+
+const RISK_PROFILES = {
+  low: { id: "low", label: "LOW RISK", color: "#4ade80", slMultiplier: 2.5, leverage: [1, 2], riskPct: 1, minWinProb: 85 },
+  mid: { id: "mid", label: "MID RISK", color: "#f59e0b", slMultiplier: 1.8, leverage: [3, 5], riskPct: 2, minWinProb: 80 },
+  high: { id: "high", label: "HIGH RISK", color: "#ff2d55", slMultiplier: 1.2, leverage: [5, 10], riskPct: 4, minWinProb: 75 },
+};
+
+const TIMEFRAMES = {
+  today: { id: "today", label: "Today", interval: "15m", count: 200 },
+  mid:   { id: "mid", label: "Mid-Term (1-4 wks)", interval: "4h", count: 300 },
+  long:  { id: "long", label: "Long-Term (1-3 mo)", interval: "1d", count: 200 },
+};
+
+const ASSETS = ["BTC", "ETH", "SOL", "TRUMP", "HYPE", "XAU", "WTI", "EURUSD", "TSLA", "NVDA"];
+
+export default function AITab() {
+  const [asset, setAsset] = useState("BTC");
+  const [market, setMarket] = useState("PERP");
+  const [query, setQuery] = useState("");
+  const [risk, setRisk] = useState("mid");
+  const [tf, setTf] = useState("today");
+  
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const handleAnalyze = async () => {
+    if (!asset) return;
+    setLoading(true); setError(null); setResult(null);
+
+    try {
+      const response = await fetch("/api/quant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: asset, marketType: market, userQuery: query, riskId: risk, timeframeId: tf }),
+      });
+
+      if (!response.ok) throw new Error(`Analysis rejected: ${await response.text()}`);
+      const data = await response.json();
+
+      if (data.rr === undefined && data.tp1?.price && data.stopLoss?.price && data.entry?.price) {
+        const riskAmount = Math.abs(data.entry.price - data.stopLoss.price);
+        const rewardAmount = Math.abs(data.tp1.price - data.entry.price);
+        data.rr = riskAmount > 0.000001 ? rewardAmount / riskAmount : 0;
+      }
+      setResult(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sigCol = result?.signal?.includes("LONG") ? "#00ff88" : result?.signal?.includes("SHORT") ? "#ff2d55" : "#f59e0b";
+
+  return (
+    <div style={{ backgroundColor: "#060a13", minHeight: "100vh", padding: "20px", fontFamily: mono, color: "#e8e8f0" }}>
+      {/* HEADER */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1a2235", paddingBottom: "15px", marginBottom: "20px" }}>
+        <h2 style={{ margin: 0, fontSize: "22px", fontFamily: serif, color: "#e8e8f0" }}>CLVRQuant AI</h2>
+        <div style={{ border: "1px solid #d4af37", color: "#d4af37", padding: "5px 12px", borderRadius: "4px", fontSize: "12px", fontWeight: "bold" }}>CLVR AI · SECURE</div>
+      </div>
+
+      {/* ASSET PILLS */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginBottom: "20px" }}>
+        {ASSETS.map(a => (
+          <button key={a} onClick={() => setAsset(a)} style={{ background: "transparent", border: `1px solid ${asset === a ? "#d4af37" : "#1a2235"}`, color: asset === a ? "#d4af37" : "#6b7a99", padding: "8px 16px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>{a} ✦</button>
+        ))}
+      </div>
+
+      {/* PERP / SPOT TOGGLES */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px", marginBottom: "20px" }}>
+        <button onClick={() => setMarket("PERP")} style={{ background: market === "PERP" ? "rgba(0, 229, 255, 0.1)" : "transparent", border: `1px solid ${market === "PERP" ? "#00e5ff" : "#1a2235"}`, color: market === "PERP" ? "#00e5ff" : "#6b7a99", padding: "12px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>📊 PERP Markets</button>
+        <button onClick={() => setMarket("SPOT")} style={{ background: market === "SPOT" ? "rgba(255, 255, 255, 0.05)" : "transparent", border: `1px solid ${market === "SPOT" ? "#fff" : "#1a2235"}`, color: market === "SPOT" ? "#fff" : "#6b7a99", padding: "12px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>📈 SPOT Markets</button>
+      </div>
+
+      <textarea placeholder='"Long BTC now?"' value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: "100%", background: "#0d1321", border: "1px solid #1a2235", borderRadius: "8px", padding: "15px", color: "#e8e8f0", fontFamily: mono, fontSize: "16px", height: "100px", resize: "none", marginBottom: "20px" }} />
+
+      {/* RISK PROFILES */}
+      <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+        {Object.entries(RISK_PROFILES).map(([key, r]) => (
+          <button key={key} onClick={() => setRisk(key)} style={{ flex: 1, background: risk === key ? `${r.color}22` : "transparent", border: `1px solid ${risk === key ? r.color : "#1a2235"}`, color: risk === key ? r.color : "#6b7a99", padding: "10px", borderRadius: "6px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" }}>{r.label}</button>
+        ))}
+      </div>
+
+      {/* TIMEFRAMES */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "20px" }}>
+        {Object.entries(TIMEFRAMES).map(([key, t]) => (
+          <button key={key} onClick={() => setTf(key)} style={{ background: tf === key ? "rgba(0, 255, 136, 0.1)" : "transparent", border: `1px solid ${tf === key ? "#00ff88" : "#1a2235"}`, color: tf === key ? "#00ff88" : "#6b7a99", padding: "12px", borderRadius: "6px", fontSize: "11px", cursor: "pointer" }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* ANALYZE BUTTON */}
+      <button onClick={handleAnalyze} disabled={loading} style={{ width: "100%", background: loading ? "#1a2235" : "#0d1321", border: "1px solid #d4af37", color: loading ? "#6b7a99" : "#d4af37", padding: "15px", borderRadius: "8px", fontSize: "18px", fontFamily: serif, fontStyle: "italic", cursor: loading ? "not-allowed" : "pointer", marginBottom: "20px" }}>
+        {loading ? "Routing to Quant Engine..." : "Execute Analysis →"}
+      </button>
+
+      {error && <div style={{ backgroundColor: "rgba(255, 45, 85, 0.1)", border: "1px solid #ff2d55", color: "#ff2d55", padding: "12px", borderRadius: "8px", marginBottom: "20px" }}>⚠️ {error}</div>}
+
+      {/* RESULTS CARD */}
+      {result && !loading && !error && (
+        <div style={{ background: "#0d1321", border: `1px solid ${sigCol}55`, borderRadius: "12px", padding: "20px", animation: "fadeIn 0.5s ease" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${sigCol}33`, paddingBottom: "15px", marginBottom: "15px" }}>
+            <div>
+              <div style={{ fontSize: "10px", color: "#6b7a99" }}>{RISK_PROFILES[risk].label} · {TIMEFRAMES[tf].label}</div>
+              <div style={{ fontSize: "24px", fontWeight: "bold", color: sigCol, marginTop: "5px" }}>{result.signal.replace(/_/g, " ")}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: "10px", color: "#6b7a99" }}>WIN PROBABILITY</div>
+              <div style={{ fontSize: "28px", fontWeight: "bold", color: sigCol }}>{result.win_probability}%</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "15px" }}>
+            <div style={{ background: "#1a2235", padding: "10px", borderRadius: "6px" }}><div style={{ fontSize: "10px", color: "#a0aec0" }}>ENTRY</div><div style={{ fontSize: "16px", color: "#d4af37", fontWeight: "bold" }}>${fmtPrice(result.entry?.price)}</div></div>
+            <div style={{ background: "#1a2235", padding: "10px", borderRadius: "6px" }}><div style={{ fontSize: "10px", color: "#a0aec0" }}>TAKE PROFIT (R:R {result.rr?.toFixed(2)})</div><div style={{ fontSize: "16px", color: "#00ff88", fontWeight: "bold" }}>${fmtPrice(result.tp1?.price)}</div></div>
+            <div style={{ background: "#1a2235", padding: "10px", borderRadius: "6px" }}><div style={{ fontSize: "10px", color: "#a0aec0" }}>STOP LOSS</div><div style={{ fontSize: "16px", color: "#ff2d55", fontWeight: "bold" }}>${fmtPrice(result.stopLoss?.price)}</div></div>
+          </div>
+          <div style={{ background: "#1a2235", padding: "15px", borderRadius: "8px", marginBottom: "15px" }}><div style={{ fontSize: "12px", color: "#d4af37", fontWeight: "bold", marginBottom: "8px" }}>QUANT RATIONALE</div><div style={{ fontSize: "13px", color: "#e8e8f0", lineHeight: "1.6" }}>{result.quant_rationale}</div></div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <div style={{ flex: 1, background: "rgba(255,45,85,0.1)", border: "1px solid rgba(255,45,85,0.3)", padding: "10px", borderRadius: "6px", fontSize: "11px", color: "#ff2d55" }}><strong>INVALIDATION:</strong><br/>{result.invalidation}</div>
+            <div style={{ flex: 1, background: "rgba(0,229,255,0.1)", border: "1px solid rgba(0,229,255,0.3)", padding: "10px", borderRadius: "6px", fontSize: "11px", color: "#00e5ff" }}><strong>HOLD TIME:</strong><br/>{result.hold_duration} · Max {result.leverage?.recommended || 1}x Lev</div>
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+    </div>
+  );
+}
+
+// ============================================================================
+// BACKEND FILE 3: server/routes/quant.js
+// Handles AI API calls securely & fetches cached top trades
+// ============================================================================
+const express = require('express');
+const router = express.Router();
+const db = require('../db'); // Your Postgres connection
+// const { fetchUniversalCandles, computeIndicators } = require('../utils/quantLogic'); // Ensure you extract the fetch logic here
+
+router.post('/quant', async (req, res) => {
+  try {
+    const { ticker, marketType, userQuery, riskId, timeframeId } = req.body;
+    // ... (Data validation, Finnhub/Hyperliquid fetch, and Indicator math goes here)
+    
+    // Anthropic API Call
+    const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ 
+        model: "claude-3-5-sonnet-20240620", 
+        max_tokens: 1500, 
+        system: "You are an elite Quant. Return JSON...", // System prompt
+        messages: [{ role: "user", content: `ASSET: ${ticker}` }] 
+      }),
+    });
+
+    const data = await anthropicResponse.json();
+    const cleanJson = data.content[0].text.replace(/```json|```/g, "").trim();
+    res.json(JSON.parse(cleanJson));
+  } catch (err) {
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
+
+router.get('/top-trades', async (req, res) => {
+  try {
+    const result = await db.query(`SELECT trades_json, generated_at FROM top_trades_cache ORDER BY generated_at DESC LIMIT 1`);
+    if (result.rows.length === 0) return res.status(404).json({ error: "No trades yet." });
+    res.json({ generated_at: result.rows[0].generated_at, trades: result.rows[0].trades_json });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch top trades." });
+  }
+});
+
+module.exports = router;
+
+// ============================================================================
+// BACKEND FILE 4: server/jobs/tradeGenerator.js
+// Cron Job that creates the "Single Source of Truth" every hour
+// ============================================================================
+const cron = require('node-cron');
+const db = require('../db'); 
+// const { runQuantAnalysis } = require('../utils/quantLogic');
+
+async function generateTopTrades() {
+  console.log("⏳ [CRON] Waking up QuantBrain to generate Top Trades...");
+  let validTrades = [];
+  const SCAN_BASKET = ["BTC", "ETH", "SOL", "TAO", "NVDA", "TSLA", "XAU", "WTI"];
+
+  for (const ticker of SCAN_BASKET) {
+     // Fetch data & ask Anthropic for trade...
+     // if (analysis.signal !== "NEUTRAL" && analysis.win_probability >= 75) { validTrades.push(analysis); }
+  }
+
+  validTrades.sort((a, b) => b.win_probability - a.win_probability);
+  const top4 = validTrades.slice(0, 4);
+
+  if (top4.length > 0) {
+    await db.query(`INSERT INTO top_trades_cache (trades_json, generated_at) VALUES ($1, CURRENT_TIMESTAMP)`, [JSON.stringify(top4)]);
+  }
+}
+
+cron.schedule('0 * * * *', () => generateTopTrades());
+module.exports = { generateTopTrades };
+
+// ============================================================================
+// BACKEND FILE 5: server/routes/webhook.js
+// Zero-touch database upgrades via Stripe Webhooks
+// ============================================================================
+const express = require('express');
+const router = express.Router();
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const db = require('../db'); 
+
+// CRITICAL: Must use express.raw for Stripe signatures
+router.post('/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  const signature = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, signature, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const userId = session.client_reference_id; 
+    let newTier = session.metadata.plan_type === 'elite' ? 'elite' : 'pro';
+
+    await db.query(
+      `UPDATE users SET subscription_status = $1, stripe_customer_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+      [newTier, session.customer, userId]
+    );
+  }
+
+  if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object;
+    await db.query(`UPDATE users SET subscription_status = 'free' WHERE stripe_customer_id = $1`, [subscription.customer]);
+  }
+
+  res.json({ received: true });
+});
+
+module.exports = router;
