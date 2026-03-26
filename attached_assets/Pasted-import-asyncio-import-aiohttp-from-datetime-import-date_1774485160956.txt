@@ -1,0 +1,121 @@
+import asyncio
+import aiohttp
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple
+
+class MacroSentimentWorker:
+    def __init__(self):
+        self.fng_api_url = "https://api.alternative.me/fng/"
+        # In a production app, you would use a real API like Financial Modeling Prep here
+        self.calendar_api_url = "https://api.mock-economic-calendar.com/events" 
+        
+        # Risk thresholds
+        self.extreme_fear_threshold = 25
+        self.extreme_greed_threshold = 75
+
+    async def fetch_fear_and_greed(self, session: aiohttp.ClientSession) -> Tuple[int, str]:
+        """
+        Fetches the current Crypto Fear & Greed Index asynchronously.
+        """
+        try:
+            async with session.get(self.fng_api_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    value = int(data['data'][0]['value'])
+                    classification = data['data'][0]['value_classification']
+                    return value, classification
+                else:
+                    print(f"⚠️ F&G API Error: Status {response.status}")
+                    return 50, "Neutral" # Default to neutral on error
+        except Exception as e:
+            print(f"⚠️ F&G Network Error: {e}")
+            return 50, "Neutral"
+
+    async def fetch_macro_calendar(self) -> List[Dict]:
+        """
+        Simulates fetching the week's economic calendar.
+        Identifies high-impact events like CPI or FOMC.
+        """
+        # Simulated data: Imagine we fetched this from a real API
+        now = datetime.utcnow()
+        mock_events = [
+            {
+                "name": "Core CPI (MoM)",
+                "impact": "HIGH",
+                # Simulating an event happening in 1.5 hours
+                "time": (now + timedelta(hours=1.5)).isoformat() 
+            },
+            {
+                "name": "Initial Jobless Claims",
+                "impact": "MEDIUM",
+                "time": (now + timedelta(days=1)).isoformat()
+            }
+        ]
+        return mock_events
+
+    def evaluate_kill_switch(self, events: List[Dict]) -> bool:
+        """
+        Calculates if we are within the 'Danger Zone' (2 hours) of a HIGH impact event.
+        """
+        now = datetime.utcnow()
+        
+        for event in events:
+            if event['impact'] == 'HIGH':
+                event_time = datetime.fromisoformat(event['time'])
+                time_difference = event_time - now
+                
+                # If the event is happening within the next 2 hours
+                if timedelta(hours=0) < time_difference < timedelta(hours=2):
+                    print(f"🛑 KILL SWITCH ACTIVATED: '{event['name']}' in {time_difference}. Halting trading.")
+                    return True # True means Kill Switch is ON (do not trade)
+                    
+        return False
+
+    async def get_macro_state(self) -> Dict:
+        """
+        The main pipeline method that grabs sentiment and calendar data concurrently.
+        """
+        async with aiohttp.ClientSession() as session:
+            # Run fetches concurrently
+            fng_task = self.fetch_fear_and_greed(session)
+            calendar_task = self.fetch_macro_calendar() # Assuming no session needed for the mock
+            
+            # Await both results
+            (fng_value, fng_class), events = await asyncio.gather(fng_task, calendar_task)
+            
+            # Process Fear & Greed signals
+            sentiment_signal = None
+            if fng_value <= self.extreme_fear_threshold:
+                sentiment_signal = "sentiment_extreme_fear"
+            elif fng_value >= self.extreme_greed_threshold:
+                sentiment_signal = "sentiment_extreme_greed"
+
+            # Evaluate Kill Switch
+            is_trading_halted = self.evaluate_kill_switch(events)
+
+            return {
+                "fear_and_greed": {
+                    "value": fng_value,
+                    "classification": fng_class,
+                    "signal": sentiment_signal
+                },
+                "macro_halt": is_trading_halted,
+                "upcoming_events": events
+            }
+
+# =======================================================================
+# MOCK EXECUTION
+# =======================================================================
+async def main():
+    worker = MacroSentimentWorker()
+    macro_state = await worker.get_macro_state()
+    
+    print("\n🌍 Macro Environment State:")
+    print(f"Sentiment: {macro_state['fear_and_greed']['value']} ({macro_state['fear_and_greed']['classification']})")
+    print(f"Trading Halted: {macro_state['macro_halt']}")
+    
+    if macro_state['fear_and_greed']['signal']:
+        print(f"🧠 Passing to Brain: ['{macro_state['fear_and_greed']['signal']}']")
+
+if __name__ == "__main__":
+    asyncio.run(main())
