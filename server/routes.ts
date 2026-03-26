@@ -3910,6 +3910,7 @@ Every level must be technically defensible. Return JSON only.`;
   });
 
   app.get("/api/auth/me", async (req, res) => {
+    res.set("Cache-Control", "no-store");
     const userId = (req.session as any)?.userId;
     if (!userId) return res.json({ user: null });
     try {
