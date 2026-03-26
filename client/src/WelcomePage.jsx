@@ -81,6 +81,7 @@ export default function WelcomePage({ onEnter }) {
   const [showLegal, setShowLegal] = useState(false);
   const [showSpam, setShowSpam] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [signedUpUser, setSignedUpUser] = useState(null);
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
@@ -131,7 +132,7 @@ export default function WelcomePage({ onEnter }) {
         .catch(() => { setVerifyError("Network error. Please try again."); setVerifyState("error"); });
       return;
     }
-    fetch("/api/auth/me").then(r => r.json()).then(data => {
+    fetch("/api/auth/me", { cache: "no-store" }).then(r => r.json()).then(data => {
       if (data.user) onEnter(data.user);
       else setCheckingSession(false);
     }).catch(() => setCheckingSession(false));
@@ -204,6 +205,7 @@ export default function WelcomePage({ onEnter }) {
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Signup failed"); setLoading(false); return; }
       setLoading(false);
+      if (data.user) setSignedUpUser(data.user);
       setMode("verify");
     } catch (e) {
       setError("Network error. Please try again.");
@@ -843,7 +845,8 @@ export default function WelcomePage({ onEnter }) {
             {form.dailyEmail && <><br />You're subscribed to the <span style={{ color: C.gold }}>6AM Daily Brief</span>.</>}
           </div>
           <button data-testid="btn-enter-app" onClick={() => {
-            fetch("/api/auth/me").then(r => r.json()).then(data => {
+            if (signedUpUser) { onEnter(signedUpUser); return; }
+            fetch("/api/auth/me?t=" + Date.now(), { cache: "no-store" }).then(r => r.json()).then(data => {
               if (data.user) onEnter(data.user);
               else { setError("Session expired. Please sign in."); setMode("signin"); }
             }).catch(() => { setError("Connection error. Please sign in."); setMode("signin"); });
