@@ -438,7 +438,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
                   <div style={{ fontWeight:700, color:C.gold, fontFamily:SERIF }}>Pro</div>
                   <div style={{ fontSize:11, color:C.muted2, fontFamily:MONO }}>Full AI analysis + all 9 tabs</div>
                 </div>
-                <button data-testid="btn-upgrade-account" onClick={() => setShowUpgrade && setShowUpgrade(true)} style={S.goldBtn}>$29/mo →</button>
+                <button data-testid="btn-upgrade-account" onClick={() => setShowUpgrade && setShowUpgrade(true)} style={S.goldBtn}>View Plans →</button>
               </div>
             </div>
           )}
