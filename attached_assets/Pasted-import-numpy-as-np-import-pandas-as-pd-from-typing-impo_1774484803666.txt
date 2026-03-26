@@ -1,0 +1,140 @@
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Tuple
+
+class MasterTradingBrain:
+    def __init__(self, historical_win_rate: float = 0.50):
+        # 1. Bayesian Baseline
+        self.prior_prob = historical_win_rate 
+        
+        # Historical accuracy of our signals (derived from your future backtesting)
+        # Format: P(Signal triggering | Trade was successful)
+        self.signal_evidence_weights = {
+            'pattern_bull_flag': 0.65,
+            'pattern_head_shoulders': 0.60,
+            'order_flow_whale_buy': 0.75,
+            'order_flow_short_squeeze': 0.80,
+            'sentiment_extreme_fear': 0.68, # Contarian signal
+            'confluence_all_timeframes': 0.72
+        }
+
+    # -------------------------------------------------------------------
+    # MODULE 5: MACRO CALENDAR (The Kill Switch)
+    # -------------------------------------------------------------------
+    def is_macro_environment_safe(self, upcoming_events: List[Dict]) -> bool:
+        """
+        Prevents trading 2 hours before/after major Fed/CPI announcements.
+        Returns False if we should halt trading.
+        """
+        for event in upcoming_events:
+            if event['impact'] == 'HIGH' and event['time_to_event_hours'] < 2:
+                print(f"⚠️ MACRO HALT: High impact event '{event['name']}' imminent.")
+                return False
+        return True
+
+    # -------------------------------------------------------------------
+    # MODULE 6: MULTI-TIMEFRAME CONFLUENCE
+    # -------------------------------------------------------------------
+    def check_timeframe_confluence(self, trends: Dict[str, str]) -> bool:
+        """
+        Requires 15m, 4h, and 1d to point in the same direction.
+        """
+        # Ensure all timeframes match the 1d trend
+        macro_trend = trends.get('1d')
+        is_confluent = all(trend == macro_trend for timeframe, trend in trends.items())
+        
+        if is_confluent:
+            print(f"✅ Confluence Achieved: All timeframes are {macro_trend}")
+        return is_confluent
+
+    # -------------------------------------------------------------------
+    # MODULE 1, 2, 3, 4: BAYESIAN PROBABILITY SCORING
+    # -------------------------------------------------------------------
+    def calculate_trade_probability(self, active_signals: List[str]) -> float:
+        """
+        Updates the probability of a successful trade based on active signals
+        using a Naive Bayes approach.
+        """
+        if not active_signals:
+            return self.prior_prob
+
+        # Calculate Posterior Probability
+        # P(Success | Signals) ∝ P(Success) * Π P(Signal_i | Success)
+        
+        prob_success = self.prior_prob
+        prob_failure = 1 - self.prior_prob
+        
+        for signal in active_signals:
+            if signal in self.signal_evidence_weights:
+                # Weight of evidence for success
+                weight_success = self.signal_evidence_weights[signal]
+                # Assuming symmetric penalty for simplicity in this baseline model
+                weight_failure = 1 - weight_success 
+                
+                prob_success *= weight_success
+                prob_failure *= weight_failure
+
+        # Normalize the probabilities so they sum to 1.0
+        normalized_probability = prob_success / (prob_success + prob_failure)
+        
+        return round(normalized_probability, 4)
+
+    # -------------------------------------------------------------------
+    # THE EXECUTION ENGINE
+    # -------------------------------------------------------------------
+    def evaluate_market_state(self, market_data: Dict) -> Dict:
+        """
+        The master function called every minute by your web app.
+        """
+        print("\n--- Evaluating Market State ---")
+        
+        # 1. Check Macro Calendar Kill Switch
+        if not self.is_macro_environment_safe(market_data.get('macro_events', [])):
+            return {"action": "HOLD", "reason": "Macroeconomic event imminent."}
+
+        # 2. Check Multi-Timeframe Confluence
+        if not self.check_timeframe_confluence(market_data.get('timeframes', {})):
+            return {"action": "HOLD", "reason": "Timeframes are conflicting."}
+
+        # 3. Gather Active Signals (Pattern, Order Flow, Sentiment)
+        active_signals = market_data.get('active_signals', [])
+        
+        # Add confluence as a positive signal if we reached this point
+        active_signals.append('confluence_all_timeframes')
+
+        # 4. Bayesian Scoring
+        confidence_score = self.calculate_trade_probability(active_signals)
+        print(f"🧠 Bayesian Confidence Score: {confidence_score * 100:.2f}%")
+
+        # 5. Execution Logic
+        if confidence_score >= 0.80: # 80% confidence threshold
+            direction = market_data['timeframes']['1d']
+            return {
+                "action": "EXECUTE_TRADE",
+                "direction": direction,
+                "confidence": confidence_score,
+                "signals_used": active_signals
+            }
+        else:
+            return {
+                "action": "HOLD",
+                "reason": f"Confidence too low ({confidence_score * 100:.2f}%)"
+            }
+
+# =======================================================================
+# MOCK EXECUTION (How your web app will use this class)
+# =======================================================================
+if __name__ == "__main__":
+    # Initialize the Brain
+    ai_brain = MasterTradingBrain(historical_win_rate=0.50)
+
+    # Simulated data feed coming from your database/websockets
+    current_market_data = {
+        "timeframes": {"15m": "BULLISH", "4h": "BULLISH", "1d": "BULLISH"},
+        "macro_events": [{"name": "CPI Report", "impact": "HIGH", "time_to_event_hours": 48}],
+        "active_signals": ["pattern_bull_flag", "order_flow_whale_buy"]
+    }
+
+    # Run the evaluation
+    decision = ai_brain.evaluate_market_state(current_market_data)
+    print("\n🚀 FINAL AI DECISION:", decision)
