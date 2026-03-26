@@ -174,7 +174,7 @@ setInterval(() => {
 let finnhubFetchLock: Promise<any> | null = null;
 let stockRefreshRunning = false;
 let hlRefreshRunning = false;
-const hlData: Record<string, { funding: number; oi: number; perpPrice: number; volume: number }> = {};
+const hlData: Record<string, { funding: number; oi: number; perpPrice: number; volume: number; dayChg: number }> = {};
 
 const priceHistory: Record<string, { price: number; ts: number }[]> = {};
 const liveSignals: any[] = [];
@@ -341,7 +341,7 @@ async function checkAndGrantReferralReward(userId: string) {
       const { client: resend, fromEmail } = await getUncachableResendClient();
       await resend.emails.send({
         from: fromEmail, to: referrer.email,
-        reply_to: "MikeClaver@CLVRQuantAI.com",
+        replyTo: "MikeClaver@CLVRQuantAI.com",
         subject: "CLVRQuant — You earned 1 week of Pro!",
         headers: {
           "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
@@ -373,7 +373,7 @@ async function checkPromoExpiryReminders() {
         const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
         await resend.emails.send({
           from: fromEmail, to: u.email,
-          reply_to: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "MikeClaver@CLVRQuantAI.com",
           subject: "CLVRQuant — Your Pro access expires in 2 weeks",
           headers: {
             "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}>`,
@@ -2213,13 +2213,15 @@ export async function registerRoutes(
     return { "15m": t15m, "4h": t4h, "1d": t1d, confluent, direction, strength };
   }
 
-  function computeBayesianScore(ind: any, confluence: any) {
+  function computeBayesianScore(ind: any, confluence: any, patternSignals: string[] = [], fngSignal: string | null = null) {
     const WEIGHTS: Record<string, number> = {
       rsi_bullish: 0.65, rsi_oversold: 0.72, macd_bull_cross: 0.72,
       ema_bull_stack: 0.68, volume_surge: 0.60, mtf_confluence_bull: 0.75,
       price_above_ema200: 0.70, rsi_bearish: 0.65, rsi_overbought: 0.72,
       macd_bear_cross: 0.72, ema_bear_stack: 0.68, mtf_confluence_bear: 0.75,
       price_below_ema200: 0.70,
+      pattern_bull_flag: 0.65, pattern_head_shoulders: 0.60,
+      sentiment_extreme_fear: 0.68, sentiment_extreme_greed: 0.55,
     };
     const direction = ind.trend?.includes("UP") ? "bull" : ind.trend?.includes("DOWN") ? "bear" : "neutral";
     const signals: string[] = [];
@@ -2231,6 +2233,8 @@ export async function registerRoutes(
       if (["SURGE","ABOVE AVG"].includes(ind.volumeSignal)) signals.push("volume_surge");
       if (confluence?.direction === "BULLISH" || confluence?.direction === "LEANING_BULL") signals.push("mtf_confluence_bull");
       if (ind.currentPrice > ind.ema200)  signals.push("price_above_ema200");
+      if (patternSignals.includes("pattern_bull_flag"))    signals.push("pattern_bull_flag");
+      if (fngSignal === "sentiment_extreme_fear")          signals.push("sentiment_extreme_fear");
     } else if (direction === "bear") {
       if (ind.rsi <= 50 && ind.rsi >= 30) signals.push("rsi_bearish");
       if (ind.rsi > 70)                   signals.push("rsi_overbought");
@@ -2239,6 +2243,8 @@ export async function registerRoutes(
       if (["SURGE","ABOVE AVG"].includes(ind.volumeSignal)) signals.push("volume_surge");
       if (confluence?.direction === "BEARISH" || confluence?.direction === "LEANING_BEAR") signals.push("mtf_confluence_bear");
       if (ind.currentPrice < ind.ema200)  signals.push("price_below_ema200");
+      if (patternSignals.includes("pattern_head_shoulders")) signals.push("pattern_head_shoulders");
+      if (fngSignal === "sentiment_extreme_greed")           signals.push("sentiment_extreme_greed");
     }
     const PRIOR = 0.50;
     let pS = PRIOR, pF = 1 - PRIOR;
@@ -2275,6 +2281,65 @@ export async function registerRoutes(
     return { safe: true, warning: null, nearest_event: null };
   }
 
+  function detectPatterns(candles: any[]): { patterns: string[]; detected: { head_and_shoulders: boolean; bull_flag: boolean } } {
+    const prices = candles.map((c: any) => c.c);
+    const highs  = candles.map((c: any) => c.h);
+    const n      = prices.length;
+    const ORDER  = 5;
+    const TOLERANCE = 0.03;
+
+    function localMaxima(arr: number[], order: number): number[] {
+      const idx: number[] = [];
+      for (let i = order; i < arr.length - order; i++) {
+        let isMax = true;
+        for (let j = i - order; j <= i + order; j++) {
+          if (j !== i && arr[j] >= arr[i]) { isMax = false; break; }
+        }
+        if (isMax) idx.push(i);
+      }
+      return idx;
+    }
+
+    const peaks = localMaxima(highs, ORDER);
+    let headAndShoulders = false;
+    if (peaks.length >= 3) {
+      const [i1, i2, i3] = peaks.slice(-3);
+      const p1 = highs[i1], p2 = highs[i2], p3 = highs[i3];
+      const headHighest = p2 > p1 && p2 > p3;
+      const shoulderSym = Math.abs(p1 - p3) / Math.max(p1, p3) <= TOLERANCE;
+      if (headHighest && shoulderSym) headAndShoulders = true;
+    }
+
+    let bullFlag = false;
+    if (n >= 15) {
+      const recent = prices.slice(-15);
+      const startPx  = recent[0];
+      const peakPx   = Math.max(...recent);
+      const currentPx = recent[recent.length - 1];
+      const flagpoleGrowth = (peakPx - startPx) / startPx;
+      if (flagpoleGrowth > 0.05 && currentPx < peakPx && currentPx > startPx) bullFlag = true;
+    }
+
+    const patterns: string[] = [];
+    if (headAndShoulders) patterns.push("pattern_head_shoulders");
+    if (bullFlag)         patterns.push("pattern_bull_flag");
+    return { patterns, detected: { head_and_shoulders: headAndShoulders, bull_flag: bullFlag } };
+  }
+
+  async function fetchFearAndGreed(): Promise<{ value: number; classification: string; signal: string | null }> {
+    try {
+      const r = await fetch("https://api.alternative.me/fng/", { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) return { value: 50, classification: "Neutral", signal: null };
+      const d: any = await r.json();
+      const value  = parseInt(d?.data?.[0]?.value || "50", 10);
+      const classification = d?.data?.[0]?.value_classification || "Neutral";
+      const signal = value <= 25 ? "sentiment_extreme_fear" : value >= 75 ? "sentiment_extreme_greed" : null;
+      return { value, classification, signal };
+    } catch {
+      return { value: 50, classification: "Neutral", signal: null };
+    }
+  }
+
   app.post("/api/quant", async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
@@ -2286,19 +2351,24 @@ export async function registerRoutes(
       if (!risk || !tf) return res.status(400).json({ error: "Invalid risk or timeframe." });
       const cls: string = assetClass || (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(ticker) ? "equity" : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(ticker) ? "commodity" : "crypto");
 
-      const [candles, candles15m, candles4h, candles1d] = await Promise.all([
+      const [candles, candles15m, candles4h, candles1d, fng] = await Promise.all([
         fetchQuantCandles(ticker, cls, tf.interval, tf.count),
-        fetchQuantCandles(ticker, cls, "15",   50),
-        fetchQuantCandles(ticker, cls, "60",   60),
-        fetchQuantCandles(ticker, cls, "D",    30),
+        fetchQuantCandles(ticker, cls, "15m",  50),
+        fetchQuantCandles(ticker, cls, "4h",   60),
+        fetchQuantCandles(ticker, cls, "1d",   30),
+        fetchFearAndGreed(),
       ]);
       if (!candles) return res.status(502).json({ error: "Failed to fetch market data." });
       const ind = computeQuantIndicators(candles);
       if (!ind) return res.status(500).json({ error: "Insufficient candle data for indicators." });
 
-      const confluence    = computeMultiTFConfluence(candles15m, candles4h, candles1d);
-      const bayesian      = computeBayesianScore(ind, confluence);
+      const confluence      = computeMultiTFConfluence(candles15m, candles4h, candles1d);
+      const patternResult   = detectPatterns(candles);
+      const bayesian        = computeBayesianScore(ind, confluence, patternResult.patterns, fng.signal);
       const macroKillSwitch = checkMacroKillSwitch(macroCache.data || []);
+
+      const fngEmoji = fng.value <= 25 ? "🟢 Extreme Fear (contrarian bull)" : fng.value >= 75 ? "🔴 Extreme Greed (distribution risk)" : fng.value <= 45 ? "😨 Fear" : fng.value >= 60 ? "😎 Greed" : "😐 Neutral";
+      const patternsStr = patternResult.patterns.length > 0 ? patternResult.patterns.join(", ") : "none detected";
 
       const mtfStr = `
 MULTI-TIMEFRAME CONFLUENCE (EMA9 vs EMA21):
@@ -2306,6 +2376,15 @@ MULTI-TIMEFRAME CONFLUENCE (EMA9 vs EMA21):
   4h:  ${confluence["4h"].trend.padEnd(8)} | EMA9=$${confluence["4h"].ema9.toFixed(4)} vs EMA21=$${confluence["4h"].ema21.toFixed(4)} (${confluence["4h"].bars} bars)
   1d:  ${confluence["1d"].trend.padEnd(8)} | EMA9=$${confluence["1d"].ema9.toFixed(4)} vs EMA21=$${confluence["1d"].ema21.toFixed(4)} (${confluence["1d"].bars} bars)
   VERDICT: ${confluence.confluent ? "CONFLUENT" : "CONFLICTING"} — ${confluence.direction} (${confluence.strength})
+
+PATTERN RECOGNITION ENGINE:
+  Detected patterns: ${patternsStr}
+  Head & Shoulders: ${patternResult.detected.head_and_shoulders ? "YES — bearish reversal warning" : "No"}
+  Bull Flag:        ${patternResult.detected.bull_flag ? "YES — continuation setup" : "No"}
+
+MACRO SENTIMENT (Fear & Greed Index):
+  Value: ${fng.value}/100 — ${fng.classification} ${fngEmoji}
+  Signal for Brain: ${fng.signal || "neutral — no contrarian edge"}
 
 BAYESIAN BRAIN SCORE:
   Probability: ${bayesian.probability}% → ${bayesian.interpretation} [Tier ${bayesian.tier}]
@@ -2394,11 +2473,13 @@ Every level must be technically defensible. Return JSON only.`;
       const clean = rawText.replace(/```json|```/g, "").trim();
       let parsed: any;
       try { parsed = JSON.parse(clean); } catch { console.error("[/api/quant parse]", clean.slice(0,200)); return res.status(500).json({ error:"AI returned malformed data." }); }
-      parsed.indicators       = ind;
-      parsed.multi_tf         = confluence;
-      parsed.bayesian         = bayesian;
+      parsed.indicators        = ind;
+      parsed.multi_tf          = confluence;
+      parsed.bayesian          = bayesian;
       parsed.macro_kill_switch = macroKillSwitch;
-      parsed.conviction_tier  = bayesian.tier;
+      parsed.conviction_tier   = bayesian.tier;
+      parsed.patterns          = patternResult;
+      parsed.fear_greed        = fng;
       if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
         const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
         const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);
@@ -3588,7 +3669,7 @@ Every level must be technically defensible. Return JSON only.`;
           const dailyEmail = u.subscribe_to_brief;
           const emailResult = await resend.emails.send({
             from: senderAddress,
-            reply_to: "MikeClaver@CLVRQuantAI.com",
+            replyTo: "MikeClaver@CLVRQuantAI.com",
             to: u.email,
             subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
             headers: {
@@ -3682,7 +3763,7 @@ Every level must be technically defensible. Return JSON only.`;
         const verifyUrl = `https://clvrquantai.com?verify=${verifyToken}`;
         const emailResult = await resend.emails.send({
           from: senderAddress,
-          reply_to: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "MikeClaver@CLVRQuantAI.com",
           to: email.toLowerCase().trim(),
           subject: "Verify your CLVRQuant account",
           headers: {
@@ -3839,7 +3920,7 @@ Every level must be technically defensible. Return JSON only.`;
       const { client: resend, fromEmail: resendFrom } = await getUncachableResendClient();
       await resend.emails.send({
         from: resendFrom,
-        reply_to: "MikeClaver@CLVRQuantAI.com",
+        replyTo: "MikeClaver@CLVRQuantAI.com",
         to: user.email,
         subject: "Verify your CLVRQuant email",
         headers: {
@@ -3946,7 +4027,7 @@ Every level must be technically defensible. Return JSON only.`;
         const { client: resend, fromEmail } = await getUncachableResendClient();
         await resend.emails.send({
           from: fromEmail,
-          reply_to: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "MikeClaver@CLVRQuantAI.com",
           to: email.toLowerCase().trim(),
           subject: "CLVRQuant — Password Reset",
           text: `Hello ${user.name},\n\nYou requested a password reset.\n\nTemporary password: ${tempPassword}\n\nOr reset via link (expires in 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,

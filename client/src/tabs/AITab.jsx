@@ -67,6 +67,8 @@ const LOAD_STEPS = [
   "Fetching candle history…",
   "Running multi-timeframe confluence…",
   "Computing Bayesian brain score…",
+  "Scanning chart patterns…",
+  "Fetching Fear & Greed index…",
   "Checking macro kill switch…",
   "Routing to CLVR Quant Engine…",
   "Synthesising AI analysis…",
@@ -226,6 +228,96 @@ function MacroKillBanner({ macroKillSwitch }) {
   );
 }
 
+function FearGreedPanel({ fng }) {
+  if (!fng) return null;
+  const val = fng.value || 50;
+  const col = val <= 25 ? "#00ff88" : val >= 75 ? "#ff2d55" : val <= 45 ? "#f87171" : val >= 60 ? "#f59e0b" : "#6b7a99";
+  const emoji = val <= 25 ? "😱" : val >= 75 ? "🤑" : val <= 45 ? "😨" : val >= 60 ? "😎" : "😐";
+  const label = fng.classification || "Neutral";
+
+  return (
+    <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid #1a2235", borderRadius:10, padding:"11px 14px", marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+        <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2, fontWeight:700 }}>◆ FEAR & GREED INDEX</div>
+        <div style={{ fontSize:8, color:"#3a4560" }}>MacroSentimentWorker</div>
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ fontSize:28, lineHeight:1 }}>{emoji}</div>
+        <div style={{ flex:1 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+            <span style={{ fontSize:13, fontWeight:900, color:col, fontFamily:mono }}>{val}/100</span>
+            <span style={{ fontSize:10, fontWeight:700, color:col }}>{label.toUpperCase()}</span>
+          </div>
+          <div style={{ height:5, background:"rgba(255,255,255,0.05)", borderRadius:3, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${val}%`, background:`linear-gradient(90deg,#00ff88,#f59e0b,#ff2d55)`, borderRadius:3 }}/>
+            <div style={{ position:"relative", height:0 }}>
+              <div style={{ position:"absolute", top:-9, left:`${Math.min(val,97)}%`, width:2, height:14, background:"#fff", borderRadius:2, transform:"translateX(-50%)" }}/>
+            </div>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:3 }}>
+            <span style={{ fontSize:7, color:"#00ff88" }}>FEAR</span>
+            <span style={{ fontSize:7, color:"#6b7a99" }}>NEUTRAL</span>
+            <span style={{ fontSize:7, color:"#ff2d55" }}>GREED</span>
+          </div>
+        </div>
+      </div>
+      {fng.signal && (
+        <div style={{ marginTop:8, fontSize:8, color:col, background:`${col}10`, border:`1px solid ${col}30`, borderRadius:5, padding:"4px 8px" }}>
+          🧠 Contrarian signal active: {fng.signal.replace(/_/g," ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PatternPanel({ patterns }) {
+  if (!patterns) return null;
+  const { detected, patterns: pList } = patterns;
+  const hasAny = detected.head_and_shoulders || detected.bull_flag;
+
+  return (
+    <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid #1a2235", borderRadius:10, padding:"11px 14px", marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+        <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2, fontWeight:700 }}>◆ PATTERN RECOGNITION ENGINE</div>
+        <div style={{ fontSize:8, color:"#3a4560" }}>Pivot · EMA · Flag detection</div>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+        <div style={{
+          background: detected.bull_flag ? "rgba(0,255,136,0.07)" : "rgba(255,255,255,0.02)",
+          border:`1px solid ${detected.bull_flag ? "rgba(0,255,136,0.3)" : "#1a2235"}`,
+          borderRadius:8, padding:"10px", textAlign:"center",
+        }}>
+          <div style={{ fontSize:16, marginBottom:4 }}>📈</div>
+          <div style={{ fontSize:9, fontWeight:800, color: detected.bull_flag ? "#00ff88" : "#3a4560", marginBottom:3 }}>
+            BULL FLAG
+          </div>
+          <div style={{ fontSize:8, color: detected.bull_flag ? "#4ade80" : "#2a3550" }}>
+            {detected.bull_flag ? "DETECTED — continuation" : "Not detected"}
+          </div>
+        </div>
+        <div style={{
+          background: detected.head_and_shoulders ? "rgba(255,45,85,0.07)" : "rgba(255,255,255,0.02)",
+          border:`1px solid ${detected.head_and_shoulders ? "rgba(255,45,85,0.3)" : "#1a2235"}`,
+          borderRadius:8, padding:"10px", textAlign:"center",
+        }}>
+          <div style={{ fontSize:16, marginBottom:4 }}>📉</div>
+          <div style={{ fontSize:9, fontWeight:800, color: detected.head_and_shoulders ? "#ff2d55" : "#3a4560", marginBottom:3 }}>
+            HEAD & SHOULDERS
+          </div>
+          <div style={{ fontSize:8, color: detected.head_and_shoulders ? "#f87171" : "#2a3550" }}>
+            {detected.head_and_shoulders ? "DETECTED — reversal risk" : "Not detected"}
+          </div>
+        </div>
+      </div>
+      {!hasAny && (
+        <div style={{ textAlign:"center", marginTop:8, fontSize:8, color:"#2a3550" }}>
+          No dominant patterns in current price structure
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LoadingBrain({ step }) {
   const [pulse, setPulse] = useState(0);
   useEffect(() => {
@@ -244,18 +336,18 @@ function LoadingBrain({ step }) {
         MASTERBRAIN ACTIVE
       </div>
       <div style={{ fontSize:10, color:"#6b7a99", marginBottom:14 }}>{step}{dots}</div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:6 }}>
-        {["Multi-TF Confluence","Bayesian Scoring","Macro Kill Switch"].map((label, i) => (
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
+        {["Multi-TF Confluence","Bayesian Scoring","Pattern Recognition","Macro Kill Switch"].map((label, i) => (
           <div key={i} style={{
             background:"rgba(255,255,255,0.02)", border:"1px solid #1a2235",
             borderRadius:6, padding:"6px 4px", fontSize:7, color:"#3a4560", textAlign:"center",
           }}>
-            <div style={{ fontSize:10, marginBottom:3 }}>{["🔀","🎯","🛡"][i]}</div>
+            <div style={{ fontSize:10, marginBottom:3 }}>{["🔀","🎯","📊","🛡"][i]}</div>
             {label}
           </div>
         ))}
       </div>
-      <div style={{ fontSize:8, color:"#2a3550" }}>Fetching 3 timeframes concurrently…</div>
+      <div style={{ fontSize:8, color:"#2a3550" }}>All engines running concurrently…</div>
     </div>
   );
 }
@@ -481,9 +573,11 @@ export default function AITab() {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
             {[
               { icon:"🔀", label:"Multi-TF Confluence",   desc:"15m · 4h · 1d EMA9/EMA21 trend alignment" },
-              { icon:"🎯", label:"Bayesian Scoring",      desc:"Weighted signal probability · A/B/C/D tiers" },
-              { icon:"🛡", label:"Macro Kill Switch",     desc:"Halts analysis near HIGH impact events" },
-              { icon:"📊", label:"Quant Trade Engine",    desc:"HL · Binance · Finnhub · Claude AI" },
+              { icon:"🎯", label:"Bayesian Scoring",      desc:"9 weighted signals · A/B/C/D conviction tiers" },
+              { icon:"📊", label:"Pattern Recognition",   desc:"Head & Shoulders · Bull Flag · Pivot analysis" },
+              { icon:"😱", label:"Fear & Greed Index",    desc:"Crypto sentiment · Contrarian signal detection" },
+              { icon:"🛡", label:"Macro Kill Switch",     desc:"Halts near HIGH impact events within 4h" },
+              { icon:"🤖", label:"CLVR AI (Claude)",      desc:"HL · Binance · Finnhub · claude-sonnet-4" },
             ].map(({ icon, label, desc }) => (
               <div key={label} style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
                 <span style={{ fontSize:14, flexShrink:0 }}>{icon}</span>
@@ -546,6 +640,12 @@ export default function AITab() {
 
           {/* Multi-Timeframe Confluence */}
           {result.multi_tf && <MultiTFStrip multiTf={result.multi_tf} />}
+
+          {/* Fear & Greed */}
+          <FearGreedPanel fng={result.fear_greed} />
+
+          {/* Pattern Recognition */}
+          <PatternPanel patterns={result.patterns} />
 
           {/* Bayesian Active Signals */}
           {result.bayesian?.signals_used?.length > 0 && (

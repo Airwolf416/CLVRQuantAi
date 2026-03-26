@@ -87,7 +87,7 @@ app.post(
             await resend.emails.send({
               from: payFrom,
               to: toEmail,
-              reply_to: 'MikeClaver@CLVRQuantAI.com',
+              replyTo: 'MikeClaver@CLVRQuantAI.com',
               subject: 'Your CLVRQuantAI Payment Confirmation',
               text: `Payment Confirmed — CLVRQuantAI\n\nThank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- 4 AI trade ideas per morning brief\n- Unlimited price alerts\n- Real-time signals with AI reasoning\n- Liquidation heatmap & whale tracker\n- Volume & funding rate monitors\n\nOpen your dashboard: https://clvrquantai.com\n\nQuestions? MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI`,
               html: `
@@ -214,7 +214,7 @@ app.post(
             await resend.emails.send({
               from: billFrom,
               to: toEmail,
-              reply_to: 'MikeClaver@CLVRQuantAI.com',
+              replyTo: 'MikeClaver@CLVRQuantAI.com',
               subject: `CLVRQuantAI — Billing Receipt ${invoiceNum}`,
               headers: {
                 'List-Unsubscribe': `<${unsubUrl}>`,
