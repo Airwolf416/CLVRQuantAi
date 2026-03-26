@@ -2320,14 +2320,18 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       <PricingModal
         isOpen={showPricingModal}
         onClose={()=>setShowPricingModal(false)}
-        userTier={isPro?"pro":"free"}
+        userTier={userTier||"free"}
         onUpgrade={async(tierId,billing)=>{
           const isYearly=billing==="yearly";
           let price=null;
           if(tierId==="elite"){price=isYearly?stripePrices.eliteYearly:stripePrices.eliteMonthly;}
           else{price=isYearly?stripePrices.yearly:stripePrices.monthly;}
-          if(price?.price_id){setShowPricingModal(false);await handleCheckout(price.price_id);}
-          else{setShowPricingModal(false);setShowUpgrade(true);}
+          if(price?.price_id){
+            setShowPricingModal(false);
+            await handleCheckout(price.price_id);
+          } else {
+            setToast("Payment is loading — please try again in a moment");
+          }
         }}
       />
 
@@ -3530,7 +3534,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           </div>
         </>}
 
-        {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={setShowUpgrade}/>}
+        {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT
