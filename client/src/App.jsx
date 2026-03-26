@@ -964,7 +964,7 @@ function Dashboard({user,setUser}){
   const [changePwLoading,setChangePwLoading]=useState(false);
   const [changePwError,setChangePwError]=useState("");
   const [biometricRegistering,setBiometricRegistering]=useState(false);
-  const [stripePrices,setStripePrices]=useState({monthly:null,yearly:null});
+  const [stripePrices,setStripePrices]=useState({monthly:null,yearly:null,eliteMonthly:null,eliteYearly:null});
   const [checkoutLoading,setCheckoutLoading]=useState(false);
   const isPro=userTier==="pro";
 
@@ -2321,8 +2321,11 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         onClose={()=>setShowPricingModal(false)}
         userTier={isPro?"pro":"free"}
         onUpgrade={async(tierId,billing)=>{
-          const price=billing==="yearly"?stripePrices.yearly:stripePrices.monthly;
-          if(price?.price_id){await handleCheckout(price.price_id);}
+          const isYearly=billing==="yearly";
+          let price=null;
+          if(tierId==="elite"){price=isYearly?stripePrices.eliteYearly:stripePrices.eliteMonthly;}
+          else{price=isYearly?stripePrices.yearly:stripePrices.monthly;}
+          if(price?.price_id){setShowPricingModal(false);await handleCheckout(price.price_id);}
           else{setShowPricingModal(false);setShowUpgrade(true);}
         }}
       />
@@ -2431,7 +2434,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               </div>
             </div>
             {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
-            :<button data-testid="btn-upgrade-header" onClick={()=>setShowUpgrade(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
+            :<button data-testid="btn-upgrade-header" onClick={()=>setShowPricingModal(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
             <button data-testid="btn-lang-toggle" onClick={toggleLang} style={{background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"3px 7px",fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer",letterSpacing:"0.1em",fontWeight:700}}>{lang==="EN"?"FR":"EN"}</button>
             <button data-testid="btn-signout" onClick={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"3px 6px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>OUT</button>
             <div style={{textAlign:"right"}}>
@@ -2867,8 +2870,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",marginTop:4,letterSpacing:"0.1em"}}>CLVRQuant v2 · ALL DATA LIVE · Not financial advice</div>
 
           {macroAiEvent&&(
-            <div data-testid="macro-ai-modal" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:0}} onClick={()=>{setMacroAiEvent(null);setMacroAiResp(null);}}>
-              <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:"4px 4px 0 0",padding:20,width:"100%",maxWidth:520,maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div data-testid="macro-ai-modal" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px 16px 72px"}} onClick={()=>{setMacroAiEvent(null);setMacroAiResp(null);}}>
+              <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,padding:20,width:"100%",maxWidth:520,maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                   <div>
                     <div style={{fontFamily:MONO,fontSize:7,color:C.gold,letterSpacing:"0.18em"}}>QUANTBRAIN ANALYSIS</div>

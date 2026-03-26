@@ -2940,38 +2940,52 @@ Every level must be technically defensible. Return JSON only.`;
     try {
       const stripe = await getUncachableStripeClient();
 
-      // Primary: fetch directly by lookup_key — always returns the correct IDs
+      // Fetch all tier prices in one request
       const { data: byKey } = await stripe.prices.list({
-        lookup_keys: ['pro_monthly', 'pro_yearly'],
+        lookup_keys: ['pro_monthly', 'pro_yearly', 'elite_monthly', 'elite_yearly'],
         active: true,
         expand: ['data.product'],
       });
 
-      const monthly = byKey.find(p => p.lookup_key === 'pro_monthly');
-      const yearly  = byKey.find(p => p.lookup_key === 'pro_yearly');
+      const proMonthly    = byKey.find(p => p.lookup_key === 'pro_monthly');
+      const proYearly     = byKey.find(p => p.lookup_key === 'pro_yearly');
+      const eliteMonthly  = byKey.find(p => p.lookup_key === 'elite_monthly');
+      const eliteYearly   = byKey.find(p => p.lookup_key === 'elite_yearly');
 
-      if (monthly && yearly) {
+      const toObj = (p: any) => p ? { price_id: p.id, unit_amount: p.unit_amount, interval: p.recurring?.interval, lookup_key: p.lookup_key } : null;
+
+      if (proMonthly && proYearly) {
         return res.json({
-          monthly: { price_id: monthly.id, unit_amount: monthly.unit_amount, interval: 'month', lookup_key: monthly.lookup_key },
-          yearly:  { price_id: yearly.id,  unit_amount: yearly.unit_amount,  interval: 'year',  lookup_key: yearly.lookup_key },
+          monthly:       toObj(proMonthly),
+          yearly:        toObj(proYearly),
+          eliteMonthly:  toObj(eliteMonthly),
+          eliteYearly:   toObj(eliteYearly),
         });
       }
 
-      // Fallback: search by product metadata + match by interval
+      // Fallback: enumerate all products tagged for clvrquant
       const products = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
       if (products.data.length > 0) {
-        const { data: prices } = await stripe.prices.list({ product: products.data[0].id, active: true });
-        const m = prices.find(p => p.recurring?.interval === 'month');
-        const y = prices.find(p => p.recurring?.interval === 'year');
-        if (m && y) {
+        const result: Record<string,any> = {};
+        for (const prod of products.data) {
+          const { data: prices } = await stripe.prices.list({ product: prod.id, active: true });
+          const tier = (prod.metadata as any)?.tier || 'pro';
+          for (const p of prices) {
+            const key = `${tier}_${p.recurring?.interval === 'year' ? 'yearly' : 'monthly'}`;
+            result[key] = toObj(p);
+          }
+        }
+        if (result['pro_monthly'] && result['pro_yearly']) {
           return res.json({
-            monthly: { price_id: m.id, unit_amount: m.unit_amount, interval: 'month', lookup_key: m.lookup_key ?? null },
-            yearly:  { price_id: y.id, unit_amount: y.unit_amount, interval: 'year',  lookup_key: y.lookup_key ?? null },
+            monthly:      result['pro_monthly'],
+            yearly:       result['pro_yearly'],
+            eliteMonthly: result['elite_monthly'] ?? null,
+            eliteYearly:  result['elite_yearly'] ?? null,
           });
         }
       }
 
-      res.status(404).json({ error: 'No active prices found — ensure pro_monthly and pro_yearly lookup_keys exist in Stripe' });
+      res.status(404).json({ error: 'No active prices found — ensure pro_monthly, pro_yearly, elite_monthly, elite_yearly lookup_keys exist in Stripe' });
     } catch (e: any) {
       console.error('[stripe] /api/prices error:', e.message);
       res.status(500).json({ error: e.message });
