@@ -1,0 +1,119 @@
+import numpy as np
+import pandas as pd
+from typing import Dict, Tuple
+
+class BayesianBacktestCalibrator:
+    def __init__(self, take_profit_pct: float = 0.04, stop_loss_pct: float = 0.02):
+        self.tp = take_profit_pct
+        self.sl = stop_loss_pct
+
+    def simulate_trade_outcomes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Vectorized simulation to determine if a signal at index 'i' would have 
+        hit the Take Profit (Win) or Stop Loss (Loss) first in the future.
+        """
+        print("⚙️ Running vectorized forward-simulation...")
+        df = df.copy()
+        
+        # Create columns to store the highest high and lowest low of the next N periods
+        # to simulate whether our TP or SL was hit.
+        lookahead_periods = 48 # Assume trade resolves within 48 periods (e.g., 48 hours)
+        
+        df['future_high'] = df['high'].rolling(window=lookahead_periods).max().shift(-lookahead_periods)
+        df['future_low'] = df['low'].rolling(window=lookahead_periods).min().shift(-lookahead_periods)
+        
+        # Calculate the exact price levels for TP and SL
+        df['tp_price'] = df['close'] * (1 + self.tp)
+        df['sl_price'] = df['close'] * (1 - self.sl)
+        
+        # Determine the outcome
+        # Win: Future high crosses TP before Future low crosses SL (Simplified for vectorization)
+        df['trade_won'] = np.where(df['future_high'] >= df['tp_price'], True, False)
+        df['trade_lost'] = np.where(df['future_low'] <= df['sl_price'], True, False)
+        
+        # Filter out unresolved trades
+        df['trade_resolved'] = df['trade_won'] | df['trade_lost']
+        
+        return df
+
+    def calibrate_bayesian_weights(self, df: pd.DataFrame, signals: list) -> Dict[str, float]:
+        """
+        Calculates P(Signal | Trade Won) for our Master Brain.
+        """
+        print("\n🧠 Calibrating Bayesian Evidence Weights...")
+        
+        resolved_trades = df[df['trade_resolved'] == True]
+        total_wins = len(resolved_trades[resolved_trades['trade_won'] == True])
+        
+        if total_wins == 0:
+            return {}
+
+        weights = {}
+        
+        for signal in signals:
+            # How many times did this signal fire AND the trade won?
+            signal_and_win = len(resolved_trades[(resolved_trades[signal] == True) & (resolved_trades['trade_won'] == True)])
+            
+            # P(Signal | Win)
+            prob_signal_given_win = signal_and_win / total_wins
+            
+            # Smooth the probability to avoid absolute 0 or 1 (Laplace smoothing)
+            smoothed_prob = (signal_and_win + 1) / (total_wins + 2)
+            weights[signal] = round(smoothed_prob, 4)
+            
+            print(f"   ↳ P({signal} | Win): {smoothed_prob * 100:.2f}%")
+            
+        return weights
+
+    def calculate_system_expectancy(self, df: pd.DataFrame) -> float:
+        """
+        Calculates the Mathematical Expectancy of the system.
+        """
+        resolved = df[df['trade_resolved'] == True]
+        total_trades = len(resolved)
+        
+        if total_trades == 0:
+            return 0.0
+            
+        wins = len(resolved[resolved['trade_won'] == True])
+        losses = len(resolved[resolved['trade_lost'] == True])
+        
+        win_rate = wins / total_trades
+        loss_rate = losses / total_trades
+        
+        # E = (W * R_w) - (L * R_l)
+        expectancy = (win_rate * self.tp) - (loss_rate * self.sl)
+        
+        print(f"\n📊 System Win Rate: {win_rate * 100:.2f}%")
+        print(f"🧮 Mathematical Expectancy per trade: {expectancy * 100:.4f}%")
+        
+        return expectancy
+
+# =======================================================================
+# MOCK EXECUTION (Putting years of data through the engine)
+# =======================================================================
+if __name__ == "__main__":
+    # 1. Generate Fake Historical Data (In reality, load 5 years of Binance CSV data)
+    np.random.seed(42)
+    periods = 10000
+    mock_data = {
+        'close': np.cumprod(1 + np.random.normal(0, 0.01, periods)) * 50000,
+    }
+    df = pd.DataFrame(mock_data)
+    df['high'] = df['close'] * 1.01
+    df['low'] = df['close'] * 0.99
+    
+    # 2. Simulate historical signals firing randomly for testing
+    df['pattern_bull_flag'] = np.random.choice([True, False], periods, p=[0.05, 0.95])
+    df['order_flow_whale_buy'] = np.random.choice([True, False], periods, p=[0.02, 0.98])
+    df['sentiment_extreme_fear'] = np.random.choice([True, False], periods, p=[0.10, 0.90])
+    
+    # 3. Run the Calibrator
+    calibrator = BayesianBacktestCalibrator(take_profit_pct=0.04, stop_loss_pct=0.02)
+    simulated_df = calibrator.simulate_trade_outcomes(df)
+    
+    signals_to_test = ['pattern_bull_flag', 'order_flow_whale_buy', 'sentiment_extreme_fear']
+    
+    # 4. Generate the exact weights for the MasterBrain
+    final_weights = calibrator.calibrate_bayesian_weights(simulated_df, signals_to_test)
+    expectancy = calibrator.calculate_system_expectancy(simulated_df)

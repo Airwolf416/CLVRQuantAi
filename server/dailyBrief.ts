@@ -572,7 +572,7 @@ async function sendDailyBriefEmails() {
         const resp = await client.emails.send({
           from: "CLVRQuant <hello@clvrquantai.com>",
           to: sub.email,
-          reply_to: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "MikeClaver@CLVRQuantAI.com",
           subject: `CLVRQuant Morning Brief — ${today}`,
           headers: {
             "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}>`,
@@ -666,7 +666,7 @@ async function sendApologyBriefEmails() {
         const resp = await client.emails.send({
           from: "CLVRQuant <noreply@clvrquantai.com>",
           to: sub.email,
-          reply_to: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "MikeClaver@CLVRQuantAI.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
           html: apologyHtml,
         });
@@ -767,7 +767,7 @@ export async function sendServiceApologyEmail(): Promise<{ sent: number; skipped
       const resp = await client.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
         to: r.email,
-        reply_to: "Support@CLVRQuantAI.com",
+        replyTo: "Support@CLVRQuantAI.com",
         subject: "A Message from the CLVRQuant Team",
         html,
       });
@@ -861,7 +861,7 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
       const resp = await client.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
         to: r.email,
-        reply_to: "MikeClaver@CLVRQuantAI.com",
+        replyTo: "MikeClaver@CLVRQuantAI.com",
         subject: "🎁 Share CLVRQuant & Earn 1 Week Free Pro",
         html,
       });
