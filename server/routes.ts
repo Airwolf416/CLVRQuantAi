@@ -2071,6 +2071,41 @@ export async function registerRoutes(
       return data.map((c: any) => ({ t:parseFloat(c[0]), o:parseFloat(c[1]), h:parseFloat(c[2]), l:parseFloat(c[3]), c:parseFloat(c[4]), v:parseFloat(c[5]) }));
     } catch { return null; }
   }
+  async function fetchYahooCandlesQuant(ticker: string, interval: string, count: number) {
+    try {
+      const cfgMap: Record<string,{yi:string, range:string}> = {
+        "15m":{ yi:"15m", range:"5d" }, "30m":{ yi:"30m", range:"5d" },
+        "1h": { yi:"60m", range:"30d" }, "4h": { yi:"60m", range:"60d" },
+        "1d": { yi:"1d",  range:"6mo" },
+      };
+      const cfg = cfgMap[interval] || { yi:"60m", range:"5d" };
+      const r = await fetch(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${cfg.yi}&range=${cfg.range}`,
+        { headers:{ "User-Agent":"Mozilla/5.0 (compatible; CLVRQuant/1.0)" } }
+      );
+      const data: any = await r.json();
+      const result = data?.chart?.result?.[0];
+      if (!result?.timestamp?.length) return null;
+      const ts = result.timestamp;
+      const q = result.indicators?.quote?.[0];
+      if (!q) return null;
+      let candles: any[] = ts.map((t: number, i: number) => ({
+        t: t * 1000, o: q.open?.[i] ?? 0, h: q.high?.[i] ?? 0,
+        l: q.low?.[i] ?? 0, c: q.close?.[i] ?? 0, v: q.volume?.[i] ?? 0,
+      })).filter((c: any) => c.c > 0 && c.h > 0);
+      if (interval === "4h") {
+        const grp: any[] = [];
+        for (let i = 0; i < candles.length; i += 4) {
+          const sl = candles.slice(i, i + 4);
+          if (sl.length < 2) continue;
+          grp.push({ t:sl[0].t, o:sl[0].o, h:Math.max(...sl.map((c: any)=>c.h)), l:Math.min(...sl.map((c: any)=>c.l)), c:sl[sl.length-1].c, v:sl.reduce((s: number,c: any)=>s+c.v,0) });
+        }
+        candles = grp;
+      }
+      return candles.length >= 10 ? candles.slice(-count) : null;
+    } catch { return null; }
+  }
+
   async function fetchFinnhubCandlesQuant(ticker: string, interval: string, count: number) {
     const apiKey = process.env.FINNHUB_KEY || process.env.FINNHUB_API_KEY;
     if (!apiKey) return null;
@@ -2094,9 +2129,11 @@ export async function registerRoutes(
       if (hl && binance) return binance.length > hl.length ? binance : hl;
       return hl || binance;
     }
+    const yahoo = await fetchYahooCandlesQuant(ticker, interval, count);
+    if (yahoo && yahoo.length >= 20) return yahoo;
     const finnhub = await fetchFinnhubCandlesQuant(ticker, interval, count);
     if (finnhub) return finnhub;
-    return fetchHLCandlesQuant(ticker, interval, count);
+    return null;
   }
   function computeQuantIndicators(candles: any[]) {
     if (!candles || candles.length < 50) return null;
