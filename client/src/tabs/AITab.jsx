@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { fmtPrice } from "../store/MarketDataStore";
 import { useTwitterIntelligence, buildAssetTwitterContext } from "../store/TwitterIntelligence";
 
@@ -11,21 +11,21 @@ const RISK_PROFILES = {
     color:"#4ade80", hex:"74,222,128",
     desc:"Wide stops · Low leverage · Capital first",
     slMultiplier:2.5, leverage:[1,3], riskPct:1, minWinProb:85,
-    tpRatios:[2.0, 4.0],
+    tpRatios:[2.0,4.0],
   },
   mid: {
     id:"mid", label:"BALANCED", icon:"⚖",
     color:"#f59e0b", hex:"245,158,11",
     desc:"Standard quant · Risk/reward optimized",
     slMultiplier:1.8, leverage:[3,7], riskPct:2, minWinProb:80,
-    tpRatios:[1.5, 3.0],
+    tpRatios:[1.5,3.0],
   },
   high: {
     id:"high", label:"AGGRESSIVE", icon:"⚡",
     color:"#ff2d55", hex:"255,45,85",
     desc:"Tight stops · High leverage · Max upside",
     slMultiplier:1.2, leverage:[5,15], riskPct:4, minWinProb:75,
-    tpRatios:[1.2, 2.5],
+    tpRatios:[1.2,2.5],
   },
 };
 
@@ -53,6 +53,25 @@ const sigColors = {
   SHORT:"#f87171", STRONG_SHORT:"#ff2d55",
 };
 
+const TIER_CONFIG = {
+  A: { label:"ELITE",    color:"#00ff88", bg:"rgba(0,255,136,0.08)",  border:"rgba(0,255,136,0.3)",  desc:"≥80% Bayesian confidence · All signals aligned" },
+  B: { label:"HIGH",     color:"#d4af37", bg:"rgba(212,175,55,0.08)", border:"rgba(212,175,55,0.3)", desc:"≥70% Bayesian confidence · Strong setup" },
+  C: { label:"MODERATE", color:"#f59e0b", bg:"rgba(245,158,11,0.08)", border:"rgba(245,158,11,0.3)", desc:"≥60% Bayesian confidence · Proceed with caution" },
+  D: { label:"WEAK",     color:"#ff2d55", bg:"rgba(255,45,85,0.08)",  border:"rgba(255,45,85,0.3)",  desc:"<60% confidence · Stand aside or reduce size" },
+};
+
+const TREND_ARROW = { BULLISH:"↑", BEARISH:"↓", NEUTRAL:"→", LEANING_BULL:"↗", LEANING_BEAR:"↘", MIXED:"↔" };
+const TREND_COLOR = { BULLISH:"#00ff88", BEARISH:"#ff2d55", NEUTRAL:"#f59e0b", LEANING_BULL:"#4ade80", LEANING_BEAR:"#f87171", MIXED:"#6b7a99" };
+
+const LOAD_STEPS = [
+  "Fetching candle history…",
+  "Running multi-timeframe confluence…",
+  "Computing Bayesian brain score…",
+  "Checking macro kill switch…",
+  "Routing to CLVR Quant Engine…",
+  "Synthesising AI analysis…",
+];
+
 function StatBox({ label, value, color, sub }) {
   return (
     <div style={{ background:"#0d1321", border:"1px solid #1a2235", borderRadius:8, padding:"11px 12px" }}>
@@ -75,6 +94,172 @@ function LevelRow({ label, price, color, note }) {
   );
 }
 
+function BayesianMeter({ probability, tier, interpretation }) {
+  const cfg = TIER_CONFIG[tier] || TIER_CONFIG.C;
+  const [displayed, setDisplayed] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setDisplayed(probability), 100);
+    return () => clearTimeout(t);
+  }, [probability]);
+
+  return (
+    <div style={{ background:cfg.bg, border:`1px solid ${cfg.border}`, borderRadius:12, padding:"16px 16px 14px", marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+        <div>
+          <div style={{ fontSize:8, color:"#6b7a99", letterSpacing:1.5, marginBottom:4 }}>BAYESIAN BRAIN SCORE</div>
+          <div style={{ fontSize:11, color:cfg.color, fontWeight:800, letterSpacing:1 }}>{interpretation}</div>
+        </div>
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontSize:9, color:"#6b7a99", marginBottom:2 }}>CONVICTION TIER</div>
+          <div style={{
+            fontSize:28, fontWeight:900, color:cfg.color, fontFamily:mono,
+            background:cfg.bg, border:`2px solid ${cfg.color}`,
+            borderRadius:8, width:48, height:48,
+            display:"flex", alignItems:"center", justifyContent:"center",
+          }}>{tier}</div>
+        </div>
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+        <div style={{ fontSize:36, fontWeight:900, color:cfg.color, fontFamily:mono, lineHeight:1 }}>
+          {displayed.toFixed(1)}<span style={{ fontSize:18 }}>%</span>
+        </div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:8, color:"#3a4560", marginBottom:4 }}>probability of successful trade</div>
+          <div style={{ height:6, background:"rgba(255,255,255,0.05)", borderRadius:3, overflow:"hidden" }}>
+            <div style={{
+              height:"100%", width:`${displayed}%`,
+              background:`linear-gradient(90deg,${cfg.color}60,${cfg.color})`,
+              borderRadius:3, transition:"width 1.5s cubic-bezier(.4,0,.2,1)",
+            }}/>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:3 }}>
+            <span style={{ fontSize:7, color:"#2a3550" }}>0%</span>
+            <span style={{ fontSize:7, color:"#2a3550" }}>50%</span>
+            <span style={{ fontSize:7, color:"#2a3550" }}>100%</span>
+          </div>
+        </div>
+      </div>
+      <div style={{ fontSize:8, color:"#3a4560", lineHeight:1.5 }}>{cfg.desc}</div>
+    </div>
+  );
+}
+
+function MultiTFStrip({ multiTf }) {
+  if (!multiTf) return null;
+  const tfs = [
+    { key:"15m", label:"15m", sub:"Scalp" },
+    { key:"4h",  label:"4H",  sub:"Swing" },
+    { key:"1d",  label:"1D",  sub:"Trend" },
+  ];
+  const dirColor  = TREND_COLOR[multiTf.direction] || "#6b7a99";
+  const confluent = multiTf.confluent;
+
+  return (
+    <div style={{ background:"#0a0f1e", border:"1px solid #1a2235", borderRadius:12, padding:"12px 14px", marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2, fontWeight:700 }}>◆ MULTI-TIMEFRAME CONFLUENCE</div>
+        <div style={{
+          fontSize:8, fontWeight:800, letterSpacing:1,
+          color: confluent ? "#00ff88" : "#f59e0b",
+          background: confluent ? "rgba(0,255,136,0.08)" : "rgba(245,158,11,0.08)",
+          border:`1px solid ${confluent ? "rgba(0,255,136,0.3)" : "rgba(245,158,11,0.3)"}`,
+          padding:"3px 8px", borderRadius:4,
+        }}>
+          {confluent ? "✓ CONFLUENT" : "⚡ MIXED"} · {multiTf.strength}
+        </div>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
+        {tfs.map(({ key, label, sub }) => {
+          const tf = multiTf[key];
+          const trend  = tf?.trend || "NEUTRAL";
+          const col    = TREND_COLOR[trend] || "#6b7a99";
+          const arrow  = TREND_ARROW[trend] || "→";
+          return (
+            <div key={key} style={{
+              background:`rgba(${col === "#00ff88" ? "0,255,136" : col === "#ff2d55" ? "255,45,85" : "245,158,11"},0.05)`,
+              border:`1px solid ${col}30`, borderRadius:8, padding:"10px 10px", textAlign:"center",
+            }}>
+              <div style={{ fontSize:8, color:"#6b7a99", marginBottom:4, letterSpacing:1 }}>{label} · {sub}</div>
+              <div style={{ fontSize:24, color:col, fontWeight:900, lineHeight:1, marginBottom:4 }}>{arrow}</div>
+              <div style={{ fontSize:8, fontWeight:800, color:col, letterSpacing:0.5 }}>{trend.replace("_"," ")}</div>
+              {tf?.ema9 > 0 && (
+                <div style={{ fontSize:7, color:"#2a3550", marginTop:4, lineHeight:1.6 }}>
+                  EMA9 {fmtPrice(tf.ema9)}<br/>EMA21 {fmtPrice(tf.ema21)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop:10, display:"flex", alignItems:"center", gap:6 }}>
+        <span style={{ fontSize:8, color:"#3a4560" }}>Overall direction:</span>
+        <span style={{ fontSize:9, fontWeight:800, color:dirColor }}>
+          {TREND_ARROW[multiTf.direction] || "↔"} {multiTf.direction?.replace("_"," ")}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function MacroKillBanner({ macroKillSwitch }) {
+  if (!macroKillSwitch || macroKillSwitch.safe) return null;
+  const evt = macroKillSwitch.nearest_event;
+  return (
+    <div style={{
+      background:"rgba(255,45,85,0.08)", border:"1px solid rgba(255,45,85,0.35)",
+      borderRadius:10, padding:"12px 14px", marginBottom:14,
+      display:"flex", alignItems:"flex-start", gap:10,
+    }}>
+      <div style={{ fontSize:18, flexShrink:0 }}>🛑</div>
+      <div>
+        <div style={{ fontSize:10, fontWeight:800, color:"#ff2d55", letterSpacing:1, marginBottom:3 }}>
+          MACRO KILL SWITCH TRIGGERED
+        </div>
+        <div style={{ fontSize:9, color:"#f87171", lineHeight:1.6 }}>
+          {evt?.name} in <strong>{evt?.hours_away}h</strong> ({evt?.time}) — High impact event nearby.
+        </div>
+        <div style={{ fontSize:8, color:"#6b7a99", marginTop:4 }}>
+          MasterBrain recommends reducing position size or standing aside until after the event.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoadingBrain({ step }) {
+  const [pulse, setPulse] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setPulse(p => (p + 1) % 3), 400);
+    return () => clearInterval(t);
+  }, []);
+  const dots = ".".repeat(pulse + 1);
+
+  return (
+    <div style={{
+      background:"rgba(212,175,55,0.04)", border:"1px solid rgba(212,175,55,0.15)",
+      borderRadius:12, padding:"20px 16px", marginBottom:20, textAlign:"center",
+    }}>
+      <div style={{ fontSize:32, marginBottom:8 }}>🧠</div>
+      <div style={{ fontSize:11, fontWeight:800, color:"#d4af37", letterSpacing:1, marginBottom:6 }}>
+        MASTERBRAIN ACTIVE
+      </div>
+      <div style={{ fontSize:10, color:"#6b7a99", marginBottom:14 }}>{step}{dots}</div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:6 }}>
+        {["Multi-TF Confluence","Bayesian Scoring","Macro Kill Switch"].map((label, i) => (
+          <div key={i} style={{
+            background:"rgba(255,255,255,0.02)", border:"1px solid #1a2235",
+            borderRadius:6, padding:"6px 4px", fontSize:7, color:"#3a4560", textAlign:"center",
+          }}>
+            <div style={{ fontSize:10, marginBottom:3 }}>{["🔀","🎯","🛡"][i]}</div>
+            {label}
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize:8, color:"#2a3550" }}>Fetching 3 timeframes concurrently…</div>
+    </div>
+  );
+}
+
 export default function AITab() {
   const [asset,   setAsset]   = useState("BTC");
   const [market,  setMarket]  = useState("PERP");
@@ -85,6 +270,7 @@ export default function AITab() {
   const [result,  setResult]  = useState(null);
   const [error,   setError]   = useState(null);
   const [step,    setStep]    = useState("");
+  const stepIdx   = useRef(0);
 
   const twitterData = useTwitterIntelligence();
 
@@ -93,15 +279,26 @@ export default function AITab() {
     setLoading(true);
     setError(null);
     setResult(null);
+    stepIdx.current = 0;
+
+    const nextStep = () => {
+      stepIdx.current = Math.min(stepIdx.current + 1, LOAD_STEPS.length - 1);
+      setStep(LOAD_STEPS[stepIdx.current]);
+    };
+
+    setStep(LOAD_STEPS[0]);
+    const t1 = setTimeout(nextStep, 1200);
+    const t2 = setTimeout(nextStep, 2400);
+    const t3 = setTimeout(nextStep, 3600);
+    const t4 = setTimeout(nextStep, 4800);
 
     try {
-      setStep("Fetching candle history...");
       const twitterCtx = buildAssetTwitterContext(twitterData, asset);
+      setStep(LOAD_STEPS[4]);
 
-      setStep("Running quant analysis...");
       const response = await fetch("/api/quant", {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type":"application/json" },
         credentials: "include",
         body: JSON.stringify({
           ticker:         asset,
@@ -114,25 +311,26 @@ export default function AITab() {
         }),
       });
 
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4);
+      setStep(LOAD_STEPS[5]);
+
       if (!response.ok) {
         const txt = await response.text();
         throw new Error(`Analysis failed (${response.status}): ${txt}`);
       }
 
       const data = await response.json();
-
       if (!data.signal || !data.win_probability || !data.entry?.price) {
         throw new Error("Incomplete data from Quant Engine.");
       }
-
       if (data.rr === undefined && data.tp1?.price && data.stopLoss?.price && data.entry?.price) {
-        const risk_amt   = Math.abs(data.entry.price - data.stopLoss.price);
-        const reward_amt = Math.abs(data.tp1.price   - data.entry.price);
-        data.rr = risk_amt > 0.000001 ? reward_amt / risk_amt : 0;
+        const r = Math.abs(data.entry.price - data.stopLoss.price);
+        const w = Math.abs(data.tp1.price - data.entry.price);
+        data.rr = r > 0.000001 ? w / r : 0;
       }
-
       setResult(data);
     } catch (err) {
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4);
       setError(err.message || "System error during analysis.");
     } finally {
       setLoading(false);
@@ -146,10 +344,13 @@ export default function AITab() {
   return (
     <div style={{ backgroundColor:"#060a13", minHeight:"100vh", padding:"20px 16px", fontFamily:mono, color:"#e8e8f0" }}>
 
+      {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:"1px solid #1a2235", paddingBottom:15, marginBottom:20 }}>
         <div>
           <h2 style={{ margin:0, fontSize:22, fontFamily:serif, color:"#e8e8f0" }}>CLVRQuant AI</h2>
-          <div style={{ fontSize:8, color:"#3a4560", letterSpacing:1.5, marginTop:3 }}>ELITE QUANT ENGINE · HL + BINANCE + TWITTER INTELLIGENCE</div>
+          <div style={{ fontSize:7, color:"#3a4560", letterSpacing:1.5, marginTop:3 }}>
+            MASTERBRAIN · BAYESIAN SCORING · MULTI-TF CONFLUENCE · MACRO KILL SWITCH
+          </div>
         </div>
         <div style={{ border:"1px solid #d4af37", color:"#d4af37", padding:"5px 12px", borderRadius:4, fontSize:11, fontWeight:"bold", letterSpacing:1 }}>
           CLVR AI · SECURE
@@ -183,7 +384,7 @@ export default function AITab() {
         </div>
       </div>
 
-      {/* STEP 2: ASSET PILLS */}
+      {/* STEP 2: ASSET */}
       <div style={{ marginBottom:16 }}>
         <div style={{ fontSize:8, color:"#d4af37", letterSpacing:2, marginBottom:10, fontWeight:700 }}>◆ STEP 2 — SELECT ASSET</div>
         <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
@@ -192,7 +393,7 @@ export default function AITab() {
             const clsCol = cls==="equity"?"#3b82f6":cls==="commodity"?"#d4af37":"#9945ff";
             const active = asset === a;
             return (
-              <button key={a} onClick={() => setAsset(a)} style={{
+              <button key={a} onClick={() => setAsset(a)} data-testid={`button-asset-${a}`} style={{
                 background:"transparent",
                 border:`1px solid ${active ? clsCol : "#1a2235"}`,
                 color:active ? clsCol : "#6b7a99",
@@ -209,13 +410,13 @@ export default function AITab() {
 
       {/* STEP 3: PERP / SPOT */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
-        <button onClick={() => setMarket("PERP")} style={{
+        <button onClick={() => setMarket("PERP")} data-testid="button-market-perp" style={{
           background: market==="PERP" ? "rgba(0,229,255,0.1)" : "transparent",
           border:`1px solid ${market==="PERP" ? "#00e5ff" : "#1a2235"}`,
           color: market==="PERP" ? "#00e5ff" : "#6b7a99",
           padding:12, borderRadius:6, cursor:"pointer", fontWeight:"bold", fontSize:12,
         }}>📊 PERP Markets</button>
-        <button onClick={() => setMarket("SPOT")} style={{
+        <button onClick={() => setMarket("SPOT")} data-testid="button-market-spot" style={{
           background: market==="SPOT" ? "rgba(255,255,255,0.05)" : "transparent",
           border:`1px solid ${market==="SPOT" ? "#fff" : "#1a2235"}`,
           color: market==="SPOT" ? "#fff" : "#6b7a99",
@@ -230,7 +431,7 @@ export default function AITab() {
           {Object.values(TIMEFRAMES).map(t => {
             const active = tf === t.id;
             return (
-              <button key={t.id} onClick={() => setTf(t.id)} style={{
+              <button key={t.id} onClick={() => setTf(t.id)} data-testid={`button-tf-${t.id}`} style={{
                 background: active ? "rgba(0,255,136,0.08)" : "transparent",
                 border:`1px solid ${active ? "#00ff88" : "#1a2235"}`,
                 color: active ? "#00ff88" : "#6b7a99",
@@ -249,6 +450,7 @@ export default function AITab() {
         placeholder={`"Long ${asset} now?" · "Is ${asset} overextended?" · "Best entry for ${asset}?"`}
         value={query}
         onChange={e => setQuery(e.target.value)}
+        data-testid="input-custom-query"
         style={{
           width:"100%", background:"#0d1321", border:"1px solid #1a2235",
           borderRadius:8, padding:15, color:"#e8e8f0", fontFamily:mono,
@@ -272,6 +474,29 @@ export default function AITab() {
         </div>
       )}
 
+      {/* MasterBrain Capability Overview */}
+      {!result && !loading && !error && (
+        <div style={{ marginBottom:16, background:"rgba(212,175,55,0.03)", border:"1px solid #1a2235", borderRadius:10, padding:"12px 14px" }}>
+          <div style={{ fontSize:8, color:"#d4af37", letterSpacing:2, marginBottom:8, fontWeight:700 }}>◆ MASTERBRAIN ENGINES</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+            {[
+              { icon:"🔀", label:"Multi-TF Confluence",   desc:"15m · 4h · 1d EMA9/EMA21 trend alignment" },
+              { icon:"🎯", label:"Bayesian Scoring",      desc:"Weighted signal probability · A/B/C/D tiers" },
+              { icon:"🛡", label:"Macro Kill Switch",     desc:"Halts analysis near HIGH impact events" },
+              { icon:"📊", label:"Quant Trade Engine",    desc:"HL · Binance · Finnhub · Claude AI" },
+            ].map(({ icon, label, desc }) => (
+              <div key={label} style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
+                <span style={{ fontSize:14, flexShrink:0 }}>{icon}</span>
+                <div>
+                  <div style={{ fontSize:8, fontWeight:700, color:"#a0aec0", marginBottom:2 }}>{label}</div>
+                  <div style={{ fontSize:7, color:"#3a4560", lineHeight:1.5 }}>{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ANALYZE BUTTON */}
       <button
         onClick={handleAnalyze}
@@ -290,7 +515,7 @@ export default function AITab() {
           boxShadow: loading ? "none" : `0 0 20px rgba(${profile.hex},0.15)`,
         }}
       >
-        {loading ? `⟳ ${step || "Routing to Quant Engine..."}` : `${profile.icon} Execute Quant Analysis →`}
+        {loading ? `⟳ ${step || "Routing to Quant Engine..."}` : `${profile.icon} Execute MasterBrain Analysis →`}
       </button>
 
       {/* ERROR */}
@@ -300,9 +525,41 @@ export default function AITab() {
         </div>
       )}
 
+      {/* LOADING BRAIN */}
+      {loading && <LoadingBrain step={step} />}
+
       {/* RESULTS */}
       {result && !loading && !error && (
         <div style={{ animation:"fadeIn 0.5s ease" }}>
+
+          {/* Macro Kill Switch Warning */}
+          <MacroKillBanner macroKillSwitch={result.macro_kill_switch} />
+
+          {/* Bayesian Confidence Meter + Conviction Tier */}
+          {result.bayesian && (
+            <BayesianMeter
+              probability={result.bayesian.probability}
+              tier={result.conviction_tier || result.bayesian.tier}
+              interpretation={result.bayesian.interpretation}
+            />
+          )}
+
+          {/* Multi-Timeframe Confluence */}
+          {result.multi_tf && <MultiTFStrip multiTf={result.multi_tf} />}
+
+          {/* Bayesian Active Signals */}
+          {result.bayesian?.signals_used?.length > 0 && (
+            <div style={{ marginBottom:12, display:"flex", flexWrap:"wrap", gap:5 }}>
+              {result.bayesian.signals_used.map((sig, i) => (
+                <span key={i} style={{
+                  background:"rgba(0,255,136,0.06)", border:"1px solid rgba(0,255,136,0.2)",
+                  borderRadius:4, padding:"3px 8px", fontSize:8, color:"#00ff88",
+                }}>
+                  ✓ {sig.replace(/_/g," ")}
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* Signal header */}
           <div style={{
@@ -323,7 +580,7 @@ export default function AITab() {
                 </div>
               </div>
               <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize:9, color:"#6b7a99", marginBottom:3 }}>WIN PROBABILITY</div>
+                <div style={{ fontSize:9, color:"#6b7a99", marginBottom:3 }}>AI WIN PROBABILITY</div>
                 <div style={{ fontSize:32, fontWeight:"bold", color:sigCol, fontFamily:mono, lineHeight:1 }}>
                   {result.win_probability}<span style={{ fontSize:18 }}>%</span>
                 </div>

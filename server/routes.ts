@@ -2183,6 +2183,98 @@ export async function registerRoutes(
     };
   }
 
+  function computeMultiTFConfluence(tf15m: any[] | null, tf4h: any[] | null, tf1d: any[] | null) {
+    function emaOf(closes: number[], period: number): number {
+      if (closes.length < period) return closes[closes.length - 1] || 0;
+      const k = 2 / (period + 1);
+      let val = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+      for (let i = period; i < closes.length; i++) val = closes[i] * k + val * (1 - k);
+      return val;
+    }
+    function getTrend(candles: any[] | null): { trend: string; ema9: number; ema21: number; bars: number } {
+      if (!candles || candles.length < 21) return { trend: "NEUTRAL", ema9: 0, ema21: 0, bars: 0 };
+      const closes = candles.map((c: any) => c.c);
+      const ema9  = emaOf(closes, 9);
+      const ema21 = emaOf(closes, 21);
+      const trend = ema9 > ema21 * 1.001 ? "BULLISH" : ema9 < ema21 * 0.999 ? "BEARISH" : "NEUTRAL";
+      return { trend, ema9, ema21, bars: candles.length };
+    }
+    const t15m = getTrend(tf15m);
+    const t4h  = getTrend(tf4h);
+    const t1d  = getTrend(tf1d);
+    const trends = [t15m.trend, t4h.trend, t1d.trend];
+    const allBull = trends.every(t => t === "BULLISH");
+    const allBear = trends.every(t => t === "BEARISH");
+    const twoBull = trends.filter(t => t === "BULLISH").length >= 2;
+    const twoBear = trends.filter(t => t === "BEARISH").length >= 2;
+    const confluent = allBull || allBear;
+    const direction = allBull ? "BULLISH" : allBear ? "BEARISH" : twoBull ? "LEANING_BULL" : twoBear ? "LEANING_BEAR" : "MIXED";
+    const strength  = (allBull || allBear) ? "STRONG" : (twoBull || twoBear) ? "MODERATE" : "WEAK";
+    return { "15m": t15m, "4h": t4h, "1d": t1d, confluent, direction, strength };
+  }
+
+  function computeBayesianScore(ind: any, confluence: any) {
+    const WEIGHTS: Record<string, number> = {
+      rsi_bullish: 0.65, rsi_oversold: 0.72, macd_bull_cross: 0.72,
+      ema_bull_stack: 0.68, volume_surge: 0.60, mtf_confluence_bull: 0.75,
+      price_above_ema200: 0.70, rsi_bearish: 0.65, rsi_overbought: 0.72,
+      macd_bear_cross: 0.72, ema_bear_stack: 0.68, mtf_confluence_bear: 0.75,
+      price_below_ema200: 0.70,
+    };
+    const direction = ind.trend?.includes("UP") ? "bull" : ind.trend?.includes("DOWN") ? "bear" : "neutral";
+    const signals: string[] = [];
+    if (direction === "bull") {
+      if (ind.rsi >= 50 && ind.rsi <= 70) signals.push("rsi_bullish");
+      if (ind.rsi < 35)                   signals.push("rsi_oversold");
+      if (ind.macdCrossing?.includes("BULL")) signals.push("macd_bull_cross");
+      if (ind.ema20 > ind.ema50 && ind.ema50 > ind.ema200) signals.push("ema_bull_stack");
+      if (["SURGE","ABOVE AVG"].includes(ind.volumeSignal)) signals.push("volume_surge");
+      if (confluence?.direction === "BULLISH" || confluence?.direction === "LEANING_BULL") signals.push("mtf_confluence_bull");
+      if (ind.currentPrice > ind.ema200)  signals.push("price_above_ema200");
+    } else if (direction === "bear") {
+      if (ind.rsi <= 50 && ind.rsi >= 30) signals.push("rsi_bearish");
+      if (ind.rsi > 70)                   signals.push("rsi_overbought");
+      if (ind.macdCrossing?.includes("BEAR")) signals.push("macd_bear_cross");
+      if (ind.ema20 < ind.ema50 && ind.ema50 < ind.ema200) signals.push("ema_bear_stack");
+      if (["SURGE","ABOVE AVG"].includes(ind.volumeSignal)) signals.push("volume_surge");
+      if (confluence?.direction === "BEARISH" || confluence?.direction === "LEANING_BEAR") signals.push("mtf_confluence_bear");
+      if (ind.currentPrice < ind.ema200)  signals.push("price_below_ema200");
+    }
+    const PRIOR = 0.50;
+    let pS = PRIOR, pF = 1 - PRIOR;
+    for (const sig of signals) { const w = WEIGHTS[sig] || 0.55; pS *= w; pF *= (1 - w); }
+    const prob = signals.length > 0 ? pS / (pS + pF) : PRIOR;
+    const pct  = parseFloat((prob * 100).toFixed(1));
+    const tier  = pct >= 80 ? "A" : pct >= 70 ? "B" : pct >= 60 ? "C" : "D";
+    const label = tier === "A" ? "ELITE CONVICTION" : tier === "B" ? "HIGH CONVICTION" : tier === "C" ? "MODERATE" : "LOW — STAND ASIDE";
+    return { probability: pct, signals_used: signals, tier, interpretation: label, direction };
+  }
+
+  function checkMacroKillSwitch(macroData: any[]) {
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+    const now = Date.now();
+    for (const evt of macroData) {
+      if (evt.impact !== "HIGH" && evt.impact !== "⬛") continue;
+      try {
+        const timeStr = (evt.timeET || evt.time || "").replace(/\s*ET\s*/i, "").trim();
+        const dateStr = evt.date || "";
+        if (!dateStr || !timeStr || timeStr === "All Day" || timeStr === "Tentative") continue;
+        const evtDate = new Date(`${dateStr} ${timeStr} EST`);
+        if (isNaN(evtDate.getTime())) continue;
+        const diff = evtDate.getTime() - now;
+        if (diff > -60 * 60 * 1000 && diff < FOUR_HOURS_MS) {
+          const hoursAway = Math.max(0, diff / (60 * 60 * 1000));
+          return {
+            safe: false,
+            warning: `HIGH IMPACT: ${evt.name} in ${hoursAway.toFixed(1)}h — reduce size`,
+            nearest_event: { name: evt.name, time: evt.timeET || evt.time, date: evt.date, hours_away: parseFloat(hoursAway.toFixed(1)) },
+          };
+        }
+      } catch { /* skip unparseable */ }
+    }
+    return { safe: true, warning: null, nearest_event: null };
+  }
+
   app.post("/api/quant", async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
@@ -2193,10 +2285,34 @@ export async function registerRoutes(
       const tf   = QUANT_TIMEFRAMES[timeframeId];
       if (!risk || !tf) return res.status(400).json({ error: "Invalid risk or timeframe." });
       const cls: string = assetClass || (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(ticker) ? "equity" : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(ticker) ? "commodity" : "crypto");
-      const candles = await fetchQuantCandles(ticker, cls, tf.interval, tf.count);
+
+      const [candles, candles15m, candles4h, candles1d] = await Promise.all([
+        fetchQuantCandles(ticker, cls, tf.interval, tf.count),
+        fetchQuantCandles(ticker, cls, "15",   50),
+        fetchQuantCandles(ticker, cls, "60",   60),
+        fetchQuantCandles(ticker, cls, "D",    30),
+      ]);
       if (!candles) return res.status(502).json({ error: "Failed to fetch market data." });
       const ind = computeQuantIndicators(candles);
       if (!ind) return res.status(500).json({ error: "Insufficient candle data for indicators." });
+
+      const confluence    = computeMultiTFConfluence(candles15m, candles4h, candles1d);
+      const bayesian      = computeBayesianScore(ind, confluence);
+      const macroKillSwitch = checkMacroKillSwitch(macroCache.data || []);
+
+      const mtfStr = `
+MULTI-TIMEFRAME CONFLUENCE (EMA9 vs EMA21):
+  15m: ${confluence["15m"].trend.padEnd(8)} | EMA9=$${confluence["15m"].ema9.toFixed(4)} vs EMA21=$${confluence["15m"].ema21.toFixed(4)} (${confluence["15m"].bars} bars)
+  4h:  ${confluence["4h"].trend.padEnd(8)} | EMA9=$${confluence["4h"].ema9.toFixed(4)} vs EMA21=$${confluence["4h"].ema21.toFixed(4)} (${confluence["4h"].bars} bars)
+  1d:  ${confluence["1d"].trend.padEnd(8)} | EMA9=$${confluence["1d"].ema9.toFixed(4)} vs EMA21=$${confluence["1d"].ema21.toFixed(4)} (${confluence["1d"].bars} bars)
+  VERDICT: ${confluence.confluent ? "CONFLUENT" : "CONFLICTING"} — ${confluence.direction} (${confluence.strength})
+
+BAYESIAN BRAIN SCORE:
+  Probability: ${bayesian.probability}% → ${bayesian.interpretation} [Tier ${bayesian.tier}]
+  Active signals: ${bayesian.signals_used.join(", ") || "none"}
+
+MACRO KILL SWITCH: ${macroKillSwitch.safe ? "CLEAR — no HIGH impact events within 4h" : macroKillSwitch.warning}`;
+
       const indContext = `
 TECHNICAL ANALYSIS — ${tf.label} (${tf.interval} candles, ${candles.length} bars):
 Current: $${ind.currentPrice.toFixed(4)}
@@ -2214,7 +2330,8 @@ Nearest Support:    $${ind.nearestSupport?.toFixed(4)||"none below"}
 7d  High: $${ind.high7d.toFixed(4)} | 7d  Low:  $${ind.low7d.toFixed(4)}
 Position in 24h range: ${ind.posInRange}% from bottom
 Volume: ${ind.volumeSignal} (${ind.volumeRatio}× average)
-Momentum Score: ${ind.momentumScore}/100`;
+Momentum Score: ${ind.momentumScore}/100
+${mtfStr}`;
 
       const system = `You are the most elite quantitative analyst and systematic trader on the planet. You think like a hybrid of Paul Tudor Jones + Stan Druckenmiller + a senior quant desk head. Capital preservation first. Never force a trade.
 
@@ -2277,7 +2394,11 @@ Every level must be technically defensible. Return JSON only.`;
       const clean = rawText.replace(/```json|```/g, "").trim();
       let parsed: any;
       try { parsed = JSON.parse(clean); } catch { console.error("[/api/quant parse]", clean.slice(0,200)); return res.status(500).json({ error:"AI returned malformed data." }); }
-      parsed.indicators = ind;
+      parsed.indicators       = ind;
+      parsed.multi_tf         = confluence;
+      parsed.bayesian         = bayesian;
+      parsed.macro_kill_switch = macroKillSwitch;
+      parsed.conviction_tier  = bayesian.tier;
       if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
         const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
         const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);
