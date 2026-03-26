@@ -2072,7 +2072,7 @@ export async function registerRoutes(
     } catch { return null; }
   }
   async function fetchFinnhubCandlesQuant(ticker: string, interval: string, count: number) {
-    const apiKey = process.env.FINNHUB_API_KEY;
+    const apiKey = process.env.FINNHUB_KEY || process.env.FINNHUB_API_KEY;
     if (!apiKey) return null;
     try {
       const resMap: Record<string,string> = { "15m":"15","1h":"60","4h":"240","1d":"D" };

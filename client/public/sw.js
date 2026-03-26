@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clvrquant-v6';
+const CACHE_NAME = 'clvrquant-v7';
 const STATIC_ASSETS = ['/', '/manifest.json', '/favicon.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-1024.png'];
 
 self.addEventListener('install', (e) => {
@@ -70,19 +70,19 @@ self.addEventListener('push', (e) => {
   );
 });
 
-// ── Notification click → bring app to foreground ──────────────────────────────
+// ── Notification click → bring app to foreground (no reload) ──────────────────
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const targetUrl = e.notification.data?.url || '/';
   e.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // Focus the existing app window without navigating (avoids page reload / state reset)
       for (const client of clientList) {
         if (client.url.includes(self.location.origin) && 'focus' in client) {
-          client.navigate(targetUrl);
           return client.focus();
         }
       }
-      if (clients.openWindow) return clients.openWindow(targetUrl);
+      // No existing window — open a new one
+      if (clients.openWindow) return clients.openWindow('/');
     })
   );
 });
