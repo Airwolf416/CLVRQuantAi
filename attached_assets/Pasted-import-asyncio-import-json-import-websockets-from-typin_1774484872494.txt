@@ -1,0 +1,109 @@
+import asyncio
+import json
+import websockets
+from typing import Dict, List
+
+class OrderFlowWorker:
+    def __init__(self, symbol: str = 'btcusdt', whale_threshold_usd: float = 500000):
+        self.symbol = symbol.lower()
+        self.whale_threshold = whale_threshold_usd
+        
+        # Binance Futures WebSocket Endpoints
+        # @aggTrade = Live trades, @forceOrder = Liquidations
+        self.ws_url = f"wss://fstream.binance.com/stream?streams={self.symbol}@aggTrade/{self.symbol}@forceOrder"
+        
+        # Shared state to pass back to the Master Brain
+        self.active_signals: List[str] = []
+
+    def process_trade(self, data: Dict):
+        """Analyzes live trades for whale activity."""
+        price = float(data['p'])
+        quantity = float(data['q'])
+        is_buyer_maker = data['m'] # If true, it was a market SELL. If false, market BUY.
+        
+        trade_value_usd = price * quantity
+        
+        if trade_value_usd >= self.whale_threshold:
+            trade_type = "Whale SELL" if is_buyer_maker else "Whale BUY"
+            print(f"🚨 {trade_type} DETECTED: ${trade_value_usd:,.2f} at {price}")
+            
+            if not is_buyer_maker:
+                self.active_signals.append('order_flow_whale_buy')
+            else:
+                self.active_signals.append('order_flow_whale_sell')
+
+    def process_liquidation(self, data: Dict):
+        """Analyzes forced liquidations (squeezes)."""
+        order = data['o']
+        side = order['S'] # 'BUY' (Shorts liquidated) or 'SELL' (Longs liquidated)
+        price = float(order['ap']) # Average fill price
+        quantity = float(order['q'])
+        
+        liq_value_usd = price * quantity
+        print(f"💥 LIQUIDATION CASCADE: {side} ${liq_value_usd:,.2f} at {price}")
+        
+        if side == 'BUY':
+            # Shorts are being forced to buy (Short Squeeze - Bullish)
+            self.active_signals.append('order_flow_short_squeeze')
+        elif side == 'SELL':
+            # Longs are being forced to sell (Long Squeeze - Bearish)
+            self.active_signals.append('order_flow_long_squeeze')
+
+    async def stream_data(self):
+        """Maintains a persistent, zero-error websocket connection."""
+        while True:
+            try:
+                print(f"🔌 Connecting to Order Flow Stream for {self.symbol.upper()}...")
+                async with websockets.connect(self.ws_url) as ws:
+                    print("✅ Connected. Scanning for anomalies...")
+                    
+                    while True:
+                        response = await ws.recv()
+                        payload = json.loads(response)
+                        
+                        # Route the data to the correct mathematical processor
+                        stream_name = payload.get('stream', '')
+                        data = payload.get('data', {})
+                        
+                        if '@aggTrade' in stream_name:
+                            self.process_trade(data)
+                        elif '@forceOrder' in stream_name:
+                            self.process_liquidation(data)
+                            
+                        # Periodically clear old signals so the AI doesn't trade on stale data
+                        # In a real app, you'd use a time-to-live (TTL) cache here.
+                        if len(self.active_signals) > 10:
+                            self.active_signals.pop(0)
+
+            except websockets.ConnectionClosed:
+                print("⚠️ WebSocket Connection Closed. Reconnecting in 5 seconds...")
+                await asyncio.sleep(5)
+            except Exception as e:
+                print(f"⚠️ Critical Stream Error: {e}. Rebooting stream...")
+                await asyncio.sleep(5)
+
+    def get_current_signals(self) -> List[str]:
+        """Called by the Master Brain to fetch the latest order flow data."""
+        # Return a copy and clear the current queue
+        signals = list(set(self.active_signals)) 
+        self.active_signals.clear()
+        return signals
+
+# =======================================================================
+# MOCK EXECUTION (Runs concurrently in your background workers)
+# =======================================================================
+async def main():
+    worker = OrderFlowWorker(symbol='btcusdt', whale_threshold_usd=500000)
+    
+    # Start the stream in the background
+    asyncio.create_task(worker.stream_data())
+    
+    # Simulate the Master Brain checking in every 10 seconds
+    while True:
+        await asyncio.sleep(10)
+        current_signals = worker.get_current_signals()
+        if current_signals:
+            print(f"🧠 Passing to Brain: {current_signals}")
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,0 +1,99 @@
+import ccxt.async_support as ccxt
+import pandas as pd
+import asyncio
+
+class MultiTimeframeWorker:
+    def __init__(self, exchange_id: str = 'binance', symbol: str = 'BTC/USDT'):
+        self.symbol = symbol
+        # Initialize exchange dynamically
+        exchange_class = getattr(ccxt, exchange_id)
+        self.exchange = exchange_class({
+            'enableRateLimit': True, # Critical to avoid API bans
+        })
+
+    async def fetch_ohlcv_data(self, timeframe: str, limit: int = 50) -> pd.DataFrame:
+        """
+        Fetches candle data safely and converts it to a Pandas DataFrame.
+        """
+        try:
+            # Fetch Open, High, Low, Close, Volume
+            candles = await self.exchange.fetch_ohlcv(self.symbol, timeframe, limit=limit)
+            
+            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df
+            
+        except ccxt.NetworkError as e:
+            print(f"⚠️ Network Error fetching {timeframe}: {e}")
+            return pd.DataFrame() # Return empty on failure to prevent crashes
+        except Exception as e:
+            print(f"⚠️ Unexpected Error: {e}")
+            return pd.DataFrame()
+
+    def determine_trend(self, df: pd.DataFrame) -> str:
+        """
+        Calculates a baseline trend. 
+        For this engine, we will use a fast/slow moving average crossover 
+        (e.g., 9 EMA vs 21 EMA) to determine directional momentum.
+        """
+        if df.empty or len(df) < 21:
+            return "NEUTRAL" # Failsafe
+
+        # Calculate Exponential Moving Averages
+        df['EMA_9'] = df['close'].ewm(span=9, adjust=False).mean()
+        df['EMA_21'] = df['close'].ewm(span=21, adjust=False).mean()
+
+        # Check the most recent closed candle (index -1)
+        latest_ema_9 = df['EMA_9'].iloc[-1]
+        latest_ema_21 = df['EMA_21'].iloc[-1]
+
+        if latest_ema_9 > latest_ema_21:
+            return "BULLISH"
+        elif latest_ema_9 < latest_ema_21:
+            return "BEARISH"
+        else:
+            return "NEUTRAL"
+
+    async def get_confluence_state(self) -> dict:
+        """
+        The main function that gathers all timeframes concurrently.
+        """
+        print(f"Fetching market structure for {self.symbol}...")
+        
+        # Run fetches concurrently for maximum speed
+        tasks = [
+            self.fetch_ohlcv_data('15m'),
+            self.fetch_ohlcv_data('4h'),
+            self.fetch_ohlcv_data('1d')
+        ]
+        
+        df_15m, df_4h, df_1d = await asyncio.gather(*tasks)
+
+        # Map the trends
+        trends = {
+            "15m": self.determine_trend(df_15m),
+            "4h": self.determine_trend(df_4h),
+            "1d": self.determine_trend(df_1d)
+        }
+        
+        # Always close the exchange connection cleanly
+        await self.exchange.close()
+        
+        return trends
+
+# =======================================================================
+# MOCK EXECUTION
+# =======================================================================
+async def main():
+    worker = MultiTimeframeWorker(exchange_id='binance', symbol='BTC/USDT')
+    current_trends = await worker.get_confluence_state()
+    
+    print("\n📊 Current Market Structure:")
+    print(current_trends)
+    
+    # This output {"15m": "...", "4h": "...", "1d": "..."} is exactly 
+    # what gets passed into the 'timeframes' key of our MasterTradingBrain.
+
+if __name__ == "__main__":
+    # Run the async event loop
+    asyncio.run(main())
