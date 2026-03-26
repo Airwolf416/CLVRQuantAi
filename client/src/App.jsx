@@ -942,6 +942,7 @@ function Dashboard({user,setUser}){
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
   const [showQRScanner,setShowQRScanner]=useState(false);
   const [showUpgrade,setShowUpgrade]=useState(false);
+  const [upgradePlanTab,setUpgradePlanTab]=useState("pro");
   const [showPricingModal,setShowPricingModal]=useState(false);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
   const [showTour,setShowTour]=useState(false);
@@ -2330,38 +2331,73 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         }}
       />
 
-      {showUpgrade&&<div style={{position:"fixed",inset:0,zIndex:300,background:"rgba(0,0,0,.85)",backdropFilter:"blur(12px)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowUpgrade(false)}>
-        <div onClick={e=>e.stopPropagation()} style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,maxWidth:420,width:"100%",maxHeight:"90vh",overflowY:"auto",position:"relative"}}>
+      {showUpgrade&&<div style={{position:"fixed",inset:0,zIndex:300,background:"rgba(0,0,0,.88)",backdropFilter:"blur(14px)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowUpgrade(false)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:8,maxWidth:520,width:"100%",maxHeight:"90vh",overflowY:"auto",position:"relative"}}>
           <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`}}/>
-          <div style={{padding:"22px 20px",textAlign:"center"}}>
-            <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.gold2,marginBottom:2}}>CLVRQuant Pro</div>
-            <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.2em",marginBottom:16}}>UNLOCK FULL INTELLIGENCE</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16,textAlign:"left"}}>
-              {["AI Market Analyst","QuantBrain Trade Ideas","Morning Briefs","Unlimited Alerts","Live Signals","Liquidation Heatmap","Volume Spike Monitor","Funding Rate Monitor"].map(f=>(
-                <div key={f} style={{fontFamily:MONO,fontSize:9,color:C.text,display:"flex",alignItems:"center",gap:6}}>
-                  <span style={{color:C.gold,fontSize:10}}>✦</span>{f}
+          <div style={{padding:"24px 20px 20px",textAlign:"center"}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.3em",marginBottom:6}}>CLVR QUANTAI — SUBSCRIPTION PLANS</div>
+            <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.white,marginBottom:4}}>Institutional-Grade Intelligence</div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginBottom:20}}>Real-time markets · AI Quant Engine · SEC insider flow</div>
+
+            {/* Plan toggle tabs */}
+            {(()=>{
+              const [upgTab,setUpgTab]=[upgradePlanTab||"pro",v=>{try{window.__upgTab=v;}catch(e){}setUpgradePlanTab(v);}];
+              const proM=stripePrices.monthly, proY=stripePrices.yearly;
+              const elM=stripePrices.eliteMonthly, elY=stripePrices.eliteYearly;
+              const proReady=!!(proM?.price_id&&proY?.price_id);
+              const elReady=!!(elM?.price_id&&elY?.price_id);
+              return<>
+                <div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,borderRadius:6,padding:4}}>
+                  {[{id:"pro",label:"CLVR Pro",color:C.gold},{id:"elite",label:"CLVR Elite",color:"#00e5ff"}].map(t=>(
+                    <button key={t.id} onClick={()=>setUpgTab(t.id)} style={{flex:1,padding:"8px 4px",borderRadius:4,border:`1px solid ${upgTab===t.id?t.color+"60":C.border}`,background:upgTab===t.id?`${t.color}10`:"transparent",fontFamily:MONO,fontSize:9,color:upgTab===t.id?t.color:C.muted,cursor:"pointer",letterSpacing:"0.1em",fontWeight:upgTab===t.id?700:400,transition:"all 0.2s"}}>
+                      {t.label}{t.id==="elite"&&<span style={{marginLeft:5,fontSize:7,background:"#00e5ff20",border:"1px solid #00e5ff40",borderRadius:10,padding:"1px 5px",color:"#00e5ff"}}>TOP</span>}
+                    </button>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div style={{display:"flex",gap:8,marginBottom:16}}>
-              {(()=>{
-                const monthlyPrice=stripePrices.monthly;
-                const yearlyPrice=stripePrices.yearly;
-                const pricesReady=!!(monthlyPrice?.price_id&&yearlyPrice?.price_id);
-                return<>
-                  <button data-testid="btn-checkout-monthly" onClick={()=>pricesReady?handleCheckout(monthlyPrice.price_id):setToast("Prices loading, try again in a moment")} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer"}}>
-                    <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.gold2}}>${monthlyPrice?((monthlyPrice.unit_amount||2900)/100).toFixed(0):"29"}</div>
-                    <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER MONTH</div>
-                  </button>
-                  <button data-testid="btn-checkout-yearly" onClick={()=>pricesReady?handleCheckout(yearlyPrice.price_id):setToast("Prices loading, try again in a moment")} disabled={checkoutLoading} style={{flex:1,padding:"14px 12px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:2,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
-                    <div style={{position:"absolute",top:-8,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:700}}>SAVE 43%</div>
-                    <div style={{fontFamily:SERIF,fontWeight:900,fontSize:22,color:C.green}}>${yearlyPrice?((yearlyPrice.unit_amount||19900)/100).toFixed(0):"199"}</div>
-                    <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em"}}>PER YEAR</div>
-                  </button>
-                </>;
-              })()}
-            </div>
-            <div style={{borderTop:`1px solid ${C.border}`,paddingTop:14}}>
+                {upgTab==="pro"&&<>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:14,textAlign:"left"}}>
+                    {["AI Quant Engine","QuantBrain AI · 30/day","Morning Briefs","Live anomaly signals","Full news & sentiment","Macro Calendar","Twitter/Stocktwits","Price alerts"].map(f=>(
+                      <div key={f} style={{fontFamily:MONO,fontSize:8,color:C.text,display:"flex",alignItems:"center",gap:5}}>
+                        <span style={{color:C.gold,fontSize:9}}>✦</span>{f}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:8,marginBottom:14}}>
+                    <button data-testid="btn-checkout-monthly" onClick={()=>proReady?handleCheckout(proM.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(201,168,76,.07)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer"}}>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.gold2}}>${proM?((proM.unit_amount||2999)/100).toFixed(2):"29.99"}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER MONTH</div>
+                    </button>
+                    <button data-testid="btn-checkout-yearly" onClick={()=>proReady?handleCheckout(proY.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
+                      <div style={{position:"absolute",top:-9,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:800}}>SAVE $60/yr</div>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.green}}>${proY?((proY.unit_amount||29900)/100).toFixed(0):"299"}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER YEAR</div>
+                    </button>
+                  </div>
+                </>}
+                {upgTab==="elite"&&<>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:14,textAlign:"left"}}>
+                    {["All Pro features +","Unlimited QuantBrain AI","SEC Insider Flow","Basket Analysis","Forex & Commodities","Whale tracking","Political Alpha","Custom SMS alerts"].map((f,i)=>(
+                      <div key={f} style={{fontFamily:MONO,fontSize:8,color:i===0?C.muted:C.text,display:"flex",alignItems:"center",gap:5}}>
+                        <span style={{color:"#00e5ff",fontSize:9}}>✦</span>{f}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:8,marginBottom:14}}>
+                    <button data-testid="btn-checkout-elite-monthly" onClick={()=>elReady?handleCheckout(elM.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,229,255,.06)",border:`1px solid rgba(0,229,255,.35)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer"}}>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:"#00e5ff"}}>${elM?((elM.unit_amount||12900)/100).toFixed(2):"129.00"}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER MONTH</div>
+                    </button>
+                    <button data-testid="btn-checkout-elite-yearly" onClick={()=>elReady?handleCheckout(elY.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
+                      <div style={{position:"absolute",top:-9,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:800}}>SAVE $349/yr</div>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.green}}>${elY?((elY.unit_amount||119900)/100).toFixed(0):"1,199"}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER YEAR</div>
+                    </button>
+                  </div>
+                </>}
+              </>;
+            })()}
+
+            <div style={{borderTop:`1px solid ${C.border}`,paddingTop:14,marginBottom:2}}>
               <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>HAVE AN ACCESS CODE?</div>
               <div style={{display:"flex",gap:6}}>
                 <button data-testid="btn-scan-qr" onClick={()=>setShowQRScanner(true)} title="Scan QR code" style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"8px 10px",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center"}}>📷</button>
@@ -2370,7 +2406,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               </div>
               {accessCodeMsg&&<div style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("✦")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
             </div>
-            <button onClick={()=>setShowUpgrade(false)} style={{marginTop:14,background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:9,cursor:"pointer",letterSpacing:"0.1em"}}>CLOSE</button>
+            <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:10}}>Cancel anytime · Secure checkout via Stripe · USD</div>
+            <button onClick={()=>setShowUpgrade(false)} style={{marginTop:10,background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:9,cursor:"pointer",letterSpacing:"0.1em"}}>CLOSE</button>
           </div>
         </div>
       </div>}
@@ -3459,7 +3496,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               {q:"What is the Morning Brief?",a:"The Morning Brief is a daily AI-generated market summary delivered every day at 6:00 AM ET. It covers overnight moves across crypto, equities, and commodities; key macro events for the day; and top trade setups. You can also receive it by email — subscribe in the Account tab."},
             ]},
             {cat:"Billing & Subscription",color:C.red,items:[
-              {q:"How much does Pro cost?",a:"Pro is $29/month or $199/year (save $149 vs monthly). Both plans include all Pro features: unlimited CLVR AI, 4 daily trade ideas, advanced signals, and priority support."},
+              {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year (save $60). CLVR Elite is $129/month or $1,199/year (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
               {q:"How do I upgrade to Pro?",a:"Tap the PRO button in the top navigation bar, or go to Account → Upgrade to Pro. You'll be taken to a secure Stripe checkout. After payment, your account is instantly upgraded."},
               {q:"Can I cancel my subscription?",a:"Yes, you can cancel anytime. Go to Account → Manage Subscription. Your Pro access continues until the end of your current billing period, then reverts to Free. No questions asked."},
               {q:"Is my payment information secure?",a:"All payments are processed by Stripe, the industry-standard payments platform used by thousands of businesses. CLVRQuant never stores your card details."},
