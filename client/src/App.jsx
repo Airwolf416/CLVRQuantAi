@@ -382,15 +382,18 @@ function SubBtn({k,label,col="gold",state,setter}){
   return<button onClick={()=>setter(k)} style={{padding:"6px 12px",borderRadius:2,whiteSpace:"nowrap",outline:"none",cursor:"pointer",fontFamily:MONO,fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",border:`1px solid ${active?ac:C.border}`,background:active?"rgba(201,168,76,.07)":C.panel,color:active?ac:C.muted2,transition:"all .2s"}}>{label}</button>;
 }
 function LiveDot({live}){return<div style={{width:5,height:5,borderRadius:"50%",flexShrink:0,background:live?C.green:C.orange,boxShadow:live?`0 0 6px ${C.green}`:"none"}}/>;}
-function ProGate({feature,isPro,onUpgrade,children}){
+function ProGate({feature,isPro,onUpgrade,children,tier}){
   if(isPro)return children;
+  const isEliteTier=tier==="elite";
+  const label=isEliteTier?"Elite Feature":"Pro Feature";
+  const btnLabel=isEliteTier?"Upgrade to Elite ⚡":"Upgrade to Pro";
   return(
     <div data-testid={`progate-${feature}`} style={{position:"relative"}}>
       <div style={{filter:"blur(4px)",opacity:0.3,pointerEvents:"none",maxHeight:180,overflow:"hidden"}}>{children}</div>
       <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(5,7,9,.85)",backdropFilter:"blur(8px)",borderRadius:2}}>
-        <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.gold2,marginBottom:4}}>Pro Feature</div>
+        <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:isEliteTier?"#e8c96d":C.gold2,marginBottom:4,textShadow:isEliteTier?"0 0 12px rgba(201,168,76,.5)":undefined}}>{label}</div>
         <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.12em",marginBottom:12,textTransform:"uppercase"}}>{feature}</div>
-        <button data-testid={`btn-upgrade-${feature}`} onClick={onUpgrade} style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"8px 20px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro</button>
+        <button data-testid={`btn-upgrade-${feature}`} onClick={onUpgrade} style={{background:isEliteTier?"rgba(201,168,76,.18)":"rgba(201,168,76,.12)",border:`1px solid ${isEliteTier?"rgba(201,168,76,.55)":"rgba(201,168,76,.35)"}`,borderRadius:2,padding:"8px 20px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:isEliteTier?"#e8c96d":C.gold2,cursor:"pointer",boxShadow:isEliteTier?"0 0 16px rgba(201,168,76,.2)":undefined}}>{btnLabel}</button>
       </div>
     </div>
   );
@@ -944,6 +947,7 @@ function Dashboard({user,setUser}){
   const [showUpgrade,setShowUpgrade]=useState(false);
   const [upgradePlanTab,setUpgradePlanTab]=useState("pro");
   const [showPricingModal,setShowPricingModal]=useState(false);
+  const [upgradeDefaultTier,setUpgradeDefaultTier]=useState(null);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
   const [showTour,setShowTour]=useState(false);
   // Auto-show tour on first-ever login (localStorage-gated; any dismissal sets the key)
@@ -2327,8 +2331,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
       <PricingModal
         isOpen={showPricingModal}
-        onClose={()=>setShowPricingModal(false)}
+        onClose={()=>{setShowPricingModal(false);setUpgradeDefaultTier(null);}}
         userTier={userTier||"free"}
+        defaultTier={upgradeDefaultTier}
         onUpgrade={async(tierId,billing)=>{
           const isYearly=billing==="yearly";
           let price=null;
@@ -2485,12 +2490,12 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
               </div>
             </div>
-            {/* ── Tier badge ── */}
+            {/* ── Tier badge (clickable) ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
               <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>{isElite?"TIER":isPro?"TIER":"PLAN"}</span>
-              {isElite?<div data-testid="badge-elite" style={{background:"rgba(201,168,76,.18)",border:`1px solid rgba(201,168,76,.55)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700,textShadow:"0 0 8px rgba(201,168,76,.4)",height:26,display:"flex",alignItems:"center"}}>ELITE</div>
-              :isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700,height:26,display:"flex",alignItems:"center"}}>PRO</div>
-              :<button data-testid="btn-upgrade-header" onClick={()=>setShowPricingModal(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600,height:26,display:"flex",alignItems:"center"}}>UPGRADE</button>}
+              {isElite?<button data-testid="badge-elite" onClick={()=>{setUpgradeDefaultTier("pro");setShowPricingModal(true);}} title="Click to manage plan" style={{background:"rgba(201,168,76,.18)",border:`1px solid rgba(201,168,76,.55)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700,textShadow:"0 0 8px rgba(201,168,76,.4)",height:26,display:"flex",alignItems:"center",cursor:"pointer"}}>ELITE</button>
+              :isPro?<button data-testid="badge-pro" onClick={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}} title="Click to upgrade to Elite" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700,height:26,display:"flex",alignItems:"center",cursor:"pointer"}}>PRO</button>
+              :<button data-testid="btn-upgrade-header" onClick={()=>{setUpgradeDefaultTier(null);setShowPricingModal(true);}} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600,height:26,display:"flex",alignItems:"center"}}>UPGRADE</button>}
             </div>
             {/* ── Language toggle ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
@@ -3297,7 +3302,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               ⚡ QUANT ENGINE
             </button>
           </div>
-          {aiMode==="quant"&&<ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}><AIQuantTab/></ProGate>}
+          {aiMode==="quant"&&<ProGate feature="quant-engine" tier="elite" isPro={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}><AIQuantTab/></ProGate>}
           {aiMode==="chat"&&<ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}>
           <div style={{...panel,overflow:"visible"}}>
             <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="CLVR AI · Live" color="gold"/></div>
@@ -3417,8 +3422,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={{padding:"8px 16px 16px"}}>
               {[
                 {t:"One Dashboard, All Markets",d:"Crypto, equities, commodities, forex, and macro events — all live, all in one place. No more tab-switching."},
-                {t:"AI-Powered Intelligence",d:"CLVR AI — powered by Claude — analyzes real-time data across all asset classes, giving you trade ideas with specific entries, targets, and stops. Not generic advice — data-driven analysis using live prices and your actual signals."},
-                {t:"Real Alpha Signals",d:"Our QuantBrain engine detects price moves, anomalies, and momentum shifts across 32 crypto assets, 16 equities, and commodities in real-time. Every signal is scored using multiple on-chain and market factors."},
+                {t:"AI-Powered Intelligence — Two Tiers",d:"Pro members get CLVR AI Market Chat: ask Claude anything about markets, get trade ideas, macro breakdowns, and sector rotations in real-time. Elite members get everything in Pro plus the full AI Quant Engine — MasterBrain Analysis with automated entry, stop, and target generation across SPOT and PERP markets."},
+                {t:"AI Quant Engine — Elite Exclusive",d:"The ⚡ Quant Engine is CLVRQuant's most powerful feature. MasterBrain runs a 12-factor confluence analysis — price, funding, OI, momentum, macro context, sentiment, and more — to generate a complete trade blueprint with Kelly-sized position sizing. Available exclusively to Elite members."},
+                {t:"Real Alpha Signals",d:"QuantBrain detects price moves, anomalies, and momentum shifts across 32 crypto assets, 16 equities, and commodities in real-time. Every signal is scored using multiple on-chain and market factors — available to all Pro and Elite members."},
                 {t:"Stay Ahead Daily",d:"The Morning Brief summarizes overnight moves, key macro events, and top setups before you even open a chart. Price alerts notify you when targets hit. The macro calendar keeps you aware of Fed decisions, CPI, NFP, and central bank events worldwide."},
                 {t:"Built for Mobile",d:"Designed mobile-first so you can check markets, review signals, and get AI analysis from anywhere — your pocket market intelligence hub."},
               ].map(({t,d},i)=>(
@@ -3455,6 +3461,36 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                   <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.9}}>{d}</div>
                 </div>
               ))}
+            </div>
+          </div>
+          {/* ── Pro vs Elite Comparison ── */}
+          <div style={{...panel,border:`1px solid rgba(201,168,76,.18)`}}>
+            <div style={ph}><PTitle>Plan Comparison</PTitle><Badge label="Tiers" color="gold"/></div>
+            <div style={{padding:"8px 16px 16px"}}>
+              {[
+                {feature:"Live market data (crypto, equities, forex, commodities)",free:true,pro:true,elite:true},
+                {feature:"Macro Calendar & Morning Brief",free:"1 idea",pro:"4 ideas",elite:"4 ideas"},
+                {feature:"QuantBrain signals & anomaly alerts",free:false,pro:true,elite:true},
+                {feature:"CLVR AI Market Chat (Claude)",free:false,pro:"30/day",elite:"Unlimited"},
+                {feature:"⚡ AI Quant Engine — MasterBrain",free:false,pro:false,elite:true},
+                {feature:"SEC Insider Flow & Whale Tracking",free:false,pro:false,elite:true},
+                {feature:"Basket Analysis (3+ assets)",free:false,pro:false,elite:true},
+                {feature:"Custom price alerts & push notifications",free:false,pro:true,elite:true},
+                {feature:"Squawk Box (live signal announcer)",free:false,pro:true,elite:true},
+              ].map(({feature,free,pro,elite},i)=>{
+                const cell=(v,col)=><div style={{width:48,textAlign:"center",fontFamily:MONO,fontSize:9,color:v===false?C.muted:v===true?C.green:col,flexShrink:0}}>{v===false?"—":v===true?"✓":v}</div>;
+                return(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,paddingBottom:10,borderBottom:i<8?`1px solid ${C.border}`:"none"}}>
+                    <div style={{flex:1,fontFamily:SANS,fontSize:11,color:C.muted2,lineHeight:1.4}}>{feature}</div>
+                    {cell(free,C.muted2)}{cell(pro,C.gold)}{cell(elite,"#00e5ff")}
+                  </div>
+                );
+              })}
+              <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:4}}>
+                {[{l:"FREE",c:C.muted2},{l:"PRO",c:C.gold},{l:"ELITE",c:"#00e5ff"}].map(({l,c})=>(
+                  <div key={l} style={{fontFamily:MONO,fontSize:7,color:c,background:`${c}10`,border:`1px solid ${c}30`,borderRadius:3,padding:"2px 6px",letterSpacing:"0.1em"}}>{l}</div>
+                ))}
+              </div>
             </div>
           </div>
           <div style={{...panel,border:`1px solid rgba(201,168,76,.15)`}}>
@@ -3503,7 +3539,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             {cat:"Getting Started",color:C.blue,items:[
               {q:"What is CLVRQuant?",a:"CLVRQuant is a mobile-first AI-powered market intelligence dashboard. It aggregates live prices across crypto, equities, commodities, and forex — combined with AI analysis, macro event tracking, and real-time signals — all in one clean app."},
               {q:"How do I create an account?",a:"Tap the Account tab (⚙) in the navigation bar, then choose Sign Up. Enter your email and password. That's it — you're in. Free accounts get access to all core market data, signals, and the daily brief."},
-              {q:"What's the difference between Free and Pro?",a:"Free accounts get live prices, macro calendar, 1 trade idea in the morning brief, and basic signals. Pro unlocks the full CLVR AI chat, 4 trade ideas in the brief, priority signal alerts, and advanced market analysis. Pro is $29/month or $199/year."},
+              {q:"What's the difference between Free, Pro, and Elite?",a:"Free: live prices, macro calendar, basic signals. Pro ($29.99/mo): adds CLVR AI Market Chat (Claude-powered), 4 daily trade ideas in the morning brief, full signals, sentiment feed, and custom price alerts. Elite ($129/mo): everything in Pro plus the exclusive ⚡ AI Quant Engine (MasterBrain 12-factor analysis), SEC Insider Flow, Basket Analysis, whale tracking, and Hyperliquid perpetuals data. Tap your tier badge in the header to upgrade."},
               {q:"Can I use CLVRQuant on my phone?",a:"Yes — CLVRQuant is designed mobile-first. You can add it to your home screen as a PWA (Progressive Web App) for a native app experience. On iPhone, tap Share → Add to Home Screen. On Android, tap the browser menu → Install App."},
             ]},
             {cat:"Market Data & Signals",color:C.green,items:[
@@ -3515,7 +3551,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             ]},
             {cat:"CLVR AI",color:C.gold2,items:[
               {q:"What is CLVR AI?",a:"CLVR AI is your personal AI market analyst, powered by Anthropic's Claude model. It analyzes live prices, signals, macro events, and market regime data in real-time to answer your questions and suggest trade setups."},
-              {q:"Is CLVR AI available on the Free plan?",a:"No — CLVR AI is a Pro feature. Free users can see the morning brief which includes AI-generated market summaries and 1 trade idea. Pro users get unlimited AI chat plus 4 daily trade ideas."},
+              {q:"Is CLVR AI available on the Free plan?",a:"Free users see the morning brief (1 trade idea). Pro unlocks CLVR AI Market Chat — ask Claude anything about markets, get trade ideas and analysis. Elite unlocks everything in Pro PLUS the ⚡ Quant Engine — MasterBrain runs a full 12-factor analysis generating precise entry, stop, and target levels with Kelly-sized position sizing. The Quant Engine is Elite exclusive."},
+              {q:"What is the AI Quant Engine and who can use it?",a:"The ⚡ Quant Engine is the most advanced feature in CLVRQuant, available exclusively to Elite members. It runs MasterBrain Analysis — a 12-factor confluence model across price action, funding rates, open interest, momentum, macro context, and sentiment — then generates a complete trade blueprint with entry, stop-loss, two profit targets, and an optimal position size. In the AI tab, tap ⚡ QUANT ENGINE to access it (Elite members only)."},
               {q:"Does the AI give financial advice?",a:"CLVRQuant and CLVR AI are for educational and informational purposes only. Nothing on this platform constitutes financial advice. Always do your own research and consult a licensed financial advisor before making investment decisions."},
             ]},
             {cat:"Alerts & Notifications",color:C.orange,items:[
@@ -3525,7 +3562,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             ]},
             {cat:"Billing & Subscription",color:C.red,items:[
               {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year (save $60). CLVR Elite is $129/month or $1,199/year (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
-              {q:"How do I upgrade to Pro?",a:"Tap the PRO button in the top navigation bar, or go to Account → Upgrade to Pro. You'll be taken to a secure Stripe checkout. After payment, your account is instantly upgraded."},
+              {q:"How do I upgrade to Pro or Elite?",a:"Tap your tier badge in the top navigation bar (the one showing UPGRADE, PRO, or ELITE). Free users are taken directly to the plan selector. Pro users who tap their PRO badge are directed straight to the Elite upgrade. Elite users who tap their ELITE badge can view downgrade options. You can also go to Account → Upgrade. All payments are processed by Stripe."},
+              {q:"How do I downgrade from Elite to Pro or Free?",a:"Tap your ELITE badge in the header — this opens the pricing modal where you can select Pro or Free. For billing changes mid-cycle, go to Account → Manage Subscription to access the Stripe billing portal where you can switch plans or cancel anytime."},
               {q:"Can I cancel my subscription?",a:"Yes, you can cancel anytime. Go to Account → Manage Subscription. Your Pro access continues until the end of your current billing period, then reverts to Free. No questions asked."},
               {q:"Is my payment information secure?",a:"All payments are processed by Stripe, the industry-standard payments platform used by thousands of businesses. CLVRQuant never stores your card details."},
             ]},

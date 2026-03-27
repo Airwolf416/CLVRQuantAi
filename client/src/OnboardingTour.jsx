@@ -74,13 +74,24 @@ const STEPS = [
   },
   {
     icon: "✦",
-    label: "AI ANALYST — PRO",
+    label: "CLVR AI — PRO",
     title: "Ask CLVR AI Anything",
-    subtitle: "CLVR AI — Powered by Claude",
-    body: "Type any question about markets and CLVR AI — powered by Claude — responds with institutional-grade analysis. Ask for trade ideas, macro breakdowns, sector rotations, or risk assessments. Pro subscribers also get a personalised Morning Brief at 6 AM ET daily.\n\nCLVR AI uses the Claude API by Anthropic to power its AI analysis engine.",
+    subtitle: "AI Market Chat — Powered by Claude",
+    body: "Pro members unlock CLVR AI Market Chat — type any question about markets and Claude responds with institutional-grade analysis. Ask for trade ideas, macro breakdowns, sector rotations, or risk assessments. You also get a personalised Morning Brief at 6 AM ET daily with 4 trade ideas.",
     cta: "Open AI →",
     tab: "ai",
     pro: true,
+  },
+  {
+    icon: "⚡",
+    label: "QUANT ENGINE — ELITE",
+    title: "MasterBrain Analysis",
+    subtitle: "12-Factor Confluence · Elite Exclusive",
+    body: "Elite members unlock the full ⚡ Quant Engine. MasterBrain runs a 12-factor confluence analysis — price action, funding rates, open interest, momentum, macro context, sentiment, and more — then generates a complete trade blueprint with precise entry, stop-loss, two profit targets, and a Kelly-optimised position size.\n\nTap the ⚡ QUANT ENGINE toggle in the AI tab to access it.",
+    cta: "Open AI →",
+    tab: "ai",
+    pro: true,
+    elite: true,
   },
 ];
 
@@ -171,13 +182,23 @@ export default function OnboardingTour({ onClose, onNavigateTab, isPro }) {
           }}>
             {current.label}
           </div>
-          {current.pro && (
+          {current.pro && !current.elite && (
             <div style={{
               fontFamily: MONO, fontSize: 9, color: "#a855f7", letterSpacing: "0.15em",
               background: "rgba(168,85,247,.1)", border: "1px solid rgba(168,85,247,.25)",
               borderRadius: 3, padding: "3px 8px", fontWeight: 600,
             }}>
               PRO
+            </div>
+          )}
+          {current.elite && (
+            <div style={{
+              fontFamily: MONO, fontSize: 9, color: "#e8c96d", letterSpacing: "0.15em",
+              background: "rgba(201,168,76,.12)", border: "1px solid rgba(201,168,76,.4)",
+              borderRadius: 3, padding: "3px 8px", fontWeight: 700,
+              textShadow: "0 0 6px rgba(201,168,76,.4)",
+            }}>
+              ELITE
             </div>
           )}
         </div>
