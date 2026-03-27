@@ -41,6 +41,7 @@ export const TIERS = {
       { label: "AI Quant Engine",                        locked: true,  note: "Elite only" },
       { label: "SEC Insider Flow",                       locked: true,  note: "Elite only" },
       { label: "Basket Analysis (3+ assets)",            locked: true,  note: "Elite only" },
+      { label: "Squawk Box (live signal announcer)",     locked: true,  note: "Elite only" },
     ],
   },
   elite: {
@@ -61,6 +62,7 @@ export const TIERS = {
       { label: "AI Quant Engine — full access",         locked: false, elite: true },
       { label: "SEC Insider Flow · Whale tracking",     locked: false, elite: true, tag: "ELITE EXCLUSIVE" },
       { label: "Basket Analysis (3+ assets)",           locked: false, elite: true, tag: "ELITE EXCLUSIVE" },
+      { label: "Squawk Box — Live Signal Announcer",    locked: false, elite: true, tag: "ELITE EXCLUSIVE" },
       { label: "Political Alpha · Deep news correlation",locked: false, elite: true, tag: "ELITE EXCLUSIVE" },
       { label: "Custom SMS & browser price alerts",     locked: false, elite: true },
       { label: "Funding rate flip alerts",              locked: false, elite: true },

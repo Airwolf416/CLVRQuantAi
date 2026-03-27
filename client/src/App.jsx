@@ -2326,7 +2326,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       <GlobalBellOverlay bellFlash={bellFlash} secsToClose={globalSecsToClose}/>
       {activeAlerts.length>0&&<div style={{animation:"slideDown .3s ease"}}><AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} C={C}/></div>}
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
-      <SquawkBox signals={liveSignals} soundEnabled={soundEnabled} isPro={isPro} muted={squawkMuted} onToggle={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})}/>
+      <SquawkBox signals={liveSignals} soundEnabled={soundEnabled} isPro={isElite} muted={squawkMuted} onToggle={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})}/>
       {tradeModalSig&&<TradeConfirmationModal sig={tradeModalSig} currentPrice={(cryptoPrices[tradeModalSig.token]||{}).price} masterScore={tradeModalSig.masterScore||50} riskOn={tradeModalSig.riskOn||50} onApprove={()=>{setToast(`Trade approved: ${tradeModalSig.token} ${tradeModalSig.dir}`);setTradeModalSig(null);}} onCancel={()=>setTradeModalSig(null)} C={C}/>}
 
       <PricingModal
@@ -2447,14 +2447,13 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               <span style={{fontFamily:MONO,fontSize:6,color:soundEnabled?C.cyan:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>SOUND</span>
               <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound ON":"Sound OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>{soundEnabled?"🔊":"🔇"}</button>
             </div>
-            {/* ── Squawk Box (Pro only) ── */}
-            {isPro&&(()=>{
+            {/* ── Squawk Box (Elite only) ── */}
+            {isElite?(()=>{
               const sqActive=!squawkMuted&&soundEnabled;
               const toggleSq=()=>{
                 setSquawkMuted(v=>{
                   const nv=!v;
                   try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}
-                  // Unlock speech synthesis on the enabling tap (must be inside a user gesture)
                   if(!nv) unlockSpeechSynthesis();
                   return nv;
                 });
@@ -2468,7 +2467,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                       style={{background:sqActive?"rgba(201,168,76,.07)":"none",border:`1px solid ${sqActive?"rgba(201,168,76,.5)":C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:sqActive?C.gold:C.muted2,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
                       📣
                     </button>
-                    {/* Red diagonal slash when disabled */}
                     {!sqActive&&(
                       <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}} viewBox="0 0 30 24">
                         <line x1="4" y1="20" x2="26" y2="4" stroke="#ff4060" strokeWidth="2.2" strokeLinecap="round"/>
@@ -2477,7 +2475,18 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                   </div>
                 </div>
               );
-            })()}
+            })():isPro?(
+              /* Pro users see a locked teaser — nudge to Elite */
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>SQUAWK</span>
+                <button data-testid="btn-squawk-locked" onClick={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
+                  title="Squawk Box — Elite feature. Tap to upgrade."
+                  style={{background:"rgba(201,168,76,.04)",border:`1px solid rgba(201,168,76,.15)`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+                  📣
+                  <span style={{position:"absolute",top:-3,right:-3,fontSize:7,lineHeight:1}}>🔒</span>
+                </button>
+              </div>
+            ):null}
             {/* ── Alerts / Push ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
               <span style={{fontFamily:MONO,fontSize:6,color:notifPerm==="granted"&&!pushDisabled?C.gold:C.red,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>ALERTS</span>
@@ -3178,8 +3187,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&<>
           <InsiderTab
-            isPro={isPro}
-            onUpgrade={onUpgrade}
+            isPro={isElite}
+            onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
             onAskAI={(q)=>{setAiInput(q);setTab("ai");}}
           />
         </>}
@@ -3379,8 +3388,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           {/* ── MY BASKET — Personalised Scalper/Swing Tool ── */}
           <div style={{marginBottom:6}}><SLabel>My Basket</SLabel></div>
           <MyBasket
-            isPro={isPro}
-            onUpgrade={onUpgrade}
+            isPro={isElite}
+            onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
             aiLoading={aiLoading}
             setAiLoading={setAiLoading}
             setAiOutput={setAiOutput}
@@ -3476,7 +3485,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 {feature:"SEC Insider Flow & Whale Tracking",free:false,pro:false,elite:true},
                 {feature:"Basket Analysis (3+ assets)",free:false,pro:false,elite:true},
                 {feature:"Custom price alerts & push notifications",free:false,pro:true,elite:true},
-                {feature:"Squawk Box (live signal announcer)",free:false,pro:true,elite:true},
+                {feature:"Squawk Box (live signal announcer)",free:false,pro:false,elite:true},
               ].map(({feature,free,pro,elite},i)=>{
                 const cell=(v,col)=><div style={{width:48,textAlign:"center",fontFamily:MONO,fontSize:9,color:v===false?C.muted:v===true?C.green:col,flexShrink:0}}>{v===false?"—":v===true?"✓":v}</div>;
                 return(
@@ -3539,7 +3548,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             {cat:"Getting Started",color:C.blue,items:[
               {q:"What is CLVRQuant?",a:"CLVRQuant is a mobile-first AI-powered market intelligence dashboard. It aggregates live prices across crypto, equities, commodities, and forex — combined with AI analysis, macro event tracking, and real-time signals — all in one clean app."},
               {q:"How do I create an account?",a:"Tap the Account tab (⚙) in the navigation bar, then choose Sign Up. Enter your email and password. That's it — you're in. Free accounts get access to all core market data, signals, and the daily brief."},
-              {q:"What's the difference between Free, Pro, and Elite?",a:"Free: live prices, macro calendar, basic signals. Pro ($29.99/mo): adds CLVR AI Market Chat (Claude-powered), 4 daily trade ideas in the morning brief, full signals, sentiment feed, and custom price alerts. Elite ($129/mo): everything in Pro plus the exclusive ⚡ AI Quant Engine (MasterBrain 12-factor analysis), SEC Insider Flow, Basket Analysis, whale tracking, and Hyperliquid perpetuals data. Tap your tier badge in the header to upgrade."},
+              {q:"What's the difference between Free, Pro, and Elite?",a:"Free: live prices, macro calendar, basic signals, 1 morning brief idea. Pro ($29.99/mo): CLVR AI Market Chat, 4 daily brief ideas, full signals, sentiment feed, and custom price alerts. Elite ($129/mo): everything in Pro plus the exclusive ⚡ AI Quant Engine (MasterBrain 12-factor analysis), SEC Insider Flow, My Basket Analysis, Squawk Box live signal announcer, whale tracking, and Hyperliquid perpetuals data. The Squawk Box, SEC Insider tab, and Basket Analysis are Elite-only — Pro users see a locked preview with an upgrade prompt. Tap your tier badge in the header to upgrade."},
               {q:"Can I use CLVRQuant on my phone?",a:"Yes — CLVRQuant is designed mobile-first. You can add it to your home screen as a PWA (Progressive Web App) for a native app experience. On iPhone, tap Share → Add to Home Screen. On Android, tap the browser menu → Install App."},
             ]},
             {cat:"Market Data & Signals",color:C.green,items:[
@@ -3559,6 +3568,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               {q:"How do I set a price alert?",a:"Tap the 🔔 Alerts tab in the navigation bar. Enter the asset, price target, and direction (above/below). Tap Save. You'll get a push notification when the price hits your target — even if the app is closed."},
               {q:"Why aren't I receiving push notifications?",a:"First, make sure you've allowed notifications when prompted. On iPhone, go to Settings → Notifications → Safari (or your browser) and enable notifications for CLVRQuant. If you added the app to your home screen, you may need to re-enable notifications from Settings → CLVRQuant."},
               {q:"What is the Morning Brief?",a:"The Morning Brief is a daily AI-generated market summary delivered every day at 6:00 AM ET. It covers overnight moves across crypto, equities, and commodities; key macro events for the day; and top trade setups. You can also receive it by email — subscribe in the Account tab."},
+              {q:"What is the Squawk Box and who can use it?",a:"The Squawk Box (📣 in the header) is an Elite-only live signal announcer. When active, it uses your device's text-to-speech to call out new QuantBrain signals in real-time — hands-free market awareness while you work. Pro users see a locked 📣 icon with a 🔒 badge; tap it to upgrade. Enable SOUND first, then tap 📣 SQUAWK to go live."},
             ]},
             {cat:"Billing & Subscription",color:C.red,items:[
               {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year (save $60). CLVR Elite is $129/month or $1,199/year (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
@@ -3610,11 +3620,13 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:"rgba(5,7,9,.97)",borderTop:`1px solid ${C.border}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
+          const eliteGatedTab=["insider"].includes(item.k)&&!isElite;
           return(
             <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
-              <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:C.muted2}}>{item.icon}</span>
+              <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:eliteGatedTab?C.muted:C.muted2}}>{item.icon}</span>
               {macroAlert&&!active&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
-              <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:active?C.gold:C.muted,letterSpacing:"0.06em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
+              {eliteGatedTab&&!active&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>🔒</div>}
+              <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:active?C.gold:eliteGatedTab?C.muted:C.muted,letterSpacing:"0.06em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
             </button>
           );
         })}

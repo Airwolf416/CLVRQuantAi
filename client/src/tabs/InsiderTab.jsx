@@ -146,9 +146,9 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
           </div>
         </div>
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(5,7,9,.85)", backdropFilter: "blur(8px)", borderRadius: 4 }}>
-          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 16, color: C.gold2, marginBottom: 4 }}>Pro Feature</div>
+          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 16, color: "#e8c96d", marginBottom: 4, textShadow: "0 0 12px rgba(201,168,76,.5)" }}>Elite Feature</div>
           <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted2, letterSpacing: "0.12em", marginBottom: 12, textTransform: "uppercase" }}>SEC Insider Intelligence</div>
-          <button data-testid="btn-upgrade-insider" onClick={onUpgrade} style={{ background: "rgba(201,168,76,.12)", border: `1px solid rgba(201,168,76,.35)`, borderRadius: 2, padding: "8px 20px", fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 13, color: C.gold2, cursor: "pointer" }}>Upgrade to Pro</button>
+          <button data-testid="btn-upgrade-insider" onClick={onUpgrade} style={{ background: "rgba(201,168,76,.18)", border: `1px solid rgba(201,168,76,.55)`, borderRadius: 2, padding: "8px 20px", fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 13, color: "#e8c96d", cursor: "pointer", boxShadow: "0 0 16px rgba(201,168,76,.2)" }}>Upgrade to Elite ⚡</button>
         </div>
       </div>
     );
