@@ -67,18 +67,25 @@ app.post(
           const txDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
           const txId = (session.payment_intent || session.id || '').toString().substring(0, 20);
 
-          let planName = 'CLVRQuantAI Pro';
+          // Detect plan tier from amount
+          const isEliteSubscription = amountCents >= 11900; // Elite: $129/mo or $1199/yr
+          let planName = isEliteSubscription ? 'CLVRQuantAI Elite' : 'CLVRQuantAI Pro';
           let planInterval = '';
-          let planColor = '#e8c96d';
-          if (amountCents === 2900) {
-            planName = 'Pro Plan — Monthly';
-            planInterval = '$29.00 / month';
-          } else if (amountCents === 19900) {
+          let planColor = isEliteSubscription ? '#c9a84c' : '#e8c96d';
+          if (amountCents >= 119000) {
+            planName = 'Elite Plan — Annual';
+            planInterval = `$${(amountCents / 100).toFixed(2)} / year`;
+            planColor = '#00c787';
+          } else if (amountCents >= 11900) {
+            planName = 'Elite Plan — Monthly';
+            planInterval = `$${(amountCents / 100).toFixed(2)} / month`;
+          } else if (amountCents >= 25000) {
             planName = 'Pro Plan — Annual';
-            planInterval = '$199.00 / year';
+            planInterval = `$${(amountCents / 100).toFixed(2)} / year`;
             planColor = '#00c787';
           } else {
-            planInterval = `$${(amountCents / 100).toFixed(2)} ${(session.currency || 'usd').toUpperCase()}`;
+            planName = 'Pro Plan — Monthly';
+            planInterval = `$${(amountCents / 100).toFixed(2)} / month`;
           }
 
           if (toEmail) {
@@ -88,8 +95,10 @@ app.post(
               from: payFrom,
               to: toEmail,
               replyTo: 'MikeClaver@CLVRQuantAI.com',
-              subject: 'Your CLVRQuantAI Payment Confirmation',
-              text: `Payment Confirmed — CLVRQuantAI\n\nThank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- 4 AI trade ideas per morning brief\n- Unlimited price alerts\n- Real-time signals with AI reasoning\n- Liquidation heatmap & whale tracker\n- Volume & funding rate monitors\n\nOpen your dashboard: https://clvrquantai.com\n\nQuestions? MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI`,
+              subject: isEliteSubscription ? '✦ Your CLVRQuantAI Elite Subscription is Active' : 'Your CLVRQuantAI Payment Confirmation',
+              text: isEliteSubscription
+                ? `✦ Elite Access Confirmed — CLVRQuantAI\n\nWelcome to the Elite tier, ${customerName}. Your exclusive CLVRQuantAI Elite subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Elite features (full access):\n- Unlimited CLVR AI — Claude Sonnet, unrestricted\n- All real-time signals: crypto, equities, commodities & forex\n- Full Hyperliquid perpetuals data & funding rate monitor\n- Daily Morning Intelligence Brief\n- Priority price alerts & push notifications\n- Phantom Wallet Solana integration\n- Macro calendar with AI event analysis\n\nTrade with precision — CLVRQuant is your edge.\nhttps://clvrquantai.com\n\nQuestions? MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI`
+                : `Payment Confirmed — CLVRQuantAI\n\nThank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- 4 AI trade ideas per morning brief\n- Unlimited price alerts\n- Real-time signals with AI reasoning\n- Liquidation heatmap & whale tracker\n- Volume & funding rate monitors\n\nOpen your dashboard: https://clvrquantai.com\n\nQuestions? MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI`,
               html: `
 <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:0;margin:0">
   <div style="max-width:600px;margin:0 auto;padding:32px 24px">
@@ -101,9 +110,9 @@ app.post(
     </div>
 
     <!-- Body -->
-    <p style="font-size:15px;color:#f0f4ff;margin-bottom:6px">Payment Confirmed</p>
+    <p style="font-size:15px;color:#f0f4ff;margin-bottom:6px">${isEliteSubscription ? '✦ Elite Access Confirmed' : 'Payment Confirmed'}</p>
     <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:20px">
-      Thank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active. Below is your receipt for your records.
+      ${isEliteSubscription ? `Welcome to the <strong style="color:#e8c96d">Elite tier</strong>, ${customerName}. Your exclusive CLVRQuantAI Elite membership is now active. Below is your receipt.` : `Thank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active. Below is your receipt for your records.`}
     </p>
 
     <!-- Invoice box -->
@@ -131,14 +140,20 @@ app.post(
 
     <!-- Pro features -->
     <div style="background:#0a1020;border:1px solid #1a2840;border-left:3px solid #e8c96d;border-radius:4px;padding:16px;margin-bottom:24px">
-      <div style="font-family:'Courier New',monospace;font-size:9px;color:#e8c96d;letter-spacing:0.2em;margin-bottom:10px">YOUR PRO FEATURES</div>
+      <div style="font-family:'Courier New',monospace;font-size:9px;color:#e8c96d;letter-spacing:0.2em;margin-bottom:10px">${isEliteSubscription ? 'YOUR ELITE ACCESS' : 'YOUR PRO FEATURES'}</div>
       <div style="font-size:12px;color:#6b7fa8;line-height:2">
-        ✦ CLVR AI — Full Claude-powered market analyst<br>
+        ${isEliteSubscription ? `✦ Unlimited CLVR AI — Claude Sonnet, unrestricted<br>
+        ✦ All real-time signals: crypto, equities, commodities &amp; forex<br>
+        ✦ Full Hyperliquid perpetuals data &amp; funding rate monitor<br>
+        ✦ Daily Morning Intelligence Brief<br>
+        ✦ Priority price alerts &amp; push notifications<br>
+        ✦ Phantom Wallet Solana integration<br>
+        ✦ Macro calendar with AI event-by-event analysis` : `✦ CLVR AI — Full Claude-powered market analyst<br>
         ✦ 4 AI trade ideas per morning brief<br>
         ✦ Unlimited price alerts<br>
         ✦ Real-time signals with AI reasoning<br>
         ✦ Liquidation heatmap &amp; whale tracker<br>
-        ✦ Volume &amp; funding rate monitors
+        ✦ Volume &amp; funding rate monitors`}
       </div>
     </div>
 

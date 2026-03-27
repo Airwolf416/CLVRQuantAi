@@ -967,7 +967,8 @@ function Dashboard({user,setUser}){
   const [biometricRegistering,setBiometricRegistering]=useState(false);
   const [stripePrices,setStripePrices]=useState({monthly:null,yearly:null,eliteMonthly:null,eliteYearly:null});
   const [checkoutLoading,setCheckoutLoading]=useState(false);
-  const isPro=userTier==="pro";
+  const isElite=userTier==="elite";
+  const isPro=userTier==="pro"||isElite;
 
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
@@ -1249,7 +1250,8 @@ function Dashboard({user,setUser}){
     const status=params.get("status");
     if(status==="success"&&sessionId){
       fetch(`/api/stripe/subscription?session_id=${sessionId}`).then(r=>r.json()).then(data=>{
-        if(data.tier==="pro"){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");}catch{}setToast("✦ Welcome to CLVRQuant Pro!");}
+        if(data.tier==="elite"){setUserTier("elite");try{localStorage.setItem("clvr_tier","elite");}catch{}setToast("✦ Welcome to CLVRQuant Elite!");}
+        else if(data.tier==="pro"){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");}catch{}setToast("✦ Welcome to CLVRQuant Pro!");}
       }).catch(()=>{});
       window.history.replaceState({},document.title,window.location.pathname);
     }
@@ -1269,8 +1271,14 @@ function Dashboard({user,setUser}){
     try{
       const r=await fetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
       const data=await r.json();
-      if(data.valid){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");localStorage.setItem("clvr_code",code);}catch{}setAccessCodeMsg(`✦ ${data.label} — Pro access activated`);setToast("✦ Pro access activated!");}
-      else{setAccessCodeMsg(data.error||"Invalid or expired code");}
+      if(data.valid){
+        const grantedTier=data.tier||"elite";
+        setUserTier(grantedTier);
+        try{localStorage.setItem("clvr_tier",grantedTier);localStorage.setItem("clvr_code",code);}catch{}
+        const tierLabel=grantedTier==="elite"?"Elite":"Pro";
+        setAccessCodeMsg(`✦ ${data.label} — ${tierLabel} access activated`);
+        setToast(`✦ ${tierLabel} access activated!`);
+      } else{setAccessCodeMsg(data.error||"Invalid or expired code");}
     }catch{setAccessCodeMsg("Verification failed");}
   },[accessCodeInput]);
 
@@ -2423,14 +2431,17 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:20,color:C.gold2,letterSpacing:"0.04em",lineHeight:1,textShadow:"0 0 24px rgba(201,168,76,.25)"}}>CLVRQuant</div>
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.25em",marginTop:2}}>TRADE SMARTER WITH AI · v2</div>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <div style={{display:"flex",alignItems:"flex-end",gap:6}}>
             {/* ── QR Code ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>QR CODE</span>
-              <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2}}>📷</button>
+              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>QR CODE</span>
+              <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>📷</button>
             </div>
             {/* ── Sound ── */}
-            <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound ON":"Sound OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2}}>{soundEnabled?"🔊":"🔇"}</button>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              <span style={{fontFamily:MONO,fontSize:6,color:soundEnabled?C.cyan:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>SOUND</span>
+              <button data-testid="btn-sound-toggle" onClick={toggleSound} title={soundEnabled?"Sound ON":"Sound OFF"} style={{background:"none",border:`1px solid ${soundEnabled?C.cyan:C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:soundEnabled?C.cyan:C.muted2,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>{soundEnabled?"🔊":"🔇"}</button>
+            </div>
             {/* ── Squawk Box (Pro only) ── */}
             {isPro&&(()=>{
               const sqActive=!squawkMuted&&soundEnabled;
@@ -2445,11 +2456,11 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               };
               return(
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                  <span style={{fontFamily:MONO,fontSize:6,color:sqActive?C.gold:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>SQUAWK</span>
+                  <span style={{fontFamily:MONO,fontSize:6,color:sqActive?C.gold:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>SQUAWK</span>
                   <div style={{position:"relative",display:"inline-flex"}}>
                     <button data-testid="btn-squawk-toggle" onClick={toggleSq}
                       title={sqActive?"Squawk Box LIVE — tap to mute":"Squawk Box OFF — tap to enable"}
-                      style={{background:sqActive?"rgba(201,168,76,.07)":"none",border:`1px solid ${sqActive?"rgba(201,168,76,.5)":C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:sqActive?C.gold:C.muted2}}>
+                      style={{background:sqActive?"rgba(201,168,76,.07)":"none",border:`1px solid ${sqActive?"rgba(201,168,76,.5)":C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:sqActive?C.gold:C.muted2,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
                       📣
                     </button>
                     {/* Red diagonal slash when disabled */}
@@ -2464,20 +2475,33 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             })()}
             {/* ── Alerts / Push ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-              <span style={{fontFamily:MONO,fontSize:6,color:notifPerm==="granted"&&!pushDisabled?C.gold:C.red,letterSpacing:"0.1em",textTransform:"uppercase"}}>ALERTS</span>
+              <span style={{fontFamily:MONO,fontSize:6,color:notifPerm==="granted"&&!pushDisabled?C.gold:C.red,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>ALERTS</span>
               <div style={{position:"relative",display:"inline-flex"}}>
                 <button data-testid="btn-push-notif" onClick={requestPush}
                   title={notifPerm==="granted"&&!pushDisabled?"Alerts ON — tap to pause":notifPerm==="granted"&&pushDisabled?"Alerts paused — tap to re-enable":"Tap to enable alerts"}
-                  style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red}}>
+                  style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
                   {notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}
                 </button>
                 {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
               </div>
             </div>
-            {isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700}}>PRO</div>
-            :<button data-testid="btn-upgrade-header" onClick={()=>setShowPricingModal(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"3px 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600}}>UPGRADE</button>}
-            <button data-testid="btn-lang-toggle" onClick={toggleLang} style={{background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"3px 7px",fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer",letterSpacing:"0.1em",fontWeight:700}}>{lang==="EN"?"FR":"EN"}</button>
-            <button data-testid="btn-signout" onClick={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"3px 6px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>OUT</button>
+            {/* ── Tier badge ── */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>{isElite?"TIER":isPro?"TIER":"PLAN"}</span>
+              {isElite?<div data-testid="badge-elite" style={{background:"rgba(201,168,76,.18)",border:`1px solid rgba(201,168,76,.55)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700,textShadow:"0 0 8px rgba(201,168,76,.4)",height:26,display:"flex",alignItems:"center"}}>ELITE</div>
+              :isPro?<div data-testid="badge-pro" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700,height:26,display:"flex",alignItems:"center"}}>PRO</div>
+              :<button data-testid="btn-upgrade-header" onClick={()=>setShowPricingModal(true)} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600,height:26,display:"flex",alignItems:"center"}}>UPGRADE</button>}
+            </div>
+            {/* ── Language toggle ── */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>LANG</span>
+              <button data-testid="btn-lang-toggle" onClick={toggleLang} style={{background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"4px 7px",fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer",letterSpacing:"0.1em",fontWeight:700,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>{lang==="EN"?"FR":"EN"}</button>
+            </div>
+            {/* ── Sign out ── */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>EXIT</span>
+              <button data-testid="btn-signout" onClick={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 7px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em",height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>OUT</button>
+            </div>
             <div style={{textAlign:"right"}}>
               <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
                 <LiveDot live={hlLive}/><span style={{fontFamily:MONO,fontSize:7,color:hlLive?C.green:C.orange}}>HL</span>
