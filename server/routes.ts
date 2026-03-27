@@ -2258,6 +2258,7 @@ export async function registerRoutes(
       macd_bear_cross: 0.72, ema_bear_stack: 0.68, mtf_confluence_bear: 0.75,
       price_below_ema200: 0.70,
       pattern_bull_flag: 0.65, pattern_head_shoulders: 0.60,
+      pattern_bear_flag: 0.65, pattern_double_top: 0.62, pattern_double_bottom: 0.62,
       sentiment_extreme_fear: 0.68, sentiment_extreme_greed: 0.55,
     };
     const direction = ind.trend?.includes("UP") ? "bull" : ind.trend?.includes("DOWN") ? "bear" : "neutral";
@@ -2271,6 +2272,7 @@ export async function registerRoutes(
       if (confluence?.direction === "BULLISH" || confluence?.direction === "LEANING_BULL") signals.push("mtf_confluence_bull");
       if (ind.currentPrice > ind.ema200)  signals.push("price_above_ema200");
       if (patternSignals.includes("pattern_bull_flag"))    signals.push("pattern_bull_flag");
+      if (patternSignals.includes("pattern_double_bottom")) signals.push("pattern_double_bottom");
       if (fngSignal === "sentiment_extreme_fear")          signals.push("sentiment_extreme_fear");
     } else if (direction === "bear") {
       if (ind.rsi <= 50 && ind.rsi >= 30) signals.push("rsi_bearish");
@@ -2281,6 +2283,8 @@ export async function registerRoutes(
       if (confluence?.direction === "BEARISH" || confluence?.direction === "LEANING_BEAR") signals.push("mtf_confluence_bear");
       if (ind.currentPrice < ind.ema200)  signals.push("price_below_ema200");
       if (patternSignals.includes("pattern_head_shoulders")) signals.push("pattern_head_shoulders");
+      if (patternSignals.includes("pattern_bear_flag"))     signals.push("pattern_bear_flag");
+      if (patternSignals.includes("pattern_double_top"))    signals.push("pattern_double_top");
       if (fngSignal === "sentiment_extreme_greed")           signals.push("sentiment_extreme_greed");
     }
     const PRIOR = 0.50;
@@ -2321,10 +2325,10 @@ export async function registerRoutes(
   function detectPatterns(candles: any[]): { patterns: string[]; detected: { head_and_shoulders: boolean; bull_flag: boolean } } {
     const prices = candles.map((c: any) => c.c);
     const highs  = candles.map((c: any) => c.h);
+    const lows   = candles.map((c: any) => c.l);
     const n      = prices.length;
-    const ORDER  = 5;
-    const TOLERANCE = 0.03;
 
+    // ── Local extrema helpers ─────────────────────────────────────────────────
     function localMaxima(arr: number[], order: number): number[] {
       const idx: number[] = [];
       for (let i = order; i < arr.length - order; i++) {
@@ -2336,31 +2340,128 @@ export async function registerRoutes(
       }
       return idx;
     }
-
-    const peaks = localMaxima(highs, ORDER);
-    let headAndShoulders = false;
-    if (peaks.length >= 3) {
-      const [i1, i2, i3] = peaks.slice(-3);
-      const p1 = highs[i1], p2 = highs[i2], p3 = highs[i3];
-      const headHighest = p2 > p1 && p2 > p3;
-      const shoulderSym = Math.abs(p1 - p3) / Math.max(p1, p3) <= TOLERANCE;
-      if (headHighest && shoulderSym) headAndShoulders = true;
+    function localMinima(arr: number[], order: number): number[] {
+      const idx: number[] = [];
+      for (let i = order; i < arr.length - order; i++) {
+        let isMin = true;
+        for (let j = i - order; j <= i + order; j++) {
+          if (j !== i && arr[j] <= arr[i]) { isMin = false; break; }
+        }
+        if (isMin) idx.push(i);
+      }
+      return idx;
     }
 
+    // ── Head & Shoulders (relaxed: order=3, tolerance=7%) ────────────────────
+    const H_ORDER = 3;
+    const H_TOL   = 0.07;
+    const peaks = localMaxima(highs, H_ORDER);
+    let headAndShoulders = false;
+    if (peaks.length >= 3) {
+      for (let k = peaks.length - 1; k >= 2; k--) {
+        const [i1, i2, i3] = [peaks[k-2], peaks[k-1], peaks[k]];
+        const p1 = highs[i1], p2 = highs[i2], p3 = highs[i3];
+        const headHighest  = p2 > p1 && p2 > p3;
+        const headProtrude = (p2 - Math.max(p1,p3)) / p2 >= 0.008; // head at least 0.8% above shoulders
+        const shoulderSym  = Math.abs(p1 - p3) / Math.max(p1, p3) <= H_TOL;
+        const spacingOk    = (i2 - i1) >= 2 && (i3 - i2) >= 2; // peaks not on adjacent candles
+        if (headHighest && headProtrude && shoulderSym && spacingOk) {
+          headAndShoulders = true;
+          break;
+        }
+      }
+    }
+
+    // ── Bull Flag (flagpole + tight consolidation) ────────────────────────────
     let bullFlag = false;
-    if (n >= 15) {
-      const recent = prices.slice(-15);
-      const startPx  = recent[0];
-      const peakPx   = Math.max(...recent);
-      const currentPx = recent[recent.length - 1];
-      const flagpoleGrowth = (peakPx - startPx) / startPx;
-      if (flagpoleGrowth > 0.05 && currentPx < peakPx && currentPx > startPx) bullFlag = true;
+    if (n >= 20) {
+      const lookback = prices.slice(-30);
+      const lbN = lookback.length;
+      // Find the highest point in the lookback window
+      let peakIdx = 0;
+      for (let i = 1; i < lbN; i++) {
+        if (lookback[i] > lookback[peakIdx]) peakIdx = i;
+      }
+      // Flagpole must have meaningful candles before and at least 3 after (the flag)
+      if (peakIdx >= 5 && peakIdx <= lbN - 3) {
+        // Flagpole: rise from the lowest point in the 10 candles leading up to peak
+        const beforeSlice  = lookback.slice(Math.max(0, peakIdx - 10), peakIdx + 1);
+        const flagpoleStart = Math.min(...beforeSlice);
+        const peakPx        = lookback[peakIdx];
+        const flagpoleGrowth = (peakPx - flagpoleStart) / flagpoleStart;
+        // Flag: small pullback after peak (1–15%) and still above the flagpole start
+        const currentPx = lookback[lbN - 1];
+        const pullback   = (peakPx - currentPx) / peakPx;
+        if (flagpoleGrowth >= 0.03 && pullback >= 0.005 && pullback <= 0.18 && currentPx > flagpoleStart) {
+          bullFlag = true;
+        }
+      }
+    }
+
+    // ── Bear Flag (flagpole down + tight consolidation up) ───────────────────
+    let bearFlag = false;
+    if (n >= 20) {
+      const lookback = prices.slice(-30);
+      const lbN = lookback.length;
+      let troughIdx = 0;
+      for (let i = 1; i < lbN; i++) {
+        if (lookback[i] < lookback[troughIdx]) troughIdx = i;
+      }
+      if (troughIdx >= 5 && troughIdx <= lbN - 3) {
+        const beforeSlice   = lookback.slice(Math.max(0, troughIdx - 10), troughIdx + 1);
+        const flagpoleStart = Math.max(...beforeSlice);
+        const troughPx      = lookback[troughIdx];
+        const flagpoleDrop  = (flagpoleStart - troughPx) / flagpoleStart;
+        const currentPx     = lookback[lbN - 1];
+        const bounce        = (currentPx - troughPx) / troughPx;
+        if (flagpoleDrop >= 0.03 && bounce >= 0.005 && bounce <= 0.18 && currentPx < flagpoleStart) {
+          bearFlag = true;
+        }
+      }
+    }
+
+    // ── Double Top (two similar highs with a valley) ─────────────────────────
+    let doubleTop = false;
+    if (peaks.length >= 2) {
+      const [i1, i2] = peaks.slice(-2);
+      const p1 = highs[i1], p2 = highs[i2];
+      const sym = Math.abs(p1 - p2) / Math.max(p1, p2);
+      const valleyLows = lows.slice(i1, i2 + 1);
+      const valley = Math.min(...valleyLows);
+      const dip = (Math.max(p1, p2) - valley) / Math.max(p1, p2);
+      if (sym <= 0.04 && dip >= 0.02 && (i2 - i1) >= 4) doubleTop = true;
+    }
+
+    // ── Double Bottom ─────────────────────────────────────────────────────────
+    let doubleBottom = false;
+    const troughs = localMinima(lows, H_ORDER);
+    if (troughs.length >= 2) {
+      const [j1, j2] = troughs.slice(-2);
+      const t1 = lows[j1], t2 = lows[j2];
+      const sym = Math.abs(t1 - t2) / Math.min(t1, t2);
+      const peakHighs = highs.slice(j1, j2 + 1);
+      const peak = Math.max(...peakHighs);
+      const rise = (peak - Math.min(t1, t2)) / Math.min(t1, t2);
+      if (sym <= 0.04 && rise >= 0.02 && (j2 - j1) >= 4) doubleBottom = true;
     }
 
     const patterns: string[] = [];
     if (headAndShoulders) patterns.push("pattern_head_shoulders");
     if (bullFlag)         patterns.push("pattern_bull_flag");
-    return { patterns, detected: { head_and_shoulders: headAndShoulders, bull_flag: bullFlag } };
+    if (bearFlag)         patterns.push("pattern_bear_flag");
+    if (doubleTop)        patterns.push("pattern_double_top");
+    if (doubleBottom)     patterns.push("pattern_double_bottom");
+
+    return {
+      patterns,
+      detected: {
+        head_and_shoulders: headAndShoulders,
+        bull_flag: bullFlag,
+        bear_flag: bearFlag,
+        double_top: doubleTop,
+        double_bottom: doubleBottom,
+      } as any,
+    };
   }
 
   async function fetchFearAndGreed(): Promise<{ value: number; classification: string; signal: string | null }> {
@@ -2416,8 +2517,11 @@ MULTI-TIMEFRAME CONFLUENCE (EMA9 vs EMA21):
 
 PATTERN RECOGNITION ENGINE:
   Detected patterns: ${patternsStr}
-  Head & Shoulders: ${patternResult.detected.head_and_shoulders ? "YES — bearish reversal warning" : "No"}
-  Bull Flag:        ${patternResult.detected.bull_flag ? "YES — continuation setup" : "No"}
+  Bull Flag:         ${(patternResult.detected as any).bull_flag ? "YES — bullish continuation" : "No"}
+  Bear Flag:         ${(patternResult.detected as any).bear_flag ? "YES — bearish continuation" : "No"}
+  Head & Shoulders:  ${patternResult.detected.head_and_shoulders ? "YES — bearish reversal warning" : "No"}
+  Double Top:        ${(patternResult.detected as any).double_top ? "YES — distribution / resistance" : "No"}
+  Double Bottom:     ${(patternResult.detected as any).double_bottom ? "YES — accumulation / support" : "No"}
 
 MACRO SENTIMENT (Fear & Greed Index):
   Value: ${fng.value}/100 — ${fng.classification} ${fngEmoji}
