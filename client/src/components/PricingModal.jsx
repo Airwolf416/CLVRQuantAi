@@ -233,14 +233,14 @@ export default function PricingModal({ isOpen, onClose, userTier = "free", onUpg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
                   <div style={{ fontFamily: MONO, fontSize: 48, fontWeight: 900, color: C.white, lineHeight: 1, letterSpacing: "-0.03em" }}>
-                    ${monthlyDisplay % 1 === 0 ? monthlyDisplay.toFixed(0) : monthlyDisplay.toFixed(2)}
+                    ${yearly ? yearlyTotal.toLocaleString() : (monthlyDisplay % 1 === 0 ? monthlyDisplay.toFixed(0) : monthlyDisplay.toFixed(2))}
                   </div>
-                  <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, marginBottom: 6 }}>/mo</div>
+                  <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, marginBottom: 6 }}>{yearly ? "/yr" : "/mo"}</div>
                 </div>
                 {yearly && (
                   <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 4 }}>
                     <span style={{ color: C.green }}>Save ${tier.yearlySavings}</span>
-                    <span style={{ marginLeft: 6 }}> · billed ${yearlyTotal}/yr</span>
+                    <span style={{ marginLeft: 6 }}> · ${(tier.yearlyPrice / 12).toFixed(2)}/mo equivalent</span>
                   </div>
                 )}
               </div>
