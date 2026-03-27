@@ -214,23 +214,32 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   }, []);
 
   const getPriceSnap = useCallback((sym) => {
-    // 1. Hyperliquid perp (most real-time for crypto)
+    const fmtChg = (c) => c != null ? ` (${c >= 0 ? "+" : ""}${c.toFixed(2)}%)` : "";
+    // 1. Hyperliquid perp — most real-time for crypto
     const perp = storePerps?.[sym];
     if (perp?.price) {
-      const chg = perp.change24h != null ? ` (${perp.change24h >= 0 ? "+" : ""}${perp.change24h.toFixed(2)}%)` : "";
       const fund = perp.funding != null ? ` Fund:${(perp.funding * 100).toFixed(4)}%/8h` : "";
-      return `$${perp.price.toFixed(perp.price >= 100 ? 0 : perp.price >= 1 ? 2 : 4)}${chg}${fund} [LIVE]`;
+      return `$${perp.price.toFixed(perp.price >= 100 ? 0 : perp.price >= 1 ? 2 : 4)}${fmtChg(perp.change24h)}${fund} [LIVE]`;
     }
-    // 2. Yahoo Finance basket price (covers all 140+ assets)
+    // 2. Real-time store prices — same source as the Markets tab (WebSocket / Binance / Finnhub)
+    const spot = storeSpot?.[sym];
+    if (spot?.price > 0) return `${fmtPrice(spot.price, "USD")}${fmtChg(spot.chg)} [LIVE]`;
+
+    const crypto = cryptoPrices?.[sym];
+    if (crypto?.price > 0) return `${fmtPrice(crypto.price, "USD")}${fmtChg(crypto.chg)} [LIVE]`;
+
+    const equity = equityPrices?.[sym];
+    if (equity?.price > 0) return `${fmtPrice(equity.price, "USD")}${fmtChg(equity.chg)} [LIVE]`;
+
+    const metal = metalPrices?.[sym];
+    if (metal?.price > 0) return `${fmtPrice(metal.price, "USD")}${fmtChg(metal.chg)} [LIVE]`;
+
+    // 3. Basket API fallback — covers global stocks, intl equities, commodities not in live feed
     const bp = bPrices?.[sym];
-    if (bp?.price && bp.price > 0) {
-      const chg = bp.chg != null ? ` (${bp.chg >= 0 ? "+" : ""}${bp.chg.toFixed(2)}%)` : "";
+    if (bp?.price > 0) {
       const liveTag = bp.live ? " [LIVE]" : " [est]";
-      return `${fmtPrice(bp.price, bp.currency)}${chg}${liveTag}`;
+      return `${fmtPrice(bp.price, bp.currency)}${fmtChg(bp.chg)}${liveTag}`;
     }
-    // 3. Existing store fallbacks
-    const spot = storeSpot?.[sym]?.price || cryptoPrices?.[sym]?.price || equityPrices?.[sym]?.price || metalPrices?.[sym]?.price;
-    if (spot) return `$${spot.toFixed(spot >= 100 ? 0 : 2)} [est]`;
     return "loading…";
   }, [storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, bPrices, fmtPrice]);
 
@@ -384,7 +393,7 @@ Format clearly with each asset as a header. Be direct and numerical.`;
               const metal = metalPrices?.[sym];
               // Priority: HL perp > store spot > crypto store > equity store > metal store > basket API
               const rawPrice = perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.price;
-              const rawChg = perp?.change24h ?? crypto?.chg ?? spot?.chg ?? equity?.chg ?? metal?.chg ?? bp?.chg ?? 0;
+              const rawChg = perp?.change24h ?? spot?.chg ?? crypto?.chg ?? equity?.chg ?? metal?.chg ?? bp?.chg ?? 0;
               const currency = bp?.currency || "USD";
               const isLive = !!(perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.live);
               const priceStr = rawPrice ? fmtPrice(rawPrice, currency) : (pricesLoading ? "…" : "—");
