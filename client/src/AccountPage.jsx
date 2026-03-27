@@ -103,7 +103,7 @@ function OwnerResendBrief({ C, MONO }) {
   );
 }
 
-export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) {
+export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, onTestBell }) {
   const [tab, setTab] = useState("subscription");
   const [acct, setAcct] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -577,6 +577,31 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade }) 
           {acct.isOwner && (
             <div style={{ border:`1px solid rgba(201,168,76,0.15)`, borderRadius:8, padding:"16px", marginBottom:12, background:"rgba(201,168,76,0.03)" }}>
               <div style={{ fontFamily:MONO, fontSize:9, color:C.gold, letterSpacing:"0.2em", marginBottom:14 }}>⚡ OWNER — BROADCAST TOOLS</div>
+
+              {/* ── Bell Test Panel ── */}
+              <div style={{ border:`1px solid rgba(201,168,76,0.25)`, borderRadius:6, padding:"14px", marginBottom:16, background:"rgba(201,168,76,0.06)" }}>
+                <div style={{ fontFamily:MONO, fontSize:9, color:C.gold, letterSpacing:"0.15em", marginBottom:6 }}>🔔 MARKET BELL TEST</div>
+                <div style={{ fontSize:11, color:C.muted2, fontFamily:MONO, marginBottom:12, lineHeight:1.6 }}>
+                  Fire the NYSE open or close bell immediately. Confirm sound is ON (🔊) in the header first. This tests both the audio and the banner.
+                </div>
+                <div style={{ display:"flex", gap:10 }}>
+                  <button
+                    data-testid="btn-test-bell-open"
+                    onClick={() => onTestBell?.("open")}
+                    style={{ flex:1, padding:"10px 0", borderRadius:4, border:`1px solid ${C.green}`, background:"rgba(0,199,135,.1)", color:C.green, fontFamily:MONO, fontSize:11, fontWeight:700, cursor:"pointer", letterSpacing:"0.08em" }}
+                  >
+                    🔔 OPEN BELL (9:30)
+                  </button>
+                  <button
+                    data-testid="btn-test-bell-close"
+                    onClick={() => onTestBell?.("close")}
+                    style={{ flex:1, padding:"10px 0", borderRadius:4, border:`1px solid ${C.red}`, background:"rgba(255,64,96,.1)", color:C.red, fontFamily:MONO, fontSize:11, fontWeight:700, cursor:"pointer", letterSpacing:"0.08em" }}
+                  >
+                    🔔 CLOSE BELL (4pm)
+                  </button>
+                </div>
+              </div>
+
               <OwnerResendBrief C={C} MONO={MONO} />
               <OwnerEmailTool C={C} MONO={MONO}
                 title="Service Disruption Apology"
