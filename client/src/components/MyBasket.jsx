@@ -215,25 +215,26 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
 
   const getPriceSnap = useCallback((sym) => {
     const fmtChg = (c) => c != null ? ` (${c >= 0 ? "+" : ""}${c.toFixed(2)}%)` : "";
-    // 1. Hyperliquid perp — most real-time for crypto
-    const perp = storePerps?.[sym];
+    // Always use store chg sources first (matches Markets tab ticker exactly)
+    const crypto = cryptoPrices?.[sym];
+    const equity = equityPrices?.[sym];
+    const metal  = metalPrices?.[sym];
+    const spot   = storeSpot?.[sym];
+    const perp   = storePerps?.[sym];
+    // chg: same source priority as Markets tab
+    const storeChg = crypto?.chg ?? equity?.chg ?? metal?.chg ?? spot?.chg ?? perp?.change24h;
+    const chgStr = fmtChg(storeChg);
+
+    // 1. Best price: HL perp (sub-second for crypto)
     if (perp?.price) {
       const fund = perp.funding != null ? ` Fund:${(perp.funding * 100).toFixed(4)}%/8h` : "";
-      return `$${perp.price.toFixed(perp.price >= 100 ? 0 : perp.price >= 1 ? 2 : 4)}${fmtChg(perp.change24h)}${fund} [LIVE]`;
+      return `$${perp.price.toFixed(perp.price >= 100 ? 0 : perp.price >= 1 ? 2 : 4)}${chgStr}${fund} [LIVE]`;
     }
-    // 2. Real-time store prices — same source as the Markets tab (WebSocket / Binance / Finnhub)
-    const spot = storeSpot?.[sym];
-    if (spot?.price > 0) return `${fmtPrice(spot.price, "USD")}${fmtChg(spot.chg)} [LIVE]`;
-
-    const crypto = cryptoPrices?.[sym];
-    if (crypto?.price > 0) return `${fmtPrice(crypto.price, "USD")}${fmtChg(crypto.chg)} [LIVE]`;
-
-    const equity = equityPrices?.[sym];
-    if (equity?.price > 0) return `${fmtPrice(equity.price, "USD")}${fmtChg(equity.chg)} [LIVE]`;
-
-    const metal = metalPrices?.[sym];
-    if (metal?.price > 0) return `${fmtPrice(metal.price, "USD")}${fmtChg(metal.chg)} [LIVE]`;
-
+    // 2. Real-time store prices — same source as Markets tab
+    if (spot?.price > 0)   return `${fmtPrice(spot.price,   "USD")}${chgStr} [LIVE]`;
+    if (crypto?.price > 0) return `${fmtPrice(crypto.price, "USD")}${chgStr} [LIVE]`;
+    if (equity?.price > 0) return `${fmtPrice(equity.price, "USD")}${chgStr} [LIVE]`;
+    if (metal?.price > 0)  return `${fmtPrice(metal.price,  "USD")}${chgStr} [LIVE]`;
     // 3. Basket API fallback — covers global stocks, intl equities, commodities not in live feed
     const bp = bPrices?.[sym];
     if (bp?.price > 0) {
@@ -391,9 +392,10 @@ Format clearly with each asset as a header. Be direct and numerical.`;
               const crypto = cryptoPrices?.[sym];
               const equity = equityPrices?.[sym];
               const metal = metalPrices?.[sym];
-              // Priority: HL perp > store spot > crypto store > equity store > metal store > basket API
+              // Price: HL perp > store spot > crypto store > equity store > metal store > basket API
               const rawPrice = perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.price;
-              const rawChg = perp?.change24h ?? spot?.chg ?? crypto?.chg ?? equity?.chg ?? metal?.chg ?? bp?.chg ?? 0;
+              // Change %: always use the same source as the Markets tab ticker (crypto/equity/metal stores first)
+              const rawChg = crypto?.chg ?? equity?.chg ?? metal?.chg ?? spot?.chg ?? perp?.change24h ?? bp?.chg ?? 0;
               const currency = bp?.currency || "USD";
               const isLive = !!(perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.live);
               const priceStr = rawPrice ? fmtPrice(rawPrice, currency) : (pricesLoading ? "…" : "—");

@@ -79,7 +79,14 @@ async function fetchMarketData(): Promise<MarketData> {
       }
 
       const metals = res.metals || {};
-      const metalSyms = [["XAU", "Gold XAU/USD"], ["XAG", "Silver XAG/USD"]];
+      const metalSyms: [string, string][] = [
+        ["XAU", "Gold XAU/USD"],
+        ["XAG", "Silver XAG/USD"],
+        ["WTI", "WTI Crude Oil"],
+        ["BRENT", "Brent Crude Oil"],
+        ["NATGAS", "Natural Gas"],
+        ["COPPER", "Copper"],
+      ];
       for (const [sym, label] of metalSyms) {
         const d = metals[sym];
         if (d && d.price) {
@@ -196,7 +203,9 @@ MACRO EVENTS [fetched: ${macroFetchedAt}]:
 LAYER 2 — LIVE MARKET DATA [fetched: ${macroFetchedAt}]:
 CRYPTO: ${cryptoStr || "Data unavailable"}
 EQUITIES: ${eqStr || "Data unavailable"}
-METALS: ${metalStr || "Data unavailable"}
+ENERGY & COMMODITIES (use these exact prices in your Oil & Gas commentary):
+  ${marketData.metals.filter(m => ["WTI Crude Oil","Brent Crude Oil","Natural Gas"].includes(m.symbol)).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
+METALS: ${marketData.metals.filter(m => ["Gold XAU/USD","Silver XAG/USD","Copper"].includes(m.symbol)).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
 FOREX: ${fxStr || "Data unavailable"}
 
 LAYER 3 — SESSION: ${sessionCtx}
@@ -231,8 +240,13 @@ Return a JSON object with EXACTLY these fields:
     },
     {
       "emoji": "🥇",
-      "title": "Gold & Commodities",
-      "text": "3-4 sentences: XAU current price, real yield driver, DXY correlation, WTI oil price. End with 🟢/🟡/🔴 bias."
+      "title": "Gold & Silver",
+      "text": "3-4 sentences: XAU current price and trend, real yield driver, DXY correlation, silver ratio. End with 🟢/🟡/🔴 bias."
+    },
+    {
+      "emoji": "🛢️",
+      "title": "Oil & Gas — Geopolitical Watch",
+      "text": "4-5 sentences covering: (1) WTI and Brent crude current prices and today's move direction, (2) key supply/demand drivers — OPEC+ production decisions, US inventory data, or demand outlook, (3) geopolitical risk premium — any active conflicts, sanctions, or shipping disruptions affecting energy flows (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), (4) natural gas price if notable, (5) how oil price trajectory affects inflation expectations and central bank posture. End with 🟢/🟡/🔴 bias for energy sector."
     }
   ],
   "topTrade": {
