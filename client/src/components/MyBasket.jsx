@@ -215,34 +215,34 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
 
   const getPriceSnap = useCallback((sym) => {
     const fmtChg = (c) => c != null ? ` (${c >= 0 ? "+" : ""}${c.toFixed(2)}%)` : "";
-    // Always use store chg sources first (matches Markets tab ticker exactly)
     const crypto = cryptoPrices?.[sym];
     const equity = equityPrices?.[sym];
     const metal  = metalPrices?.[sym];
-    const spot   = storeSpot?.[sym];
     const perp   = storePerps?.[sym];
-    // chg: same source priority as Markets tab
-    const storeChg = crypto?.chg ?? equity?.chg ?? metal?.chg ?? spot?.chg ?? perp?.change24h;
-    const chgStr = fmtChg(storeChg);
+    const bp     = bPrices?.[sym];
 
-    // 1. Best price: HL perp (sub-second for crypto)
-    if (perp?.price) {
-      const fund = perp.funding != null ? ` Fund:${(perp.funding * 100).toFixed(4)}%/8h` : "";
-      return `$${perp.price.toFixed(perp.price >= 100 ? 0 : perp.price >= 1 ? 2 : 4)}${chgStr}${fund} [LIVE]`;
+    // Determine category — matches Markets tab SPOT data source routing
+    if (crypto?.price > 0) {
+      // Crypto: Markets tab uses cryptoPrices (Finnhub spot); perp for funding info
+      const fund = perp?.funding != null ? ` Fund:${(perp.funding * 100).toFixed(4)}%/8h` : "";
+      const chg = fmtChg(crypto.chg ?? perp?.change24h);
+      return `${fmtPrice(crypto.price, "USD")}${chg}${fund} [LIVE]`;
     }
-    // 2. Real-time store prices — same source as Markets tab
-    if (spot?.price > 0)   return `${fmtPrice(spot.price,   "USD")}${chgStr} [LIVE]`;
-    if (crypto?.price > 0) return `${fmtPrice(crypto.price, "USD")}${chgStr} [LIVE]`;
-    if (equity?.price > 0) return `${fmtPrice(equity.price, "USD")}${chgStr} [LIVE]`;
-    if (metal?.price > 0)  return `${fmtPrice(metal.price,  "USD")}${chgStr} [LIVE]`;
-    // 3. Basket API fallback — covers global stocks, intl equities, commodities not in live feed
-    const bp = bPrices?.[sym];
+    if (equity?.price > 0) {
+      // Equities: Markets tab SPOT uses equityPrices (Finnhub WS) — match exactly
+      return `${fmtPrice(equity.price, "USD")}${fmtChg(equity.chg)} [LIVE]`;
+    }
+    if (metal?.price > 0) {
+      // Commodities: Markets tab uses metalPrices (Gold-API / Finnhub) — match exactly
+      return `${fmtPrice(metal.price, "USD")}${fmtChg(metal.chg)} [LIVE]`;
+    }
+    // Fallback — basket REST API (intl stocks, assets not in live feeds)
     if (bp?.price > 0) {
       const liveTag = bp.live ? " [LIVE]" : " [est]";
       return `${fmtPrice(bp.price, bp.currency)}${fmtChg(bp.chg)}${liveTag}`;
     }
     return "loading…";
-  }, [storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, bPrices, fmtPrice]);
+  }, [storePerps, cryptoPrices, equityPrices, metalPrices, bPrices, fmtPrice]);
 
   const runBasket = useCallback(async () => {
     if (selected.size === 0 || basketLoading) return;
@@ -385,19 +385,33 @@ Format clearly with each asset as a header. Be direct and numerical.`;
               const active = selected.has(sym);
               const blocked = !active && selected.size >= MAX_ASSETS;
               const catColor = assetCat === "crypto" ? C.cyan : assetCat === "equities" ? C.blue : C.gold;
-              // Live price — store real-time sources first, basket-api as fallback
-              const bp = bPrices?.[sym];
-              const perp = storePerps?.[sym];
-              const spot = storeSpot?.[sym];
+              // Live price — route by category to match Markets tab SPOT data source exactly
+              const bp     = bPrices?.[sym];
+              const perp   = storePerps?.[sym];
               const crypto = cryptoPrices?.[sym];
               const equity = equityPrices?.[sym];
-              const metal = metalPrices?.[sym];
-              // Price: HL perp > store spot > crypto store > equity store > metal store > basket API
-              const rawPrice = perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.price;
-              // Change %: always use the same source as the Markets tab ticker (crypto/equity/metal stores first)
-              const rawChg = crypto?.chg ?? equity?.chg ?? metal?.chg ?? spot?.chg ?? perp?.change24h ?? bp?.chg ?? 0;
+              const metal  = metalPrices?.[sym];
+              // Per-category routing — same as Markets tab Spot sub-tab:
+              //   crypto      → cryptoPrices (Finnhub spot)  [perp as secondary for crypto]
+              //   equities    → equityPrices (Finnhub WS)
+              //   commodities → metalPrices  (Gold-API / Finnhub)
+              //   fallback    → basket REST API
+              const rawPrice =
+                assetCat === "crypto"      ? (crypto?.price  || perp?.price  || bp?.price) :
+                assetCat === "equities"    ? (equity?.price  || bp?.price) :
+                assetCat === "commodities" ? (metal?.price   || bp?.price) :
+                                             bp?.price;
+              const rawChg =
+                assetCat === "crypto"      ? (crypto?.chg  ?? perp?.change24h ?? bp?.chg ?? 0) :
+                assetCat === "equities"    ? (equity?.chg  ?? bp?.chg ?? 0) :
+                assetCat === "commodities" ? (metal?.chg   ?? bp?.chg ?? 0) :
+                                             (bp?.chg ?? 0);
               const currency = bp?.currency || "USD";
-              const isLive = !!(perp?.price || spot?.price || crypto?.price || equity?.price || metal?.price || bp?.live);
+              const isLive =
+                assetCat === "crypto"      ? !!(crypto?.price || perp?.price) :
+                assetCat === "equities"    ? !!(equity?.price || bp?.live) :
+                assetCat === "commodities" ? !!(metal?.price  || bp?.live) :
+                                             !!bp?.live;
               const priceStr = rawPrice ? fmtPrice(rawPrice, currency) : (pricesLoading ? "…" : "—");
               const chgColor = rawChg > 0 ? C.green : rawChg < 0 ? C.red : C.muted;
               return (
