@@ -398,11 +398,11 @@ async function ensureStripeProducts() {
 
     // Check if prices with the required lookup_keys already exist
     const existing = await stripe.prices.list({
-      lookup_keys: ['pro_monthly', 'pro_yearly'],
+      lookup_keys: ['pro_monthly1', 'pro_yearly1'],
       active: true,
     });
     if (existing.data.length >= 2) {
-      log(`Stripe prices OK: found pro_monthly + pro_yearly by lookup_key`, 'stripe');
+      log(`Stripe prices OK: found pro_monthly1 + pro_yearly1 by lookup_key`, 'stripe');
       return;
     }
 
@@ -419,28 +419,28 @@ async function ensureStripeProducts() {
     }
 
     // Create missing prices with lookup_keys
-    const hasMonthly = existing.data.some(p => p.lookup_key === 'pro_monthly');
-    const hasYearly  = existing.data.some(p => p.lookup_key === 'pro_yearly');
+    const hasMonthly = existing.data.some(p => p.lookup_key === 'pro_monthly1');
+    const hasYearly  = existing.data.some(p => p.lookup_key === 'pro_yearly1');
 
     if (!hasMonthly) {
       await stripe.prices.create({
         product: product.id, unit_amount: 2900, currency: 'usd',
         recurring: { interval: 'month' },
-        lookup_key: 'pro_monthly',
+        lookup_key: 'pro_monthly1',
         transfer_lookup_key: true,
-        metadata: { plan: 'pro_monthly' },
+        metadata: { plan: 'pro_monthly1' },
       });
-      log('Created price: pro_monthly ($29/month)', 'stripe');
+      log('Created price: pro_monthly1 ($29/month)', 'stripe');
     }
     if (!hasYearly) {
       await stripe.prices.create({
         product: product.id, unit_amount: 19900, currency: 'usd',
         recurring: { interval: 'year' },
-        lookup_key: 'pro_yearly',
+        lookup_key: 'pro_yearly1',
         transfer_lookup_key: true,
-        metadata: { plan: 'pro_yearly' },
+        metadata: { plan: 'pro_yearly1' },
       });
-      log('Created price: pro_yearly ($199/year)', 'stripe');
+      log('Created price: pro_yearly1 ($199/year)', 'stripe');
     }
   } catch (e: any) {
     console.error('[stripe] Product setup error:', e.message);

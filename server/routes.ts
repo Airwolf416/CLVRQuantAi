@@ -3181,13 +3181,13 @@ Every level must be technically defensible. Return JSON only.`;
 
       // Fetch all tier prices in one request
       const { data: byKey } = await stripe.prices.list({
-        lookup_keys: ['pro_monthly', 'pro_yearly', 'elite_monthly', 'elite_yearly'],
+        lookup_keys: ['pro_monthly1', 'pro_yearly1', 'elite_monthly', 'elite_yearly'],
         active: true,
         expand: ['data.product'],
       });
 
-      const proMonthly    = byKey.find(p => p.lookup_key === 'pro_monthly');
-      const proYearly     = byKey.find(p => p.lookup_key === 'pro_yearly');
+      const proMonthly    = byKey.find(p => p.lookup_key === 'pro_monthly1');
+      const proYearly     = byKey.find(p => p.lookup_key === 'pro_yearly1');
       const eliteMonthly  = byKey.find(p => p.lookup_key === 'elite_monthly');
       const eliteYearly   = byKey.find(p => p.lookup_key === 'elite_yearly');
 
@@ -3214,17 +3214,17 @@ Every level must be technically defensible. Return JSON only.`;
             result[key] = toObj(p);
           }
         }
-        if (result['pro_monthly'] && result['pro_yearly']) {
+        if (result['pro_monthly1'] && result['pro_yearly1']) {
           return res.json({
-            monthly:      result['pro_monthly'],
-            yearly:       result['pro_yearly'],
+            monthly:      result['pro_monthly1'],
+            yearly:       result['pro_yearly1'],
             eliteMonthly: result['elite_monthly'] ?? null,
             eliteYearly:  result['elite_yearly'] ?? null,
           });
         }
       }
 
-      res.status(404).json({ error: 'No active prices found — ensure pro_monthly, pro_yearly, elite_monthly, elite_yearly lookup_keys exist in Stripe' });
+      res.status(404).json({ error: 'No active prices found — ensure pro_monthly1, pro_yearly1, elite_monthly, elite_yearly lookup_keys exist in Stripe' });
     } catch (e: any) {
       console.error('[stripe] /api/prices error:', e.message);
       res.status(500).json({ error: e.message });
