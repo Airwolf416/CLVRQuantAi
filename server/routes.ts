@@ -3266,14 +3266,25 @@ Every level must be technically defensible. Return JSON only.`;
 
     try {
       const stripe = await getUncachableStripeClient();
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["line_items"] });
       if (session.payment_status === 'paid' && session.subscription) {
-        const sub = await stripe.subscriptions.retrieve(session.subscription as string);
+        const sub = await stripe.subscriptions.retrieve(session.subscription as string, { expand: ["items.data.price"] });
+        // Detect Elite plan by lookup_key or by price amount (Elite monthly ~$12900, yearly ~$119900)
+        const priceItem = (sub as any).items?.data?.[0]?.price;
+        const lookupKey = priceItem?.lookup_key || "";
+        const unitAmount = priceItem?.unit_amount || 0;
+        const isElitePlan = lookupKey.startsWith("elite") || unitAmount >= 11900;
+        // Store the tier in DB for the signed-in user
+        const sessionUserId = (req.session as any)?.userId;
+        if (sessionUserId) {
+          const tierToSet = isElitePlan ? "elite" : "pro";
+          await pool.query("UPDATE users SET tier = $1, stripe_subscription_id = $2 WHERE id = $3", [tierToSet, sub.id, sessionUserId]);
+        }
         return res.json({
-          tier: "pro",
+          tier: isElitePlan ? "elite" : "pro",
           status: sub.status,
-          currentPeriodEnd: sub.current_period_end,
-          cancelAtPeriodEnd: sub.cancel_at_period_end,
+          currentPeriodEnd: (sub as any).current_period_end,
+          cancelAtPeriodEnd: (sub as any).cancel_at_period_end,
         });
       }
       res.json({ tier: "free" });
@@ -3438,7 +3449,7 @@ Every level must be technically defensible. Return JSON only.`;
       if (!userId || !(await isOwner(userId))) {
         return res.json({ valid: false, error: "This code is reserved" });
       }
-      return res.json({ valid: true, tier: "pro", type: "owner", label: "Owner Access" });
+      return res.json({ valid: true, tier: "elite", type: "owner", label: "Owner Access" });
     }
 
     if (!userId) {
@@ -3479,14 +3490,55 @@ Every level must be technically defensible. Return JSON only.`;
       }
       const promoExpiry = ac.expires_at || null;
       await storage.updateUserPromoCode(userId, code, promoExpiry ? new Date(promoExpiry) : null);
-      await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [userId]);
+      await pool.query("UPDATE users SET tier = 'elite' WHERE id = $1", [userId]);
       checkAndGrantReferralReward(userId).catch(() => {});
       // If it was a trial code, auto-generate a new one for the owner
       if (ac.type === "trial") {
         getCurrentTrialCode().catch(() => {}); // ensure next trial code exists
       }
-      console.log(`[verify-code] SUCCESS: ${code} redeemed by user ${userId}, expires ${promoExpiry}`);
-      return res.json({ valid: true, tier: "pro", type: ac.type, label: ac.label, expiresAt: promoExpiry });
+      console.log(`[verify-code] SUCCESS: ${code} redeemed by user ${userId}, tier=elite, expires ${promoExpiry}`);
+      // Send Elite activation email asynchronously
+      storage.getUser(userId).then(async (activatedUser) => {
+        if (!activatedUser?.email) return;
+        try {
+          const { client: resend, fromEmail } = await getUncachableResendClient();
+          await resend.emails.send({
+            from: fromEmail,
+            replyTo: "MikeClaver@CLVRQuantAI.com",
+            to: activatedUser.email,
+            subject: "✦ Your CLVRQuant Elite Access is Active",
+            text: `Welcome to CLVRQuant Elite, ${activatedUser.name || "Valued Member"}.\n\nYour exclusive Elite access is now active${promoExpiry ? ` through ${new Date(promoExpiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}` : ""}.\n\nAs an Elite member you have full access to:\n- Unlimited AI Market Analyst (Claude Sonnet)\n- Real-time CLVR Quant signals across all asset classes\n- Full Hyperliquid perpetuals data & funding rates\n- Morning Intelligence Brief delivered daily\n- Priority price alerts & push notifications\n- Phantom Wallet Solana integration\n- Macro calendar with AI event analysis\n\nTrade with precision — CLVRQuant is your edge.\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+            html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+              <div style="text-align:center;margin-bottom:28px">
+                <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
+                <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">ELITE · MARKET INTELLIGENCE</div>
+              </div>
+              <div style="border:1px solid rgba(201,168,76,.3);border-radius:4px;padding:20px 24px;margin-bottom:24px;background:rgba(201,168,76,.04)">
+                <p style="font-size:18px;color:#e8c96d;margin:0 0 6px;font-weight:700;letter-spacing:0.05em">✦ ELITE ACCESS ACTIVATED</p>
+                <p style="font-size:13px;color:#6b7fa8;margin:0">Welcome, <strong style="color:#f0f4ff">${activatedUser.name || "Valued Member"}</strong> — your exclusive Elite membership is now live.</p>
+              </div>
+              ${promoExpiry ? `<p style="font-family:monospace;font-size:11px;color:#4a5d80;margin-bottom:20px;letter-spacing:0.1em">ACCESS VALID THROUGH: <strong style="color:#e8c96d">${new Date(promoExpiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"}).toUpperCase()}</strong></p>` : ""}
+              <p style="font-size:13px;color:#6b7fa8;margin-bottom:16px">As an <strong style="color:#e8c96d">Elite member</strong>, you have full unrestricted access to every CLVRQuant capability:</p>
+              <ul style="font-size:13px;color:#c8d4ee;line-height:2;padding-left:20px">
+                <li>Unlimited AI Market Analyst — Claude Sonnet, unrestricted</li>
+                <li>Real-time signals across crypto, equities, commodities &amp; forex</li>
+                <li>Full Hyperliquid perpetuals data &amp; funding rate monitor</li>
+                <li>Daily Morning Intelligence Brief</li>
+                <li>Priority price alerts &amp; push notifications</li>
+                <li>Phantom Wallet Solana integration</li>
+                <li>Macro calendar with AI event-by-event analysis</li>
+              </ul>
+              <div style="border-top:1px solid #141e35;padding-top:20px;margin-top:24px;text-align:center">
+                <a href="https://clvrquantai.com" style="display:inline-block;background:#e8c96d;color:#050709;font-family:monospace;font-size:12px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none">OPEN TERMINAL →</a>
+              </div>
+              <p style="font-size:10px;color:#2a3d5a;text-align:center;margin-top:24px">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.<br/>© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com</p>
+            </div>`,
+          });
+        } catch (emailErr: any) {
+          console.error("[verify-code] Elite activation email failed:", emailErr.message);
+        }
+      }).catch(() => {});
+      return res.json({ valid: true, tier: "elite", type: ac.type, label: ac.label, expiresAt: promoExpiry });
     } catch (err: any) {
       console.error(`[verify-code] ERROR for code=${code}:`, err.message);
       res.json({ valid: false, error: "Verification failed — please try again" });
@@ -3877,9 +3929,9 @@ Every level must be technically defensible. Return JSON only.`;
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) return res.status(401).json({ error: "Invalid email or password" });
       const ownerMatch = user.email === OWNER_EMAIL;
-      const tier = ownerMatch ? "pro" : user.tier;
-      if (ownerMatch && user.tier !== "pro") {
-        await pool.query("UPDATE users SET tier = 'pro' WHERE id = $1", [user.id]);
+      const tier = ownerMatch ? "elite" : user.tier;
+      if (ownerMatch && user.tier !== "elite") {
+        await pool.query("UPDATE users SET tier = 'elite' WHERE id = $1", [user.id]);
       }
       const mustChangePassword = !!(user as any).mustChangePassword;
       (req.session as any).userId = user.id;
@@ -3916,7 +3968,7 @@ Every level must be technically defensible. Return JSON only.`;
     try {
       const user = await storage.getUser(userId);
       if (!user) return res.json({ user: null });
-      const tier = user.email === OWNER_EMAIL ? "pro" : user.tier;
+      const tier = user.email === OWNER_EMAIL ? "elite" : user.tier;
       const pendingVerification = !user.emailVerified && !!user.emailVerificationToken;
       res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification } });
     } catch {
@@ -4127,7 +4179,7 @@ Every level must be technically defensible. Return JSON only.`;
     try {
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
-      const tier = user.email === OWNER_EMAIL ? "pro" : user.tier;
+      const tier = user.email === OWNER_EMAIL ? "elite" : user.tier;
       const subRow = await pool.query("SELECT active FROM subscribers WHERE email = $1", [user.email]);
       const dailyEmail = subRow.rows.length > 0 ? subRow.rows[0].active : false;
       let stripeInfo: any = null;
