@@ -273,43 +273,53 @@ function FearGreedPanel({ fng }) {
 function PatternPanel({ patterns }) {
   if (!patterns) return null;
   const { detected, patterns: pList } = patterns;
-  const hasAny = detected.head_and_shoulders || detected.bull_flag;
+  const anyDetected = detected.head_and_shoulders || detected.bull_flag || detected.bear_flag || detected.double_top || detected.double_bottom;
+
+  const PATS = [
+    { key:"bull_flag",        icon:"📈", label:"BULL FLAG",        color:"#00ff88", desc:"DETECTED — continuation",    descNo:"Not detected" },
+    { key:"bear_flag",        icon:"📉", label:"BEAR FLAG",        color:"#ff2d55", desc:"DETECTED — continuation ↓",  descNo:"Not detected" },
+    { key:"head_and_shoulders",icon:"🔻",label:"HEAD & SHOULDERS", color:"#ff2d55", desc:"DETECTED — reversal risk",   descNo:"Not detected" },
+    { key:"double_top",       icon:"⛰", label:"DOUBLE TOP",       color:"#f87171", desc:"DETECTED — resistance zone", descNo:"Not detected" },
+    { key:"double_bottom",    icon:"🏔", label:"DOUBLE BOTTOM",    color:"#4ade80", desc:"DETECTED — support zone",    descNo:"Not detected" },
+  ];
+
+  const detectedPats = PATS.filter(p => detected[p.key]);
+  const undetectedPats = PATS.filter(p => !detected[p.key]);
+  const displayPats = anyDetected
+    ? [...detectedPats, ...undetectedPats].slice(0, 4)
+    : PATS.slice(0, 4);
 
   return (
     <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid #1a2235", borderRadius:10, padding:"11px 14px", marginBottom:12 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
         <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2, fontWeight:700 }}>◆ PATTERN RECOGNITION ENGINE</div>
-        <div style={{ fontSize:8, color:"#3a4560" }}>Pivot · EMA · Flag detection</div>
+        <div style={{ fontSize:8, color:"#3a4560" }}>Flag · H&S · Double Top/Bottom</div>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-        <div style={{
-          background: detected.bull_flag ? "rgba(0,255,136,0.07)" : "rgba(255,255,255,0.02)",
-          border:`1px solid ${detected.bull_flag ? "rgba(0,255,136,0.3)" : "#1a2235"}`,
-          borderRadius:8, padding:"10px", textAlign:"center",
-        }}>
-          <div style={{ fontSize:16, marginBottom:4 }}>📈</div>
-          <div style={{ fontSize:9, fontWeight:800, color: detected.bull_flag ? "#00ff88" : "#3a4560", marginBottom:3 }}>
-            BULL FLAG
-          </div>
-          <div style={{ fontSize:8, color: detected.bull_flag ? "#4ade80" : "#2a3550" }}>
-            {detected.bull_flag ? "DETECTED — continuation" : "Not detected"}
-          </div>
-        </div>
-        <div style={{
-          background: detected.head_and_shoulders ? "rgba(255,45,85,0.07)" : "rgba(255,255,255,0.02)",
-          border:`1px solid ${detected.head_and_shoulders ? "rgba(255,45,85,0.3)" : "#1a2235"}`,
-          borderRadius:8, padding:"10px", textAlign:"center",
-        }}>
-          <div style={{ fontSize:16, marginBottom:4 }}>📉</div>
-          <div style={{ fontSize:9, fontWeight:800, color: detected.head_and_shoulders ? "#ff2d55" : "#3a4560", marginBottom:3 }}>
-            HEAD & SHOULDERS
-          </div>
-          <div style={{ fontSize:8, color: detected.head_and_shoulders ? "#f87171" : "#2a3550" }}>
-            {detected.head_and_shoulders ? "DETECTED — reversal risk" : "Not detected"}
-          </div>
-        </div>
+        {displayPats.map(p => {
+          const hit = !!detected[p.key];
+          return (
+            <div key={p.key} style={{
+              background: hit ? `${p.color}11` : "rgba(255,255,255,0.02)",
+              border:`1px solid ${hit ? `${p.color}55` : "#1a2235"}`,
+              borderRadius:8, padding:"10px", textAlign:"center",
+            }}>
+              <div style={{ fontSize:16, marginBottom:4 }}>{p.icon}</div>
+              <div style={{ fontSize:9, fontWeight:800, color: hit ? p.color : "#3a4560", marginBottom:3 }}>{p.label}</div>
+              <div style={{ fontSize:8, color: hit ? p.color : "#2a3550" }}>{hit ? p.desc : p.descNo}</div>
+            </div>
+          );
+        })}
       </div>
-      {!hasAny && (
+      {anyDetected ? (
+        <div style={{ marginTop:8, display:"flex", flexWrap:"wrap", gap:4 }}>
+          {detectedPats.map(p => (
+            <span key={p.key} style={{ fontSize:8, color:p.color, background:`${p.color}11`, border:`1px solid ${p.color}30`, borderRadius:4, padding:"2px 6px", fontFamily:mono }}>
+              ✓ {p.label}
+            </span>
+          ))}
+        </div>
+      ) : (
         <div style={{ textAlign:"center", marginTop:8, fontSize:8, color:"#2a3550" }}>
           No dominant patterns in current price structure
         </div>
