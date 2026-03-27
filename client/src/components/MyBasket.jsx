@@ -147,6 +147,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   const [cat, setCat]               = useState("all");
   const [region, setRegion]         = useState("all");
   const [search, setSearch]         = useState("");
+  const [priceView, setPriceView]   = useState("spot"); // "spot" | "perp"
   const [basketResult, setBasketResult] = useState("");
   const [basketLoading, setBasketLoading] = useState(false);
   const [openPanel, setOpenPanel]   = useState(true);
@@ -374,6 +375,19 @@ Format clearly with each asset as a header. Be direct and numerical.`;
             </button>
           </div>
 
+          {/* ── Price view toggle: SPOT / PERP ── */}
+          <div style={{ display:"flex", alignItems:"center", gap:4, marginBottom:8 }}>
+            <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, letterSpacing:"0.08em", marginRight:2 }}>PRICE:</span>
+            {[["spot","SPOT · FINNHUB"],["perp","PERP · HYPERLIQUID"]].map(([k,lbl]) => (
+              <button
+                key={k}
+                data-testid={`basket-priceview-${k}`}
+                onClick={() => setPriceView(k)}
+                style={{ padding:"3px 9px", borderRadius:2, border:`1px solid ${priceView===k ? C.gold : C.border}`, background:priceView===k ? "rgba(201,168,76,.1)" : "transparent", color:priceView===k ? C.gold : C.muted, fontFamily:MONO, fontSize:7, cursor:"pointer", letterSpacing:"0.06em", whiteSpace:"nowrap" }}
+              >{lbl}</button>
+            ))}
+          </div>
+
           {/* ── Asset grid ── */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:4, marginBottom:12, maxHeight:280, overflowY:"auto", WebkitOverflowScrolling:"touch" }}>
             {filtered.length === 0 && (
@@ -385,33 +399,37 @@ Format clearly with each asset as a header. Be direct and numerical.`;
               const active = selected.has(sym);
               const blocked = !active && selected.size >= MAX_ASSETS;
               const catColor = assetCat === "crypto" ? C.cyan : assetCat === "equities" ? C.blue : C.gold;
-              // Live price — route by category to match Markets tab SPOT data source exactly
+              // Live price — route by priceView toggle (SPOT matches Markets tab; PERP matches HL perps)
               const bp     = bPrices?.[sym];
               const perp   = storePerps?.[sym];
               const crypto = cryptoPrices?.[sym];
               const equity = equityPrices?.[sym];
               const metal  = metalPrices?.[sym];
-              // Per-category routing — same as Markets tab Spot sub-tab:
-              //   crypto      → cryptoPrices (Finnhub spot)  [perp as secondary for crypto]
-              //   equities    → equityPrices (Finnhub WS)
-              //   commodities → metalPrices  (Gold-API / Finnhub)
-              //   fallback    → basket REST API
-              const rawPrice =
-                assetCat === "crypto"      ? (crypto?.price  || perp?.price  || bp?.price) :
-                assetCat === "equities"    ? (equity?.price  || bp?.price) :
-                assetCat === "commodities" ? (metal?.price   || bp?.price) :
-                                             bp?.price;
-              const rawChg =
-                assetCat === "crypto"      ? (crypto?.chg  ?? perp?.change24h ?? bp?.chg ?? 0) :
-                assetCat === "equities"    ? (equity?.chg  ?? bp?.chg ?? 0) :
-                assetCat === "commodities" ? (metal?.chg   ?? bp?.chg ?? 0) :
-                                             (bp?.chg ?? 0);
+              let rawPrice, rawChg, isLive;
+              if (priceView === "perp" && perp?.price) {
+                // PERP mode — Hyperliquid perpetual (same as Markets tab PERP sub-tab)
+                rawPrice = perp.price;
+                rawChg   = perp.change24h ?? 0;
+                isLive   = true;
+              } else {
+                // SPOT mode — same sources as Markets tab SPOT sub-tab per category
+                rawPrice =
+                  assetCat === "crypto"      ? (crypto?.price  || bp?.price) :
+                  assetCat === "equities"    ? (equity?.price  || bp?.price) :
+                  assetCat === "commodities" ? (metal?.price   || bp?.price) :
+                                               bp?.price;
+                rawChg =
+                  assetCat === "crypto"      ? (crypto?.chg  ?? bp?.chg ?? 0) :
+                  assetCat === "equities"    ? (equity?.chg  ?? bp?.chg ?? 0) :
+                  assetCat === "commodities" ? (metal?.chg   ?? bp?.chg ?? 0) :
+                                               (bp?.chg ?? 0);
+                isLive =
+                  assetCat === "crypto"      ? !!(crypto?.price) :
+                  assetCat === "equities"    ? !!(equity?.price || bp?.live) :
+                  assetCat === "commodities" ? !!(metal?.price  || bp?.live) :
+                                               !!bp?.live;
+              }
               const currency = bp?.currency || "USD";
-              const isLive =
-                assetCat === "crypto"      ? !!(crypto?.price || perp?.price) :
-                assetCat === "equities"    ? !!(equity?.price || bp?.live) :
-                assetCat === "commodities" ? !!(metal?.price  || bp?.live) :
-                                             !!bp?.live;
               const priceStr = rawPrice ? fmtPrice(rawPrice, currency) : (pricesLoading ? "…" : "—");
               const chgColor = rawChg > 0 ? C.green : rawChg < 0 ? C.red : C.muted;
               return (
