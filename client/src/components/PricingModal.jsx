@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { TIERS, TIER_ORDER } from "../config/pricing.js";
 
 const MONO  = "'IBM Plex Mono', monospace";
@@ -40,10 +40,14 @@ function LockIcon() {
   );
 }
 
-export default function PricingModal({ isOpen, onClose, userTier = "free", onUpgrade }) {
-  const [activeTier, setActiveTier] = useState(userTier === "elite" ? "elite" : "pro");
+export default function PricingModal({ isOpen, onClose, userTier = "free", onUpgrade, defaultTier }) {
+  const [activeTier, setActiveTier] = useState(defaultTier || (userTier === "elite" ? "elite" : "pro"));
   const [yearly, setYearly] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) setActiveTier(defaultTier || (userTier === "elite" ? "elite" : "pro"));
+  }, [isOpen, defaultTier, userTier]);
 
   if (!isOpen) return null;
 
