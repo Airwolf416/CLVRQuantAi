@@ -19,7 +19,7 @@ import PricingModal from "./components/PricingModal.jsx";
 import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
-import { playMarketBell, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
+import { playMarketBell, unlockAudio, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -913,7 +913,22 @@ function Dashboard({user,setUser}){
   const firedAlerts=useRef(new Set());
   const macroFired=useRef(new Set());
   const soundEnabledRef=useRef(soundEnabled);
-  const toggleSound=useCallback(()=>{setSoundEnabled(v=>{const nv=!v;soundEnabledRef.current=nv;try{localStorage.setItem("clvr_sound",nv?"on":"off");}catch(e){}if(nv)playBloombergPing();return nv;});},[]);
+  const toggleSound=useCallback(()=>{setSoundEnabled(v=>{const nv=!v;soundEnabledRef.current=nv;try{localStorage.setItem("clvr_sound",nv?"on":"off");}catch(e){}if(nv){unlockAudio();playBloombergPing();}return nv;});},[]);
+  // Unlock AudioContext on first user interaction so bell works even from timers
+  useEffect(()=>{
+    const unlock=()=>{unlockAudio();document.removeEventListener("touchstart",unlock,true);document.removeEventListener("mousedown",unlock,true);};
+    document.addEventListener("touchstart",unlock,{once:true,capture:true});
+    document.addEventListener("mousedown",unlock,{once:true,capture:true});
+    return()=>{document.removeEventListener("touchstart",unlock,true);document.removeEventListener("mousedown",unlock,true);};
+  },[]);
+  // Callback for owner test — fires bell + banner immediately
+  const triggerTestBell=useCallback((type="open")=>{
+    unlockAudio();
+    playMarketBell(0.8,type==="open"?3:4);
+    setBellFlash(type);
+    clearTimeout(bellFlashTimerRef.current);
+    bellFlashTimerRef.current=setTimeout(()=>setBellFlash(null),6000);
+  },[]);
   // Sync pushDisabled state → module-level flag so sendPush respects toggle
   useEffect(()=>{_pushDisabledFlag=pushDisabled;},[pushDisabled]);
   const [activeAlerts,setActiveAlerts]=useState([]); // floating banner — auto-dismisses after 5s
@@ -3606,7 +3621,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           </div>
         </>}
 
-        {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)}/>}
+        {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT

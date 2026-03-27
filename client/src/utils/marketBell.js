@@ -18,10 +18,46 @@ export function getNYSEStatus() {
   return "closed";
 }
 
-// Plays resonant bell tones — count=3 for open, count=4 for close (NYSE tradition)
+// ── Shared AudioContext (must be created/resumed inside a user gesture) ──────
+let _sharedCtx = null;
+
+/**
+ * Call this inside a user gesture (button tap, toggle, etc.) to pre-create
+ * and unlock the shared AudioContext so the bell can fire from timer callbacks.
+ */
+export function unlockAudio() {
+  try {
+    if (!_sharedCtx) {
+      _sharedCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (_sharedCtx.state === "suspended") {
+      _sharedCtx.resume().catch(() => {});
+    }
+  } catch (e) {}
+}
+
+/**
+ * Plays resonant bell tones — count=3 for open, count=4 for close (NYSE tradition).
+ * Uses the shared AudioContext so it works even from timer callbacks on iOS/Android.
+ */
 export function playMarketBell(volume = 0.6, count = 3) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Try to use shared context first, fall back to a new one
+    const ctx = _sharedCtx && _sharedCtx.state !== "closed"
+      ? _sharedCtx
+      : new (window.AudioContext || window.webkitAudioContext)();
+
+    // If still suspended, resume it then schedule playback after a tick
+    if (ctx.state === "suspended") {
+      ctx.resume().then(() => _playBellTones(ctx, volume, count)).catch(() => {});
+      return;
+    }
+    _playBellTones(ctx, volume, count);
+  } catch (e) {}
+}
+
+function _playBellTones(ctx, volume, count) {
+  try {
     const bellTone = (freq, startAt) => {
       const o = ctx.createOscillator();
       const g = ctx.createGain();
@@ -30,21 +66,32 @@ export function playMarketBell(volume = 0.6, count = 3) {
       g.gain.setValueAtTime(0, ctx.currentTime + startAt);
       g.gain.linearRampToValueAtTime(volume, ctx.currentTime + startAt + 0.01);
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startAt + 2.5);
+
       const o2 = ctx.createOscillator();
       const g2 = ctx.createGain();
       o2.type = "sine";
       o2.frequency.setValueAtTime(freq * 2, ctx.currentTime + startAt);
       g2.gain.setValueAtTime(0, ctx.currentTime + startAt);
-      g2.gain.linearRampToValueAtTime(volume * 0.2, ctx.currentTime + startAt + 0.01);
-      g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startAt + 1.5);
-      o.connect(g); g.connect(ctx.destination);
+      g2.gain.linearRampToValueAtTime(volume * 0.25, ctx.currentTime + startAt + 0.01);
+      g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startAt + 1.8);
+
+      // 3rd harmonic for extra richness
+      const o3 = ctx.createOscillator();
+      const g3 = ctx.createGain();
+      o3.type = "sine";
+      o3.frequency.setValueAtTime(freq * 3, ctx.currentTime + startAt);
+      g3.gain.setValueAtTime(0, ctx.currentTime + startAt);
+      g3.gain.linearRampToValueAtTime(volume * 0.08, ctx.currentTime + startAt + 0.01);
+      g3.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startAt + 1.0);
+
+      o.connect(g);   g.connect(ctx.destination);
       o2.connect(g2); g2.connect(ctx.destination);
-      o.start(ctx.currentTime + startAt);
-      o.stop(ctx.currentTime + startAt + 2.5);
-      o2.start(ctx.currentTime + startAt);
-      o2.stop(ctx.currentTime + startAt + 1.5);
+      o3.connect(g3); g3.connect(ctx.destination);
+
+      o.start(ctx.currentTime + startAt);  o.stop(ctx.currentTime + startAt + 2.5);
+      o2.start(ctx.currentTime + startAt); o2.stop(ctx.currentTime + startAt + 1.8);
+      o3.start(ctx.currentTime + startAt); o3.stop(ctx.currentTime + startAt + 1.0);
     };
-    for (let i = 0; i < count; i++) bellTone(880, i * 0.75);
-    setTimeout(() => { try { ctx.close(); } catch(e) {} }, count * 750 + 2800);
+    for (let i = 0; i < count; i++) bellTone(880, i * 0.72);
   } catch (e) {}
 }
