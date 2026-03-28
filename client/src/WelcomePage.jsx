@@ -188,6 +188,15 @@ export default function WelcomePage({ onEnter, onBack }) {
 
   const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setError(""); setSuccess(""); };
 
+  // Escape from biometric flow back to the welcome screen
+  const goToWelcome = () => {
+    setBypassBiometric(true);
+    setFaceIdCancelled(false);
+    setCancelledShowPw(false);
+    setMode("welcome");
+    setError("");
+  };
+
   const handleSignUp = async () => {
     if (!form.name.trim()) return setError("Please enter your name.");
     if (!form.email.includes("@")) return setError("Please enter a valid email.");
@@ -415,6 +424,12 @@ export default function WelcomePage({ onEnter, onBack }) {
         <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, letterSpacing: "0.1em" }}>
           {waLoading ? "Look at your device to continue" : checkingSession ? "" : "Waiting for Face ID..."}
         </div>
+        {!checkingSession && !waLoading && (
+          <button data-testid="btn-skip-faceid" onClick={goToWelcome}
+            style={{ marginTop: 32, background: "none", border: "none", fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, cursor: "pointer", letterSpacing: "0.08em", textDecoration: "underline", padding: 0 }}>
+            Sign in differently / Back to welcome
+          </button>
+        )}
       </div>
     );
   }
@@ -497,6 +512,10 @@ export default function WelcomePage({ onEnter, onBack }) {
                   style={{ width: "100%", background: `linear-gradient(135deg,${C.gold},${C.gold2})`, border: "none", borderRadius: 8, padding: "13px", fontFamily: "'IBM Plex Mono',monospace", fontSize: 13, fontWeight: 600, color: "#0a0a0a", letterSpacing: "0.08em", opacity: loading ? 0.6 : 1, touchAction: "manipulation" }}>
                   {loading ? "Signing In..." : "Sign In →"}
                 </button>
+                <button data-testid="btn-cancelled-forgot" onClick={() => { setBypassBiometric(true); setFaceIdCancelled(false); setCancelledShowPw(false); setMode("forgot"); setError(""); }}
+                  style={{ background: "none", border: "none", fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.gold, textAlign: "center", padding: "4px 0", cursor: "pointer", letterSpacing: "0.06em", touchAction: "manipulation" }}>
+                  Forgot Password?
+                </button>
                 <button
                   onClick={() => { setCancelledShowPw(false); setError(""); }}
                   style={{ background: "none", border: "none", fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, textAlign: "center", padding: "4px 0", touchAction: "manipulation" }}>
@@ -505,6 +524,12 @@ export default function WelcomePage({ onEnter, onBack }) {
               </div>
             </div>
           )}
+        {!cancelledShowPw && (
+          <button data-testid="btn-back-welcome-cancelled" onClick={goToWelcome}
+            style={{ marginTop: 16, background: "none", border: "none", fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.muted, cursor: "pointer", letterSpacing: "0.08em", textDecoration: "underline", padding: 0, touchAction: "manipulation" }}>
+            ← Back to welcome screen
+          </button>
+        )}
         </div>
       </div>
     );
