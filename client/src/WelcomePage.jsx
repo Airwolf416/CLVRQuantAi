@@ -72,7 +72,7 @@ function Particles() {
   );
 }
 
-export default function WelcomePage({ onEnter }) {
+export default function WelcomePage({ onEnter, onBack }) {
   const [mode, setMode] = useState("welcome");
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false, referralCode: "" });
   const [loading, setLoading] = useState(false);
@@ -557,6 +557,12 @@ export default function WelcomePage({ onEnter }) {
 
       {mode === "welcome" && (
         <div data-testid="welcome-screen" style={{ textAlign: "center", maxWidth: 480, width: "100%", position: "relative", zIndex: 1 }}>
+          {onBack && (
+            <button data-testid="btn-back-preview" onClick={onBack}
+              style={{ position:"absolute", top:-8, left:0, background:"none", border:"none", fontFamily:MONO, fontSize:10, color:C.muted, cursor:"pointer", letterSpacing:"0.06em", display:"flex", alignItems:"center", gap:5, padding:"4px 0" }}>
+              ← Back to Preview
+            </button>
+          )}
           <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: "clamp(40px,10vw,64px)", color: C.gold2, letterSpacing: "0.04em", lineHeight: 1, marginBottom: 6, textShadow: "0 0 40px rgba(201,168,76,.3)" }}>
             CLVRQuant
           </div>
@@ -602,9 +608,9 @@ export default function WelcomePage({ onEnter }) {
                 Sign In with Password
               </button>
             )}
-            <button data-testid="btn-guest" onClick={() => onEnter && onEnter({ guest: true, tier: "free" })}
+            <button data-testid="btn-guest" onClick={() => onBack ? onBack() : onEnter && onEnter({ preview: true, tier: "free", name: "Guest" })}
               style={{ ...btnGhost, fontSize: 11, color: C.muted, borderColor: C.border }}>
-              Continue as Guest (limited access)
+              Preview Dashboard (locked)
             </button>
           </div>
 
@@ -755,9 +761,9 @@ export default function WelcomePage({ onEnter }) {
               Need an account? Create one
             </button>
 
-            <button data-testid="btn-guest-signin" onClick={() => onEnter && onEnter({ guest: true, tier: "free" })}
+            <button data-testid="btn-guest-signin" onClick={() => onBack ? onBack() : onEnter && onEnter({ preview: true, tier: "free", name: "Guest" })}
               style={{ ...btnGhost, fontSize: 10, color: C.muted, borderColor: C.border }}>
-              Continue as Guest
+              Preview Dashboard (locked)
             </button>
           </div>
         </div>
