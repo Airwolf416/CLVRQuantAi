@@ -4424,15 +4424,63 @@ Every level must be technically defensible. Return JSON only.`;
           let html: string;
           let text: string;
           if (isRawHtml) {
-            // Personalize [First Name] and inject unsubscribe footer before </body>
-            const personalized = body.replace(/\[First Name\]/gi, recipientName).replace(/\[Name\]/gi, recipientName);
-            const hasBody = /<\/body>/i.test(personalized);
+            // ── Step 1: personalize ──────────────────────────────────────────
+            let sanitized = body
+              .replace(/\[First Name\]/gi, recipientName)
+              .replace(/\[Name\]/gi, recipientName);
+
+            // ── Step 2: strip JS (doesn't run in email) ──────────────────────
+            sanitized = sanitized.replace(/<script\b[\s\S]*?<\/script>/gi, "");
+            // Replace QR placeholder div with a static link fallback
+            sanitized = sanitized.replace(/<div\s+id=["']qrcode["'][^>]*>[\s\S]*?<\/div>/gi,
+              `<div style="display:inline-block;background:#090c10;border:1px dashed rgba(250,189,0,.35);border-radius:8px;padding:10px 16px;font-family:monospace;font-size:11px;color:#fabd00;letter-spacing:.06em;text-align:center">Scan at<br>clvrquantai.com</div>`
+            );
+            // Strip empty qrcode divs (no closing tag variety)
+            sanitized = sanitized.replace(/<div\s+id=["']qrcode["'][^/]*/gi, '<div style="display:none"');
+
+            // ── Step 3: strip web-layout CSS from <style> blocks ─────────────
+            // Email clients ignore flex/min-height on body; this causes the
+            // narrow-squished-card rendering bug seen on iPhone Mail & Gmail.
+            sanitized = sanitized.replace(
+              /(<style[\s\S]*?>)([\s\S]*?)(<\/style>)/gi,
+              (_m, open: string, css: string, close: string) => {
+                const clean = css
+                  // Body: remove viewport-layout props
+                  .replace(/display\s*:\s*flex\s*;?/gi, "")
+                  .replace(/align-items\s*:\s*center\s*;?/gi, "")
+                  .replace(/justify-content\s*:\s*center\s*;?/gi, "")
+                  .replace(/min-height\s*:\s*100vh\s*;?/gi, "")
+                  // Remove CSS animations entirely
+                  .replace(/@keyframes[\s\S]*?\}\s*\}/g, "")
+                  .replace(/animation\s*:[^;]+;/gi, "");
+                return open + clean + close;
+              }
+            );
+
+            // ── Step 4: ensure main wrapper centres in email clients ─────────
+            // Add margin:0 auto to .email-wrapper / .email-card if missing
+            sanitized = sanitized.replace(
+              /\.email-wrapper\s*\{/g,
+              ".email-wrapper { margin: 0 auto;"
+            );
+
+            // ── Step 5: fix placeholder unsubscribe links ────────────────────
+            sanitized = sanitized.replace(
+              /<a\s+href=["']#["'][^>]*>\s*Unsubscribe\s*<\/a>/gi,
+              `<a href="https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}" style="color:#5a8fc4;text-decoration:none">Unsubscribe</a>`
+            );
+            sanitized = sanitized.replace(
+              /<a\s+href=["']#["'][^>]*>\s*Privacy Policy\s*<\/a>/gi,
+              `<a href="https://clvrquantai.com/privacy" style="color:#5a8fc4;text-decoration:none">Privacy Policy</a>`
+            );
+
+            // ── Step 6: inject unsubscribe footer before </body> ─────────────
+            const hasBody = /<\/body>/i.test(sanitized);
             html = hasBody
-              ? personalized.replace(/<\/body>/i, `${unsubFooter}</body>`)
-              : personalized + unsubFooter;
-            // Update any hardcoded unsubscribe href placeholder in the template
-            html = html.replace(/<a\s+href=["']#["']\s*>\s*Unsubscribe\s*<\/a>/gi, `<a href="https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}" style="color:#5a8fc4;text-decoration:none">Unsubscribe</a>`);
-            text = `${subject}\n\nTo view this email, open it in a compatible mail client.\n\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}`;
+              ? sanitized.replace(/<\/body>/i, `${unsubFooter}</body>`)
+              : sanitized + unsubFooter;
+
+            text = `${subject}\n\nTo view this email properly, open it in an HTML-compatible mail client.\n\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}`;
           } else {
             // Plain text: wrap in CLVRQuant branded template
             const escapedBody = body.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>").replace(/\[First Name\]/gi, recipientName);
