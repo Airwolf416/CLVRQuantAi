@@ -214,7 +214,7 @@ export default function WelcomePage({ onEnter, onBack }) {
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Signup failed"); setLoading(false); return; }
       setLoading(false);
-      if (data.user) setSignedUpUser(data.user);
+      if (data.user) setSignedUpUser({ ...data.user, isNewUser: true });
       setMode("verify");
     } catch (e) {
       setError("Network error. Please try again.");

@@ -1199,10 +1199,18 @@ function Dashboard({user,setUser,onShowAuth}){
   const [upgradeDefaultTier,setUpgradeDefaultTier]=useState(null);
   const [showBiometricSetup,setShowBiometricSetup]=useState(false);
   const [showTour,setShowTour]=useState(false);
-  // Auto-show tour on first-ever login (localStorage-gated; any dismissal sets the key)
+  // Auto-show tour on first-ever login (localStorage-gated).
+  // If isNewUser flag is set (fresh signup), always force the tour regardless of localStorage.
   useEffect(()=>{
     if(!user)return;
-    try{ if(!localStorage.getItem("clvr_tour_v1_done")) setTimeout(()=>setShowTour(true),800); }catch{}
+    try{
+      if(user.isNewUser){
+        localStorage.removeItem("clvr_tour_v1_done");
+        setTimeout(()=>setShowTour(true),1000);
+      } else if(!localStorage.getItem("clvr_tour_v1_done")){
+        setTimeout(()=>setShowTour(true),800);
+      }
+    }catch{}
   },[user?.id]);
   const [resendLoading,setResendLoading]=useState(false);
   const [resendSent,setResendSent]=useState(false);
