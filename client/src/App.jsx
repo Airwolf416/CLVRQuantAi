@@ -447,6 +447,90 @@ function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
   );
 }
 
+function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
+  const plans=[
+    {name:"Free",price:"$0",period:"forever",color:C2.muted2,borderColor:"#1c2b4a",features:["Live crypto, equities & forex prices","Macro calendar & event tracker","Market regime dashboard","About & Help resources","Community access"]},
+    {name:"Pro",price:"$29.99",period:"/mo",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","📰 Daily AI Morning Brief","⚡ Quant AI Signals library","🔔 Custom price alerts + push","👛 Phantom Wallet + Solana","📊 4 curated trade ideas daily","🤖 CLVR AI Market Analyst"]},
+    {name:"Elite",price:"$129",period:"/mo",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","📡 Institutional order flow","⚡ Hyperliquid integration","🔑 Direct founder access","All future features included"]},
+  ];
+  return(
+    <div style={{padding:"20px 4px 40px"}}>
+      {/* Header */}
+      <div style={{textAlign:"center",marginBottom:28}}>
+        <div style={{fontFamily:SERIF2,fontSize:24,fontWeight:900,color:C2.gold2,letterSpacing:"-0.02em",marginBottom:4}}>CLVRQuant Plans</div>
+        <div style={{fontFamily:MONO2,fontSize:9,color:C2.gold,letterSpacing:"0.2em",marginBottom:10}}>MARKET INTELLIGENCE · FOR SERIOUS TRADERS</div>
+        <div style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.7,maxWidth:320,margin:"0 auto"}}>
+          Real-time data, AI-powered analysis, and institutional-grade tools — built for traders who want an edge.
+        </div>
+      </div>
+
+      {/* Pricing cards */}
+      <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:24}}>
+        {plans.map(plan=>(
+          <div key={plan.name} style={{background:"#0c1220",border:`1px solid ${plan.borderColor}`,borderRadius:6,padding:"18px 16px",position:"relative"}}>
+            {plan.badge&&(
+              <div style={{position:"absolute",top:-10,right:16,background:plan.name==="Elite"?"rgba(0,229,255,.15)":"rgba(201,168,76,.18)",border:`1px solid ${plan.borderColor}`,borderRadius:3,padding:"3px 10px",fontFamily:MONO2,fontSize:8,color:plan.color,letterSpacing:"0.15em",fontWeight:700}}>
+                {plan.badge}
+              </div>
+            )}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+              <div>
+                <div style={{fontFamily:SERIF2,fontSize:18,fontWeight:900,color:plan.color,letterSpacing:"-0.01em"}}>{plan.name}</div>
+                <div style={{fontFamily:MONO2,fontSize:9,color:C2.muted,letterSpacing:"0.08em",marginTop:2}}>
+                  {plan.name==="Free"?"No credit card required":"Cancel anytime"}
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <span style={{fontFamily:SERIF2,fontSize:28,fontWeight:900,color:plan.color}}>{plan.price}</span>
+                <span style={{fontFamily:MONO2,fontSize:9,color:C2.muted}}>{plan.period}</span>
+              </div>
+            </div>
+            {plan.features.map(f=>(
+              <div key={f} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:6}}>
+                <span style={{color:plan.color,fontFamily:MONO2,fontSize:10,lineHeight:1.6,flexShrink:0}}>✓</span>
+                <span style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.6}}>{f}</span>
+              </div>
+            ))}
+            {plan.name!=="Free"&&(
+              <button data-testid={`preview-pricing-${plan.name.toLowerCase()}`} onClick={()=>onSignUp(plan.name.toLowerCase())}
+                style={{width:"100%",marginTop:14,padding:"11px 0",borderRadius:4,background:plan.name==="Elite"?"rgba(0,229,255,.1)":"rgba(201,168,76,.12)",border:`1px solid ${plan.borderColor}`,color:plan.color,fontFamily:MONO2,fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:"0.1em"}}>
+                {plan.name==="Elite"?"Get Elite Access ⚡":"Get Pro Access →"}
+              </button>
+            )}
+            {plan.name==="Free"&&(
+              <button data-testid="preview-pricing-free" onClick={()=>onSignUp("free")}
+                style={{width:"100%",marginTop:14,padding:"11px 0",borderRadius:4,background:"rgba(255,255,255,.04)",border:"1px solid #1c2b4a",color:C2.muted2,fontFamily:MONO2,fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:"0.1em"}}>
+                Create Free Account →
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Sign in link */}
+      <div style={{textAlign:"center",fontFamily:MONO2,fontSize:10,color:C2.muted,marginBottom:20}}>
+        Already have an account?{" "}
+        <span data-testid="preview-pricing-signin" onClick={onSignIn} style={{color:C2.gold,cursor:"pointer",textDecoration:"underline"}}>Sign in →</span>
+      </div>
+
+      {/* Benefits strip */}
+      <div style={{background:"#0c1220",border:"1px solid #141e35",borderRadius:5,padding:"14px 16px"}}>
+        <div style={{fontFamily:MONO2,fontSize:9,color:C2.gold,letterSpacing:"0.16em",marginBottom:10}}>WHY CLVRQUANT</div>
+        {[["📡","Live data from Binance, Finnhub & Crypto Panic — no delays"],["🤖","CLVR AI uses Claude Sonnet — real market context, not generic answers"],["🏛","SEC Form 4 insider filings updated daily — follow the smart money"],["🔔","Push alerts to your device — never miss a breakout or news event"],["👛","Phantom Wallet integration — track your Solana portfolio in-app"],["🔒","Your data is private and never sold — ever"]].map(([icon,text])=>(
+          <div key={text} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:8}}>
+            <span style={{fontSize:12,lineHeight:1.6,flexShrink:0}}>{icon}</span>
+            <span style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.6}}>{text}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{fontFamily:MONO2,fontSize:8,color:C2.muted,textAlign:"center",marginTop:18,lineHeight:1.7}}>
+        CLVRQuant is an information & education platform only. Not financial advice.<br/>Trading involves risk. Past data does not guarantee future results.
+      </div>
+    </div>
+  );
+}
+
 function TabUpgradeGate({tab,tier,onUpgrade,C2,MONO2,SERIF2}){
   const isElite=tier==="elite";
   const labels={brief:"Morning Brief",signals:"Quant AI Signals",alerts:"Alerts & Anomalies",wallet:"Phantom Wallet",ai:"AI Market Analyst",insider:"SEC Insider Flow"};
@@ -920,15 +1004,14 @@ export default function App(){
     );
   }
 
-  // Sign-up / sign-in screen
+  // Sign-up / sign-in screen (triggered from locked-tab CTA while in preview)
   if(showAuth){
     return <WelcomePage onEnter={(u)=>{setUser(u);setShowAuth(false);}} onBack={()=>setShowAuth(false)}/>;
   }
 
-  // Not logged in → show locked preview dashboard
+  // Not logged in → show WelcomePage (landing: sign up / sign in / enter without signing in)
   if(!user){
-    const previewUser={preview:true,tier:"free",name:"Guest"};
-    return <Dashboard user={previewUser} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>;
+    return <WelcomePage onEnter={(u)=>setUser(u)}/>;
   }
 
   return <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>;
@@ -2659,8 +2742,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       {/* ── CONTENT ── */}
       <div style={{padding:"10px 12px",position:"relative",zIndex:1}}>
 
-        {/* ── Preview (unauthenticated) full-screen overlay ── */}
-        {isPreview&&(
+        {/* ── Preview (unauthenticated) full-screen overlay — skips about/help/account ── */}
+        {isPreview&&!["about","help","account"].includes(tab)&&(
           <div style={{position:"fixed",top:54,left:0,right:0,bottom:60,background:"#050709",zIndex:50,overflowY:"auto"}}>
             <PreviewGate tab={tab} C2={C} MONO2={MONO} SERIF2={SERIF}
               onSignUp={()=>onShowAuth&&onShowAuth()}
@@ -3734,7 +3817,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           </div>
         </>}
 
-        {tab==="account"&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell}/>}
+        {tab==="account"&&isPreview&&<PreviewPricingPage C2={C} MONO2={MONO} SERIF2={SERIF} onSignUp={()=>onShowAuth&&onShowAuth()} onSignIn={()=>onShowAuth&&onShowAuth()}/>}
+        {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT
@@ -3748,9 +3832,10 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:"rgba(5,7,9,.97)",borderTop:`1px solid ${C.border}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
+          const previewFreeTab=["about","help","account"].includes(item.k);
           const eliteGatedTab=!isPreview&&["insider"].includes(item.k)&&!isElite;
           const proGatedTab=!isPreview&&PRO_TABS_GATE.includes(item.k)&&!isPro;
-          const isTabLocked=isPreview||eliteGatedTab||proGatedTab;
+          const isTabLocked=(isPreview&&!previewFreeTab)||eliteGatedTab||proGatedTab;
           return(
             <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
               <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:isTabLocked?C.muted:C.muted2}}>{item.icon}</span>

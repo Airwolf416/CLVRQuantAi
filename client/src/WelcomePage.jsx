@@ -610,7 +610,7 @@ export default function WelcomePage({ onEnter, onBack }) {
             )}
             <button data-testid="btn-guest" onClick={() => onBack ? onBack() : onEnter && onEnter({ preview: true, tier: "free", name: "Guest" })}
               style={{ ...btnGhost, fontSize: 11, color: C.muted, borderColor: C.border }}>
-              Preview Dashboard (locked)
+              Enter without signing in
             </button>
           </div>
 
@@ -763,7 +763,7 @@ export default function WelcomePage({ onEnter, onBack }) {
 
             <button data-testid="btn-guest-signin" onClick={() => onBack ? onBack() : onEnter && onEnter({ preview: true, tier: "free", name: "Guest" })}
               style={{ ...btnGhost, fontSize: 10, color: C.muted, borderColor: C.border }}>
-              Preview Dashboard (locked)
+              Enter without signing in
             </button>
           </div>
         </div>
