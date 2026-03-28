@@ -402,6 +402,51 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 // Tabs that require Pro (fully locked for free users)
 const PRO_TABS_GATE=["brief","signals","alerts","wallet","ai"];
 
+function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About"};
+  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles"};
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
+      {/* Icon + heading */}
+      <div style={{fontSize:44,marginBottom:14,filter:"drop-shadow(0 0 12px rgba(201,168,76,.3))"}}>🔐</div>
+      <div style={{fontFamily:SERIF2,fontSize:22,fontWeight:900,color:C2.gold2,marginBottom:6,letterSpacing:"-0.02em"}}>{tabNames[tab]||"Feature Locked"}</div>
+      <div style={{fontFamily:MONO2,fontSize:9,color:C2.muted,letterSpacing:"0.18em",textTransform:"uppercase",marginBottom:18}}>FREE ACCOUNT REQUIRED</div>
+      <div style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.85,marginBottom:28,maxWidth:290}}>{tabBlurbs[tab]||"Create a free account to unlock this feature and start trading smarter."}</div>
+
+      {/* Primary CTA — free account */}
+      <button data-testid="preview-signup-btn" onClick={()=>onSignUp("free")}
+        style={{width:"100%",maxWidth:300,padding:"14px 0",borderRadius:4,background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.55)",color:C2.gold2,fontFamily:SERIF2,fontStyle:"italic",fontWeight:700,fontSize:16,cursor:"pointer",marginBottom:10,letterSpacing:"0.02em",boxShadow:"0 0 20px rgba(201,168,76,.1)"}}>
+        Create Free Account →
+      </button>
+
+      {/* Upgrade pitch card */}
+      <div style={{width:"100%",maxWidth:300,background:"rgba(201,168,76,.04)",border:"1px solid rgba(201,168,76,.18)",borderRadius:5,padding:"16px 18px",marginBottom:18,textAlign:"left"}}>
+        <div style={{fontFamily:MONO2,fontSize:9,color:C2.gold,letterSpacing:"0.16em",marginBottom:10}}>PRO & ELITE MEMBERS ALSO GET</div>
+        {[["⚡","AI-powered quant signals + trade ideas"],["📰","Morning brief · 4 daily curated ideas"],["🔍","SEC insider filings · whale cluster flow"],["🔔","Custom price alerts · push notifications"],["👛","Phantom wallet + Hyperliquid trading"]].map(([icon,text])=>(
+          <div key={text} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:6}}>
+            <span style={{fontSize:11,lineHeight:1.7}}>{icon}</span>
+            <span style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.7}}>{text}</span>
+          </div>
+        ))}
+        <button data-testid="preview-upgrade-pro-btn" onClick={()=>onSignUp("pro")}
+          style={{width:"100%",marginTop:14,padding:"11px 0",borderRadius:3,background:"rgba(201,168,76,.15)",border:"1px solid rgba(201,168,76,.45)",color:C2.gold,fontFamily:MONO2,fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:"0.1em"}}>
+          UPGRADE TO PRO — FROM $29.99/mo →
+        </button>
+        <button data-testid="preview-upgrade-elite-btn" onClick={()=>onSignUp("elite")}
+          style={{width:"100%",marginTop:6,padding:"10px 0",borderRadius:3,background:"rgba(0,229,255,.06)",border:"1px solid rgba(0,229,255,.3)",color:"#00e5ff",fontFamily:MONO2,fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:"0.1em"}}>
+          ELITE — FULL ACCESS FROM $129/mo ⚡
+        </button>
+      </div>
+
+      {/* Sign in link */}
+      <div style={{fontFamily:MONO2,fontSize:10,color:C2.muted}}>
+        Already have an account?{" "}
+        <span data-testid="preview-signin-link" onClick={onSignIn} style={{color:C2.gold,cursor:"pointer",textDecoration:"underline",letterSpacing:"0.04em"}}>Sign in</span>
+      </div>
+    </div>
+  );
+}
+
 function TabUpgradeGate({tab,tier,onUpgrade,C2,MONO2,SERIF2}){
   const isElite=tier==="elite";
   const labels={brief:"Morning Brief",signals:"Quant AI Signals",alerts:"Alerts & Anomalies",wallet:"Phantom Wallet",ai:"AI Market Analyst",insider:"SEC Insider Flow"};
@@ -853,13 +898,43 @@ function HelpItem({q,a}){
 // ═══════════════════════════════════════════════════════════
 export default function App(){
   const [user,setUser]=useState(null);
+  const [showAuth,setShowAuth]=useState(false);
+  const [sessionChecked,setSessionChecked]=useState(false);
 
-  if(!user) return <WelcomePage onEnter={setUser}/>;
+  // Check for existing session on mount
+  useEffect(()=>{
+    fetch("/api/auth/me",{credentials:"include"})
+      .then(r=>r.ok?r.json():null)
+      .then(d=>{ if(d?.id) setUser(d); })
+      .catch(()=>{})
+      .finally(()=>setSessionChecked(true));
+  },[]);
 
-  return <Dashboard user={user} setUser={setUser}/>;
+  // Brief splash while checking session
+  if(!sessionChecked){
+    return(
+      <div style={{background:"#050709",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
+        <div style={{fontFamily:"'Playfair Display',Georgia,serif",fontSize:28,fontWeight:900,color:"#c9a84c",letterSpacing:"-0.02em"}}>CLVRQuant</div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#2a3650",letterSpacing:"0.25em"}}>LOADING...</div>
+      </div>
+    );
+  }
+
+  // Sign-up / sign-in screen
+  if(showAuth){
+    return <WelcomePage onEnter={(u)=>{setUser(u);setShowAuth(false);}} onBack={()=>setShowAuth(false)}/>;
+  }
+
+  // Not logged in → show locked preview dashboard
+  if(!user){
+    const previewUser={preview:true,tier:"free",name:"Guest"};
+    return <Dashboard user={previewUser} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>;
+  }
+
+  return <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>;
 }
 
-function Dashboard({user,setUser}){
+function Dashboard({user,setUser,onShowAuth}){
   const [tab,setTab]=useState("radar");
   const [clockTick,setClockTick]=useState(0);
   // ── Global market bell state ───────────────────────────────────────────────
@@ -967,6 +1042,7 @@ function Dashboard({user,setUser}){
   const [briefDate,setBriefDate]=useState(null);
 
   const [userTier,setUserTier]=useState(()=>{try{return user?.tier||localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
+  const isPreview=user?.preview===true;
 
   // ── Market Data Store (shared singleton, all tabs read from here) ──────────
   const {
@@ -2583,9 +2659,19 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       {/* ── CONTENT ── */}
       <div style={{padding:"10px 12px",position:"relative",zIndex:1}}>
 
+        {/* ── Preview (unauthenticated) full-screen overlay ── */}
+        {isPreview&&(
+          <div style={{position:"fixed",top:54,left:0,right:0,bottom:60,background:"#050709",zIndex:50,overflowY:"auto"}}>
+            <PreviewGate tab={tab} C2={C} MONO2={MONO} SERIF2={SERIF}
+              onSignUp={()=>onShowAuth&&onShowAuth()}
+              onSignIn={()=>onShowAuth&&onShowAuth()}
+            />
+          </div>
+        )}
+
         {/* ── Free-user tab gates ── */}
-        {!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
-        {!isElite&&tab==="insider"&&<TabUpgradeGate tab="insider" tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
+        {!isPreview&&!isElite&&tab==="insider"&&<TabUpgradeGate tab="insider" tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
@@ -3662,14 +3748,15 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:"rgba(5,7,9,.97)",borderTop:`1px solid ${C.border}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
-          const eliteGatedTab=["insider"].includes(item.k)&&!isElite;
-          const proGatedTab=PRO_TABS_GATE.includes(item.k)&&!isPro;
-          const isTabLocked=eliteGatedTab||proGatedTab;
+          const eliteGatedTab=!isPreview&&["insider"].includes(item.k)&&!isElite;
+          const proGatedTab=!isPreview&&PRO_TABS_GATE.includes(item.k)&&!isPro;
+          const isTabLocked=isPreview||eliteGatedTab||proGatedTab;
           return(
             <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
               <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:isTabLocked?C.muted:C.muted2}}>{item.icon}</span>
-              {macroAlert&&!active&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
-              {isTabLocked&&!active&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>🔒</div>}
+              {macroAlert&&!active&&!isPreview&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
+              {isTabLocked&&!active&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>{isPreview?"🔐":"🔒"}</div>}
+              {isTabLocked&&active&&isPreview&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>🔐</div>}
               <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:active?C.gold:isTabLocked?C.muted:C.muted,letterSpacing:"0.06em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
             </button>
           );
