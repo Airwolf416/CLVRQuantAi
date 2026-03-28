@@ -4402,14 +4402,15 @@ Every level must be technically defensible. Return JSON only.`;
       const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
       const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
       if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
-      const { subject, body, targetAll } = req.body;
+      const { subject, body, targetAll, htmlMode } = req.body;
       if (!subject?.trim() || !body?.trim()) return res.status(400).json({ error: "Subject and body are required" });
       // Fetch recipients
       const recipientsRes = targetAll
         ? await pool.query("SELECT id, name, email FROM users WHERE email LIKE '%@%' ORDER BY created_at DESC")
         : await pool.query("SELECT u.id, u.name, u.email FROM users u INNER JOIN subscribers s ON LOWER(u.email)=LOWER(s.email) WHERE s.active=true AND u.email LIKE '%@%' ORDER BY u.created_at DESC");
       const recipients = recipientsRes.rows;
-      console.log(`[custom-email] Sending "${subject}" to ${recipients.length} recipients (targetAll=${targetAll})`);
+      const isRawHtml = htmlMode && (body.trimStart().toLowerCase().startsWith("<!doctype") || body.trimStart().toLowerCase().startsWith("<html"));
+      console.log(`[custom-email] Sending "${subject}" to ${recipients.length} recipients (targetAll=${targetAll}, htmlMode=${htmlMode}, isRawHtml=${isRawHtml})`);
       const { client: resend, fromEmail } = await getUncachableResendClient();
       let sent = 0; let skipped = 0;
       for (let i = 0; i < recipients.length; i++) {
@@ -4418,15 +4419,33 @@ Every level must be technically defensible. Return JSON only.`;
         if (i > 0) await new Promise(r => setTimeout(r, 550)); // ~1.8 req/s — safe under Resend limit
         try {
           const encodedEmail = encodeURIComponent(u.email);
-          const escapedBody = body.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
-          const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet"></head><body style="margin:0;padding:0;background:#050709;font-family:'Helvetica Neue',Arial,sans-serif"><div style="max-width:580px;margin:0 auto;background:#080d18;border:1px solid #141e35"><div style="padding:28px 32px 20px;border-bottom:1px solid #0d1525;text-align:center"><div style="font-family:Georgia,serif;font-size:26px;font-weight:900;color:#e8c96d;letter-spacing:-0.02em">CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;letter-spacing:0.25em;margin-top:4px">MARKET INTELLIGENCE</div></div><div style="padding:32px"><p style="color:#8a96b2;font-size:13px;line-height:1.9;margin:0 0 24px">${escapedBody}</p><div style="border-top:1px solid #141e35;padding-top:20px"><div style="font-family:Georgia,serif;font-size:13px;color:#c8d4ee;font-weight:600">Mike Claver</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px">Founder, CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px"><a href="mailto:Support@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">Support@CLVRQuantAI.com</a></div></div></div><div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">You are receiving this email because you have a CLVRQuant account.<br><a href="https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a> · CLVRQuant · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div></div></body></html>`;
+          const recipientName = u.name || "Trader";
+          const unsubFooter = `<div style="padding:14px 24px 18px;text-align:center;background:#090c10;border-top:1px solid #111d2b"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">You are receiving this email because you have a CLVRQuant account.<br><a href="https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a> &nbsp;·&nbsp; CLVRQuant &nbsp;·&nbsp; <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div>`;
+          let html: string;
+          let text: string;
+          if (isRawHtml) {
+            // Personalize [First Name] and inject unsubscribe footer before </body>
+            const personalized = body.replace(/\[First Name\]/gi, recipientName).replace(/\[Name\]/gi, recipientName);
+            const hasBody = /<\/body>/i.test(personalized);
+            html = hasBody
+              ? personalized.replace(/<\/body>/i, `${unsubFooter}</body>`)
+              : personalized + unsubFooter;
+            // Update any hardcoded unsubscribe href placeholder in the template
+            html = html.replace(/<a\s+href=["']#["']\s*>\s*Unsubscribe\s*<\/a>/gi, `<a href="https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}" style="color:#5a8fc4;text-decoration:none">Unsubscribe</a>`);
+            text = `${subject}\n\nTo view this email, open it in a compatible mail client.\n\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}`;
+          } else {
+            // Plain text: wrap in CLVRQuant branded template
+            const escapedBody = body.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>").replace(/\[First Name\]/gi, recipientName);
+            html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet"></head><body style="margin:0;padding:0;background:#050709;font-family:'Helvetica Neue',Arial,sans-serif"><div style="max-width:580px;margin:0 auto;background:#080d18;border:1px solid #141e35"><div style="padding:28px 32px 20px;border-bottom:1px solid #0d1525;text-align:center"><div style="font-family:Georgia,serif;font-size:26px;font-weight:900;color:#e8c96d;letter-spacing:-0.02em">CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;letter-spacing:0.25em;margin-top:4px">MARKET INTELLIGENCE</div></div><div style="padding:32px"><p style="color:#8a96b2;font-size:13px;line-height:1.9;margin:0 0 24px">${escapedBody}</p><div style="border-top:1px solid #141e35;padding-top:20px"><div style="font-family:Georgia,serif;font-size:13px;color:#c8d4ee;font-weight:600">Mike Claver</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px">Founder, CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px"><a href="mailto:Support@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">Support@CLVRQuantAI.com</a></div></div></div><div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525">${unsubFooter}</div></div></body></html>`;
+            text = `${body.replace(/\[First Name\]/gi, recipientName)}\n\n---\nMike Claver\nFounder, CLVRQuant\nSupport@CLVRQuantAI.com\n\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}`;
+          }
           const resp = await resend.emails.send({
             from: fromEmail,
             to: u.email,
-            subject: subject.trim(),
+            subject: subject.trim().replace(/\[First Name\]/gi, recipientName),
             headers: { "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}>` },
             html,
-            text: `${body}\n\n---\nMike Claver\nFounder, CLVRQuant\nSupport@CLVRQuantAI.com\n\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}`,
+            text,
           });
           if ((resp as any).error) { console.log(`[custom-email] Resend error for ${u.email}:`, JSON.stringify((resp as any).error)); skipped++; }
           else { sent++; }

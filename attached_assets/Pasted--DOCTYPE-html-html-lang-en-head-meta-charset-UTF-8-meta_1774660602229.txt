@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>CLVRQuantAI — Weekly Update</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+background: #090c10;
+font-family: ‘DM Sans’, sans-serif;
+color: #e2e8f0;
+min-height: 100vh;
+display: flex;
+align-items: center;
+justify-content: center;
+padding: 40px 16px;
+}
+
+.email-wrapper {
+width: 100%;
+max-width: 560px;
+animation: fadeUp 0.7s ease both;
+}
+
+@keyframes fadeUp {
+from { opacity: 0; transform: translateY(24px); }
+to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Header */
+.header {
+background: linear-gradient(135deg, #0f1923 0%, #0a1628 100%);
+border: 1px solid #1e3a5f;
+border-bottom: none;
+border-radius: 16px 16px 0 0;
+padding: 36px 40px 28px;
+position: relative;
+overflow: hidden;
+}
+.header::before {
+content: ‘’;
+position: absolute;
+top: -60px; right: -60px;
+width: 220px; height: 220px;
+background: radial-gradient(circle, rgba(250,189,0,0.08) 0%, transparent 70%);
+pointer-events: none;
+}
+.logo a {
+font-family: ‘Space Mono’, monospace;
+font-size: 13px;
+font-weight: 700;
+letter-spacing: 0.18em;
+color: #fabd00;
+text-transform: uppercase;
+margin-bottom: 20px;
+text-decoration: none;
+display: inline-block;
+transition: opacity 0.2s;
+}
+.logo a:hover { opacity: 0.75; }
+.header h1 {
+font-size: 26px;
+font-weight: 600;
+line-height: 1.3;
+color: #f0f6ff;
+margin-bottom: 8px;
+}
+.header p {
+font-size: 14px;
+color: #7a9bbf;
+font-weight: 300;
+}
+.badge {
+display: inline-block;
+background: rgba(250,189,0,0.12);
+border: 1px solid rgba(250,189,0,0.3);
+color: #fabd00;
+font-family: ‘Space Mono’, monospace;
+font-size: 10px;
+letter-spacing: 0.12em;
+padding: 4px 10px;
+border-radius: 4px;
+margin-bottom: 14px;
+}
+
+/* Body */
+.body {
+background: #0d1520;
+border: 1px solid #1e3a5f;
+border-top: none;
+border-bottom: none;
+padding: 32px 40px;
+}
+.body p.intro {
+font-size: 15px;
+color: #a0b8d0;
+line-height: 1.7;
+margin-bottom: 28px;
+}
+
+/* Update items */
+.updates { display: flex; flex-direction: column; gap: 16px; margin-bottom: 32px; }
+.update-item {
+display: flex;
+gap: 14px;
+align-items: flex-start;
+background: rgba(255,255,255,0.03);
+border: 1px solid #1a2e47;
+border-radius: 10px;
+padding: 16px 18px;
+transition: border-color 0.2s;
+}
+.update-item:hover { border-color: #2a4a6f; }
+.update-icon {
+width: 36px; height: 36px;
+border-radius: 8px;
+background: rgba(250,189,0,0.1);
+border: 1px solid rgba(250,189,0,0.2);
+display: flex; align-items: center; justify-content: center;
+font-size: 16px;
+flex-shrink: 0;
+}
+.update-icon.blue {
+background: rgba(90,143,196,0.12);
+border-color: rgba(90,143,196,0.25);
+}
+.update-text strong {
+display: block;
+font-size: 14px;
+font-weight: 600;
+color: #dce8f5;
+margin-bottom: 3px;
+}
+.update-text span {
+font-size: 13px;
+color: #7a9bbf;
+line-height: 1.5;
+}
+
+/* Divider */
+.divider {
+height: 1px;
+background: linear-gradient(90deg, transparent, #1e3a5f 30%, #1e3a5f 70%, transparent);
+margin: 4px 0 28px;
+}
+
+/* Promo section */
+.promo-section {
+background: linear-gradient(135deg, rgba(250,189,0,0.06), rgba(90,143,196,0.06));
+border: 1px solid rgba(250,189,0,0.2);
+border-radius: 12px;
+padding: 26px 24px;
+text-align: center;
+}
+.promo-eyebrow {
+font-family: ‘Space Mono’, monospace;
+font-size: 10px;
+letter-spacing: 0.16em;
+color: #fabd00;
+text-transform: uppercase;
+margin-bottom: 6px;
+}
+.promo-headline {
+font-size: 17px;
+font-weight: 600;
+color: #f0f6ff;
+margin-bottom: 4px;
+}
+.promo-sub {
+font-size: 12px;
+color: #7a9bbf;
+margin-bottom: 20px;
+}
+.promo-note {
+font-size: 11px;
+color: #c87d00;
+background: rgba(200,125,0,0.1);
+border: 1px solid rgba(200,125,0,0.2);
+border-radius: 6px;
+padding: 6px 12px;
+display: inline-block;
+margin-bottom: 20px;
+}
+
+/* QR + Code side by side */
+.promo-flex {
+display: flex;
+align-items: center;
+justify-content: center;
+gap: 24px;
+flex-wrap: wrap;
+}
+#qrcode {
+background: #fff;
+padding: 8px;
+border-radius: 8px;
+display: inline-block;
+line-height: 0;
+}
+#qrcode img, #qrcode canvas { border-radius: 4px; }
+
+.code-box {
+text-align: left;
+}
+.code-label {
+font-size: 11px;
+color: #7a9bbf;
+text-transform: uppercase;
+letter-spacing: 0.1em;
+margin-bottom: 6px;
+}
+.code-value {
+font-family: ‘Space Mono’, monospace;
+font-size: 20px;
+font-weight: 700;
+color: #fabd00;
+letter-spacing: 0.06em;
+background: rgba(250,189,0,0.08);
+border: 1px dashed rgba(250,189,0,0.35);
+padding: 10px 16px;
+border-radius: 8px;
+display: inline-block;
+margin-bottom: 8px;
+}
+.code-expires {
+font-size: 11px;
+color: #506a80;
+}
+
+/* CTA */
+.cta-wrap { text-align: center; margin-top: 28px; }
+.cta-btn {
+display: inline-block;
+background: #fabd00;
+color: #0a0c10;
+font-family: ‘Space Mono’, monospace;
+font-size: 12px;
+font-weight: 700;
+letter-spacing: 0.1em;
+text-decoration: none;
+padding: 13px 30px;
+border-radius: 8px;
+text-transform: uppercase;
+transition: background 0.2s, transform 0.15s;
+}
+.cta-btn:hover { background: #ffd040; transform: translateY(-1px); }
+
+/* Footer */
+.footer {
+background: #090c10;
+border: 1px solid #1e3a5f;
+border-top: 1px solid #111d2b;
+border-radius: 0 0 16px 16px;
+padding: 20px 40px;
+text-align: center;
+}
+.footer p {
+font-size: 11px;
+color: #3d5a73;
+line-height: 1.6;
+}
+.footer a { color: #5a8fc4; text-decoration: none; }
+</style>
+
+</head>
+<body>
+<div class="email-wrapper">
+
+  <!-- Header -->
+
+  <div class="header">
+    <div class="logo"><a href="https://clvrquantai.com" target="_blank">CLVRQuantAI</a></div>
+    <div class="badge">WEEKLY UPDATE · MARCH 2026</div>
+    <h1>Big upgrades just shipped. 🚀</h1>
+    <p>Here's what's new on the platform this week.</p>
+  </div>
+
+  <!-- Body -->
+
+  <div class="body">
+    <p class="intro">
+      Hi [First Name], it's been a big build week. Two major features just went live —
+      plus serious infrastructure upgrades under the hood.
+    </p>
+
+```
+<div class="updates">
+  <div class="update-item">
+    <div class="update-icon">🧠</div>
+    <div class="update-text">
+      <strong>QuantBrain AI Engine</strong>
+      <span>Customizable trade signals across Crypto, Equities & Commodities. Pick your risk profile: Conservative, Balanced, or Aggressive.</span>
+    </div>
+  </div>
+  <div class="update-item">
+    <div class="update-icon">🔊</div>
+    <div class="update-text">
+      <strong>Audio Squawk Box Alerts</strong>
+      <span>Real-time voice alerts via Google TTS — optimized for PC and iPad. Your signals, spoken aloud the moment they fire.</span>
+    </div>
+  </div>
+  <div class="update-item">
+    <div class="update-icon blue">⚡</div>
+    <div class="update-text">
+      <strong>Microservices & Real-Time Streaming</strong>
+      <span>New FastAPI + WebSocket backend for faster, more reliable data. Plus Stripe payments fixed and live on Railway.</span>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- Promo -->
+<div class="promo-section">
+  <div class="promo-eyebrow">Exclusive Gift</div>
+  <div class="promo-headline">Share 1 Free Week with a Friend or Family</div>
+  <div class="promo-sub">Give someone you trust full access — on us.</div>
+  <div class="promo-note">⚠️ This code is for new users only — not valid on your own account.</div>
+
+  <div class="promo-flex">
+    <div id="qrcode"></div>
+    <div class="code-box">
+      <div class="code-label">Promo Code</div>
+      <div class="code-value">CLVR-FRIEND-7D</div>
+      <div class="code-expires">Valid for 7 days · New accounts only</div>
+    </div>
+  </div>
+</div>
+
+<div class="cta-wrap">
+  <a href="https://clvrquantai.com" class="cta-btn">Go to CLVRQuantAI →</a>
+</div>
+```
+
+  </div>
+
+  <!-- Footer -->
+
+  <div class="footer">
+    <p>
+      © 2026 CLVRQuantAI · <a href="https://clvrquantai.com">clvrquantai.com</a><br/>
+      You're receiving this because you have an active account.<br/>
+      <a href="#">Unsubscribe</a> · <a href="#">Privacy Policy</a>
+    </p>
+  </div>
+
+</div>
+
+<script>
+  const promoUrl = "https://clvrquantai.com?promo=CLVR-FRIEND-7D";
+  new QRCode(document.getElementById("qrcode"), {
+    text: promoUrl,
+    width: 110,
+    height: 110,
+    colorDark: "#0a0c10",
+    colorLight: "#ffffff",
+    correctLevel: QRCode.CorrectLevel.M
+  });
+</script>
+
+</body>
+</html>
