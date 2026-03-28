@@ -4359,11 +4359,30 @@ Every level must be technically defensible. Return JSON only.`;
     try {
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
+      const hadPaidPlan = user.tier === "pro" || user.tier === "elite" || !!user.stripeSubscriptionId;
       if (user.stripeSubscriptionId) {
         try {
           const stripe = await getUncachableStripeClient();
           await stripe.subscriptions.cancel(user.stripeSubscriptionId);
         } catch (e: any) { console.log("[account] Stripe cancel error:", e.message); }
+      }
+      // Send retention email only if user had a paid plan (avoid loophole for free users)
+      if (hadPaidPlan && user.email) {
+        try {
+          const { client: resend, fromEmail } = await getUncachableResendClient();
+          const encodedEmail = encodeURIComponent(user.email);
+          await resend.emails.send({
+            from: fromEmail,
+            to: user.email,
+            subject: "We'll miss you at CLVRQuant",
+            headers: { "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}>` },
+            html: `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet"></head><body style="margin:0;padding:0;background:#050709;font-family:'Helvetica Neue',Arial,sans-serif"><div style="max-width:580px;margin:0 auto;background:#080d18;border:1px solid #141e35"><div style="padding:28px 32px 20px;border-bottom:1px solid #0d1525;text-align:center"><div style="font-family:Georgia,serif;font-size:26px;font-weight:900;color:#e8c96d;letter-spacing:-0.02em">CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;letter-spacing:0.25em;margin-top:4px">MARKET INTELLIGENCE</div></div><div style="padding:32px"><div style="font-family:Georgia,serif;font-size:20px;font-weight:700;color:#f0f4ff;margin-bottom:16px">We'll miss you, ${user.name || "Trader"}.</div><p style="color:#8a96b2;font-size:13px;line-height:1.8;margin-bottom:16px">Your account has been deleted as requested. All your data has been permanently removed.</p><p style="color:#8a96b2;font-size:13px;line-height:1.8;margin-bottom:20px">If you ever decide to return, we'd love to have you back. As a thank-you for the time you spent with us — <strong style="color:#e8c96d">your first month back is on us</strong>.</p><div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:24px;text-align:center"><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;letter-spacing:0.15em;margin-bottom:6px">RETURN OFFER</div><div style="font-family:Georgia,serif;font-size:15px;color:#e8c96d;font-weight:700">1 Month Free on Your Previous Plan</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:6px">Email us at Support@CLVRQuantAI.com to claim</div></div><p style="color:#8a96b2;font-size:12px;line-height:1.8;margin-bottom:24px">If there's anything we could have done better, I'd genuinely love to hear it. Your feedback helps us build a better platform for every trader.</p><div style="border-top:1px solid #141e35;padding-top:20px"><div style="font-family:Georgia,serif;font-size:13px;color:#c8d4ee;font-weight:600">Mike Claver</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px">Founder, CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px"><a href="mailto:Support@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">Support@CLVRQuantAI.com</a></div></div></div><div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">This is a one-time account deletion confirmation. You will not receive further emails.<br>CLVRQuant · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div></div></body></html>`,
+            text: `Hi ${user.name || "Trader"},\n\nYour CLVRQuant account has been deleted as requested.\n\nIf you ever decide to return, your first month back is on us — just email us at Support@CLVRQuantAI.com to claim your free month.\n\nWe'd love to have you back.\n\nMike Claver\nFounder, CLVRQuant\nSupport@CLVRQuantAI.com`,
+          });
+          console.log(`[account] Sent retention email to ${user.email}`);
+        } catch (emailErr: any) {
+          console.log("[account] Retention email failed:", emailErr.message);
+        }
       }
       await pool.query("UPDATE subscribers SET active = false WHERE email = $1", [user.email]);
       await pool.query("UPDATE access_codes SET used_by = NULL, used_at = NULL WHERE used_by = $1", [userId]);
@@ -4373,6 +4392,49 @@ Every level must be technically defensible. Return JSON only.`;
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ── Admin: Custom broadcast email (owner only) ───────────────────────────
+  app.post("/api/admin/send-custom-email", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    try {
+      const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+      const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+      if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
+      const { subject, body, targetAll } = req.body;
+      if (!subject?.trim() || !body?.trim()) return res.status(400).json({ error: "Subject and body are required" });
+      // Fetch recipients
+      const recipientsRes = targetAll
+        ? await pool.query("SELECT id, name, email FROM users WHERE email LIKE '%@%' ORDER BY created_at DESC")
+        : await pool.query("SELECT u.id, u.name, u.email FROM users u INNER JOIN subscribers s ON LOWER(u.email)=LOWER(s.email) WHERE s.active=true AND u.email LIKE '%@%' ORDER BY u.created_at DESC");
+      const recipients = recipientsRes.rows;
+      console.log(`[custom-email] Sending "${subject}" to ${recipients.length} recipients (targetAll=${targetAll})`);
+      const { client: resend, fromEmail } = await getUncachableResendClient();
+      let sent = 0; let skipped = 0;
+      for (let i = 0; i < recipients.length; i++) {
+        const u = recipients[i];
+        if (!u.email || !u.email.includes("@")) { skipped++; continue; }
+        if (i > 0) await new Promise(r => setTimeout(r, 550)); // ~1.8 req/s — safe under Resend limit
+        try {
+          const encodedEmail = encodeURIComponent(u.email);
+          const escapedBody = body.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
+          const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet"></head><body style="margin:0;padding:0;background:#050709;font-family:'Helvetica Neue',Arial,sans-serif"><div style="max-width:580px;margin:0 auto;background:#080d18;border:1px solid #141e35"><div style="padding:28px 32px 20px;border-bottom:1px solid #0d1525;text-align:center"><div style="font-family:Georgia,serif;font-size:26px;font-weight:900;color:#e8c96d;letter-spacing:-0.02em">CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#4a5d80;letter-spacing:0.25em;margin-top:4px">MARKET INTELLIGENCE</div></div><div style="padding:32px"><p style="color:#8a96b2;font-size:13px;line-height:1.9;margin:0 0 24px">${escapedBody}</p><div style="border-top:1px solid #141e35;padding-top:20px"><div style="font-family:Georgia,serif;font-size:13px;color:#c8d4ee;font-weight:600">Mike Claver</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px">Founder, CLVRQuant</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a5d80;margin-top:2px"><a href="mailto:Support@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">Support@CLVRQuantAI.com</a></div></div></div><div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">You are receiving this email because you have a CLVRQuant account.<br><a href="https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a> · CLVRQuant · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div></div></body></html>`;
+          const resp = await resend.emails.send({
+            from: fromEmail,
+            to: u.email,
+            subject: subject.trim(),
+            headers: { "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}>` },
+            html,
+            text: `${body}\n\n---\nMike Claver\nFounder, CLVRQuant\nSupport@CLVRQuantAI.com\n\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodedEmail}`,
+          });
+          if ((resp as any).error) { console.log(`[custom-email] Resend error for ${u.email}:`, JSON.stringify((resp as any).error)); skipped++; }
+          else { sent++; }
+        } catch (e: any) { console.log(`[custom-email] Failed for ${u.email}:`, e.message); skipped++; }
+      }
+      console.log(`[custom-email] Done — sent=${sent}, skipped=${skipped}`);
+      res.json({ ok: true, sent, skipped });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/access-codes", async (req, res) => {
