@@ -399,6 +399,29 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
   );
 }
 
+// Tabs that require Pro (fully locked for free users)
+const PRO_TABS_GATE=["brief","signals","alerts","wallet","ai"];
+
+function TabUpgradeGate({tab,tier,onUpgrade,C2,MONO2,SERIF2}){
+  const isElite=tier==="elite";
+  const labels={brief:"Morning Brief",signals:"Quant AI Signals",alerts:"Alerts & Anomalies",wallet:"Phantom Wallet",ai:"AI Market Analyst",insider:"SEC Insider Flow"};
+  const features={brief:"Daily AI-generated market brief · 4 curated trade ideas · macro risk scoring",signals:"Full pattern library · Bayesian signal scoring · funding rate anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI Market Chat · real-time context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow"};
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:380,padding:"32px 24px",textAlign:"center"}}>
+      <div style={{fontSize:32,marginBottom:16}}>🔒</div>
+      <div style={{fontFamily:SERIF2,fontSize:20,fontWeight:900,color:isElite?"#00e5ff":C2.gold2,marginBottom:6,letterSpacing:"-0.02em"}}>{isElite?"Elite Feature":"Pro Feature"}</div>
+      <div style={{fontFamily:MONO2,fontSize:11,color:C2.muted,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:16}}>{labels[tab]||tab}</div>
+      <div style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.8,marginBottom:24,maxWidth:280}}>{features[tab]||"Unlock this feature with an upgrade."}</div>
+      <button onClick={onUpgrade} style={{background:isElite?"rgba(0,229,255,.12)":"rgba(201,168,76,.12)",border:`1px solid ${isElite?"rgba(0,229,255,.4)":"rgba(201,168,76,.4)"}`,borderRadius:3,padding:"11px 28px",fontFamily:SERIF2,fontStyle:"italic",fontWeight:700,fontSize:14,color:isElite?"#00e5ff":C2.gold2,cursor:"pointer",letterSpacing:"0.04em",boxShadow:isElite?"0 0 24px rgba(0,229,255,.15)":"0 0 24px rgba(201,168,76,.12)"}}>
+        {isElite?"Upgrade to Elite ⚡":"Upgrade to Pro →"}
+      </button>
+      <div style={{fontFamily:MONO2,fontSize:9,color:C2.muted,marginTop:14,letterSpacing:"0.08em"}}>
+        {isElite?"FROM $129/mo · CANCEL ANYTIME":"FROM $29.99/mo · CANCEL ANYTIME"}
+      </div>
+    </div>
+  );
+}
+
 // ─── GLOBAL BELL OVERLAY ─────────────────────────────────────────────────────
 // Shows NYSE open/close banner + 60-second countdown anywhere on the app
 function GlobalBellOverlay({bellFlash,secsToClose}){
@@ -2560,6 +2583,10 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       {/* ── CONTENT ── */}
       <div style={{padding:"10px 12px",position:"relative",zIndex:1}}>
 
+        {/* ── Free-user tab gates ── */}
+        {!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
+        {!isElite&&tab==="insider"&&<TabUpgradeGate tab="insider" tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
           <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
@@ -2995,7 +3022,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ BRIEF ══ */}
-        {tab==="brief"&&<>
+        {tab==="brief"&&isPro&&<>
           <div style={{marginBottom:14}}><SLabel>Morning Market Brief</SLabel></div>
           <div style={panel}>
             <div style={ph}><PTitle>Daily Intelligence Brief</PTitle><Badge label="AI · Live Prices" color="gold"/></div>
@@ -3109,7 +3136,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ SIGNALS ══ */}
-        {tab==="signals"&&<>
+        {tab==="signals"&&isPro&&<>
           <div style={{marginBottom:10}}><SLabel>Quant AI Signals</SLabel></div>
 
           {/* ── Store price strip (top 6 assets by volume) ── */}
@@ -3200,7 +3227,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ INSIDER ══ */}
-        {tab==="insider"&&<>
+        {tab==="insider"&&isElite&&<>
           <InsiderTab
             isPro={isElite}
             onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
@@ -3209,7 +3236,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ ALERTS ══ */}
-        {tab==="alerts"&&<>
+        {tab==="alerts"&&isPro&&<>
           <div style={{marginBottom:10}}><SLabel>Alerts & Anomalies</SLabel></div>
 
           {/* ── Store auto-generated alerts (internal only — hidden from users) ── */}
@@ -3309,13 +3336,13 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ WALLET ══ */}
-        {tab==="wallet"&&<>
+        {tab==="wallet"&&isPro&&<>
           <div style={{marginBottom:14}}><SLabel>Phantom Wallet</SLabel></div>
           <PhantomWalletPanel />
         </>}
 
         {/* ══ AI ══ */}
-        {tab==="ai"&&<>
+        {tab==="ai"&&isPro&&<>
           <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
           {/* AI Mode toggle */}
           <div style={{display:"flex",gap:6,marginBottom:14}}>
@@ -3636,12 +3663,14 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
           const eliteGatedTab=["insider"].includes(item.k)&&!isElite;
+          const proGatedTab=PRO_TABS_GATE.includes(item.k)&&!isPro;
+          const isTabLocked=eliteGatedTab||proGatedTab;
           return(
             <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
-              <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:eliteGatedTab?C.muted:C.muted2}}>{item.icon}</span>
+              <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:isTabLocked?C.muted:C.muted2}}>{item.icon}</span>
               {macroAlert&&!active&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
-              {eliteGatedTab&&!active&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>🔒</div>}
-              <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:active?C.gold:eliteGatedTab?C.muted:C.muted,letterSpacing:"0.06em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
+              {isTabLocked&&!active&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>🔒</div>}
+              <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:active?C.gold:isTabLocked?C.muted:C.muted,letterSpacing:"0.06em",fontWeight:active?600:400,textTransform:"uppercase"}}>{item.label}</span>
             </button>
           );
         })}

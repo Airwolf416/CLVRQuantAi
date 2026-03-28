@@ -12,8 +12,9 @@ const MONO  = "'IBM Plex Mono', monospace";
 const SANS  = "'Barlow', system-ui, sans-serif";
 
 const PLAN_INFO = {
-  free:  { label: "Free",  color: C.muted2, border: C.border, price: "$0" },
-  pro:   { label: "Pro", color: C.gold, border: C.gold, price: "$29/mo" },
+  free:  { label: "Free",  color: C.muted2,  border: C.border,    price: "$0" },
+  pro:   { label: "Pro",   color: C.gold,    border: C.gold,      price: "$29.99/mo" },
+  elite: { label: "Elite", color: "#00e5ff", border: "#00a8cc",   price: "$129/mo" },
 };
 
 function ConfirmModal({ title, message, warning, confirmLabel, confirmColor, onConfirm, onCancel, children }) {
@@ -103,6 +104,190 @@ function OwnerResendBrief({ C, MONO }) {
   );
 }
 
+const SYSTEM_EMAILS = [
+  {
+    name: "Welcome Email",
+    trigger: "Automatic — on new account creation",
+    recipients: "New user (individually)",
+    description: "Sent immediately when a user creates an account. Contains a platform overview, feature list, and login link.",
+    color: "#00c787",
+  },
+  {
+    name: "Morning Market Brief",
+    trigger: "Automatic — daily at 6:00 AM ET",
+    recipients: "All subscribed users",
+    description: "Daily AI-generated brief covering market sentiment, macro outlook, top trades, and price signals.",
+    color: "#c9a84c",
+  },
+  {
+    name: "Apology Brief (Manual Resend)",
+    trigger: "Manual — owner panel → Emails tab",
+    recipients: "All subscribed users",
+    description: "Re-sends today's brief with an apology note if the automated 6AM send failed or had issues.",
+    color: "#ff8c00",
+  },
+  {
+    name: "Service Disruption Apology",
+    trigger: "Manual — owner panel → Emails tab",
+    recipients: "All users (subscribed and unsubscribed)",
+    description: "Formal apology email sent during outages or data disruptions. Links users to Support@CLVRQuantAI.com.",
+    color: "#ff4060",
+  },
+  {
+    name: "Referral Promotion",
+    trigger: "Manual — owner panel → Emails tab",
+    recipients: "All users",
+    description: "Encourages users to share their referral code. They earn 1 week of free Pro per paid referral.",
+    color: "#9b59b6",
+  },
+  {
+    name: "Referral Reward",
+    trigger: "Automatic — when a referred user subscribes to a paid plan",
+    recipients: "Referring user (individually)",
+    description: "Notifies the referrer they've earned 1 week of free Pro access for a successful referral.",
+    color: "#00d4ff",
+  },
+  {
+    name: "Promo Code Expiry Reminder",
+    trigger: "Automatic — 14 days before promo code expiry",
+    recipients: "Users with expiring promo codes (individually)",
+    description: "Reminds users their promo-based access expires soon and nudges them to subscribe via Stripe.",
+    color: "#ff8c00",
+  },
+  {
+    name: "Elite Access Activation",
+    trigger: "Automatic — when an Elite access code is redeemed",
+    recipients: "Newly activated Elite user (individually)",
+    description: "Welcome email confirming Elite access is now active, with a full feature breakdown.",
+    color: "#00e5ff",
+  },
+  {
+    name: "Account Deletion Retention",
+    trigger: "Automatic — when a paid user deletes their account",
+    recipients: "Deleted user (individually)",
+    description: "Sent only if the user had a paid plan (Pro or Elite). Offers 1 free month to return. Not sent to free-plan deletions.",
+    color: "#ff4060",
+  },
+  {
+    name: "Custom Broadcast (Admin Panel)",
+    trigger: "Manual — owner panel → Admin tab",
+    recipients: "All users or subscribed users (owner's choice)",
+    description: "Free-form broadcast email typed by you in the Admin tab. Sent with CLVRQuant HTML branding and your founder signature.",
+    color: "#c9a84c",
+  },
+];
+
+function AdminTab({ C, MONO, SANS, SERIF }) {
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [targetAll, setTargetAll] = useState(false);
+  const [sendStatus, setSendStatus] = useState(null);
+  const [sendMsg, setSendMsg] = useState("");
+
+  const sendCustomEmail = async () => {
+    if (!subject.trim() || !body.trim()) { setSendMsg("Subject and body are both required."); setSendStatus("error"); return; }
+    setSendStatus("sending"); setSendMsg("");
+    try {
+      const r = await fetch("/api/admin/send-custom-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject: subject.trim(), body: body.trim(), targetAll }),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        setSendStatus("sent");
+        setSendMsg(`✓ Sent to ${d.sent} recipient${d.sent !== 1 ? "s" : ""}.`);
+        setSubject(""); setBody("");
+      } else { setSendStatus("error"); setSendMsg(d.error || "Failed to send."); }
+    } catch { setSendStatus("error"); setSendMsg("Network error. Please try again."); }
+    setTimeout(() => { setSendStatus(null); setSendMsg(""); }, 12000);
+  };
+
+  return (
+    <div>
+      {/* Email Catalog */}
+      <div style={{ background:"#0c1220", border:`1px solid rgba(155,89,182,.3)`, borderRadius:6, padding:18, marginBottom:16 }}>
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#9b59b6", letterSpacing:"0.2em", marginBottom:14 }}>📬 SYSTEM EMAIL CATALOG</div>
+        <div style={{ fontSize:11, color:"#6b7fa8", fontFamily:MONO, marginBottom:16, lineHeight:1.6 }}>
+          All automated and manual emails sent by CLVRQuant on your behalf. Use this as a reference so you know exactly what users receive and when.
+        </div>
+        {SYSTEM_EMAILS.map((em, i) => (
+          <div key={em.name} style={{ borderLeft:`3px solid ${em.color}`, paddingLeft:12, marginBottom:14, paddingBottom:i < SYSTEM_EMAILS.length-1 ? 14 : 0, borderBottom: i < SYSTEM_EMAILS.length-1 ? "1px solid #141e35" : "none" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, flexWrap:"wrap", marginBottom:3 }}>
+              <div style={{ fontFamily:MONO, fontSize:11, fontWeight:700, color:"#f0f4ff" }}>{em.name}</div>
+              <div style={{ fontFamily:MONO, fontSize:8, color:em.color, border:`1px solid ${em.color}44`, borderRadius:2, padding:"2px 7px", whiteSpace:"nowrap", letterSpacing:"0.08em" }}>
+                {em.recipients.includes("individually") ? "INDIVIDUAL" : "BROADCAST"}
+              </div>
+            </div>
+            <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginBottom:4, letterSpacing:"0.04em" }}>⚡ {em.trigger}</div>
+            <div style={{ fontSize:11, color:"#6b7fa8", lineHeight:1.65 }}>{em.description}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Free-Form Composer */}
+      <div style={{ background:"#0c1220", border:`1px solid rgba(201,168,76,.25)`, borderRadius:6, padding:18 }}>
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#c9a84c", letterSpacing:"0.2em", marginBottom:6 }}>✍️ CUSTOM BROADCAST EMAIL</div>
+        <div style={{ fontSize:11, color:"#6b7fa8", fontFamily:MONO, marginBottom:16, lineHeight:1.6 }}>
+          Compose and send a custom email to your users. It will be formatted with CLVRQuant HTML branding and your founder signature.
+        </div>
+
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:5 }}>SUBJECT LINE</div>
+          <input
+            data-testid="input-custom-subject"
+            value={subject}
+            onChange={e => setSubject(e.target.value)}
+            placeholder="e.g. Important update from CLVRQuant"
+            maxLength={120}
+            style={{ width:"100%", background:"#080d18", border:`1px solid #1c2b4a`, borderRadius:4, padding:"10px 12px", fontFamily:MONO, fontSize:11, color:"#c8d4ee", boxSizing:"border-box" }}
+          />
+        </div>
+
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:5 }}>MESSAGE BODY (plain text — HTML formatting handled automatically)</div>
+          <textarea
+            data-testid="input-custom-body"
+            value={body}
+            onChange={e => setBody(e.target.value)}
+            placeholder={"Dear CLVRQuant community,\n\nYour message here...\n\nWarm regards,\nMike Claver\nFounder, CLVRQuant"}
+            rows={9}
+            style={{ width:"100%", background:"#080d18", border:`1px solid #1c2b4a`, borderRadius:4, padding:"10px 12px", fontFamily:MONO, fontSize:11, color:"#c8d4ee", resize:"vertical", boxSizing:"border-box", lineHeight:1.7 }}
+          />
+        </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+          <div
+            data-testid="toggle-target-all"
+            onClick={() => setTargetAll(v => !v)}
+            style={{ width:36, height:20, borderRadius:10, background:targetAll?"rgba(201,168,76,.35)":"rgba(255,255,255,.08)", border:`1px solid ${targetAll?"#c9a84c":"#1c2b4a"}`, cursor:"pointer", position:"relative", transition:"all .2s", flexShrink:0 }}>
+            <div style={{ width:14, height:14, borderRadius:"50%", background:targetAll?"#c9a84c":"#4a5d80", position:"absolute", top:2, left:targetAll?18:2, transition:"left .2s" }}/>
+          </div>
+          <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", lineHeight:1.5 }}>
+            {targetAll ? "Send to ALL registered users (including non-subscribers)" : "Send to subscribed users only"}
+          </div>
+        </div>
+
+        {sendMsg && (
+          <div style={{ fontFamily:MONO, fontSize:10, color:sendStatus==="sent"?"#00c787":"#ff4060", marginBottom:10, lineHeight:1.5 }}>{sendMsg}</div>
+        )}
+
+        <button
+          data-testid="btn-send-custom-email"
+          onClick={sendCustomEmail}
+          disabled={sendStatus==="sending"}
+          style={{ width:"100%", padding:"11px 0", borderRadius:4, border:`1px solid rgba(201,168,76,.4)`, background:"rgba(201,168,76,.08)", color:"#e8c96d", fontFamily:MONO, fontSize:11, fontWeight:700, cursor:sendStatus==="sending"?"not-allowed":"pointer", letterSpacing:"0.1em", opacity:sendStatus==="sending"?0.6:1 }}>
+          {sendStatus==="sending" ? "Sending…" : sendStatus==="sent" ? "✓ Sent!" : "📤 Send Broadcast Email"}
+        </button>
+
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#2a3650", marginTop:10, textAlign:"center", lineHeight:1.6 }}>
+          Emails include automatic unsubscribe links and your CLVRQuant founder signature.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, onTestBell }) {
   const [tab, setTab] = useState("subscription");
   const [acct, setAcct] = useState(null);
@@ -144,7 +329,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
     return () => { cancelled = true; }; // cancel stale retries on unmount
   }, [user?.id]);
 
-  const plan = PLAN_INFO[acct?.tier || "free"] || PLAN_INFO.free;
+  const effectiveTier = acct?.isOwner ? "elite" : (acct?.tier || "free");
+  const plan = PLAN_INFO[effectiveTier] || PLAN_INFO.free;
 
   const handleToggleDailyEmail = async (subscribe) => {
     setActionLoading(true);
@@ -307,7 +493,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   };
 
   const baseTabs = ["subscription", "referral", "emails", "billing", "legal"];
-  const tabs = acct?.isOwner ? [...baseTabs, "owner"] : baseTabs;
+  const tabs = acct?.isOwner ? [...baseTabs, "owner", "admin"] : baseTabs;
 
   if (loading) {
     return (
@@ -365,11 +551,18 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
           {acct.name?.[0] || "?"}
         </div>
         <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ fontWeight:700, fontSize:14, color:C.white }}>{acct.name}</div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+            <div style={{ fontWeight:700, fontSize:14, color:C.white }}>{acct.name}</div>
+            {acct.isOwner && (
+              <div style={{ background:"rgba(201,168,76,.15)", border:`1px solid rgba(201,168,76,.4)`, borderRadius:3, padding:"2px 8px", fontSize:8, fontWeight:700, color:C.gold, fontFamily:MONO, letterSpacing:"0.18em", textShadow:"0 0 8px rgba(201,168,76,.5)" }}>
+                FOUNDER
+              </div>
+            )}
+          </div>
           <div style={{ fontSize:11, color:C.muted2, fontFamily:MONO }}>{acct.email}</div>
           <div style={{ fontSize:10, color:C.muted, marginTop:2, fontFamily:MONO }}>Member since {acct.memberSince}</div>
         </div>
-        <div data-testid="badge-plan" style={{ background:plan.border+"18", border:`1px solid ${plan.border}44`, borderRadius:4, padding:"4px 10px", fontSize:10, fontWeight:700, color:plan.color, fontFamily:MONO, letterSpacing:"0.1em" }}>
+        <div data-testid="badge-plan" style={{ background:plan.border+"22", border:`1px solid ${plan.border}55`, borderRadius:4, padding:"4px 10px", fontSize:10, fontWeight:700, color:plan.color, fontFamily:MONO, letterSpacing:"0.1em", textShadow:effectiveTier==="elite"?"0 0 8px rgba(0,229,255,.3)":undefined }}>
           {plan.label.toUpperCase()}
         </div>
       </div>
@@ -377,8 +570,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       <div style={{ display:"flex", gap:4, marginBottom:18, flexWrap:"wrap" }}>
         {tabs.map(t => (
           <button key={t} data-testid={`tab-${t}`} onClick={() => setTab(t)}
-            style={{ background:tab === t ? (t === "owner" ? C.purple : C.gold) : "transparent", border:`1px solid ${tab === t ? (t === "owner" ? C.purple : C.gold) : C.border}`, color:tab === t ? C.bg : (t === "owner" ? C.purple : C.muted2), borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
-            {t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : "⚡ Owner"}
+            style={{ background:tab === t ? (t === "owner" || t === "admin" ? C.purple : C.gold) : "transparent", border:`1px solid ${tab === t ? (t === "owner" || t === "admin" ? C.purple : C.gold) : C.border}`, color:tab === t ? C.bg : (t === "owner" || t === "admin" ? C.purple : C.muted2), borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
+            {t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : t === "owner" ? "⚡ Owner" : "🛠 Admin"}
           </button>
         ))}
       </div>
@@ -402,7 +595,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
                     </div>
                   </>
                 )}
-                {acct.tier === "free" && <div style={{ fontSize:11, color:C.muted, marginTop:4, fontFamily:MONO }}>Free forever — 3 tabs available</div>}
+                {acct.isOwner && <div style={{ fontSize:11, color:"#00e5ff", marginTop:4, fontFamily:MONO }}>Founder — unlimited lifetime access</div>}
+                {!acct.isOwner && acct.tier === "free" && <div style={{ fontSize:11, color:C.muted, marginTop:4, fontFamily:MONO }}>Free forever — core tabs available</div>}
               </div>
               {acct.tier !== "free" && !acct.subscription?.cancelAtPeriodEnd && (
                 <div style={{ fontSize:18, color:C.green }}>✓</div>
@@ -623,10 +817,17 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
           <div style={S.card}>
             <div style={{ fontFamily:MONO, fontSize:9, color:C.red, letterSpacing:"0.2em", marginBottom:8 }}>DANGER ZONE</div>
             <div style={{ fontSize:11, color:C.muted2, lineHeight:1.7, marginBottom:12 }}>
-              Deleting your account permanently removes all your data, cancels your subscription, and unsubscribes you from all emails. This cannot be undone.
+              {acct.isOwner
+                ? "As the platform founder, your account is protected and cannot be deleted from here."
+                : "Deleting your account permanently removes all your data, cancels your subscription, and unsubscribes you from all emails. This cannot be undone."}
             </div>
-            <button data-testid="btn-delete-account" onClick={() => setModal("delete")} style={S.dangerBtn}>
-              Delete My Account
+            <button
+              data-testid="btn-delete-account"
+              onClick={() => !acct.isOwner && setModal("delete")}
+              disabled={acct.isOwner}
+              title={acct.isOwner ? "Founder account is protected" : undefined}
+              style={{ ...S.dangerBtn, opacity: acct.isOwner ? 0.35 : 1, cursor: acct.isOwner ? "not-allowed" : "pointer" }}>
+              {acct.isOwner ? "🔒 Protected — Cannot Delete" : "Delete My Account"}
             </button>
           </div>
         </div>
@@ -860,6 +1061,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
         </div>
       )}
 
+      {tab === "admin" && acct.isOwner && <AdminTab C={C} MONO={MONO} SANS={SANS} SERIF={SERIF} />}
+
       {modal === "unsub_daily" && (
         <ConfirmModal
           title="Unsubscribe from Daily Brief?"
@@ -904,10 +1107,10 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
 
       {modal === "delete" && (
         <ConfirmModal
-          title="Delete Account Permanently?"
-          message="This will permanently delete your account, cancel your subscription, remove all your data, and unsubscribe you from all emails. This action cannot be undone."
-          warning="All your data will be erased immediately and cannot be recovered. Your subscription will be cancelled with no refund."
-          confirmLabel={actionLoading ? "Deleting..." : "Yes, delete everything"}
+          title="We'd hate to see you go."
+          message="Before you proceed — your account, data, alerts, and subscription will be permanently removed. If there's something we could improve, we'd genuinely love to hear it at Support@CLVRQuantAI.com."
+          warning="This action is irreversible. All data will be erased and your subscription cancelled immediately with no refund for unused time."
+          confirmLabel={actionLoading ? "Deleting..." : "Yes, delete my account"}
           confirmColor={C.red}
           onConfirm={handleDelete}
           onCancel={() => setModal(null)} />
