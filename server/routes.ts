@@ -8,6 +8,7 @@ import { getUncachableResendClient } from "./resendClient";
 import WebSocket from "ws";
 import webpush from "web-push";
 import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./insider";
+import QRCode from "qrcode";
 
 // ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
 const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
@@ -4402,15 +4403,18 @@ Every level must be technically defensible. Return JSON only.`;
       const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
       const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
       if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
-      const { subject, body, targetAll, htmlMode } = req.body;
+      const { subject, body, targetAll, htmlMode, testMode } = req.body;
       if (!subject?.trim() || !body?.trim()) return res.status(400).json({ error: "Subject and body are required" });
-      // Fetch recipients
-      const recipientsRes = targetAll
-        ? await pool.query("SELECT id, name, email FROM users WHERE email LIKE '%@%' ORDER BY created_at DESC")
-        : await pool.query("SELECT u.id, u.name, u.email FROM users u INNER JOIN subscribers s ON LOWER(u.email)=LOWER(s.email) WHERE s.active=true AND u.email LIKE '%@%' ORDER BY u.created_at DESC");
+      // Fetch recipients — test mode sends only to owner
+      const recipientsRes = testMode
+        ? await pool.query("SELECT id, name, email FROM users WHERE LOWER(email)='mikeclaver@gmail.com' LIMIT 1")
+        : targetAll
+          ? await pool.query("SELECT id, name, email FROM users WHERE email LIKE '%@%' ORDER BY created_at DESC")
+          : await pool.query("SELECT u.id, u.name, u.email FROM users u INNER JOIN subscribers s ON LOWER(u.email)=LOWER(s.email) WHERE s.active=true AND u.email LIKE '%@%' ORDER BY u.created_at DESC");
       const recipients = recipientsRes.rows;
+      if (testMode) console.log(`[custom-email] TEST MODE — sending preview to owner only`);
       const isRawHtml = htmlMode && (body.trimStart().toLowerCase().startsWith("<!doctype") || body.trimStart().toLowerCase().startsWith("<html"));
-      console.log(`[custom-email] Sending "${subject}" to ${recipients.length} recipients (targetAll=${targetAll}, htmlMode=${htmlMode}, isRawHtml=${isRawHtml})`);
+      console.log(`[custom-email] Sending "${subject}" to ${recipients.length} recipient(s) (targetAll=${targetAll}, htmlMode=${htmlMode}, isRawHtml=${isRawHtml}, testMode=${testMode})`);
       const { client: resend, fromEmail } = await getUncachableResendClient();
       let sent = 0; let skipped = 0;
       for (let i = 0; i < recipients.length; i++) {
@@ -4429,14 +4433,47 @@ Every level must be technically defensible. Return JSON only.`;
               .replace(/\[First Name\]/gi, recipientName)
               .replace(/\[Name\]/gi, recipientName);
 
-            // ── Step 2: strip JS (doesn't run in email) ──────────────────────
+            // ── Step 2: extract QR URLs from JS, generate real QR images ─────────
+            // Detect all QR code generation calls and generate base64 PNGs
+            const qrCodeMap: Record<string, string> = {};
+            const qrMatches = [...sanitized.matchAll(/new\s+QRCode\s*\(\s*document\.getElementById\s*\(\s*["']([^"']+)["']\s*\)\s*,\s*\{[^}]*text\s*:\s*["']([^"']+)["']/gi)];
+            for (const match of qrMatches) {
+              const elementId = match[1]; const qrUrl = match[2];
+              try {
+                const dataUrl = await QRCode.toDataURL(qrUrl, { width: 120, margin: 1, color: { dark: "#0a0c10", light: "#ffffff" } });
+                qrCodeMap[elementId] = dataUrl;
+                console.log(`[custom-email] Generated QR for #${elementId}: ${qrUrl}`);
+              } catch (qrErr: any) { console.log(`[custom-email] QR gen error for ${elementId}:`, qrErr.message); }
+            }
+            // Also check for QR URL defined as a variable (const promoUrl = "...")
+            const qrVarMatch = sanitized.match(/(?:const|var|let)\s+\w*[Uu]rl\w*\s*=\s*["']([^"']+clvrquantai[^"']+)["']/i);
+            if (qrVarMatch && Object.keys(qrCodeMap).length === 0) {
+              try {
+                const dataUrl = await QRCode.toDataURL(qrVarMatch[1], { width: 120, margin: 1, color: { dark: "#0a0c10", light: "#ffffff" } });
+                qrCodeMap["qrcode"] = dataUrl;
+              } catch {}
+            }
+
+            // Strip script tags
             sanitized = sanitized.replace(/<script\b[\s\S]*?<\/script>/gi, "");
-            // Replace QR placeholder div with a static link fallback
-            sanitized = sanitized.replace(/<div\s+id=["']qrcode["'][^>]*>[\s\S]*?<\/div>/gi,
-              `<div style="display:inline-block;background:#090c10;border:1px dashed rgba(250,189,0,.35);border-radius:8px;padding:10px 16px;font-family:monospace;font-size:11px;color:#fabd00;letter-spacing:.06em;text-align:center">Scan at<br>clvrquantai.com</div>`
-            );
-            // Strip empty qrcode divs (no closing tag variety)
-            sanitized = sanitized.replace(/<div\s+id=["']qrcode["'][^/]*/gi, '<div style="display:none"');
+
+            // Replace QR placeholder divs with real QR images (or fallback link)
+            sanitized = sanitized.replace(/<div\s+id=["']([^"']+)["'][^>]*>[\s\S]*?<\/div>/gi, (match, id) => {
+              if (qrCodeMap[id]) {
+                return `<img src="${qrCodeMap[id]}" alt="QR Code" width="120" height="120" style="border-radius:6px;display:block;background:#fff;padding:4px;" />`;
+              }
+              if (id === "qrcode" || id.toLowerCase().includes("qr")) {
+                return `<div style="display:inline-block;background:#090c10;border:1px dashed rgba(250,189,0,.35);border-radius:8px;padding:10px 16px;font-family:monospace;font-size:11px;color:#fabd00;letter-spacing:.06em;text-align:center">Visit<br>clvrquantai.com</div>`;
+              }
+              return match; // leave non-QR divs alone
+            });
+            // Also handle unclosed qrcode divs
+            sanitized = sanitized.replace(/<div\s+id=["']qrcode["'][^>]*>/gi, (match) => {
+              const fallback = qrCodeMap["qrcode"];
+              return fallback
+                ? `<img src="${fallback}" alt="QR Code" width="120" height="120" style="border-radius:6px;display:block;background:#fff;padding:4px;" /><div style="display:none">`
+                : `<div style="display:none">`;
+            });
 
             // ── Step 3: strip web-layout CSS from <style> blocks ─────────────
             // Email clients ignore flex/min-height on body; this causes the

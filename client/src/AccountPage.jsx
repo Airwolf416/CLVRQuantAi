@@ -182,6 +182,7 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
   const [body, setBody] = useState("");
   const [htmlMode, setHtmlMode] = useState(false);
   const [targetAll, setTargetAll] = useState(false);
+  const [testMode, setTestMode] = useState(true);
   const [sendStatus, setSendStatus] = useState(null);
   const [sendMsg, setSendMsg] = useState("");
   const [showPreview, setShowPreview] = useState(false);
@@ -206,7 +207,7 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
       const r = await fetch("/api/admin/send-custom-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject: subject.trim(), body: body.trim(), targetAll, htmlMode }),
+        body: JSON.stringify({ subject: subject.trim(), body: body.trim(), targetAll, htmlMode, testMode }),
       });
       const d = await r.json();
       if (r.ok) {
@@ -336,15 +337,35 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
           </div>
         )}
 
-        {/* Target toggle */}
-        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-          <div data-testid="toggle-target-all" onClick={() => setTargetAll(v => !v)}
-            style={{ width:36, height:20, borderRadius:10, background:targetAll?"rgba(201,168,76,.35)":"rgba(255,255,255,.08)", border:`1px solid ${targetAll?"#c9a84c":"#1c2b4a"}`, cursor:"pointer", position:"relative", transition:"all .2s", flexShrink:0 }}>
-            <div style={{ width:14, height:14, borderRadius:"50%", background:targetAll?"#c9a84c":"#4a5d80", position:"absolute", top:2, left:targetAll?18:2, transition:"left .2s" }}/>
+        {/* Test mode + Target toggles */}
+        <div style={{ background:"#080d18", border:`1px solid ${testMode?"rgba(0,195,100,.25)":"rgba(255,64,96,.18)"}`, borderRadius:5, padding:"12px 14px", marginBottom:14 }}>
+          {/* TEST MODE toggle */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:testMode?10:0 }}>
+            <div data-testid="toggle-test-mode" onClick={() => setTestMode(v => !v)}
+              style={{ width:36, height:20, borderRadius:10, background:testMode?"rgba(0,195,100,.4)":"rgba(255,64,96,.25)", border:`1px solid ${testMode?"#00c364":"rgba(255,64,96,.5)"}`, cursor:"pointer", position:"relative", transition:"all .2s", flexShrink:0 }}>
+              <div style={{ width:14, height:14, borderRadius:"50%", background:testMode?"#00e57a":"#ff4060", position:"absolute", top:2, left:testMode?18:2, transition:"left .2s" }}/>
+            </div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontFamily:MONO, fontSize:10, fontWeight:700, color:testMode?"#00e57a":"#ff4060", letterSpacing:"0.06em" }}>
+                {testMode ? "🧪 TEST MODE — sends to you only" : "🚨 LIVE MODE — sends to all subscribers"}
+              </div>
+              <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:2 }}>
+                {testMode ? "Safe: preview before broadcasting. Toggle off to go live." : "Caution: real broadcast to your subscriber list."}
+              </div>
+            </div>
           </div>
-          <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", lineHeight:1.5 }}>
-            {targetAll ? "Send to ALL registered users (including non-subscribers)" : "Send to subscribed users only"}
-          </div>
+          {/* Target toggle — only when live mode */}
+          {!testMode && (
+            <div style={{ display:"flex", alignItems:"center", gap:10, borderTop:"1px solid #0e1a30", paddingTop:10 }}>
+              <div data-testid="toggle-target-all" onClick={() => setTargetAll(v => !v)}
+                style={{ width:36, height:20, borderRadius:10, background:targetAll?"rgba(201,168,76,.35)":"rgba(255,255,255,.08)", border:`1px solid ${targetAll?"#c9a84c":"#1c2b4a"}`, cursor:"pointer", position:"relative", transition:"all .2s", flexShrink:0 }}>
+                <div style={{ width:14, height:14, borderRadius:"50%", background:targetAll?"#c9a84c":"#4a5d80", position:"absolute", top:2, left:targetAll?18:2, transition:"left .2s" }}/>
+              </div>
+              <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", lineHeight:1.5 }}>
+                {targetAll ? "All registered users (incl. non-subscribers)" : "Subscribed users only"}
+              </div>
+            </div>
+          )}
         </div>
 
         {sendMsg && (
@@ -355,14 +376,16 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
           data-testid="btn-send-custom-email"
           onClick={sendCustomEmail}
           disabled={sendStatus==="sending"}
-          style={{ width:"100%", padding:"12px 0", borderRadius:4, border:`1px solid ${htmlMode?"rgba(0,212,255,.4)":"rgba(201,168,76,.4)"}`, background:htmlMode?"rgba(0,212,255,.08)":"rgba(201,168,76,.08)", color:htmlMode?"#00e5ff":"#e8c96d", fontFamily:MONO, fontSize:11, fontWeight:700, cursor:sendStatus==="sending"?"not-allowed":"pointer", letterSpacing:"0.1em", opacity:sendStatus==="sending"?0.6:1 }}>
-          {sendStatus==="sending" ? "Sending…" : sendStatus==="sent" ? "✓ Sent!" : `📤 Send ${htmlMode?"HTML":"Broadcast"} Email`}
+          style={{ width:"100%", padding:"12px 0", borderRadius:4, border:`1px solid ${testMode?"rgba(0,195,100,.5)":htmlMode?"rgba(0,212,255,.4)":"rgba(201,168,76,.4)"}`, background:testMode?"rgba(0,195,100,.1)":htmlMode?"rgba(0,212,255,.08)":"rgba(201,168,76,.08)", color:testMode?"#00e57a":htmlMode?"#00e5ff":"#e8c96d", fontFamily:MONO, fontSize:11, fontWeight:700, cursor:sendStatus==="sending"?"not-allowed":"pointer", letterSpacing:"0.1em", opacity:sendStatus==="sending"?0.6:1 }}>
+          {sendStatus==="sending" ? "Sending…" : sendStatus==="sent" ? "✓ Sent!" : testMode ? "🧪 Send Test to Me Only" : `📤 Send ${htmlMode?"HTML":"Broadcast"} Email`}
         </button>
 
         <div style={{ fontFamily:MONO, fontSize:9, color:"#2a3650", marginTop:10, textAlign:"center", lineHeight:1.6 }}>
-          {htmlMode
-            ? "Your HTML is sent as-is · Unsubscribe footer auto-injected · [First Name] replaced per recipient"
-            : "Auto-formatted with CLVRQuant branding · Includes your founder signature · Unsubscribe link"}
+          {testMode
+            ? "Test email delivers only to mikeclaver@gmail.com · No subscribers affected"
+            : htmlMode
+              ? "HTML sent as-is · Unsubscribe footer auto-injected · [First Name] personalized"
+              : "Auto-formatted with CLVRQuant branding · Includes founder signature · Unsubscribe link"}
         </div>
       </div>
     </div>
