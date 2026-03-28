@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "otoTEPN1KRYxDY_gdjOxO"
+uri = "file://clvrquant_full_code_export.txt"
+type = "text"
+title = "CLVRQuant — Full Source Code Export"
