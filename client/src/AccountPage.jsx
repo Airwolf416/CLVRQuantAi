@@ -180,9 +180,24 @@ const SYSTEM_EMAILS = [
 function AdminTab({ C, MONO, SANS, SERIF }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [htmlMode, setHtmlMode] = useState(false);
   const [targetAll, setTargetAll] = useState(false);
   const [sendStatus, setSendStatus] = useState(null);
   const [sendMsg, setSendMsg] = useState("");
+  const [showPreview, setShowPreview] = useState(false);
+
+  // Auto-detect HTML when pasting
+  const handleBodyChange = (val) => {
+    setBody(val);
+    const trimmed = val.trimStart().toLowerCase();
+    if (trimmed.startsWith("<!doctype") || trimmed.startsWith("<html") || trimmed.startsWith("<div") || trimmed.startsWith("<table")) {
+      setHtmlMode(true);
+    }
+  };
+
+  const isRawHtml = htmlMode && (body.trimStart().toLowerCase().startsWith("<!doctype") || body.trimStart().toLowerCase().startsWith("<html"));
+  const lineCount = body.split("\n").length;
+  const charCount = body.length;
 
   const sendCustomEmail = async () => {
     if (!subject.trim() || !body.trim()) { setSendMsg("Subject and body are both required."); setSendStatus("error"); return; }
@@ -191,13 +206,13 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
       const r = await fetch("/api/admin/send-custom-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject: subject.trim(), body: body.trim(), targetAll }),
+        body: JSON.stringify({ subject: subject.trim(), body: body.trim(), targetAll, htmlMode }),
       });
       const d = await r.json();
       if (r.ok) {
         setSendStatus("sent");
         setSendMsg(`✓ Sent to ${d.sent} recipient${d.sent !== 1 ? "s" : ""}.`);
-        setSubject(""); setBody("");
+        setSubject(""); setBody(""); setShowPreview(false);
       } else { setSendStatus("error"); setSendMsg(d.error || "Failed to send."); }
     } catch { setSendStatus("error"); setSendMsg("Network error. Please try again."); }
     setTimeout(() => { setSendStatus(null); setSendMsg(""); }, 12000);
@@ -225,41 +240,105 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
         ))}
       </div>
 
-      {/* Free-Form Composer */}
-      <div style={{ background:"#0c1220", border:`1px solid rgba(201,168,76,.25)`, borderRadius:6, padding:18 }}>
-        <div style={{ fontFamily:MONO, fontSize:9, color:"#c9a84c", letterSpacing:"0.2em", marginBottom:6 }}>✍️ CUSTOM BROADCAST EMAIL</div>
-        <div style={{ fontSize:11, color:"#6b7fa8", fontFamily:MONO, marginBottom:16, lineHeight:1.6 }}>
-          Compose and send a custom email to your users. It will be formatted with CLVRQuant HTML branding and your founder signature.
+      {/* Composer */}
+      <div style={{ background:"#0c1220", border:`1px solid ${htmlMode ? "rgba(0,212,255,.3)" : "rgba(201,168,76,.25)"}`, borderRadius:6, padding:18 }}>
+        {/* Header + mode toggle */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14, flexWrap:"wrap", gap:8 }}>
+          <div>
+            <div style={{ fontFamily:MONO, fontSize:9, color: htmlMode ? "#00d4ff" : "#c9a84c", letterSpacing:"0.2em", marginBottom:3 }}>
+              {htmlMode ? "💻 HTML EMAIL BROADCAST" : "✍️ CUSTOM BROADCAST EMAIL"}
+            </div>
+            <div style={{ fontSize:10, color:"#4a5d80", fontFamily:MONO, lineHeight:1.5 }}>
+              {htmlMode
+                ? "Paste full HTML — sent exactly as written, unsubscribe footer auto-injected"
+                : "Type a message — auto-formatted with CLVRQuant branding + your signature"}
+            </div>
+          </div>
+          {/* Mode toggle */}
+          <div style={{ display:"flex", gap:0, borderRadius:4, overflow:"hidden", border:"1px solid #1c2b4a", flexShrink:0 }}>
+            <button data-testid="btn-mode-text" onClick={() => setHtmlMode(false)}
+              style={{ padding:"6px 12px", fontFamily:MONO, fontSize:9, fontWeight:700, letterSpacing:"0.08em", border:"none", cursor:"pointer", background:!htmlMode?"rgba(201,168,76,.2)":"transparent", color:!htmlMode?"#e8c96d":"#4a5d80" }}>
+              TEXT
+            </button>
+            <button data-testid="btn-mode-html" onClick={() => setHtmlMode(true)}
+              style={{ padding:"6px 12px", fontFamily:MONO, fontSize:9, fontWeight:700, letterSpacing:"0.08em", border:"none", borderLeft:"1px solid #1c2b4a", cursor:"pointer", background:htmlMode?"rgba(0,212,255,.12)":"transparent", color:htmlMode?"#00d4ff":"#4a5d80" }}>
+              {"< HTML >"}
+            </button>
+          </div>
         </div>
 
+        {/* HTML mode info banner */}
+        {htmlMode && (
+          <div style={{ background:"rgba(0,212,255,.04)", border:"1px solid rgba(0,212,255,.15)", borderRadius:4, padding:"10px 12px", marginBottom:14 }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:"#00a8cc", lineHeight:1.7 }}>
+              ✦ Paste any complete HTML email — including <code style={{ color:"#00d4ff" }}>&lt;!DOCTYPE html&gt;</code>, inline styles, images, and QR codes.<br/>
+              ✦ CLVRQuant will automatically inject a compliant <strong style={{ color:"#c8d4ee" }}>unsubscribe footer</strong> before <code style={{ color:"#00d4ff" }}>&lt;/body&gt;</code>.<br/>
+              ✦ <code style={{ color:"#00d4ff", fontFamily:MONO }}>[First Name]</code> in your HTML is automatically replaced with each recipient's name.
+            </div>
+          </div>
+        )}
+
+        {/* Subject */}
         <div style={{ marginBottom:12 }}>
           <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:5 }}>SUBJECT LINE</div>
           <input
             data-testid="input-custom-subject"
             value={subject}
             onChange={e => setSubject(e.target.value)}
-            placeholder="e.g. Important update from CLVRQuant"
+            placeholder="e.g. Big upgrades just shipped 🚀"
             maxLength={120}
-            style={{ width:"100%", background:"#080d18", border:`1px solid #1c2b4a`, borderRadius:4, padding:"10px 12px", fontFamily:MONO, fontSize:11, color:"#c8d4ee", boxSizing:"border-box" }}
+            style={{ width:"100%", background:"#080d18", border:`1px solid ${htmlMode?"rgba(0,212,255,.2)":"#1c2b4a"}`, borderRadius:4, padding:"10px 12px", fontFamily:MONO, fontSize:11, color:"#c8d4ee", boxSizing:"border-box" }}
           />
         </div>
 
+        {/* Body */}
         <div style={{ marginBottom:12 }}>
-          <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:5 }}>MESSAGE BODY (plain text — HTML formatting handled automatically)</div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+            <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", letterSpacing:"0.12em" }}>
+              {htmlMode ? "HTML BODY — PASTE FULL EMAIL HERE" : "MESSAGE BODY"}
+            </div>
+            {body.length > 0 && (
+              <div style={{ fontFamily:MONO, fontSize:8, color:"#2a3650" }}>
+                {lineCount} lines · {charCount.toLocaleString()} chars
+              </div>
+            )}
+          </div>
           <textarea
             data-testid="input-custom-body"
             value={body}
-            onChange={e => setBody(e.target.value)}
-            placeholder={"Dear CLVRQuant community,\n\nYour message here...\n\nWarm regards,\nMike Claver\nFounder, CLVRQuant"}
-            rows={9}
-            style={{ width:"100%", background:"#080d18", border:`1px solid #1c2b4a`, borderRadius:4, padding:"10px 12px", fontFamily:MONO, fontSize:11, color:"#c8d4ee", resize:"vertical", boxSizing:"border-box", lineHeight:1.7 }}
+            onChange={e => handleBodyChange(e.target.value)}
+            placeholder={htmlMode
+              ? "<!DOCTYPE html>\n<html lang=\"en\">\n<head>...</head>\n<body>\n  <!-- Paste your full email HTML here -->\n</body>\n</html>"
+              : "Dear CLVRQuant community,\n\nYour message here...\n\nWarm regards,\nMike Claver\nFounder, CLVRQuant"}
+            rows={htmlMode ? 18 : 9}
+            spellCheck={!htmlMode}
+            style={{ width:"100%", background:"#06080d", border:`1px solid ${htmlMode?"rgba(0,212,255,.2)":"#1c2b4a"}`, borderRadius:4, padding:"10px 12px", fontFamily:MONO, fontSize: htmlMode ? 10 : 11, color: htmlMode ? "#8fc4e0" : "#c8d4ee", resize:"vertical", boxSizing:"border-box", lineHeight:1.65 }}
           />
         </div>
 
+        {/* HTML Preview toggle */}
+        {htmlMode && isRawHtml && body.length > 100 && (
+          <div style={{ marginBottom:14 }}>
+            <button data-testid="btn-toggle-preview" onClick={() => setShowPreview(v => !v)}
+              style={{ background:"rgba(0,212,255,.06)", border:"1px solid rgba(0,212,255,.2)", borderRadius:4, padding:"6px 14px", fontFamily:MONO, fontSize:9, color:"#00d4ff", cursor:"pointer", letterSpacing:"0.1em", fontWeight:700 }}>
+              {showPreview ? "▲ HIDE PREVIEW" : "▼ PREVIEW EMAIL"}
+            </button>
+            {showPreview && (
+              <div style={{ marginTop:10, border:"1px solid rgba(0,212,255,.15)", borderRadius:4, overflow:"hidden", background:"#fff" }}>
+                <iframe
+                  srcDoc={body}
+                  sandbox="allow-same-origin"
+                  style={{ width:"100%", height:500, border:"none", display:"block" }}
+                  title="Email Preview"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Target toggle */}
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-          <div
-            data-testid="toggle-target-all"
-            onClick={() => setTargetAll(v => !v)}
+          <div data-testid="toggle-target-all" onClick={() => setTargetAll(v => !v)}
             style={{ width:36, height:20, borderRadius:10, background:targetAll?"rgba(201,168,76,.35)":"rgba(255,255,255,.08)", border:`1px solid ${targetAll?"#c9a84c":"#1c2b4a"}`, cursor:"pointer", position:"relative", transition:"all .2s", flexShrink:0 }}>
             <div style={{ width:14, height:14, borderRadius:"50%", background:targetAll?"#c9a84c":"#4a5d80", position:"absolute", top:2, left:targetAll?18:2, transition:"left .2s" }}/>
           </div>
@@ -269,19 +348,21 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
         </div>
 
         {sendMsg && (
-          <div style={{ fontFamily:MONO, fontSize:10, color:sendStatus==="sent"?"#00c787":"#ff4060", marginBottom:10, lineHeight:1.5 }}>{sendMsg}</div>
+          <div style={{ fontFamily:MONO, fontSize:10, color:sendStatus==="sent"?"#00c787":"#ff4060", marginBottom:10, lineHeight:1.5, padding:"8px 10px", background:sendStatus==="sent"?"rgba(0,199,135,.06)":"rgba(255,64,96,.06)", borderRadius:3 }}>{sendMsg}</div>
         )}
 
         <button
           data-testid="btn-send-custom-email"
           onClick={sendCustomEmail}
           disabled={sendStatus==="sending"}
-          style={{ width:"100%", padding:"11px 0", borderRadius:4, border:`1px solid rgba(201,168,76,.4)`, background:"rgba(201,168,76,.08)", color:"#e8c96d", fontFamily:MONO, fontSize:11, fontWeight:700, cursor:sendStatus==="sending"?"not-allowed":"pointer", letterSpacing:"0.1em", opacity:sendStatus==="sending"?0.6:1 }}>
-          {sendStatus==="sending" ? "Sending…" : sendStatus==="sent" ? "✓ Sent!" : "📤 Send Broadcast Email"}
+          style={{ width:"100%", padding:"12px 0", borderRadius:4, border:`1px solid ${htmlMode?"rgba(0,212,255,.4)":"rgba(201,168,76,.4)"}`, background:htmlMode?"rgba(0,212,255,.08)":"rgba(201,168,76,.08)", color:htmlMode?"#00e5ff":"#e8c96d", fontFamily:MONO, fontSize:11, fontWeight:700, cursor:sendStatus==="sending"?"not-allowed":"pointer", letterSpacing:"0.1em", opacity:sendStatus==="sending"?0.6:1 }}>
+          {sendStatus==="sending" ? "Sending…" : sendStatus==="sent" ? "✓ Sent!" : `📤 Send ${htmlMode?"HTML":"Broadcast"} Email`}
         </button>
 
         <div style={{ fontFamily:MONO, fontSize:9, color:"#2a3650", marginTop:10, textAlign:"center", lineHeight:1.6 }}>
-          Emails include automatic unsubscribe links and your CLVRQuant founder signature.
+          {htmlMode
+            ? "Your HTML is sent as-is · Unsubscribe footer auto-injected · [First Name] replaced per recipient"
+            : "Auto-formatted with CLVRQuant branding · Includes your founder signature · Unsubscribe link"}
         </div>
       </div>
     </div>
