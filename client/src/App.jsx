@@ -366,6 +366,53 @@ function FactorBreakdown({factors,score,C:_C}){
   );
 }
 
+// ─── ADVANCED 6-DIMENSION SCORE BREAKDOWN ────────────────
+function AdvancedFactorBreakdown({breakdown,C:_C}){
+  if(!breakdown)return null;
+  const dims=[
+    {key:"technical",        label:"TECHNICAL ANALYSIS",  color:"#3b82f6",  desc:"RSI · EMA Alignment · Bollinger Bands"},
+    {key:"statistical",      label:"STATISTICS / MATH",   color:"#a855f7",  desc:"Z-Score standard deviations from mean"},
+    {key:"newsSentiment",    label:"NEWS SENTIMENT",       color:"#06b6d4",  desc:"CryptoPanic live market sentiment"},
+    {key:"fundamentals",     label:"FUNDAMENTALS",         color:"#c9a84c",  desc:"Open Interest · Funding Rate"},
+    {key:"patternRecognition",label:"PATTERN RECOGNITION", color:"#f97316",  desc:"Chart patterns (flags, H&S, double tops)"},
+    {key:"backtesting",      label:"BACK TESTING",         color:"#22c55e",  desc:"Historical win rate for similar setups"},
+  ];
+  const total=breakdown.total||0;
+  return(
+    <div style={{background:_C.bg,border:`1px solid ${_C.border}`,borderRadius:2,padding:14,marginTop:10}}>
+      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:_C.muted,letterSpacing:"0.18em",marginBottom:12}}>ADVANCED 6-DIMENSION ANALYSIS</div>
+      {dims.map(({key,label,color,desc})=>{
+        const dim=breakdown[key];
+        if(!dim)return null;
+        const pct=dim.max>0?Math.round((dim.pts/dim.max)*100):0;
+        return(
+          <div key={key} style={{marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+              <div>
+                <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,fontWeight:700,color}}>{label}</span>
+                <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:_C.muted,marginLeft:6}}>{desc}</span>
+              </div>
+              <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,fontWeight:800,color:pct>=70?_C.green:pct>=40?_C.orange:_C.red}}>{dim.pts}/{dim.max}</span>
+            </div>
+            <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2}}>
+              <div style={{height:4,width:`${pct}%`,background:color,borderRadius:2,transition:"width 1s ease",boxShadow:`0 0 6px ${color}66`}}/>
+            </div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:_C.muted,marginTop:2}}>{dim.label}</div>
+          </div>
+        );
+      })}
+      <div style={{display:"flex",justifyContent:"space-between",paddingTop:8,borderTop:`1px solid ${_C.border}`,marginTop:6}}>
+        <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:_C.white}}>COMPOSITE SCORE</span>
+        <div style={{textAlign:"right"}}>
+          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:14,fontWeight:900,color:total>=80?_C.green:total>=65?_C.orange:_C.red}}>{total}</span>
+          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:_C.muted}}>/100</span>
+          {total>=80&&<span style={{marginLeft:8,fontSize:9,fontWeight:700,color:_C.green,fontFamily:"'IBM Plex Mono',monospace"}}>⚡ STRONG — PUSH SENT</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── LAYOUT HELPERS (stable, outside Dashboard) ──────────
 function SLabel({children}){
   return(
@@ -720,16 +767,21 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
   const oiM=md.oi?Math.round(md.oi/1e6):0;
   const vH=md.volHistory||[];const avgVol=vH.length>=3?vH.slice(-5).reduce((a,b)=>a+b,0)/Math.min(vH.length,5):0;
   const lastVol=vH[vH.length-1]||0;const volumeMultiplier=avgVol>0?lastVol/avgVol:1;
-  const{total:qScore,factors}=scoreSignal({priceMoveAbs,direction:isLong?"long":"short",fundingRate,oiM,volumeMultiplier});
-  const conviction=qScore>=75?"HIGH":qScore>=55?"MED":"LOW";
-  const convColor=qScore>=75?C.green:qScore>=55?C.orange:C.red;
+  const{total:computedScore,factors}=scoreSignal({priceMoveAbs,direction:isLong?"long":"short",fundingRate,oiM,volumeMultiplier});
+  const qScore=sig.advancedScore!=null?sig.advancedScore:computedScore;
+  const isStrong=sig.isStrongSignal||qScore>=80;
+  const conviction=qScore>=80?"STRONG":qScore>=70?"HIGH":qScore>=55?"MED":"LOW";
+  const convColor=qScore>=80?C.green:qScore>=70?C.green:qScore>=55?C.orange:C.red;
   const moveType=priceMoveAbs>=3?"MAJOR MOVE":priceMoveAbs>=2?"BREAKOUT":"MOMENTUM";
   const minutesAgo=sig.ts?Math.floor((Date.now()-sig.ts)/60000):0;
   const strength=bullProbability({priceMoveAbs,fundingRate,oiM,volumeMultiplier,dir:sig.dir,masterScore:sig.masterScore});
   const whaleMatch=wAlerts&&wAlerts.some(w=>w.sym===sig.token&&Math.abs(w.ts-sig.ts)<300000);
   const isHighConf=qScore>=75;
   return(
-    <div data-testid={`signal-card-${sig.id}`} className={whaleMatch?"high-confidence-glow":""} style={{background:C.panel,border:`1px solid ${whaleMatch?C.gold+"88":isHighConf?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
+    <div data-testid={`signal-card-${sig.id}`} className={isStrong?"high-confidence-glow":whaleMatch?"high-confidence-glow":""} style={{background:C.panel,border:`1px solid ${isStrong?"rgba(0,199,135,.6)":whaleMatch?C.gold+"88":isHighConf?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
+      {isStrong&&<div style={{background:"linear-gradient(90deg,rgba(0,199,135,.15),rgba(0,199,135,.05))",borderBottom:"1px solid rgba(0,199,135,.25)",padding:"5px 14px",display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontFamily:MONO,fontSize:8,fontWeight:800,color:C.green,letterSpacing:"0.2em"}}>⚡ STRONG SIGNAL — PUSH NOTIFICATION SENT · {sig.advancedScore}/100</span>
+      </div>}
       <div style={{padding:"14px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:28,height:28,background:dirBg,border:`1px solid ${dirColor}44`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:900,fontFamily:MONO,color:dirColor,flexShrink:0}}>
@@ -802,7 +854,7 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
             </div>
           ))}
         </div>}
-        <FactorBreakdown factors={factors} score={qScore} C={C}/>
+        {sig.scoreBreakdown?<AdvancedFactorBreakdown breakdown={sig.scoreBreakdown} C={C}/>:<FactorBreakdown factors={factors} score={qScore} C={C}/>}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:10}}>
           {[
             {l:"Funding",v:fundingRate!==0?(fundingRate>0?"+":"")+pct(fundingRate,4):"Neutral",c:fundingRate>0.02?C.red:fundingRate<-0.02?C.green:C.muted2},
@@ -3364,25 +3416,43 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.08em"}}>tracking {sigTracking} tokens · 0.8% threshold · 5min window</div>
           </div>
 
+          {/* 6-Dimension methodology panel */}
+          <div style={{background:"rgba(0,0,0,.2)",border:`1px solid ${C.border}`,borderRadius:2,padding:"10px 14px",marginBottom:12}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.2em",marginBottom:8}}>6-DIMENSION ANALYSIS ENGINE</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px"}}>
+              {[
+                {dot:"#3b82f6",label:"Technical Analysis",sub:"RSI · EMA · Bollinger Bands (30pts)"},
+                {dot:"#a855f7",label:"Statistics / Math",sub:"Z-Score deviation from mean (20pts)"},
+                {dot:"#06b6d4",label:"News Sentiment",sub:"CryptoPanic live signals (15pts)"},
+                {dot:"#c9a84c",label:"Fundamentals",sub:"Open Interest · Funding Rate (20pts)"},
+                {dot:"#f97316",label:"Pattern Recognition",sub:"Chart patterns H&S, flags (10pts)"},
+                {dot:"#22c55e",label:"Back Testing",sub:"Historical win rate for setup (10pts)"},
+              ].map(({dot,label,sub})=>(
+                <div key={label} style={{display:"flex",alignItems:"flex-start",gap:6,marginBottom:3}}>
+                  <div style={{width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0,marginTop:3}}/>
+                  <div>
+                    <div style={{fontFamily:MONO,fontSize:8,color:C.white,fontWeight:700}}>{label}</div>
+                    <div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{sub}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`,fontFamily:MONO,fontSize:8,color:C.green}}>⚡ Score ≥ 80 = STRONG SIGNAL → push notification sent to your device as LONG or SHORT</div>
+          </div>
+
           {/* Score legend */}
           <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-            {[{label:"HIGH (75+)",color:C.green,bg:"rgba(0,199,135,.06)"},{label:"MED (55-74)",color:C.orange,bg:"rgba(255,140,0,.06)"},{label:"LOW (<55)",color:C.red,bg:"rgba(255,64,96,.06)"}].map(({label,color,bg})=>(
+            {[{label:"STRONG (80+)",color:C.green,bg:"rgba(0,199,135,.08)"},{label:"HIGH (70-79)",color:"#86efac",bg:"rgba(134,239,172,.06)"},{label:"MED (55-69)",color:C.orange,bg:"rgba(255,140,0,.06)"},{label:"LOW (<55)",color:C.red,bg:"rgba(255,64,96,.06)"}].map(({label,color,bg})=>(
               <div key={label} style={{background:bg,border:`1px solid ${color}33`,borderRadius:2,padding:"3px 10px",fontFamily:MONO,fontSize:8,color,fontWeight:700,letterSpacing:"0.08em"}}>● {label}</div>
             ))}
-            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,padding:"3px 0"}}>Tap card for QuantBrain breakdown →</div>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,padding:"3px 0"}}>Tap card for full breakdown →</div>
           </div>
 
           {/* Signal feed */}
           {(()=>{
-            let pool=highConfOnly?filtSigs.filter(s=>{
-              const sc=scoreSignal({priceMoveAbs:Math.abs(s.pctMove||0),direction:s.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[s.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[s.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
-              return sc>=75;
-            }):filtSigs;
-            const sorted=sigSort==="score"?[...pool].sort((a,b)=>{
-              const scoreA=scoreSignal({priceMoveAbs:Math.abs(a.pctMove||0),direction:a.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[a.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[a.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
-              const scoreB=scoreSignal({priceMoveAbs:Math.abs(b.pctMove||0),direction:b.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[b.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[b.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
-              return scoreB-scoreA;
-            }):pool;
+            const getSigScore=(s)=>s.advancedScore!=null?s.advancedScore:scoreSignal({priceMoveAbs:Math.abs(s.pctMove||0),direction:s.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[s.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[s.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
+            let pool=highConfOnly?filtSigs.filter(s=>getSigScore(s)>=75):filtSigs;
+            const sorted=sigSort==="score"?[...pool].sort((a,b)=>getSigScore(b)-getSigScore(a)):pool;
             return sorted.length===0?<div style={{padding:32,textAlign:"center"}}>
               <div style={{color:C.muted,fontFamily:MONO,fontSize:10,marginBottom:8}}>
                 {liveSignals.length===0?"Monitoring markets for significant moves...":(highConfOnly?"No high-confidence signals currently.":"No signals for this filter.")}
