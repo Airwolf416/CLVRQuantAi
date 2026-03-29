@@ -93,10 +93,19 @@ export const BASKET_YAHOO_MAP: Record<string, string> = {
   URANIUM:"URA",DUBAI:"BZ=F",LNG:"UNG",
 };
 
-// ENERGY_ETF_MAP is intentionally empty — energy prices come from Yahoo Finance
-// futures (CL=F, BZ=F, NG=F) via fetchEnergyCommodities() in marketData.ts,
-// not from Finnhub WebSocket ETF proxies (USO/BNO/UNG).
+// ENERGY_ETF_MAP is intentionally empty — energy spot prices come from Finnhub
+// via OANDA CFD symbols (OANDA:WTICO_USD, OANDA:XBR_USD, OANDA:NATGAS_USD)
+// through both the WebSocket feed (COMMODITY_FH_SYMS in routes.ts) and the
+// REST fallback in fetchEnergyCommodities() in marketData.ts.
 export const ENERGY_ETF_MAP: Record<string, { etfSym: string; factor: number }> = {};
+
+// OANDA CFD symbols for real-time energy spot prices via Finnhub WebSocket.
+// Values are the app-level symbol names stored in livePrices / cache["finnhub"].data.metals.
+export const COMMODITY_FH_SYMS: Record<string, string> = {
+  "OANDA:WTICO_USD":  "WTI",
+  "OANDA:XBR_USD":    "BRENT",
+  "OANDA:NATGAS_USD": "NATGAS",
+};
 
 // ── Basket page data ──────────────────────────────────────────────────────────
 
