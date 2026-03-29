@@ -217,7 +217,7 @@ function PerpRow({ sym, label, asset }) {
     return (
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 10px", borderBottom: `1px solid ${C.border}` }}>
         <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text }}>{label || sym}</span>
-        <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>— Not listed on HL</span>
+        <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>— No perp data</span>
       </div>
     );
   }
@@ -487,6 +487,8 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
 // COMMODITIES TAB
 // ─────────────────────────────────────────────────────────────────────────────
 function CommoditiesTab({ metalPrices, flashes }) {
+  const [sub, setSub] = useState("spot");
+  const { perps: storePerps } = useMarketData();
   const anyLive = Object.values(metalPrices).some(d => d.live);
 
   return (
@@ -496,22 +498,33 @@ function CommoditiesTab({ metalPrices, flashes }) {
         subtitle="gold-api.com · XAU/XAG/Pt/Cu  |  finnhub OANDA CFD · WTI/Brent/NatGas"
         live={anyLive}
       />
-      <div style={{
-        fontFamily: MONO, fontSize: 8, color: C.muted, marginBottom: 8,
-        letterSpacing: "0.06em", padding: "4px 2px",
-      }}>
-        SPOT PRICES ONLY — Commodity perpetual markets are not listed on Hyperliquid
-      </div>
-      <div>
-        {METALS_SYMS.map(sym => {
-          const d = metalPrices[sym] || {};
-          return (
-            <FlashRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} price={d.price} chg={d.chg} flash={flashes[sym]}>
-              <Badge label={d.live ? "LIVE" : "LOADING"} color={d.live ? C.green : C.muted} />
-            </FlashRow>
-          );
-        })}
-      </div>
+      <SubTabs
+        tabs={[
+          { val: "spot", label: "SPOT · GOLD-API/FH" },
+          { val: "perp", label: "PERP · TRADE.XYZ" },
+        ]}
+        value={sub} onChange={setSub}
+      />
+
+      {sub === "spot" ? (
+        <div>
+          {METALS_SYMS.map(sym => {
+            const d = metalPrices[sym] || {};
+            return (
+              <FlashRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} price={d.price} chg={d.chg} flash={flashes[sym]}>
+                <Badge label={d.live ? "LIVE" : "LOADING"} color={d.live ? C.green : C.muted} />
+              </FlashRow>
+            );
+          })}
+        </div>
+      ) : (
+        <div>
+          {METALS_SYMS.map(sym => {
+            const perp = hlPerpFor(sym, storePerps || {});
+            return <PerpRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} asset={perp} />;
+          })}
+        </div>
+      )}
     </div>
   );
 }
