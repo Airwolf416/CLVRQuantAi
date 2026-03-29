@@ -489,56 +489,80 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
 // the perp as stale/illiquid and substitute the real CME/Yahoo Finance price.
 const MAX_PERP_SPOT_DEVIATION = 0.10; // 10%
 
-// CME futures ticker labels shown when falling back from stale/missing HL perp
+// Energy commodities always use CME Yahoo Finance reference in the perp tab.
+// The Hyperliquid flx dex energy contracts (OIL, GAS, BRENTOIL) are relatively
+// illiquid — their prevDayPx often mismatches the real CME prior close, making
+// the change-rate unreliable.  Metals (XAU, XAG, Cu, Pt, Pd) are fine on HL.
+const CME_ALWAYS_SYMS = new Set(["WTI", "BRENT", "NATGAS"]);
+
+// CME futures ticker labels shown when using spot data as perp reference
 const CME_LABEL = {
-  WTI:    "CME CL=F",
-  BRENT:  "CME BZ=F",
-  NATGAS: "CME NG=F",
-  XAU:    "CME GC=F",
-  XAG:    "CME SI=F",
-  COPPER: "CME HG=F",
+  WTI:       "CME CL=F",
+  BRENT:     "CME BZ=F",
+  NATGAS:    "CME NG=F",
+  XAU:       "CME GC=F",
+  XAG:       "CME SI=F",
+  COPPER:    "CME HG=F",
   PLATINUM:  "CME PL=F",
   PALLADIUM: "CME PA=F",
 };
 
 // Resolve the best perp asset for a commodity symbol.
-// If the HL flx perp exists but deviates >10% from the spot price, it is
-// stale/illiquid — substitute the spot data so the user sees accurate pricing.
+// Energy (WTI/BRENT/NATGAS): always use CME Yahoo Finance spot as the reference.
+// Metals: use HL flx dex price when within 10% of spot; fall back to CME otherwise.
 function resolveCommPerp(sym, storePerps, metalPrices) {
-  const hlPerp = hlPerpFor(sym, storePerps || {});
   const spot   = metalPrices[sym];
   const spotPx = spot?.price;
 
-  if (!hlPerp || !hlPerp.price) {
-    // No perp listed — synthesise a CME reference entry from spot data
+  // ── ENERGY: always show CME futures reference ──────────────────────────────
+  if (CME_ALWAYS_SYMS.has(sym)) {
     if (!spotPx || spotPx <= 0) return null;
+    const hlPerp = hlPerpFor(sym, storePerps || {});
     return {
-      price:      spotPx,
-      change24h:  spot?.chg ?? 0,
-      funding:    null,
+      price:        spotPx,
+      change24h:    spot?.chg ?? 0,
+      funding:      hlPerp?.funding ?? null,   // show funding if available
       openInterest: null,
-      source:     "CME",
-      stale:      false,
+      source:       "CME",
+      stale:        false,
     };
   }
 
-  // If HL perp price deviates more than 10% from real spot, mark it stale
+  // ── METALS: prefer HL flx dex, fall back to CME if absent/stale ───────────
+  const hlPerp = hlPerpFor(sym, storePerps || {});
+
+  if (!hlPerp || !hlPerp.price) {
+    if (!spotPx || spotPx <= 0) return null;
+    return {
+      price:        spotPx,
+      change24h:    spot?.chg ?? 0,
+      funding:      null,
+      openInterest: null,
+      source:       "CME",
+      stale:        false,
+    };
+  }
+
+  // Use oracle price if mark is stale vs oracle
+  const effectivePx = (hlPerp.oraclePx > 0) ? hlPerp.oraclePx : hlPerp.price;
+
+  // If oracle/mark deviates >10% from real spot, treat as stale
   if (spotPx > 0) {
-    const deviation = Math.abs(hlPerp.price - spotPx) / spotPx;
+    const deviation = Math.abs(effectivePx - spotPx) / spotPx;
     if (deviation > MAX_PERP_SPOT_DEVIATION) {
       return {
-        price:     spotPx,
-        change24h: spot?.chg ?? 0,
-        funding:   null,
+        price:        spotPx,
+        change24h:    spot?.chg ?? 0,
+        funding:      null,
         openInterest: null,
-        source:    "CME",
-        stale:     true,
+        source:       "CME",
+        stale:        true,
         hlStalePrice: hlPerp.price,
       };
     }
   }
 
-  return { ...hlPerp, source: "HL", stale: false };
+  return { ...hlPerp, price: effectivePx, source: "HL", stale: false };
 }
 
 // Perp row that understands stale substitution and CME references
