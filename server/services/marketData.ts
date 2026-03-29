@@ -135,44 +135,37 @@ export async function fetchMetals(finnhubKey = ""): Promise<Record<string, any>>
   return metals;
 }
 
-// ── Energy commodities via Finnhub OANDA CFD symbols (real-time, no delay) ────
-// OANDA:WTICO_USD = WTI crude, OANDA:XBR_USD = Brent crude, OANDA:NATGAS_USD = Natural Gas
-// WebSocket feed in routes.ts keeps livePrices current; this REST call is
-// used for the periodic cache refresh and initial seed on worker startup.
+// ── Energy commodities via Yahoo Finance (free, no key, real futures prices) ──
+// Primary: Yahoo Finance v8 chart API — CL=F (WTI), BZ=F (Brent), NG=F (NatGas)
+// Fallback: Finnhub OANDA CFD WebSocket keeps livePrices current via routes.ts
 
-const ENERGY_FH_SYMS: Record<string, { fhSym: string; appSym: string }> = {
-  WTI:    { fhSym: "OANDA:WTICO_USD",  appSym: "WTI"    },
-  BRENT:  { fhSym: "OANDA:XBR_USD",    appSym: "BRENT"  },
-  NATGAS: { fhSym: "OANDA:NATGAS_USD", appSym: "NATGAS" },
+const ENERGY_YF_SYMS: Record<string, { yfSym: string; appSym: string }> = {
+  WTI:    { yfSym: "CL=F", appSym: "WTI"    },
+  BRENT:  { yfSym: "BZ=F", appSym: "BRENT"  },
+  NATGAS: { yfSym: "NG=F", appSym: "NATGAS" },
 };
 
-export async function fetchEnergyCommodities(finnhubKey = ""): Promise<Record<string, any>> {
+export async function fetchEnergyCommodities(_finnhubKey = ""): Promise<Record<string, any>> {
   const results: Record<string, any> = {};
-  const now  = Math.floor(Date.now() / 1000);
-  const from = now - 3600; // last hour of 1-minute candles
 
   await Promise.all(
-    Object.entries(ENERGY_FH_SYMS).map(async ([key, { fhSym, appSym }]) => {
-      if (!finnhubKey) {
-        results[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
-        return;
-      }
+    Object.entries(ENERGY_YF_SYMS).map(async ([key, { yfSym, appSym }]) => {
       try {
-        const url = `https://finnhub.io/api/v1/forex/candle?symbol=${fhSym}&resolution=1&from=${from}&to=${now}&token=${finnhubKey}`;
-        const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-        if (!r.ok) throw new Error(`Finnhub ${r.status}`);
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yfSym}?interval=1d&range=2d`;
+        const r = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; CLVRBot/1.0)" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) throw new Error(`Yahoo ${r.status}`);
         const json: any = await r.json();
-        if (json.s !== "ok" || !Array.isArray(json.c) || !json.c.length) throw new Error("no data");
-        const closes: number[] = json.c;
-        const price = closes[closes.length - 1];
-        if (!price || price <= 0) throw new Error("no price");
-        // Use prior candle close for % change; fall back to METALS_BASE reference
-        const prevClose = closes.length >= 2 ? closes[closes.length - 2] : 0;
-        const base = prevClose > 0 ? prevClose : METALS_BASE[appSym] || price;
-        const chg  = +((price - base) / base * 100).toFixed(2);
+        const meta = json?.chart?.result?.[0]?.meta;
+        if (!meta?.regularMarketPrice || meta.regularMarketPrice <= 0) throw new Error("no price");
+        const price = meta.regularMarketPrice as number;
+        const prevClose = (meta.chartPreviousClose || meta.previousClose || price) as number;
+        const chg = prevClose > 0 ? +((price - prevClose) / prevClose * 100).toFixed(2) : 0;
         results[appSym] = { price: +price.toFixed(3), chg, live: true };
       } catch (e: any) {
-        console.warn(`[energy] ${key} Finnhub fetch failed:`, e.message);
+        console.warn(`[energy] ${key} Yahoo fetch failed:`, e.message);
         results[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
       }
     })

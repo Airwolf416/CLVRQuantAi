@@ -54,7 +54,7 @@ import {
   updateSharedMacroCache,
 } from "./state";
 import {
-  fetchBinancePrices, fetchForex, fetchMetals, fhQuoteSafe, delay,
+  fetchBinancePrices, fetchForex, fetchMetals, fetchEnergyCommodities, fhQuoteSafe, delay,
 } from "./services/marketData";
 
 // ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
@@ -1634,7 +1634,10 @@ export async function registerRoutes(
     if (!finnhubFetchLock) {
       finnhubFetchLock = (async () => {
         try {
-          const [metals, forex] = await Promise.all([fetchMetals(), fetchForex()]);
+          const [preciousMetals, energy, forex] = await Promise.all([
+            fetchMetals(), fetchEnergyCommodities(), fetchForex(),
+          ]);
+          const metals = { ...preciousMetals, ...energy };
           const stocks: Record<string, any> = {};
           EQUITY_SYMS.forEach(sym => { stocks[sym] = { price: EQUITY_BASE[sym], chg: 0, live: false }; });
           const result = { stocks, metals, forex };
