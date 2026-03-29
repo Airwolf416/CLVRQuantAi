@@ -4,12 +4,7 @@
 
 import Handlebars from "handlebars";
 import { readFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-
-// ESM-compatible __dirname (tsx runs files as ESM modules)
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = dirname(__filename);
+import { resolve } from "path";
 
 // ── Template cache: compiled once per process ──────────────────────────────────
 
@@ -18,7 +13,8 @@ const _compiled: Record<string, HandlebarsTemplateDelegate> = {};
 function getTemplate(name: string): HandlebarsTemplateDelegate {
   if (_compiled[name]) return _compiled[name];
   try {
-    const tplPath = join(__dirname, `../templates/${name}.hbs`);
+    // process.cwd() is the project root in both dev (tsx/ESM) and production (CJS build)
+    const tplPath = resolve(process.cwd(), "server", "templates", `${name}.hbs`);
     const source  = readFileSync(tplPath, "utf-8");
     _compiled[name] = Handlebars.compile(source);
     return _compiled[name];
