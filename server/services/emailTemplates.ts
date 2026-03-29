@@ -6,19 +6,19 @@ import Handlebars from "handlebars";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-// ── Compile template at startup (cached) ──────────────────────────────────────
+// ── Template cache: compiled once per process ──────────────────────────────────
 
-let _dailyBriefTemplate: HandlebarsTemplateDelegate | null = null;
+const _compiled: Record<string, HandlebarsTemplateDelegate> = {};
 
-function getTemplate(): HandlebarsTemplateDelegate {
-  if (_dailyBriefTemplate) return _dailyBriefTemplate;
+function getTemplate(name: string): HandlebarsTemplateDelegate {
+  if (_compiled[name]) return _compiled[name];
   try {
-    const tplPath = join(__dirname, "../templates/daily_brief.hbs");
+    const tplPath = join(__dirname, `../templates/${name}.hbs`);
     const source  = readFileSync(tplPath, "utf-8");
-    _dailyBriefTemplate = Handlebars.compile(source);
-    return _dailyBriefTemplate;
+    _compiled[name] = Handlebars.compile(source);
+    return _compiled[name];
   } catch (err: any) {
-    console.error("[emailTemplates] Failed to load daily_brief.hbs:", err.message);
+    console.error(`[emailTemplates] Failed to load ${name}.hbs:`, err.message);
     throw err;
   }
 }
@@ -69,7 +69,7 @@ export function renderDailyBriefEmail(
   isPro = false,
   subscriberEmail = ""
 ): string {
-  const template = getTemplate();
+  const template = getTemplate("daily_brief");
 
   const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787"
     : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
@@ -108,4 +108,35 @@ export function renderDailyBriefEmail(
   };
 
   return template(data);
+}
+
+// ── Render service-apology email ──────────────────────────────────────────────
+
+export function renderServiceApologyEmail(
+  recipientName: string,
+  recipientEmail: string
+): string {
+  const template = getTemplate("service-apology");
+  return template({
+    name:         recipientName,
+    year:         new Date().getFullYear(),
+    encodedEmail: encodeURIComponent(recipientEmail),
+  });
+}
+
+// ── Render promo / referral email ─────────────────────────────────────────────
+
+export function renderPromoEmail(
+  recipientName: string,
+  recipientEmail: string,
+  referralCode: string
+): string {
+  const template = getTemplate("promo-email");
+  return template({
+    name:         recipientName || "Trader",
+    refCode:      referralCode || "CLVR-REF-XXXXXX",
+    appUrl:       "https://clvrquantai.com",
+    year:         new Date().getFullYear(),
+    encodedEmail: encodeURIComponent(recipientEmail),
+  });
 }
