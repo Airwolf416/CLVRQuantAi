@@ -15,7 +15,7 @@ import {
   CRYPTO_SYMS, CRYPTO_BASE, BINANCE_MAP, BINANCE_SYMS,
   HL_PERP_SYMS, HL_TO_APP, APP_TO_HL,
   EQUITY_SYMS, EQUITY_BASE, EQUITY_FH_MAP,
-  METALS_BASE, BASKET_YAHOO_MAP, ENERGY_ETF_MAP, FOREX_BASE,
+  METALS_BASE, BASKET_YAHOO_MAP, ENERGY_ETF_MAP, COMMODITY_FH_SYMS, FOREX_BASE,
   BASKET_PRICE_TTL, SESSION_THRESHOLDS, HIGH_IMPACT_KEYWORDS,
   MOVE_WINDOW, SIGNAL_COOLDOWN, AI_CACHE_TTL,
   BASKET_EQUITIES_US, BASKET_INTL_FH, BASKET_COMMODITIES,
@@ -983,6 +983,7 @@ function startFinnhubWebSocket() {
       const allSubs = [
         ...Object.keys(FH_WS_SYMS),
         ...Object.keys(FOREX_FH_SYMS),
+        ...Object.keys(COMMODITY_FH_SYMS),
       ];
       const BATCH = 10;
       const sendBatch = (i: number) => {
@@ -993,7 +994,7 @@ function startFinnhubWebSocket() {
         setTimeout(() => sendBatch(i + BATCH), 400);
       };
       sendBatch(0);
-      console.log(`[finnhub-ws] connected, subscribing to ${Object.keys(FH_WS_SYMS).length} equities/ETFs + ${Object.keys(FOREX_FH_SYMS).length} forex`);
+      console.log(`[finnhub-ws] connected, subscribing to ${Object.keys(FH_WS_SYMS).length} equities/ETFs + ${Object.keys(FOREX_FH_SYMS).length} forex + ${Object.keys(COMMODITY_FH_SYMS).length} energy CFDs`);
     });
     ws.on("message", (raw: any) => {
       try {
@@ -1030,6 +1031,15 @@ function startFinnhubWebSocket() {
             const chg = base ? +((price - base) / base * 100).toFixed(2) : 0;
             livePrices[fxMapping] = { price, chg, ts: Date.now(), type: "forex" };
             batch[fxMapping] = { price, chg, type: "forex" };
+          }
+
+          // Energy CFD spot prices (OANDA:WTICO_USD → WTI, etc.)
+          const commodityMapping = COMMODITY_FH_SYMS[fhSym];
+          if (commodityMapping) {
+            const base = METALS_BASE[commodityMapping];
+            const chg = base ? +((price - base) / base * 100).toFixed(2) : 0;
+            livePrices[commodityMapping] = { price: +price.toFixed(3), chg, ts: Date.now(), type: "metal" };
+            batch[commodityMapping] = { price: +price.toFixed(3), chg, type: "metal" };
           }
         }
         if (Object.keys(batch).length && sseClients.size > 0) {

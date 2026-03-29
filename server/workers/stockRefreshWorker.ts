@@ -35,7 +35,7 @@ export async function runStockTick(): Promise<void> {
 
   const [metals, energy, forex] = await Promise.all([
     fetchMetals(FINNHUB_KEY),
-    fetchEnergyCommodities(),
+    fetchEnergyCommodities(FINNHUB_KEY),
     fetchForex(),
   ]);
 
