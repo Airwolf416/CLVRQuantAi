@@ -485,6 +485,144 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMMODITIES TAB
+// Max allowed deviation (fraction) between HL perp and spot before we treat
+// the perp as stale/illiquid and substitute the real CME/Yahoo Finance price.
+const MAX_PERP_SPOT_DEVIATION = 0.10; // 10%
+
+// CME futures ticker labels shown when falling back from stale/missing HL perp
+const CME_LABEL = {
+  WTI:    "CME CL=F",
+  BRENT:  "CME BZ=F",
+  NATGAS: "CME NG=F",
+  XAU:    "CME GC=F",
+  XAG:    "CME SI=F",
+  COPPER: "CME HG=F",
+  PLATINUM:  "CME PL=F",
+  PALLADIUM: "CME PA=F",
+};
+
+// Resolve the best perp asset for a commodity symbol.
+// If the HL flx perp exists but deviates >10% from the spot price, it is
+// stale/illiquid — substitute the spot data so the user sees accurate pricing.
+function resolveCommPerp(sym, storePerps, metalPrices) {
+  const hlPerp = hlPerpFor(sym, storePerps || {});
+  const spot   = metalPrices[sym];
+  const spotPx = spot?.price;
+
+  if (!hlPerp || !hlPerp.price) {
+    // No perp listed — synthesise a CME reference entry from spot data
+    if (!spotPx || spotPx <= 0) return null;
+    return {
+      price:      spotPx,
+      change24h:  spot?.chg ?? 0,
+      funding:    null,
+      openInterest: null,
+      source:     "CME",
+      stale:      false,
+    };
+  }
+
+  // If HL perp price deviates more than 10% from real spot, mark it stale
+  if (spotPx > 0) {
+    const deviation = Math.abs(hlPerp.price - spotPx) / spotPx;
+    if (deviation > MAX_PERP_SPOT_DEVIATION) {
+      return {
+        price:     spotPx,
+        change24h: spot?.chg ?? 0,
+        funding:   null,
+        openInterest: null,
+        source:    "CME",
+        stale:     true,
+        hlStalePrice: hlPerp.price,
+      };
+    }
+  }
+
+  return { ...hlPerp, source: "HL", stale: false };
+}
+
+// Perp row that understands stale substitution and CME references
+function CommodityPerpRow({ sym, label, asset }) {
+  const prevPriceRef = useRef(null);
+  const [flash, setFlash] = useState(null);
+
+  useEffect(() => {
+    injectBlink();
+    const price = asset?.price;
+    if (!price) return;
+    const prev = prevPriceRef.current;
+    if (prev !== null && price !== prev) {
+      setFlash(price > prev ? "green" : "red");
+      setTimeout(() => setFlash(null), 600);
+    }
+    prevPriceRef.current = price;
+  }, [asset?.price]);
+
+  if (!asset || !asset.price) {
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 10px", borderBottom: `1px solid ${C.border}` }}>
+        <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text }}>{label || sym}</span>
+        <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>— No perp data</span>
+      </div>
+    );
+  }
+
+  const chgN = Number(asset.change24h) || 0;
+  const isUp = chgN >= 0;
+  const bgFlash   = flash === "green" ? "rgba(0,199,135,0.22)" : flash === "red" ? "rgba(255,64,96,0.18)" : "transparent";
+  const priceColor = flash ? (flash === "green" ? C.green : C.red) : (isUp ? C.green : C.red);
+
+  const isCME   = asset.source === "CME";
+  const isStale = asset.stale;
+
+  return (
+    <div style={{ padding: "10px 10px", borderBottom: `1px solid ${C.border}`, background: bgFlash, transition: "background 0.3s" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text }}>{label || sym}</span>
+          <span style={{
+            fontFamily: MONO, fontSize: 7, fontWeight: 700,
+            color: isCME ? C.orange : C.cyan,
+            border: `1px solid ${isCME ? C.orange : C.cyan}`,
+            padding: "1px 4px", borderRadius: 2, letterSpacing: "0.06em",
+          }}>{isCME ? (CME_LABEL[sym] || "CME REF") : "HL FLX"}</span>
+          {isStale && (
+            <span style={{
+              fontFamily: MONO, fontSize: 7, color: C.red,
+              border: `1px solid ${C.red}44`, padding: "1px 4px", borderRadius: 2, letterSpacing: "0.06em",
+            }} title={`HL flx perp stale at $${asset.hlStalePrice?.toFixed(3)} (>${Math.round(MAX_PERP_SPOT_DEVIATION * 100)}% from CME)`}>
+              HL STALE
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 800, color: priceColor }}>{fmt(asset.price, sym)}</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: priceColor }}>{chgN >= 0 ? "+" : ""}{chgN.toFixed(2)}%</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 14, marginTop: 4 }}>
+        {asset.funding != null && (
+          <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted2 }}>
+            Fund: <span style={{ color: asset.funding > 0.001 ? C.red : asset.funding < -0.0005 ? C.green : C.muted2 }}>
+              {asset.funding >= 0 ? "+" : ""}{(asset.funding * 100).toFixed(4)}%/8h
+            </span>
+          </span>
+        )}
+        {asset.openInterest != null && asset.openInterest > 0 && asset.price > 0 && (
+          <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted2 }}>
+            OI: ${((asset.openInterest * asset.price) / 1e6).toFixed(1)}M
+          </span>
+        )}
+        {isCME && (
+          <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>
+            {isStale ? "HL perp illiquid — showing CME futures reference" : "CME futures reference"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 function CommoditiesTab({ metalPrices, flashes }) {
   const [sub, setSub] = useState("spot");
@@ -494,13 +632,13 @@ function CommoditiesTab({ metalPrices, flashes }) {
   return (
     <div>
       <PanelHeader
-        title="Commodities · Gold-API & Finnhub"
-        subtitle="gold-api.com · XAU/XAG/Pt/Cu  |  finnhub OANDA CFD · WTI/Brent/NatGas"
+        title="Commodities · Gold-API & Yahoo Finance"
+        subtitle="gold-api.com · XAU/XAG/Pt/Cu  |  Yahoo Finance CME · WTI/Brent/NatGas"
         live={anyLive}
       />
       <SubTabs
         tabs={[
-          { val: "spot", label: "SPOT · GOLD-API/FH" },
+          { val: "spot", label: "SPOT · CME/GOLD-API" },
           { val: "perp", label: "PERP · TRADE.XYZ" },
         ]}
         value={sub} onChange={setSub}
@@ -520,8 +658,8 @@ function CommoditiesTab({ metalPrices, flashes }) {
       ) : (
         <div>
           {METALS_SYMS.map(sym => {
-            const perp = hlPerpFor(sym, storePerps || {});
-            return <PerpRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} asset={perp} />;
+            const asset = resolveCommPerp(sym, storePerps, metalPrices);
+            return <CommodityPerpRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} asset={asset} />;
           })}
         </div>
       )}
