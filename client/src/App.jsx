@@ -1328,9 +1328,8 @@ function Dashboard({user,setUser,onShowAuth}){
     setCryptoPrices(prev=>{
       const next={...prev};
       Object.entries(buf).forEach(([sym,price])=>{
-        const base=CRYPTO_BASE[sym];
-        const chg=base?+((price-base)/base*100).toFixed(2):0;
-        next[sym]={...prev[sym],price,chg,live:true};
+        // Preserve the real 24h chg from the last Binance REST poll — never recalculate from a static base
+        next[sym]={...prev[sym],price,live:true};
       });
       triggerFlashes(next);return next;
     });
