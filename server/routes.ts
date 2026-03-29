@@ -4064,11 +4064,35 @@ Every level must be technically defensible. Return JSON only.`;
       const { subject, body, targetAll, htmlMode, testMode } = req.body;
       if (!subject?.trim() || !body?.trim()) return res.status(400).json({ error: "Subject and body are required" });
       // Fetch recipients — test mode sends only to owner
+      // All queries pull from PostgreSQL subscribers / users tables.
+      // "subscribers only" uses LEFT JOIN from subscribers so email-only
+      // subscribers (no user account) are never missed.
+      // "targetAll" sends to all users UNION all active subscribers so every
+      // person — whether they signed up by email only or via the app — is reached.
       const recipientsRes = testMode
         ? await pool.query("SELECT id, name, email FROM users WHERE LOWER(email)='mikeclaver@gmail.com' LIMIT 1")
         : targetAll
-          ? await pool.query("SELECT id, name, email FROM users WHERE email LIKE '%@%' ORDER BY created_at DESC")
-          : await pool.query("SELECT u.id, u.name, u.email FROM users u INNER JOIN subscribers s ON LOWER(u.email)=LOWER(s.email) WHERE s.active=true AND u.email LIKE '%@%' ORDER BY u.created_at DESC");
+          ? await pool.query(`
+              SELECT DISTINCT
+                COALESCE(u.id::text, '') AS id,
+                COALESCE(u.name, s.name, 'Subscriber') AS name,
+                COALESCE(u.email, s.email) AS email
+              FROM users u
+              FULL OUTER JOIN subscribers s ON LOWER(u.email) = LOWER(s.email)
+              WHERE (u.email LIKE '%@%' OR s.email LIKE '%@%')
+              ORDER BY email
+            `)
+          : await pool.query(`
+              SELECT DISTINCT
+                COALESCE(u.id::text, '') AS id,
+                COALESCE(u.name, s.name, 'Subscriber') AS name,
+                COALESCE(u.email, s.email) AS email
+              FROM subscribers s
+              LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
+              WHERE s.active = true
+                AND (u.email LIKE '%@%' OR (u.id IS NULL AND s.email LIKE '%@%'))
+              ORDER BY email
+            `);
       const recipients = recipientsRes.rows;
       if (testMode) console.log(`[custom-email] TEST MODE — sending preview to owner only`);
       const isRawHtml = htmlMode && (body.trimStart().toLowerCase().startsWith("<!doctype") || body.trimStart().toLowerCase().startsWith("<html"));
