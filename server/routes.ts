@@ -10,6 +10,31 @@ import webpush from "web-push";
 import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./insider";
 import QRCode from "qrcode";
 
+// ── Modular imports ───────────────────────────────────────────────────────────
+import {
+  CRYPTO_SYMS, CRYPTO_BASE, BINANCE_MAP, BINANCE_SYMS,
+  HL_PERP_SYMS, HL_TO_APP, APP_TO_HL,
+  EQUITY_SYMS, EQUITY_BASE, EQUITY_FH_MAP,
+  METALS_BASE, BASKET_YAHOO_MAP, ENERGY_ETF_MAP, FOREX_BASE,
+  BASKET_PRICE_TTL, SESSION_THRESHOLDS, HIGH_IMPACT_KEYWORDS,
+  MOVE_WINDOW, SIGNAL_COOLDOWN, AI_CACHE_TTL,
+} from "./config/assets";
+
+import {
+  calcRSI as taCalcRSI,
+  calcATR as taCalcATR,
+  calcMomentum as taCalcMomentum,
+  calcZScore as taCalcZScore,
+  calcBollingerBreakout as taCalcBollingerBreakout,
+  buildSyntheticCandles as taBuildSyntheticCandles,
+  detectPatterns as taDetectPatterns,
+  getBacktestWinRate,
+  chunkArray,
+  type PricePoint,
+} from "./services/ta";
+
+import { broadcastSignalPushParallel, startNotificationWorker } from "./workers/notifications";
+
 // ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
 const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
 const VAPID_PRIVATE_KEY = "JYSHjiS26v9DWkwQ-kc-fdoBjn2sBlaTyJOo8JPttoI";
@@ -54,68 +79,7 @@ async function sendWebPushToUser(userId: string, title: string, body: string, ta
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
-const CRYPTO_SYMS = ["BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","PEPE","XRP","BNB","ADA","DOT","MATIC","UNI","AAVE","NEAR","SUI","APT","OP","TIA","SEI","JUP","ONDO","RENDER","INJ","FET","TAO","PENDLE","HBAR","TRUMP","HYPE"];
-const CRYPTO_BASE: Record<string, number> = {BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,MATIC:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18,TRUMP:3.5,HYPE:31};
-const BINANCE_MAP: Record<string, string> = {BTC:"BTCUSDT",ETH:"ETHUSDT",SOL:"SOLUSDT",WIF:"WIFUSDT",DOGE:"DOGEUSDT",AVAX:"AVAXUSDT",LINK:"LINKUSDT",ARB:"ARBUSDT",PEPE:"PEPEUSDT",XRP:"XRPUSDT",BNB:"BNBUSDT",ADA:"ADAUSDT",DOT:"DOTUSDT",UNI:"UNIUSDT",AAVE:"AAVEUSDT",NEAR:"NEARUSDT",SUI:"SUIUSDT",APT:"APTUSDT",OP:"OPUSDT",TIA:"TIAUSDT",SEI:"SEIUSDT",JUP:"JUPUSDT",ONDO:"ONDOUSDT",RENDER:"RENDERUSDT",FET:"FETUSDT",HBAR:"HBARUSDT",TRUMP:"TRUMPUSDT",HYPE:"HYPEUSDT"};
-const BINANCE_SYMS = Object.values(BINANCE_MAP);
-
-const HL_PERP_SYMS = ["BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","kPEPE","XRP","BNB","ADA","DOT","MATIC","UNI","AAVE","NEAR","SUI","APT","OP","TIA","SEI","JUP","ONDO","RENDER","INJ","FET","TAO","PENDLE","HBAR","TRUMP","HYPE"];
-const HL_TO_APP: Record<string, string> = {kPEPE:"PEPE"};
-const APP_TO_HL: Record<string, string> = {PEPE:"kPEPE"};
-
-// Must match the frontend MarketTab EQUITY_SYMS exactly so all rows get prices
-const EQUITY_SYMS = ["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","NFLX","HOOD","ORCL","TSM","GME","RIVN","BABA","HIMS","CRCL"];
-const EQUITY_BASE: Record<string, number> = {
-  TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,NFLX:850,
-  HOOD:41,ORCL:148,TSM:180,GME:27,RIVN:13,BABA:131,HIMS:26,CRCL:25,
-  // basket-only extras kept for fallback
-  SQ:66,SHOP:95,CRM:290,DIS:105,JPM:240,V:328,XOM:113,WMT:90,BAC:44,
-};
-const EQUITY_FH_MAP: Record<string, string> = {}; // no special ticker remapping needed
-
-const METALS_BASE: Record<string, number> = {XAU:5160,XAG:84,WTI:91,BRENT:93,NATGAS:4,COPPER:5.8,PLATINUM:2150};
-
-// ── Basket Prices: Yahoo Finance ticker map for ALL 140+ basket assets ───────
-const BASKET_YAHOO_MAP: Record<string, string> = {
-  // Crypto
-  BTC:"BTC-USD",ETH:"ETH-USD",SOL:"SOL-USD",XRP:"XRP-USD",DOGE:"DOGE-USD",
-  AVAX:"AVAX-USD",LINK:"LINK-USD",BNB:"BNB-USD",ADA:"ADA-USD",SUI:"SUI-USD",
-  DOT:"DOT-USD",HYPE:"HYPE11-USD",
-  // US Equities (N.America)
-  AAPL:"AAPL",NVDA:"NVDA",MSFT:"MSFT",GOOGL:"GOOGL",AMZN:"AMZN",
-  META:"META",TSLA:"TSLA",MSTR:"MSTR",AMD:"AMD",PLTR:"PLTR",
-  COIN:"COIN",NFLX:"NFLX",JPM:"JPM",V:"V",XOM:"XOM",
-  WMT:"WMT",BAC:"BAC",UNH:"UNH",DIS:"DIS",CRM:"CRM",
-  // Canada TSX
-  RY:"RY.TO",TD:"TD.TO",CNQ:"CNQ.TO",SU:"SU.TO",BCE:"BCE.TO",
-  // Europe
-  ASML:"ASML",SAP:"SAP",NESN:"NESN.SW",LVMH:"MC.PA",
-  SHEL:"SHEL",HSBA:"HSBA.L",AZN:"AZN",NVO:"NVO",
-  SIEGY:"SIEGY",TTE:"TTE",BP:"BP",ULVR:"ULVR.L",
-  // Middle East
-  "2222.SR":"2222.SR","2010.SR":"2010.SR",
-  QNBK:"QNBK.QA",EMIRATESNBD:"ENBD.DU",ADNOCDIST:"ADNOCDIST.AD",ETISALAT:"ETISALAT.AD",
-  // Asia
-  TSM:"TSM",BABA:"BABA",TCEHY:"TCEHY",
-  "005930":"005930.KS","9984.T":"9984.T","7203.T":"7203.T",
-  "7974.T":"7974.T","0700.HK":"0700.HK",
-  PDD:"PDD",JD:"JD",RELIANCE:"RELIANCE.NS",INFY:"INFY",
-  // Commodities (futures / ETFs)
-  XAU:"GC=F",XAG:"SI=F",WTI:"CL=F",BRENT:"BZ=F",
-  NATGAS:"NG=F",COPPER:"HG=F",PLATINUM:"PL=F",PALLADIUM:"PA=F",
-  WHEAT:"ZW=F",CORN:"ZC=F",SOYBEANS:"ZS=F",
-  COFFEE:"KC=F",SUGAR:"SB=F",
-  URANIUM:"URA",DUBAI:"BZ=F",LNG:"UNG",
-};
-const BASKET_PRICE_TTL = 5 * 60 * 1000; // 5-min cache
 const metalsRef: Record<string, {price:number,ts:number}> = {};
-
-const ENERGY_ETF_MAP: Record<string, {etfSym: string, factor: number}> = {
-  WTI: { etfSym: "USO", factor: 0.840 },
-  BRENT: { etfSym: "BNO", factor: 2.105 },
-  NATGAS: { etfSym: "UNG", factor: 0.32 },
-};
-const FOREX_BASE: Record<string, number> = {EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
 
 const cache: Record<string, { data: any; ts: number }> = {};
 const FINNHUB_TTL = 120000;
@@ -124,7 +88,6 @@ const FINNHUB_TTL = 120000;
 // One Claude call per unique prompt per 5 minutes, regardless of user count.
 // With 500 users, this reduces AI costs by ~99% for identical market analysis queries.
 const aiCache = new Map<string, { text: string; ts: number }>();
-const AI_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 function hashStr(str: string): string {
   let h = 0;
@@ -183,18 +146,7 @@ let signalIdCounter = 10000;
 
 // ─── PER-TOKEN NEWS SENTIMENT CACHE (populated by background loop) ────────────
 const tokenSentimentCache: Record<string, { score: number; label: string; bullish: number; bearish: number; ts: number }> = {};
-const MOVE_WINDOW = 5 * 60 * 1000;
-const SIGNAL_COOLDOWN = 10 * 60 * 1000;
 const lastSignalTime: Record<string, number> = {};
-
-// Session-aware thresholds — stricter in low-liquidity sessions
-const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: number; minOI: number }> = {
-  ASIAN:    { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
-  LONDON:   { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
-  NY:       { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
-  POST_NY:  { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
-  DEFAULT:  { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
-};
 
 const whaleAlerts: { sym: string; ts: number; type: string; amount: string }[] = [];
 
@@ -202,8 +154,6 @@ const whaleAlerts: { sym: string; ts: number; type: string; amount: string }[] =
 // Shared cache so detectMoves can access upcoming macro events
 let sharedMacroCache: { events: any[]; ts: number } = { events: [], ts: 0 };
 export function updateSharedMacroCache(events: any[]) { sharedMacroCache = { events, ts: Date.now() }; }
-
-const HIGH_IMPACT_KEYWORDS = ["FOMC", "CPI", "NFP", "Non-Farm", "Fed Rate", "Interest Rate", "GDP", "PCE", "PPI", "Powell"];
 
 function getMacroRisk(): { highRisk: boolean; flags: string[]; confPenalty: number } {
   const flags: string[] = [];
@@ -241,15 +191,7 @@ function recordPrice(sym: string, price: number) {
 }
 
 function calcATR(sym: string): number {
-  const hist = priceHistory[sym];
-  if (!hist || hist.length < 10) return 0;
-  const recent = hist.slice(-60);
-  const intervals: number[] = [];
-  for (let i = 1; i < recent.length; i++) {
-    intervals.push(Math.abs(recent[i].price - recent[i - 1].price));
-  }
-  if (intervals.length === 0) return 0;
-  return intervals.reduce((a, b) => a + b, 0) / intervals.length;
+  return taCalcATR(priceHistory[sym]);
 }
 
 function calcMasterScore(sym: string, dir: string): { score: number; riskOn: number; reasoning: string[] } {
@@ -296,80 +238,19 @@ function calcMasterScore(sym: string, dir: string): { score: number; riskOn: num
 
 // ─── STATISTICAL: Z-SCORE OF RECENT PRICE MOVE ───────────────────────────────
 function calcZScore(sym: string): { zScore: number; label: string; pts: number } {
-  const h = priceHistory[sym];
-  if (!h || h.length < 20) return { zScore: 0, label: "Insufficient data", pts: 3 };
-  const pts = h.slice(-30);
-  const changes: number[] = [];
-  for (let i = 1; i < pts.length; i++) {
-    changes.push(((pts[i].price - pts[i-1].price) / pts[i-1].price) * 100);
-  }
-  if (changes.length < 5) return { zScore: 0, label: "Insufficient data", pts: 3 };
-  const mean = changes.reduce((s, v) => s + v, 0) / changes.length;
-  const variance = changes.reduce((s, v) => s + (v - mean) ** 2, 0) / changes.length;
-  const stddev = Math.sqrt(variance);
-  const last = changes[changes.length - 1];
-  const z = stddev > 0 ? (last - mean) / stddev : 0;
-  const absZ = Math.abs(z);
-  const label = absZ >= 3 ? "EXTREME (3σ+)" : absZ >= 2 ? "STRONG (2σ+)" : absZ >= 1.5 ? "NOTABLE (1.5σ)" : absZ >= 1 ? "MODERATE (1σ)" : "NORMAL";
-  const scorePts = absZ >= 3 ? 20 : absZ >= 2 ? 15 : absZ >= 1.5 ? 10 : absZ >= 1 ? 6 : 3;
-  return { zScore: +z.toFixed(2), label, pts: scorePts };
+  return taCalcZScore(priceHistory[sym]);
 }
 
 // ─── TECHNICAL: BOLLINGER BAND BREAKOUT ──────────────────────────────────────
 function calcBollingerBreakout(sym: string, dir: string): { breakout: boolean; pctFromBand: number; pts: number } {
-  const h = priceHistory[sym];
-  if (!h || h.length < 20) return { breakout: false, pctFromBand: 0, pts: 2 };
-  const prices = h.slice(-20).map(p => p.price);
-  const mean = prices.reduce((s, v) => s + v, 0) / prices.length;
-  const variance = prices.reduce((s, v) => s + (v - mean) ** 2, 0) / prices.length;
-  const stddev = Math.sqrt(variance);
-  const upper = mean + 2 * stddev;
-  const lower = mean - 2 * stddev;
-  const current = prices[prices.length - 1];
-  const breakoutLong = dir === "LONG" && current > upper;
-  const breakoutShort = dir === "SHORT" && current < lower;
-  const breakout = breakoutLong || breakoutShort;
-  const pctFromBand = breakoutLong
-    ? +((current - upper) / upper * 100).toFixed(2)
-    : breakoutShort ? +((lower - current) / lower * 100).toFixed(2) : 0;
-  return { breakout, pctFromBand, pts: breakout ? (pctFromBand > 1 ? 12 : 8) : 2 };
+  return taCalcBollingerBreakout(priceHistory[sym], dir);
 }
 
 // ─── PATTERN DETECTION: BUILD SYNTHETIC CANDLES FROM PRICE HISTORY ───────────
 function buildSyntheticCandles(sym: string, count = 60): { c: number; h: number; l: number; o: number }[] {
-  const hist = priceHistory[sym];
-  if (!hist || hist.length < 5) return [];
-  const pts = hist.slice(-count);
-  return pts.map((pt, i) => {
-    const p = pt.price;
-    const v = p * 0.002;
-    return { c: p, h: p + v, l: p - v, o: i > 0 ? pts[i-1].price : p };
-  });
+  return taBuildSyntheticCandles(priceHistory[sym], count);
 }
 
-// ─── BACKTESTING WIN RATE LOOKUP ──────────────────────────────────────────────
-const BACKTEST_WIN_RATES: Record<string, number> = {
-  "LONG_pattern_bull_flag_NY": 0.68, "LONG_pattern_double_bottom_NY": 0.66,
-  "LONG_pattern_bull_flag_LONDON": 0.65, "LONG_pattern_double_bottom_LONDON": 0.62,
-  "LONG_pattern_bull_flag_ASIAN": 0.57, "LONG_pattern_double_bottom_ASIAN": 0.55,
-  "SHORT_pattern_head_shoulders_NY": 0.67, "SHORT_pattern_double_top_NY": 0.65,
-  "SHORT_pattern_bear_flag_NY": 0.64, "SHORT_pattern_head_shoulders_LONDON": 0.63,
-  "SHORT_pattern_double_top_LONDON": 0.61, "SHORT_pattern_bear_flag_LONDON": 0.60,
-  "LONG_DEFAULT_NY": 0.57, "LONG_DEFAULT_LONDON": 0.55, "LONG_DEFAULT_ASIAN": 0.52,
-  "SHORT_DEFAULT_NY": 0.56, "SHORT_DEFAULT_LONDON": 0.54, "SHORT_DEFAULT_ASIAN": 0.51,
-};
-
-function getBacktestWinRate(dir: string, patterns: string[], session: string): { winRate: number; label: string; pts: number } {
-  let winRate = 0;
-  for (const p of patterns) {
-    const k = `${dir}_${p}_${session}`;
-    if (BACKTEST_WIN_RATES[k]) { winRate = BACKTEST_WIN_RATES[k]; break; }
-  }
-  if (!winRate) winRate = BACKTEST_WIN_RATES[`${dir}_DEFAULT_${session}`] || (dir === "LONG" ? 0.54 : 0.53);
-  const label = `${Math.round(winRate * 100)}% hist. win rate`;
-  const pts = winRate >= 0.65 ? 10 : winRate >= 0.60 ? 7 : winRate >= 0.55 ? 5 : 2;
-  return { winRate: +winRate.toFixed(2), label, pts };
-}
 
 // ─── ADVANCED 6-DIMENSION SIGNAL SCORE ───────────────────────────────────────
 function computeAdvancedScore(sym: string, dir: string, session: string, patterns: string[]): {
@@ -460,41 +341,6 @@ function computeAdvancedScore(sym: string, dir: string, session: string, pattern
   };
 }
 
-// ─── BROADCAST STRONG SIGNAL PUSH TO ALL PRO/ELITE SUBSCRIBERS ───────────────
-async function broadcastSignalPush(sig: any): Promise<void> {
-  try {
-    const dirLabel = sig.dir === "LONG" ? "📈 LONG" : "📉 SHORT";
-    const title = `⚡ ${dirLabel}: ${sig.token} — Score ${sig.advancedScore}/100`;
-    const entryFmt = sig.entry ? `$${typeof sig.entry === "number" ? sig.entry.toFixed(sig.entry > 100 ? 2 : 4) : sig.entry}` : "—";
-    const body = `${sig.pctMove > 0 ? "+" : ""}${sig.pctMove}% · Entry ${entryFmt} · TP $${sig.tp1 || "—"} · SL $${sig.stopLoss || "—"}`;
-    const tag = `signal-${sig.token}-${sig.dir}`.replace(/[^a-zA-Z0-9\-_.~%]/g, "-").slice(0, 32);
-    const rows = await pool.query(
-      `SELECT ps.id, ps.subscription FROM push_subscriptions ps
-       JOIN users u ON u.id = ps.user_id
-       WHERE u.tier IN ('pro','elite') OR u.email = $1`,
-      ["mikeclaver@gmail.com"]
-    );
-    const PUSH_ORIG = process.env.APP_URL
-      || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}` : "https://clvrquantai.com");
-    for (const row of rows.rows) {
-      try {
-        await webpush.sendNotification(row.subscription, JSON.stringify({
-          title, body, tag,
-          icon:  `${PUSH_ORIG}/icons/icon-512.png`,
-          badge: `${PUSH_ORIG}/icons/icon-192.png`,
-          url: "/", timestamp: Date.now(),
-        }), { urgency: "high", TTL: 3600, topic: tag });
-      } catch (e: any) {
-        if (e.statusCode === 410 || e.statusCode === 404) {
-          await pool.query("DELETE FROM push_subscriptions WHERE id = $1", [row.id]);
-        }
-      }
-    }
-    console.log(`[PUSH] Strong signal broadcast: ${sig.token} ${sig.dir} score=${sig.advancedScore} to ${rows.rows.length} subscriber(s)`);
-  } catch (e: any) {
-    console.error("[PUSH] broadcastSignalPush error:", e.message);
-  }
-}
 
 // ─── BACKGROUND NEWS SENTIMENT REFRESH (every 5 min) ─────────────────────────
 async function refreshTokenSentiment(): Promise<void> {
@@ -541,27 +387,11 @@ async function refreshTokenSentiment(): Promise<void> {
 
 // ─── MARKET REGIME ENGINE ────────────────────────────
 function calcRSI(sym: string, period = 14): number {
-  const h = priceHistory[sym];
-  if (!h || h.length < period + 1) return 50;
-  const prices = h.slice(-(period + 1)).map(p => p.price);
-  let gains = 0, losses = 0;
-  for (let i = 1; i < prices.length; i++) {
-    const diff = prices[i] - prices[i - 1];
-    if (diff > 0) gains += diff; else losses -= diff;
-  }
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  return taCalcRSI(priceHistory[sym], period);
 }
 
 function calcMomentum(sym: string): number {
-  const h = priceHistory[sym];
-  if (!h || h.length < 5) return 0;
-  const recent = h[h.length - 1].price;
-  const older = h[Math.max(0, h.length - Math.min(h.length, 30))].price;
-  return older > 0 ? ((recent - older) / older) * 100 : 0;
+  return taCalcMomentum(priceHistory[sym]);
 }
 
 function calc50MA(sym: string): number {
@@ -812,118 +642,7 @@ function calcLiquidityIndex() {
 }
 
 function detectPatterns(candles: any[]): { patterns: string[]; detected: { head_and_shoulders: boolean; bull_flag: boolean } } {
-  const prices = candles.map((c: any) => c.c);
-  const highs  = candles.map((c: any) => c.h);
-  const lows   = candles.map((c: any) => c.l);
-  const n      = prices.length;
-
-  function localMaxima(arr: number[], order: number): number[] {
-    const idx: number[] = [];
-    for (let i = order; i < arr.length - order; i++) {
-      let isMax = true;
-      for (let j = i - order; j <= i + order; j++) {
-        if (j !== i && arr[j] >= arr[i]) { isMax = false; break; }
-      }
-      if (isMax) idx.push(i);
-    }
-    return idx;
-  }
-  function localMinima(arr: number[], order: number): number[] {
-    const idx: number[] = [];
-    for (let i = order; i < arr.length - order; i++) {
-      let isMin = true;
-      for (let j = i - order; j <= i + order; j++) {
-        if (j !== i && arr[j] <= arr[i]) { isMin = false; break; }
-      }
-      if (isMin) idx.push(i);
-    }
-    return idx;
-  }
-
-  const H_ORDER = 3;
-  const H_TOL   = 0.07;
-  const peaks = localMaxima(highs, H_ORDER);
-  let headAndShoulders = false;
-  if (peaks.length >= 3) {
-    for (let k = peaks.length - 1; k >= 2; k--) {
-      const [i1, i2, i3] = [peaks[k-2], peaks[k-1], peaks[k]];
-      const p1 = highs[i1], p2 = highs[i2], p3 = highs[i3];
-      const headHighest  = p2 > p1 && p2 > p3;
-      const headProtrude = (p2 - Math.max(p1,p3)) / p2 >= 0.008;
-      const shoulderSym  = Math.abs(p1 - p3) / Math.max(p1, p3) <= H_TOL;
-      const spacingOk    = (i2 - i1) >= 2 && (i3 - i2) >= 2;
-      if (headHighest && headProtrude && shoulderSym && spacingOk) { headAndShoulders = true; break; }
-    }
-  }
-
-  let bullFlag = false;
-  if (n >= 20) {
-    const lookback = prices.slice(-30);
-    const lbN = lookback.length;
-    let peakIdx = 0;
-    for (let i = 1; i < lbN; i++) { if (lookback[i] > lookback[peakIdx]) peakIdx = i; }
-    if (peakIdx >= 5 && peakIdx <= lbN - 3) {
-      const beforeSlice   = lookback.slice(Math.max(0, peakIdx - 10), peakIdx + 1);
-      const flagpoleStart = Math.min(...beforeSlice);
-      const peakPx        = lookback[peakIdx];
-      const flagpoleGrowth = (peakPx - flagpoleStart) / flagpoleStart;
-      const currentPx = lookback[lbN - 1];
-      const pullback   = (peakPx - currentPx) / peakPx;
-      if (flagpoleGrowth >= 0.03 && pullback >= 0.005 && pullback <= 0.18 && currentPx > flagpoleStart) bullFlag = true;
-    }
-  }
-
-  let bearFlag = false;
-  if (n >= 20) {
-    const lookback = prices.slice(-30);
-    const lbN = lookback.length;
-    let troughIdx = 0;
-    for (let i = 1; i < lbN; i++) { if (lookback[i] < lookback[troughIdx]) troughIdx = i; }
-    if (troughIdx >= 5 && troughIdx <= lbN - 3) {
-      const beforeSlice   = lookback.slice(Math.max(0, troughIdx - 10), troughIdx + 1);
-      const flagpoleStart = Math.max(...beforeSlice);
-      const troughPx      = lookback[troughIdx];
-      const flagpoleDrop  = (flagpoleStart - troughPx) / flagpoleStart;
-      const currentPx     = lookback[lbN - 1];
-      const bounce        = (currentPx - troughPx) / troughPx;
-      if (flagpoleDrop >= 0.03 && bounce >= 0.005 && bounce <= 0.18 && currentPx < flagpoleStart) bearFlag = true;
-    }
-  }
-
-  let doubleTop = false;
-  if (peaks.length >= 2) {
-    const [i1, i2] = peaks.slice(-2);
-    const p1 = highs[i1], p2 = highs[i2];
-    const symVal = Math.abs(p1 - p2) / Math.max(p1, p2);
-    const valleyLows = lows.slice(i1, i2 + 1);
-    const valley = Math.min(...valleyLows);
-    const dip = (Math.max(p1, p2) - valley) / Math.max(p1, p2);
-    if (symVal <= 0.04 && dip >= 0.02 && (i2 - i1) >= 4) doubleTop = true;
-  }
-
-  let doubleBottom = false;
-  const troughs = localMinima(lows, H_ORDER);
-  if (troughs.length >= 2) {
-    const [j1, j2] = troughs.slice(-2);
-    const t1 = lows[j1], t2 = lows[j2];
-    const symVal = Math.abs(t1 - t2) / Math.min(t1, t2);
-    const peakHighs = highs.slice(j1, j2 + 1);
-    const peak = Math.max(...peakHighs);
-    const rise = (peak - Math.min(t1, t2)) / Math.min(t1, t2);
-    if (symVal <= 0.04 && rise >= 0.02 && (j2 - j1) >= 4) doubleBottom = true;
-  }
-
-  const patterns: string[] = [];
-  if (headAndShoulders) patterns.push("pattern_head_shoulders");
-  if (bullFlag)         patterns.push("pattern_bull_flag");
-  if (bearFlag)         patterns.push("pattern_bear_flag");
-  if (doubleTop)        patterns.push("pattern_double_top");
-  if (doubleBottom)     patterns.push("pattern_double_bottom");
-
-  return {
-    patterns,
-    detected: { head_and_shoulders: headAndShoulders, bull_flag: bullFlag, bear_flag: bearFlag, double_top: doubleTop, double_bottom: doubleBottom } as any,
-  };
+  return taDetectPatterns(candles) as any;
 }
 
 function detectMoves() {
@@ -1168,7 +887,7 @@ function detectMoves() {
 
     // ── BROADCAST PUSH NOTIFICATION FOR STRONG SIGNALS (score ≥ 80) ─────────
     if (advanced.isStrong) {
-      broadcastSignalPush(signal).catch(() => {});
+      broadcastSignalPushParallel(signal).catch(() => {});
     }
   }
 }
@@ -1712,6 +1431,7 @@ export async function registerRoutes(
   await seedAccessCodes();
   startStockRefreshLoop();
   startHyperliquidRefreshLoop();
+  startNotificationWorker();
   // Delay WS startup by 5s to let server settle and avoid 429 on rapid restarts
   setTimeout(startFinnhubWebSocket, 5000);
   // Start news sentiment background refresh (every 5 minutes)

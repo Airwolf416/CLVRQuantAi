@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#050709;font-family:'Barlow',Helvetica,Arial,sans-serif">
+<div style="max-width:600px;margin:0 auto;background:#0c1220">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#0c1220 0%,#141e35 100%);padding:28px 24px;text-align:center;border-bottom:1px solid rgba(201,168,76,.2)">
+    <div style="font-family:Georgia,serif;font-size:28px;font-weight:900;color:#e8c96d;letter-spacing:0.02em">CLVRQuant</div>
+    <div style="font-family:monospace;font-size:9px;color:#5a6a8a;letter-spacing:0.25em;margin-top:4px">DAILY INTELLIGENCE BRIEF</div>
+    <div style="font-family:monospace;font-size:11px;color:#8a96b2;margin-top:8px">{{dateStr}}</div>
+  </div>
+
+  <!-- Headline -->
+  <div style="padding:24px 24px 8px">
+    <div style="font-family:Georgia,serif;font-size:20px;font-weight:700;color:#e8e0d0;line-height:1.4;margin-bottom:12px;font-style:italic">"{{headline}}"</div>
+    <div>
+      <div style="display:inline-block;padding:4px 14px;border-radius:2px;font-family:monospace;font-size:9px;letter-spacing:0.15em;color:{{sentimentColor}};border:1px solid {{sentimentColor}};margin-bottom:4px">{{sentimentLabel}}</div>
+      {{#if macroRegime}}<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:{{macroRegimeColor}};border:1px solid {{macroRegimeBorderColor}};background:{{macroRegimeBg}}">{{macroRegime}}</div>{{/if}}
+      {{#if isHighMacroRisk}}<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:#ff4060;border:1px solid rgba(255,64,96,.4);background:rgba(255,64,96,.08)">🔴 MACRO RISK</div>{{/if}}
+    </div>
+    {{#if isHighMacroRisk}}
+    <div style="margin-top:10px;padding:8px 14px;background:rgba(255,64,96,.06);border:1px solid rgba(255,64,96,.2);border-radius:3px;font-family:monospace;font-size:10px;color:#ff6080;line-height:1.6">⚠️ {{macroRiskNote}} — Reduce position sizing. Max 2x leverage.</div>
+    {{/if}}
+  </div>
+
+  <!-- Market Summary Table -->
+  <div style="padding:16px 24px">
+    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:4px">📊 Market Summary</div>
+    <table style="width:100%;border-collapse:collapse;margin:12px 0;background:rgba(5,7,9,.4);border:1px solid #141e35;border-radius:4px">
+      <thead>
+        <tr>
+          <th style="padding:10px 16px;text-align:left;font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.15em;border-bottom:1px solid #1e2d4a">INSTRUMENT</th>
+          <th style="padding:10px 16px;text-align:center;font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.15em;border-bottom:1px solid #1e2d4a">PRICE</th>
+          <th style="padding:10px 16px;text-align:right;font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.15em;border-bottom:1px solid #1e2d4a">CHANGE</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each priceRows}}
+        <tr>
+          <td style="padding:12px 16px;border-bottom:1px solid #141e35;font-size:14px;font-weight:600;color:#e8e0d0">{{label}}</td>
+          <td style="padding:12px 16px;border-bottom:1px solid #141e35;font-family:'IBM Plex Mono',monospace;font-size:14px;color:#c5cfe0;text-align:center">{{price}}</td>
+          <td style="padding:12px 16px;border-bottom:1px solid #141e35;font-family:'IBM Plex Mono',monospace;font-size:13px;color:{{changeColor}};text-align:right;font-weight:600">{{arrow}}{{changeDisplay}}</td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Commentary -->
+  <div style="padding:8px 24px 24px">
+    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:16px">🧠 Market Commentary &amp; Outlook</div>
+    <div style="height:2px;background:linear-gradient(90deg,#c9a84c,transparent);margin-bottom:20px"></div>
+    {{#each commentary}}
+    <div style="margin-bottom:24px">
+      <div style="font-size:16px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{emoji}} {{title}}</div>
+      <div style="font-size:13px;color:#8a96b2;line-height:1.9">{{text}}</div>
+    </div>
+    {{/each}}
+  </div>
+
+  <!-- Trade Ideas -->
+  {{#if topTrade}}
+  <div style="padding:0 24px 24px">
+    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:12px">
+      {{#if isPro}}⚡ Today's Trade Ideas — Pro (4 Ideas){{else}}⚡ Today's Top Trade Idea{{/if}}
+    </div>
+
+    <!-- Top Trade -->
+    <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
+      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ {{#if isPro}}TRADE IDEA #1{{else}}TODAY'S TOP TRADE IDEA{{/if}}</div>
+      <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{topTrade.riskLabel}} {{topTrade.asset}} {{topTrade.dir}}</div>
+      <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
+        📍 Entry: {{topTrade.entry}}<br>
+        🛑 Stop: {{topTrade.stop}}<br>
+        🎯 TP1: {{topTrade.tp1}}<br>
+        🎯 TP2: {{topTrade.tp2}}<br>
+        📊 Confidence: {{topTrade.confidence}}<br>
+        ⚠️ Flags: {{topTrade.flags}}
+      </div>
+      {{#if topTrade.edge}}<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 {{topTrade.edge}}</div>{{/if}}
+    </div>
+
+    <!-- Additional Trades (Pro only) -->
+    {{#if isPro}}
+    {{#each additionalTrades}}
+    <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
+      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TRADE IDEA #{{tradeNum}}</div>
+      <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{riskLabel}} {{asset}} {{dir}}</div>
+      <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
+        📍 Entry: {{entry}}<br>
+        🛑 Stop: {{stop}}<br>
+        🎯 TP1: {{tp1}}<br>
+        🎯 TP2: {{tp2}}<br>
+        📊 Confidence: {{confidence}}<br>
+        ⚠️ Flags: {{flags}}
+      </div>
+      {{#if edge}}<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 {{edge}}</div>{{/if}}
+    </div>
+    {{/each}}
+    {{else}}
+    <div style="margin-top:8px;padding:10px 14px;background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">
+      🔒 <strong style="color:#c9a84c">Pro members get 4 trade ideas daily.</strong> Upgrade at <a href="https://clvrquantai.com" style="color:#e8c96d;text-decoration:none">clvrquantai.com</a>
+    </div>
+    {{/if}}
+  </div>
+
+  <!-- Disclaimer -->
+  <div style="padding:0 24px 16px">
+    <div style="padding:12px 16px;background:rgba(255,160,0,.04);border:1px solid rgba(255,160,0,.18);border-radius:4px">
+      <div style="font-family:monospace;font-size:8px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:5px;font-weight:700">⚠️ TRADE IDEA DISCLAIMER</div>
+      <div style="font-size:11px;color:#6a7a9a;line-height:1.75">These trade ideas are based on market data and conditions available <strong style="color:#8a9ab2">at the time this brief was generated</strong>. Prices, funding rates, and risk factors can change rapidly. <strong style="color:#8a9ab2">Always confirm current prices before entering any position.</strong> CLVRQuant AI is not a financial advisor. All content is for research and educational purposes only. <strong style="color:#c5a060">Operate with caution. Never risk more than you can afford to lose.</strong></div>
+    </div>
+  </div>
+  {{/if}}
+
+  <!-- Watch Items -->
+  {{#if watchItems}}
+  <div style="padding:0 24px 24px">
+    <div style="background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;padding:16px 20px">
+      <div style="font-size:16px;font-weight:700;color:#e8e0d0;margin-bottom:12px">🚀 Key Things to Watch Today</div>
+      <ul style="list-style:none;padding:0;margin:0">
+        {{#each watchItems}}
+        <li style="margin-bottom:8px;color:#c5cfe0;font-size:13px;line-height:1.7;padding-left:4px">• {{this}}</li>
+        {{/each}}
+      </ul>
+    </div>
+  </div>
+  {{/if}}
+
+  <!-- Risk Note -->
+  {{#if riskNote}}
+  <div style="padding:0 24px 24px">
+    <div style="background:rgba(255,64,96,.04);border:1px solid rgba(255,64,96,.15);border-radius:4px;padding:14px 20px">
+      <div style="font-family:monospace;font-size:9px;color:#ff4060;letter-spacing:0.15em;margin-bottom:6px;font-weight:700">RISK LEVEL: {{riskLevelUpper}}</div>
+      <div style="font-size:12px;color:#8a96b2;line-height:1.7">{{riskNote}}</div>
+    </div>
+  </div>
+  {{/if}}
+
+  <!-- CTA -->
+  <div style="padding:0 24px 24px">
+    <a href="https://clvrquantai.com" style="display:block;text-align:center;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-size:15px;font-weight:700;padding:14px 24px;border-radius:4px;text-decoration:none;font-style:italic;letter-spacing:0.02em">Open CLVRQuant Dashboard →</a>
+  </div>
+
+  <!-- PWA Install -->
+  <div style="padding:0 24px 24px">
+    <div style="background:#0a0f1a;border:1px solid #141e35;border-radius:4px;padding:16px 20px">
+      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.2em;margin-bottom:10px;font-weight:700">📱 INSTALL AS APP ON YOUR PHONE / IPAD</div>
+      <div style="font-size:12px;color:#8a96b2;line-height:1.9">
+        <strong style="color:#c5cfe0">iPhone / iPad (Safari):</strong><br>
+        1. Open <a href="https://clvrquantai.com" style="color:#e8c96d;text-decoration:underline">clvrquantai.com</a> in Safari<br>
+        2. Tap the <strong style="color:#c5cfe0">Share</strong> button (square with arrow)<br>
+        3. Scroll down and tap <strong style="color:#c5cfe0">"Add to Home Screen"</strong><br>
+        4. Tap <strong style="color:#c5cfe0">"Add"</strong> — CLVRQuant now opens like a native app<br><br>
+        <strong style="color:#c5cfe0">Android (Chrome):</strong><br>
+        1. Open <a href="https://clvrquantai.com" style="color:#e8c96d;text-decoration:underline">clvrquantai.com</a> in Chrome<br>
+        2. Tap the <strong style="color:#c5cfe0">three-dot menu</strong> (top right)<br>
+        3. Tap <strong style="color:#c5cfe0">"Add to Home screen"</strong> or <strong style="color:#c5cfe0">"Install app"</strong><br>
+        4. CLVRQuant will appear as an app icon on your home screen
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="padding:16px 24px;border-top:1px solid #141e35;text-align:center">
+    <div style="font-family:Georgia,serif;font-size:14px;color:#e8c96d;margin-bottom:8px">CLVRQuant</div>
+    <div style="font-family:monospace;font-size:8px;color:#3a4a6a;letter-spacing:0.12em;line-height:2">
+      For any issues or inquiries, please email <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">Support@CLVRQuantAI.com</a><br>
+      NOT FINANCIAL ADVICE · AI-POWERED RESEARCH FOR EDUCATIONAL PURPOSES ONLY<br>
+      ALL DATA IS INFORMATIONAL — TRADE AT YOUR OWN RISK
+    </div>
+  </div>
+
+  <!-- Unsubscribe -->
+  {{#if subscriberEmail}}
+  <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525">
+    <div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">
+      You are receiving this email because you subscribed to CLVRQuant market intelligence.<br>
+      To stop receiving these emails, <a href="https://clvrquantai.com/api/unsubscribe?email={{encodedEmail}}" style="color:#4a5d80;text-decoration:underline">unsubscribe here</a>.<br>
+      CLVRQuant · 100 King St W, Toronto, ON, Canada · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a>
+    </div>
+  </div>
+  {{/if}}
+
+</div>
+</body>
+</html>

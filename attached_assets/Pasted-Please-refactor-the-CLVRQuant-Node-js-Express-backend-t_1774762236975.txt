@@ -1,0 +1,30 @@
+Please refactor the CLVRQuant Node.js/Express backend to improve scalability, reliability, and modularity for a production environment. I will be deploying this to Railway via GitHub. Please implement the following architectural changes step-by-step, ensuring the app remains buildable and functional after each step.
+
+Step 1: Implement Redis for State Management
+- Identify all in-memory state variables in `server/routes.ts` (e.g., `priceHistory`, `hlData`, `livePrices`, `tokenSentimentCache`, `aiCache`).
+- Install `ioredis`. 
+- Create a `services/redis.ts` file to initialize the Redis client using a `REDIS_URL` environment variable (required for Railway).
+- Replace all read/write operations for those in-memory caches with Redis getters and setters. 
+
+Step 2: Extract Background Workers (BullMQ)
+- The current `server/routes.ts` file runs infinite `while(true)` polling loops for data ingestion (`startStockRefreshLoop`, `startHyperliquidRefreshLoop`) and signal detection (`detectMoves`).
+- Install `bullmq`.
+- Set up a background worker structure. Create a new directory `workers/`.
+- Move the polling and signal detection logic into dedicated BullMQ queues and workers connected to the Redis instance. 
+- Ensure the main Express server only handles HTTP requests and enqueues jobs, while the workers handle the heavy lifting.
+
+Step 3: Parallelize and Queue Notifications
+- Locate the notification functions: `sendDailyBriefEmails`, `sendPromoEmail`, and `broadcastSignalPush`. Currently, they iterate sequentially.
+- Move these functions into a dedicated notification worker queue.
+- Refactor the loops to process subscribers in concurrent batches (e.g., chunks of 50) using `Promise.allSettled()` to prevent a single failure from blocking the rest of the queue.
+
+Step 4: Modularize Technical Analysis and Configurations
+- Create a `services/ta.ts` file. 
+- Move all complex mathematical models, pattern recognition logic (head-and-shoulders, bull flags), and indicator calculations (RSI, Bollinger Bands, ATR, Z-scores) out of the routing logic and into this new file as exported functions.
+- Move massive hardcoded symbol arrays like `CRYPTO_SYMS` and `BASKET_EQUITIES_US` into a dedicated `config/assets.ts` file or prepare a script to migrate them to our database schema.
+
+Step 5: Upgrade Email Templating
+- Replace the raw template literal string construction in `buildEmailHtml` with a robust templating engine like `handlebars`.
+- Install `handlebars`, set up a `templates/` directory, and move the HTML structure there. Update the email service to compile and inject data into the Handlebars template.
+
+Please start with Step 1 and let me know when you are ready to proceed to the next step. Update `package.json` with all necessary new dependencies.
