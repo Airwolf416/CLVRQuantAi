@@ -19,6 +19,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { io as socketIO } from "socket.io-client";
 
 const HL_API        = "https://api.hyperliquid.xyz/info";
 const REFRESH_MS    = 15_000;
@@ -739,11 +740,66 @@ function startHLStream() {
   } catch {}
 }
 
+// ── Socket.io client — receives market_update events from the backend ──────────
+// Each event contains a batch of { sym: { price, chg, type } } entries
+// emitted by the Finnhub WebSocket handler whenever new ticks arrive.
+// This supplements (not replaces) the SSE stream and the HL WebSocket.
+let _socket = null;
+
+function startSocketIO() {
+  if (_socket) return;
+  try {
+    _socket = socketIO({
+      path: "/socket.io",
+      transports: ["websocket", "polling"],
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 30000,
+    });
+
+    _socket.on("connect", () => {
+      console.log("[socket.io] connected:", _socket.id);
+    });
+
+    _socket.on("market_update", (batch) => {
+      if (!batch || typeof batch !== "object") return;
+      const curSpot = _state.spot;
+      const nextSpot = { ...curSpot };
+      let changed = false;
+
+      for (const [sym, info] of Object.entries(batch)) {
+        if (!info || typeof info.price !== "number" || info.price <= 0) continue;
+        const { price, chg, type } = info;
+        // equity, metal, and forex live in the spot map
+        if (type === "equity" || type === "metal" || type === "forex") {
+          nextSpot[sym] = { ...(curSpot[sym] || {}), price, chg: chg ?? 0, live: true };
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        _state = { ..._state, spot: nextSpot, lastUpdate: Date.now() };
+        notify();
+      }
+    });
+
+    _socket.on("disconnect", (reason) => {
+      console.log("[socket.io] disconnected:", reason);
+    });
+
+    _socket.on("connect_error", (err) => {
+      console.warn("[socket.io] connection error:", err.message);
+    });
+  } catch (e) {
+    console.warn("[socket.io] init failed:", e.message);
+  }
+}
+
 function ensurePolling() {
   if (_intervalId) return;
   doFetch();
   _intervalId = setInterval(doFetch, REFRESH_MS);
-  startHLStream(); // WebSocket for real-time price ticks (~1s)
+  startHLStream();  // Hyperliquid WebSocket — real-time perp mid prices (~1s)
+  startSocketIO();  // Socket.io — real-time Finnhub equity/metal/forex ticks
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

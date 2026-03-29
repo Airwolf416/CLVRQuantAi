@@ -7,6 +7,7 @@ import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
 import { startDailyBriefScheduler } from "./dailyBrief";
 import { initializeDatabase } from "./initDb";
+import { initSocketIO } from "./socketServer";
 
 let shuttingDown = false;
 const _origExit = process.exit;
@@ -497,6 +498,7 @@ async function initStripe() {
   await initializeDatabase();
   await initStripe();
   await registerRoutes(httpServer, app);
+  initSocketIO(httpServer);
   startDailyBriefScheduler();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
