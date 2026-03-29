@@ -1,29 +1,65 @@
 // ── Optional Redis client for CLVRQuantAI ─────────────────────────────────────
 // Uses REDIS_URL when available (Railway production).
 // Gracefully falls back to null — callers must handle the null case.
+// SAFETY: Rejects the literal string "undefined" that Railway can inject before
+// a Redis add-on is fully provisioned.
 
 import Redis from "ioredis";
 
 let _client: Redis | null = null;
 let _connecting = false;
 
+function isValidRedisUrl(url: string | undefined): url is string {
+  return (
+    typeof url === "string" &&
+    url.length > 0 &&
+    url !== "undefined" &&
+    url !== "null" &&
+    (url.startsWith("redis://") || url.startsWith("rediss://"))
+  );
+}
+
 export function getRedis(): Redis | null {
-  if (!process.env.REDIS_URL) return null;
+  const url = process.env.REDIS_URL;
+  if (!isValidRedisUrl(url)) return null;
   if (_client) return _client;
   if (_connecting) return null;
 
   _connecting = true;
-  _client = new Redis(process.env.REDIS_URL, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-    lazyConnect: false,
-    retryStrategy: (times) => Math.min(times * 200, 5000),
-  });
+  try {
+    _client = new Redis(url, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+      lazyConnect: true,
+      retryStrategy: (times) => {
+        if (times > 10) return null;
+        return Math.min(times * 200, 5000);
+      },
+    });
 
-  _client.on("connect",  () => console.log("[redis] Connected"));
-  _client.on("ready",    () => console.log("[redis] Ready"));
-  _client.on("error",    (err) => console.error("[redis] Error:", err.message));
-  _client.on("close",    () => console.log("[redis] Connection closed"));
+    _client.on("connect", () => console.log("[redis] Connected"));
+    _client.on("ready",   () => console.log("[redis] Ready"));
+    _client.on("close",   () => console.log("[redis] Connection closed"));
+    _client.on("error",   (err) => {
+      console.warn("[redis] Connection error (non-fatal):", err.message);
+    });
+    _client.on("end", () => {
+      console.warn("[redis] Connection ended — resetting client");
+      _client = null;
+      _connecting = false;
+    });
+
+    _client.connect().catch((err) => {
+      console.warn("[redis] Initial connect failed (non-fatal):", err.message);
+      _client = null;
+      _connecting = false;
+    });
+  } catch (err: any) {
+    console.warn("[redis] Failed to create Redis client (non-fatal):", err.message);
+    _client = null;
+    _connecting = false;
+    return null;
+  }
 
   return _client;
 }
@@ -89,16 +125,34 @@ export async function rHGetAll<T = any>(hash: string): Promise<Record<string, T>
 }
 
 // ── Pub/Sub connection (separate connection as required by ioredis) ─────────
+
 let _sub: Redis | null = null;
 
 export function getRedisSub(): Redis | null {
-  if (!process.env.REDIS_URL) return null;
+  const url = process.env.REDIS_URL;
+  if (!isValidRedisUrl(url)) return null;
   if (_sub) return _sub;
-  _sub = new Redis(process.env.REDIS_URL, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-    lazyConnect: false,
-  });
+
+  try {
+    _sub = new Redis(url, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+      lazyConnect: true,
+    });
+    _sub.on("error", (err) => {
+      console.warn("[redis-sub] Error (non-fatal):", err.message);
+    });
+    _sub.on("end", () => { _sub = null; });
+    _sub.connect().catch((err) => {
+      console.warn("[redis-sub] Initial connect failed (non-fatal):", err.message);
+      _sub = null;
+    });
+  } catch (err: any) {
+    console.warn("[redis-sub] Failed to create sub client (non-fatal):", err.message);
+    _sub = null;
+    return null;
+  }
+
   return _sub;
 }
 
