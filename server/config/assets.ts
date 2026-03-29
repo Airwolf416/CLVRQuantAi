@@ -58,7 +58,7 @@ export const EQUITY_BASE: Record<string, number> = {
 export const EQUITY_FH_MAP: Record<string, string> = {};
 
 export const METALS_BASE: Record<string, number> = {
-  XAU:3100, XAG:34, WTI:70, BRENT:73, NATGAS:2.1, COPPER:4.90, PLATINUM:970,
+  XAU:4495, XAG:70, WTI:100, BRENT:105, NATGAS:3.0, COPPER:5.49, PLATINUM:1870,
 };
 
 export const BASKET_YAHOO_MAP: Record<string, string> = {
@@ -132,10 +132,10 @@ export const BASKET_INTL_FH: Record<string, { fhTick: string; currency: string }
 // Precious metals + energy use metalsKey → looked up in cache["finnhub"].data.metals.
 // Ag commodities use etfSym → fetched via Finnhub WS or REST quote.
 export const BASKET_COMMODITIES: Record<string, { metalsKey?: string; etfSym?: string; base: number }> = {
-  XAU:{metalsKey:"XAU",base:3100},XAG:{metalsKey:"XAG",base:34},
-  PLATINUM:{metalsKey:"PLATINUM",base:970},PALLADIUM:{metalsKey:"PALLADIUM",base:1000},
-  COPPER:{metalsKey:"COPPER",base:4.90},WTI:{metalsKey:"WTI",base:70},
-  BRENT:{metalsKey:"BRENT",base:73},NATGAS:{metalsKey:"NATGAS",base:2.1},
+  XAU:{metalsKey:"XAU",base:4495},XAG:{metalsKey:"XAG",base:70},
+  PLATINUM:{metalsKey:"PLATINUM",base:1870},PALLADIUM:{metalsKey:"PALLADIUM",base:1380},
+  COPPER:{metalsKey:"COPPER",base:5.49},WTI:{metalsKey:"WTI",base:100},
+  BRENT:{metalsKey:"BRENT",base:105},NATGAS:{metalsKey:"NATGAS",base:3.0},
   WHEAT:{etfSym:"WEAT",base:5.8},CORN:{etfSym:"CORN",base:22},
   SOYBEANS:{etfSym:"SOYB",base:24},COFFEE:{etfSym:"JO",base:45},
   SUGAR:{etfSym:"SGG",base:35},URANIUM:{etfSym:"URA",base:28},
