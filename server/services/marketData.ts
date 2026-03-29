@@ -135,6 +135,45 @@ export async function fetchMetals(finnhubKey = ""): Promise<Record<string, any>>
   return metals;
 }
 
+// ── Energy commodity futures via Yahoo Finance (CL=F, BZ=F, NG=F) ─────────────
+// Replaces the inaccurate ETF-proxy approach (USO×0.84, BNO×2.1, UNG×0.32).
+
+const ENERGY_FUTURES: Record<string, { yahooTicker: string; appSym: string }> = {
+  WTI:    { yahooTicker: "CL%3DF", appSym: "WTI"    },
+  BRENT:  { yahooTicker: "BZ%3DF", appSym: "BRENT"  },
+  NATGAS: { yahooTicker: "NG%3DF", appSym: "NATGAS" },
+};
+
+export async function fetchEnergyCommodities(): Promise<Record<string, any>> {
+  const results: Record<string, any> = {};
+  await Promise.all(
+    Object.entries(ENERGY_FUTURES).map(async ([key, { yahooTicker, appSym }]) => {
+      try {
+        const url = `https://query2.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=1d&range=2d`;
+        const r = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) throw new Error(`Yahoo ${r.status}`);
+        const json: any = await r.json();
+        const result = json?.chart?.result?.[0];
+        const quote  = result?.indicators?.quote?.[0];
+        const closes = quote?.close?.filter((v: any) => v != null) ?? [];
+        const price  = closes[closes.length - 1];
+        if (!price || price <= 0) throw new Error("no price");
+        const prevClose = closes.length >= 2 ? closes[closes.length - 2] : 0;
+        const base = prevClose > 0 ? prevClose : METALS_BASE[appSym] || price;
+        const chg  = +((price - base) / base * 100).toFixed(2);
+        results[appSym] = { price: +price.toFixed(3), chg, live: true };
+      } catch (e: any) {
+        console.warn(`[energy] ${key} fetch failed:`, e.message);
+        results[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
+      }
+    })
+  );
+  return results;
+}
+
 // ── Binance 24-hr ticker (crypto prices + HL perp overlay) ───────────────────
 // NOTE: does NOT call detectMoves — callers are responsible for triggering detection.
 

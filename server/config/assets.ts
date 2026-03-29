@@ -35,6 +35,12 @@ export const HL_PERP_SYMS = [
 export const HL_TO_APP: Record<string, string> = { kPEPE: "PEPE" };
 export const APP_TO_HL: Record<string, string> = { PEPE: "kPEPE" };
 
+// Hyperliquid perp price scaling — kXXX tokens are quoted per 1000 tokens.
+// Multiply the raw markPx/perpPrice by this factor to get the per-token USD price.
+export const HL_SCALE_FACTORS: Record<string, number> = {
+  kPEPE: 0.001, // 1 kPEPE contract = 1000 PEPE → price_per_PEPE = markPx × 0.001
+};
+
 // Must match the frontend MarketTab EQUITY_SYMS exactly
 export const EQUITY_SYMS = [
   "TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR",
@@ -87,10 +93,44 @@ export const BASKET_YAHOO_MAP: Record<string, string> = {
   URANIUM:"URA",DUBAI:"BZ=F",LNG:"UNG",
 };
 
-export const ENERGY_ETF_MAP: Record<string, { etfSym: string; factor: number }> = {
-  WTI:   { etfSym: "USO", factor: 0.840 },
-  BRENT: { etfSym: "BNO", factor: 2.105 },
-  NATGAS:{ etfSym: "UNG", factor: 0.32  },
+// ENERGY_ETF_MAP is intentionally empty — energy prices come from Yahoo Finance
+// futures (CL=F, BZ=F, NG=F) via fetchEnergyCommodities() in marketData.ts,
+// not from Finnhub WebSocket ETF proxies (USO/BNO/UNG).
+export const ENERGY_ETF_MAP: Record<string, { etfSym: string; factor: number }> = {};
+
+// ── Basket page data ──────────────────────────────────────────────────────────
+
+export const BASKET_EQUITIES_US = [
+  "AAPL","NVDA","MSFT","GOOGL","AMZN","META","TSLA","MSTR","AMD","PLTR",
+  "COIN","NFLX","JPM","V","XOM","WMT","BAC","UNH","DIS","CRM",
+  "RY","TD","CNQ","SU","BCE",
+  "ASML","SAP","AZN","NVO","SHEL","TTE","BP","SIEGY","TCEHY",
+  "TSM","BABA","PDD","JD","INFY",
+];
+
+export const BASKET_INTL_FH: Record<string, { fhTick: string; currency: string }> = {
+  NESN:{fhTick:"NESN.SW",currency:"CHF"},LVMH:{fhTick:"MC.PA",currency:"EUR"},
+  HSBA:{fhTick:"HSBA.L",currency:"GBP"},ULVR:{fhTick:"ULVR.L",currency:"GBP"},
+  "2222.SR":{fhTick:"2222.SR",currency:"SAR"},"2010.SR":{fhTick:"2010.SR",currency:"SAR"},
+  QNBK:{fhTick:"QNBK.QA",currency:"QAR"},EMIRATESNBD:{fhTick:"ENBD.DU",currency:"AED"},
+  ADNOCDIST:{fhTick:"ADNOCDIST.AD",currency:"AED"},ETISALAT:{fhTick:"ETISALAT.AD",currency:"AED"},
+  "005930":{fhTick:"005930.KS",currency:"KRW"},"9984.T":{fhTick:"9984.T",currency:"JPY"},
+  "7203.T":{fhTick:"7203.T",currency:"JPY"},"7974.T":{fhTick:"7974.T",currency:"JPY"},
+  "0700.HK":{fhTick:"0700.HK",currency:"HKD"},RELIANCE:{fhTick:"RELIANCE.NS",currency:"INR"},
+};
+
+// Commodity basket entries.
+// Precious metals + energy use metalsKey → looked up in cache["finnhub"].data.metals.
+// Ag commodities use etfSym → fetched via Finnhub WS or REST quote.
+export const BASKET_COMMODITIES: Record<string, { metalsKey?: string; etfSym?: string; base: number }> = {
+  XAU:{metalsKey:"XAU",base:3100},XAG:{metalsKey:"XAG",base:35},
+  PLATINUM:{metalsKey:"PLATINUM",base:920},PALLADIUM:{metalsKey:"PALLADIUM",base:1000},
+  COPPER:{metalsKey:"COPPER",base:5.8},WTI:{metalsKey:"WTI",base:70},
+  BRENT:{metalsKey:"BRENT",base:72},NATGAS:{metalsKey:"NATGAS",base:4},
+  WHEAT:{etfSym:"WEAT",base:5.8},CORN:{etfSym:"CORN",base:22},
+  SOYBEANS:{etfSym:"SOYB",base:24},COFFEE:{etfSym:"JO",base:45},
+  SUGAR:{etfSym:"SGG",base:35},URANIUM:{etfSym:"URA",base:28},
+  DUBAI:{etfSym:"BNO",base:35},LNG:{etfSym:"UNG",base:10},
 };
 
 export const FOREX_BASE: Record<string, number> = {

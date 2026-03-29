@@ -4,7 +4,7 @@
 // When Redis is unavailable, a plain setInterval is used as fallback.
 
 import { hlData, recordPrice } from "../state";
-import { HL_PERP_SYMS, HL_TO_APP } from "../config/assets";
+import { HL_PERP_SYMS, HL_TO_APP, HL_SCALE_FACTORS } from "../config/assets";
 import { createRepeatableWorker } from "./queue";
 
 const HL_INTERVAL_MS = 5_000;
@@ -34,9 +34,10 @@ export async function runHlTick(onPricesUpdated: () => void): Promise<void> {
 
   universe.forEach((asset: any, i: number) => {
     if (!HL_PERP_SYMS.includes(asset.name)) return;
-    const appName = HL_TO_APP[asset.name] || asset.name;
-    const markPx    = parseFloat(ctxs[i]?.markPx    || 0);
-    const prevDayPx = parseFloat(ctxs[i]?.prevDayPx || 0);
+    const appName   = HL_TO_APP[asset.name] || asset.name;
+    const scale     = HL_SCALE_FACTORS[asset.name] ?? 1; // e.g. kPEPE = 0.001
+    const markPx    = parseFloat(ctxs[i]?.markPx    || 0) * scale;
+    const prevDayPx = parseFloat(ctxs[i]?.prevDayPx || 0) * scale;
     const dayChg    = prevDayPx > 0
       ? +((markPx - prevDayPx) / prevDayPx * 100).toFixed(2)
       : 0;
@@ -44,7 +45,7 @@ export async function runHlTick(onPricesUpdated: () => void): Promise<void> {
     hlData[appName] = {
       funding:   +(parseFloat(ctxs[i]?.funding     || 0) * 100).toFixed(4),
       oi:        parseFloat(ctxs[i]?.openInterest  || 0) * markPx,
-      perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) : 0,
+      perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) * scale : 0,
       volume:    parseFloat(ctxs[i]?.dayNtlVlm     || 0),
       dayChg,
     };

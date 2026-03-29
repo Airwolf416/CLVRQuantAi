@@ -5,7 +5,7 @@
 
 import { EQUITY_SYMS, EQUITY_FH_MAP, EQUITY_BASE } from "../config/assets";
 import { cache, recordPrice } from "../state";
-import { fhQuoteSafe, fetchMetals, fetchForex, delay } from "../services/marketData";
+import { fhQuoteSafe, fetchMetals, fetchEnergyCommodities, fetchForex, delay } from "../services/marketData";
 import { createRepeatableWorker } from "./queue";
 
 const STOCK_INTERVAL_MS = 120_000;
@@ -33,12 +33,16 @@ export async function runStockTick(): Promise<void> {
     }
   } catch {}
 
-  const [metals, forex] = await Promise.all([
+  const [metals, energy, forex] = await Promise.all([
     fetchMetals(FINNHUB_KEY),
+    fetchEnergyCommodities(),
     fetchForex(),
   ]);
 
-  cache["finnhub"] = { data: { stocks, metals, forex }, ts: Date.now() };
+  // Merge energy futures into metals dict so basket pricing reads them via metalsKey
+  const allMetals = { ...metals, ...energy };
+
+  cache["finnhub"] = { data: { stocks, metals: allMetals, forex }, ts: Date.now() };
   console.log("[stock-worker] finnhub cache refreshed");
 }
 
