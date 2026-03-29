@@ -1,0 +1,129 @@
+// ── Asset symbol configuration for CLVRQuantAI ───────────────────────────────
+// Single source of truth for all symbol arrays, maps, and base prices.
+// Import from here instead of defining inline in routes.ts.
+
+export const CRYPTO_SYMS = [
+  "BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","PEPE","XRP",
+  "BNB","ADA","DOT","MATIC","UNI","AAVE","NEAR","SUI","APT","OP",
+  "TIA","SEI","JUP","ONDO","RENDER","INJ","FET","TAO","PENDLE","HBAR","TRUMP","HYPE",
+];
+
+export const CRYPTO_BASE: Record<string, number> = {
+  BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,
+  PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,MATIC:0.55,UNI:9.5,AAVE:220,
+  NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,
+  RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18,TRUMP:3.5,HYPE:31,
+};
+
+export const BINANCE_MAP: Record<string, string> = {
+  BTC:"BTCUSDT",ETH:"ETHUSDT",SOL:"SOLUSDT",WIF:"WIFUSDT",DOGE:"DOGEUSDT",
+  AVAX:"AVAXUSDT",LINK:"LINKUSDT",ARB:"ARBUSDT",PEPE:"PEPEUSDT",XRP:"XRPUSDT",
+  BNB:"BNBUSDT",ADA:"ADAUSDT",DOT:"DOTUSDT",UNI:"UNIUSDT",AAVE:"AAVEUSDT",
+  NEAR:"NEARUSDT",SUI:"SUIUSDT",APT:"APTUSDT",OP:"OPUSDT",TIA:"TIAUSDT",
+  SEI:"SEIUSDT",JUP:"JUPUSDT",ONDO:"ONDOUSDT",RENDER:"RENDERUSDT",FET:"FETUSDT",
+  HBAR:"HBARUSDT",TRUMP:"TRUMPUSDT",HYPE:"HYPEUSDT",
+};
+
+export const BINANCE_SYMS = Object.values(BINANCE_MAP);
+
+export const HL_PERP_SYMS = [
+  "BTC","ETH","SOL","WIF","DOGE","AVAX","LINK","ARB","kPEPE","XRP",
+  "BNB","ADA","DOT","MATIC","UNI","AAVE","NEAR","SUI","APT","OP",
+  "TIA","SEI","JUP","ONDO","RENDER","INJ","FET","TAO","PENDLE","HBAR","TRUMP","HYPE",
+];
+
+export const HL_TO_APP: Record<string, string> = { kPEPE: "PEPE" };
+export const APP_TO_HL: Record<string, string> = { PEPE: "kPEPE" };
+
+// Must match the frontend MarketTab EQUITY_SYMS exactly
+export const EQUITY_SYMS = [
+  "TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR",
+  "COIN","NFLX","HOOD","ORCL","TSM","GME","RIVN","BABA","HIMS","CRCL",
+];
+
+export const EQUITY_BASE: Record<string, number> = {
+  TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,
+  MSTR:310,AMD:145,PLTR:70,COIN:210,NFLX:850,HOOD:41,ORCL:148,
+  TSM:180,GME:27,RIVN:13,BABA:131,HIMS:26,CRCL:25,
+  // basket-only extras kept for fallback
+  SQ:66,SHOP:95,CRM:290,DIS:105,JPM:240,V:328,XOM:113,WMT:90,BAC:44,
+};
+
+export const EQUITY_FH_MAP: Record<string, string> = {};
+
+export const METALS_BASE: Record<string, number> = {
+  XAU:5160,XAG:84,WTI:91,BRENT:93,NATGAS:4,COPPER:5.8,PLATINUM:2150,
+};
+
+export const BASKET_YAHOO_MAP: Record<string, string> = {
+  // Crypto
+  BTC:"BTC-USD",ETH:"ETH-USD",SOL:"SOL-USD",XRP:"XRP-USD",DOGE:"DOGE-USD",
+  AVAX:"AVAX-USD",LINK:"LINK-USD",BNB:"BNB-USD",ADA:"ADA-USD",SUI:"SUI-USD",
+  DOT:"DOT-USD",HYPE:"HYPE11-USD",
+  // US Equities
+  AAPL:"AAPL",NVDA:"NVDA",MSFT:"MSFT",GOOGL:"GOOGL",AMZN:"AMZN",
+  META:"META",TSLA:"TSLA",MSTR:"MSTR",AMD:"AMD",PLTR:"PLTR",
+  COIN:"COIN",NFLX:"NFLX",JPM:"JPM",V:"V",XOM:"XOM",
+  WMT:"WMT",BAC:"BAC",UNH:"UNH",DIS:"DIS",CRM:"CRM",
+  // Canada TSX
+  RY:"RY.TO",TD:"TD.TO",CNQ:"CNQ.TO",SU:"SU.TO",BCE:"BCE.TO",
+  // Europe
+  ASML:"ASML",SAP:"SAP",NESN:"NESN.SW",LVMH:"MC.PA",
+  SHEL:"SHEL",HSBA:"HSBA.L",AZN:"AZN",NVO:"NVO",
+  SIEGY:"SIEGY",TTE:"TTE",BP:"BP",ULVR:"ULVR.L",
+  // Middle East
+  "2222.SR":"2222.SR","2010.SR":"2010.SR",
+  QNBK:"QNBK.QA",EMIRATESNBD:"ENBD.DU",ADNOCDIST:"ADNOCDIST.AD",ETISALAT:"ETISALAT.AD",
+  // Asia
+  TSM:"TSM",BABA:"BABA",TCEHY:"TCEHY",
+  "005930":"005930.KS","9984.T":"9984.T","7203.T":"7203.T",
+  "7974.T":"7974.T","0700.HK":"0700.HK",
+  PDD:"PDD",JD:"JD",RELIANCE:"RELIANCE.NS",INFY:"INFY",
+  // Commodities (futures / ETFs)
+  XAU:"GC=F",XAG:"SI=F",WTI:"CL=F",BRENT:"BZ=F",
+  NATGAS:"NG=F",COPPER:"HG=F",PLATINUM:"PL=F",PALLADIUM:"PA=F",
+  WHEAT:"ZW=F",CORN:"ZC=F",SOYBEANS:"ZS=F",
+  COFFEE:"KC=F",SUGAR:"SB=F",
+  URANIUM:"URA",DUBAI:"BZ=F",LNG:"UNG",
+};
+
+export const ENERGY_ETF_MAP: Record<string, { etfSym: string; factor: number }> = {
+  WTI:   { etfSym: "USO", factor: 0.840 },
+  BRENT: { etfSym: "BNO", factor: 2.105 },
+  NATGAS:{ etfSym: "UNG", factor: 0.32  },
+};
+
+export const FOREX_BASE: Record<string, number> = {
+  EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,
+  AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,
+  EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34,
+};
+
+export const BASKET_PRICE_TTL = 5 * 60 * 1000;
+
+export const BACKTEST_WIN_RATES: Record<string, number> = {
+  "LONG_pattern_bull_flag_NY": 0.68,     "LONG_pattern_double_bottom_NY": 0.66,
+  "LONG_pattern_bull_flag_LONDON": 0.65, "LONG_pattern_double_bottom_LONDON": 0.62,
+  "LONG_pattern_bull_flag_ASIAN": 0.57,  "LONG_pattern_double_bottom_ASIAN": 0.55,
+  "SHORT_pattern_head_shoulders_NY": 0.67,"SHORT_pattern_double_top_NY": 0.65,
+  "SHORT_pattern_bear_flag_NY": 0.64,    "SHORT_pattern_head_shoulders_LONDON": 0.63,
+  "SHORT_pattern_double_top_LONDON": 0.61,"SHORT_pattern_bear_flag_LONDON": 0.60,
+  "LONG_DEFAULT_NY": 0.57,   "LONG_DEFAULT_LONDON": 0.55,   "LONG_DEFAULT_ASIAN": 0.52,
+  "SHORT_DEFAULT_NY": 0.56,  "SHORT_DEFAULT_LONDON": 0.54,  "SHORT_DEFAULT_ASIAN": 0.51,
+};
+
+export const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: number; minOI: number }> = {
+  ASIAN:   { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
+  LONDON:  { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
+  NY:      { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
+  POST_NY: { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
+  DEFAULT: { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
+};
+
+export const HIGH_IMPACT_KEYWORDS = [
+  "FOMC","CPI","NFP","Non-Farm","Fed Rate","Interest Rate","GDP","PCE","PPI","Powell",
+];
+
+export const MOVE_WINDOW    = 5  * 60 * 1000;
+export const SIGNAL_COOLDOWN= 10 * 60 * 1000;
+export const AI_CACHE_TTL   = 5  * 60 * 1000;

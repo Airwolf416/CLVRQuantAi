@@ -1,5 +1,7 @@
 import { pool } from "./db";
 import { getUncachableResendClient } from "./resendClient";
+import { renderDailyBriefEmail } from "./services/emailTemplates";
+import { chunkArray } from "./services/ta";
 
 const BRIEF_HOUR_ET = 6;
 const BRIEF_MINUTE_ET = 0;
@@ -335,174 +337,6 @@ RULES:
   }
 }
 
-function buildTradeBlock(trade: any, label: string): string {
-  if (!trade) return "";
-  return `<div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
-    <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ ${label}</div>
-    <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">${trade.riskLabel || "🟡"} ${trade.asset || ""} ${trade.dir || ""}</div>
-    <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
-      📍 Entry: ${trade.entry || "—"}<br>
-      🛑 Stop: ${trade.stop || "—"}<br>
-      🎯 TP1: ${trade.tp1 || "—"}<br>
-      🎯 TP2: ${trade.tp2 || "—"}<br>
-      📊 Confidence: ${trade.confidence || "—"}<br>
-      ⚠️ Flags: ${trade.flags || "None"}
-    </div>
-    ${trade.edge ? `<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 ${trade.edge}</div>` : ""}
-  </div>`;
-}
-
-function unsubFooter(email: string): string {
-  const encoded = encodeURIComponent(email);
-  return `<div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525">
-    <div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">
-      You are receiving this email because you subscribed to CLVRQuant market intelligence.<br>
-      To stop receiving these emails, <a href="https://clvrquantai.com/api/unsubscribe?email=${encoded}" style="color:#4a5d80;text-decoration:underline">unsubscribe here</a>.<br>
-      CLVRQuant · 100 King St W, Toronto, ON, Canada · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a>
-    </div>
-  </div>`;
-}
-
-function buildEmailHtml(briefJson: any, dateStr: string, marketData: MarketData, isPro: boolean = false, subscriberEmail: string = ""): string {
-  const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787" : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
-  const macroRiskBadge = briefJson.macroRisk === "HIGH"
-    ? `<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:#ff4060;border:1px solid rgba(255,64,96,.4);background:rgba(255,64,96,.08)">🔴 MACRO RISK</div>`
-    : "";
-  const macroRegimeBadge = briefJson.macroRegime
-    ? `<div style="display:inline-block;margin-left:8px;padding:3px 12px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.12em;color:${briefJson.macroRegime==="RISK ON"?"#00c787":briefJson.macroRegime==="RISK OFF"?"#ff4060":"#e8c96d"};border:1px solid ${briefJson.macroRegime==="RISK ON"?"rgba(0,199,135,.4)":briefJson.macroRegime==="RISK OFF"?"rgba(255,64,96,.4)":"rgba(232,201,109,.4)"};background:${briefJson.macroRegime==="RISK ON"?"rgba(0,199,135,.08)":briefJson.macroRegime==="RISK OFF"?"rgba(255,64,96,.08)":"rgba(232,201,109,.08)"}">${briefJson.macroRegime}</div>`
-    : "";
-
-  const priceRow = (label: string, price: string, change: string, changeNum: number) => {
-    const changeColor = change === "—" ? "#8a96b2" : changeNum >= 0 ? "#00c787" : "#ff4060";
-    const arrow = change === "—" ? "" : changeNum >= 0 ? "▲ " : "▼ ";
-    return `<tr>
-      <td style="padding:12px 16px;border-bottom:1px solid #141e35;font-size:14px;font-weight:600;color:#e8e0d0">${label}</td>
-      <td style="padding:12px 16px;border-bottom:1px solid #141e35;font-family:'IBM Plex Mono',monospace;font-size:14px;color:#c5cfe0;text-align:center">${price}</td>
-      <td style="padding:12px 16px;border-bottom:1px solid #141e35;font-family:'IBM Plex Mono',monospace;font-size:13px;color:${changeColor};text-align:right;font-weight:600">${arrow}${change.replace("+", "").replace("-", "")}</td>
-    </tr>`;
-  };
-
-  const topCrypto = marketData.crypto.slice(0, 4);
-  const topFx = marketData.forex.slice(0, 4);
-
-  let priceTableRows = "";
-  for (const c of topCrypto) priceTableRows += priceRow(c.symbol + " ₿", c.price, c.change, c.changeNum);
-  for (const f of topFx) priceTableRows += priceRow(f.pair, f.price, f.change, f.changeNum);
-  for (const m of marketData.metals) priceTableRows += priceRow(m.symbol, m.price, m.change, m.changeNum);
-
-  const commentarySections = (briefJson.commentary || []).map((c: any) =>
-    `<div style="margin-bottom:24px">
-      <div style="font-size:16px;font-weight:700;color:#e8e0d0;margin-bottom:8px">${c.emoji || "✦"} ${c.title}</div>
-      <div style="font-size:13px;color:#8a96b2;line-height:1.9">${c.text}</div>
-    </div>`
-  ).join("");
-
-  const watchItems = (briefJson.watchItems || []).map((w: string) =>
-    `<li style="margin-bottom:8px;color:#c5cfe0;font-size:13px;line-height:1.7;padding-left:4px">• ${w}</li>`
-  ).join("");
-
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#050709;font-family:'Barlow',Helvetica,Arial,sans-serif">
-<div style="max-width:600px;margin:0 auto;background:#0c1220">
-
-  <div style="background:linear-gradient(135deg,#0c1220 0%,#141e35 100%);padding:28px 24px;text-align:center;border-bottom:1px solid rgba(201,168,76,.2)">
-    <div style="font-family:Georgia,serif;font-size:28px;font-weight:900;color:#e8c96d;letter-spacing:0.02em">CLVRQuant</div>
-    <div style="font-family:monospace;font-size:9px;color:#5a6a8a;letter-spacing:0.25em;margin-top:4px">DAILY INTELLIGENCE BRIEF</div>
-    <div style="font-family:monospace;font-size:11px;color:#8a96b2;margin-top:8px">${dateStr}</div>
-  </div>
-
-  <div style="padding:24px 24px 8px">
-    <div style="font-family:Georgia,serif;font-size:20px;font-weight:700;color:#e8e0d0;line-height:1.4;margin-bottom:12px;font-style:italic">"${briefJson.headline || "Markets in Motion"}"</div>
-    <div>
-      <div style="display:inline-block;padding:4px 14px;border-radius:2px;font-family:monospace;font-size:9px;letter-spacing:0.15em;color:${sentimentColor};border:1px solid ${sentimentColor};margin-bottom:4px">${(briefJson.marketSentiment || "NEUTRAL").toUpperCase()}</div>${macroRegimeBadge}${macroRiskBadge}
-    </div>
-    ${briefJson.macroRiskNote && briefJson.macroRisk === "HIGH" ? `<div style="margin-top:10px;padding:8px 14px;background:rgba(255,64,96,.06);border:1px solid rgba(255,64,96,.2);border-radius:3px;font-family:monospace;font-size:10px;color:#ff6080;line-height:1.6">⚠️ ${briefJson.macroRiskNote} — Reduce position sizing. Max 2x leverage.</div>` : ""}
-  </div>
-
-  <div style="padding:16px 24px">
-    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:4px">📊 Market Summary</div>
-    <table style="width:100%;border-collapse:collapse;margin:12px 0;background:rgba(5,7,9,.4);border:1px solid #141e35;border-radius:4px">
-      <thead>
-        <tr>
-          <th style="padding:10px 16px;text-align:left;font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.15em;border-bottom:1px solid #1e2d4a">INSTRUMENT</th>
-          <th style="padding:10px 16px;text-align:center;font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.15em;border-bottom:1px solid #1e2d4a">PRICE</th>
-          <th style="padding:10px 16px;text-align:right;font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.15em;border-bottom:1px solid #1e2d4a">CHANGE</th>
-        </tr>
-      </thead>
-      <tbody>${priceTableRows}</tbody>
-    </table>
-  </div>
-
-  <div style="padding:8px 24px 24px">
-    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:16px">🧠 Market Commentary &amp; Outlook</div>
-    <div style="height:2px;background:linear-gradient(90deg,#c9a84c,transparent);margin-bottom:20px"></div>
-    ${commentarySections}
-  </div>
-
-  ${briefJson.topTrade ? `<div style="padding:0 24px 24px">
-    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:12px">${isPro ? "⚡ Today's Trade Ideas — Pro (4 Ideas)" : "⚡ Today's Top Trade Idea"}</div>
-    ${buildTradeBlock(briefJson.topTrade, isPro ? "TRADE IDEA #1" : "TODAY'S TOP TRADE IDEA")}
-    ${isPro && Array.isArray(briefJson.additionalTrades) ? briefJson.additionalTrades.map((t: any, i: number) => buildTradeBlock(t, `TRADE IDEA #${i + 2}`)).join("") : ""}
-    ${!isPro ? `<div style="margin-top:8px;padding:10px 14px;background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">🔒 <strong style="color:#c9a84c">Pro members get 4 trade ideas daily.</strong> Upgrade at <a href="${APP_URL}" style="color:#e8c96d;text-decoration:none">clvrquantai.com</a></div>` : ""}
-  </div>` : ""}
-
-  ${briefJson.topTrade ? `<div style="padding:0 24px 16px">
-    <div style="padding:12px 16px;background:rgba(255,160,0,.04);border:1px solid rgba(255,160,0,.18);border-radius:4px">
-      <div style="font-family:monospace;font-size:8px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:5px;font-weight:700">⚠️ TRADE IDEA DISCLAIMER</div>
-      <div style="font-size:11px;color:#6a7a9a;line-height:1.75">These trade ideas are based on market data and conditions available <strong style="color:#8a9ab2">at the time this brief was generated</strong>. Prices, funding rates, and risk factors can change rapidly between generation and when you read this. <strong style="color:#8a9ab2">Always confirm current prices before entering any position.</strong> CLVRQuant AI is not a financial advisor. All content is for research and educational purposes only. <strong style="color:#c5a060">Operate with caution. Never risk more than you can afford to lose.</strong></div>
-    </div>
-  </div>` : ""}
-
-  ${watchItems ? `<div style="padding:0 24px 24px">
-    <div style="background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;padding:16px 20px">
-      <div style="font-size:16px;font-weight:700;color:#e8e0d0;margin-bottom:12px">🚀 Key Things to Watch Today</div>
-      <ul style="list-style:none;padding:0;margin:0">${watchItems}</ul>
-    </div>
-  </div>` : ""}
-
-  ${briefJson.riskNote ? `<div style="padding:0 24px 24px">
-    <div style="background:rgba(255,64,96,.04);border:1px solid rgba(255,64,96,.15);border-radius:4px;padding:14px 20px">
-      <div style="font-family:monospace;font-size:9px;color:#ff4060;letter-spacing:0.15em;margin-bottom:6px;font-weight:700">RISK LEVEL: ${(briefJson.riskLevel || "MEDIUM").toUpperCase()}</div>
-      <div style="font-size:12px;color:#8a96b2;line-height:1.7">${briefJson.riskNote}</div>
-    </div>
-  </div>` : ""}
-
-  <div style="padding:0 24px 24px">
-    <a href="${APP_URL}" style="display:block;text-align:center;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-size:15px;font-weight:700;padding:14px 24px;border-radius:4px;text-decoration:none;font-style:italic;letter-spacing:0.02em">Open CLVRQuant Dashboard →</a>
-  </div>
-
-  <div style="padding:0 24px 24px">
-    <div style="background:#0a0f1a;border:1px solid #141e35;border-radius:4px;padding:16px 20px">
-      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.2em;margin-bottom:10px;font-weight:700">📱 INSTALL AS APP ON YOUR PHONE / IPAD</div>
-      <div style="font-size:12px;color:#8a96b2;line-height:1.9">
-        <strong style="color:#c5cfe0">iPhone / iPad (Safari):</strong><br>
-        1. Open <a href="${APP_URL}" style="color:#e8c96d;text-decoration:underline">${APP_URL.replace("https://", "")}</a> in Safari<br>
-        2. Tap the <strong style="color:#c5cfe0">Share</strong> button (square with arrow)<br>
-        3. Scroll down and tap <strong style="color:#c5cfe0">"Add to Home Screen"</strong><br>
-        4. Tap <strong style="color:#c5cfe0">"Add"</strong> — CLVRQuant now opens like a native app<br><br>
-        <strong style="color:#c5cfe0">Android (Chrome):</strong><br>
-        1. Open <a href="${APP_URL}" style="color:#e8c96d;text-decoration:underline">${APP_URL.replace("https://", "")}</a> in Chrome<br>
-        2. Tap the <strong style="color:#c5cfe0">three-dot menu</strong> (top right)<br>
-        3. Tap <strong style="color:#c5cfe0">"Add to Home screen"</strong> or <strong style="color:#c5cfe0">"Install app"</strong><br>
-        4. CLVRQuant will appear as an app icon on your home screen
-      </div>
-    </div>
-  </div>
-
-  <div style="padding:16px 24px;border-top:1px solid #141e35;text-align:center">
-    <div style="font-family:Georgia,serif;font-size:14px;color:#e8c96d;margin-bottom:8px">CLVRQuant</div>
-    <div style="font-family:monospace;font-size:8px;color:#3a4a6a;letter-spacing:0.12em;line-height:2">
-      For any issues or inquiries, please email <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">Support@CLVRQuantAI.com</a><br>
-      NOT FINANCIAL ADVICE · AI-POWERED RESEARCH FOR EDUCATIONAL PURPOSES ONLY<br>
-      ALL DATA IS INFORMATIONAL — TRADE AT YOUR OWN RISK
-    </div>
-  </div>
-
-  ${subscriberEmail ? unsubFooter(subscriberEmail) : ""}
-
-</div>
-</body></html>`;
-}
 
 async function sendDailyBriefEmails() {
   const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -553,60 +387,74 @@ async function sendDailyBriefEmails() {
     return;
   }
 
-  console.log(`[daily-brief] Sending to ${subs.length} subscribers...`);
+  console.log(`[daily-brief] Sending to ${subs.length} subscribers in parallel batches of 50...`);
   let sentCount = 0;
 
   try {
     const { client } = await getUncachableResendClient();
+    const BATCH_SIZE = 50;
+    const RATE_LIMIT_DELAY = 600; // ms between batches — stays under Resend's 2 req/s limit
 
-    for (let i = 0; i < subs.length; i++) {
-      const sub = subs[i];
-      const isPro = sub.tier === "pro";
-      // Stay under Resend's 2 req/s rate limit
-      if (i > 0) await new Promise(r => setTimeout(r, 600));
-      try {
-        const html = buildEmailHtml(briefJson, today, marketData, isPro, sub.email);
-        const briefText = [
-          `CLVRQuant Morning Brief — ${today}`,
-          ``,
-          briefJson.headline || "",
-          briefJson.summary || "",
-          ``,
-          `TOP THEMES:`,
-          ...(briefJson.themes || []).map((t: any) => `• ${t}`),
-          ``,
-          `MARKET SNAPSHOT:`,
-          ...(briefJson.marketSnapshot || []).map((m: any) => `  ${m.label}: ${m.value} ${m.change || ""}`),
-          ``,
-          `Visit https://clvrquantai.com for live data and AI analysis.`,
-          ``,
-          `© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
-          `To unsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}`,
-        ].join("\n");
-        const resp = await client.emails.send({
-          from: "CLVRQuant <hello@clvrquantai.com>",
-          to: sub.email,
-          replyTo: "MikeClaver@CLVRQuantAI.com",
-          subject: `CLVRQuant Morning Brief — ${today}`,
-          headers: {
-            "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}>`,
-            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-          },
-          text: briefText,
-          html,
-        });
-        if ((resp as any).error) {
-          console.log(`[daily-brief] Resend error for ${sub.email}:`, JSON.stringify((resp as any).error));
-        } else {
-          console.log(`[daily-brief] Sent to ${sub.email} [${sub.tier}] — id: ${(resp as any).data?.id || "unknown"}`);
+    const chunks = chunkArray(subs, BATCH_SIZE);
+
+    for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+      const chunk = chunks[chunkIdx];
+      if (chunkIdx > 0) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY));
+
+      const results = await Promise.allSettled(
+        chunk.map(async (sub) => {
+          const isPro = sub.tier === "pro" || sub.tier === "elite";
+          const html = renderDailyBriefEmail(briefJson, today, marketData, isPro, sub.email);
+          const plainText = [
+            `CLVRQuant Morning Brief — ${today}`,
+            ``,
+            briefJson.headline || "",
+            briefJson.summary || "",
+            ``,
+            `TOP THEMES:`,
+            ...(briefJson.themes || []).map((t: any) => `• ${t}`),
+            ``,
+            `MARKET SNAPSHOT:`,
+            ...(briefJson.marketSnapshot || []).map((m: any) => `  ${m.label}: ${m.value} ${m.change || ""}`),
+            ``,
+            `Visit https://clvrquantai.com for live data and AI analysis.`,
+            ``,
+            `© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+            `To unsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}`,
+          ].join("\n");
+
+          const resp = await client.emails.send({
+            from: "CLVRQuant <hello@clvrquantai.com>",
+            to: sub.email,
+            replyTo: "MikeClaver@CLVRQuantAI.com",
+            subject: `CLVRQuant Morning Brief — ${today}`,
+            headers: {
+              "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}>`,
+              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
+            text: plainText,
+            html,
+          });
+
+          if ((resp as any).error) {
+            throw new Error(JSON.stringify((resp as any).error));
+          }
+          return { email: sub.email, tier: sub.tier, id: (resp as any).data?.id || "unknown" };
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          const { email, tier, id } = result.value;
+          console.log(`[daily-brief] Sent to ${email} [${tier}] — id: ${id}`);
           sentCount++;
+        } else {
+          console.log(`[daily-brief] Failed in batch ${chunkIdx + 1}:`, result.reason?.message || result.reason);
         }
-      } catch (e: any) {
-        console.log(`[daily-brief] Failed to send to ${sub.email}:`, e.message);
       }
     }
-    console.log(`[daily-brief] Done — ${sentCount}/${subs.length} emails sent`);
-    // Update the count (the slot was already reserved at the top)
+
+    console.log(`[daily-brief] Done — ${sentCount}/${subs.length} emails sent across ${chunks.length} batch(es)`);
     await pool.query(
       `UPDATE daily_briefs_log SET recipient_count = $1 WHERE date_key = $2`,
       [sentCount, dateKey]
@@ -672,7 +520,7 @@ async function sendApologyBriefEmails() {
       // Stay well under Resend's 2 req/s rate limit
       if (i > 0) await new Promise(r => setTimeout(r, 600));
       try {
-        const briefHtml = buildEmailHtml(briefJson, today, marketData, isPro);
+        const briefHtml = renderDailyBriefEmail(briefJson, today, marketData, isPro, sub.email);
         const apologyHtml = briefHtml.replace(
           `<div style="padding:24px 24px 8px">`,
           apologyNote + `<div style="padding:24px 24px 8px">`
@@ -776,7 +624,7 @@ export async function sendServiceApologyEmail(): Promise<{ sent: number; skipped
     CLVRQuant · Market Intelligence for Serious Traders<br>
     © ${new Date().getFullYear()} CLVRQuantAI.com · All rights reserved
   </div>
-  ${unsubFooter(r.email)}
+  <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">You are receiving this email because you subscribed to CLVRQuant market intelligence.<br>To stop receiving these emails, <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(r.email)}" style="color:#4a5d80;text-decoration:underline">unsubscribe here</a>.<br>CLVRQuant · 100 King St W, Toronto, ON, Canada · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div>
 </div></body></html>`;
       const resp = await client.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
@@ -870,7 +718,7 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
     © ${new Date().getFullYear()} CLVRQuantAI.com · All rights reserved<br>
     Questions? <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80">Support@CLVRQuantAI.com</a>
   </div>
-  ${unsubFooter(r.email)}
+  <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">You are receiving this email because you subscribed to CLVRQuant market intelligence.<br>To stop receiving these emails, <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(r.email)}" style="color:#4a5d80;text-decoration:underline">unsubscribe here</a>.<br>CLVRQuant · 100 King St W, Toronto, ON, Canada · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div>
 </div></body></html>`;
       const resp = await client.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
