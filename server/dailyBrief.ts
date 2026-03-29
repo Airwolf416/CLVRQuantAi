@@ -402,8 +402,11 @@ async function sendDailyBriefEmails() {
       const chunk = chunks[chunkIdx];
       if (chunkIdx > 0) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
 
-      const results = await Promise.allSettled(
-        chunk.map(async (sub) => {
+      // Send sequentially with a 250 ms gap to stay under Resend's 5 req/s rate limit.
+      for (let emailIdx = 0; emailIdx < chunk.length; emailIdx++) {
+        if (emailIdx > 0) await new Promise(r => setTimeout(r, 250));
+        const sub = chunk[emailIdx];
+        try {
           const isPro = sub.tier === "pro" || sub.tier === "elite";
           const html = renderDailyBriefEmail(briefJson, today, marketData, isPro, sub.email);
           const plainText = [
@@ -440,17 +443,11 @@ async function sendDailyBriefEmails() {
           if ((resp as any).error) {
             throw new Error(JSON.stringify((resp as any).error));
           }
-          return { email: sub.email, tier: sub.tier, id: (resp as any).data?.id || "unknown" };
-        })
-      );
-
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          const { email, tier, id } = result.value;
-          console.log(`[daily-brief] Sent to ${email} [${tier}] — id: ${id}`);
+          const id = (resp as any).data?.id || "unknown";
+          console.log(`[daily-brief] Sent to ${sub.email} [${sub.tier}] — id: ${id}`);
           sentCount++;
-        } else {
-          console.log(`[daily-brief] Failed in batch ${chunkIdx + 1}:`, result.reason?.message || result.reason);
+        } catch (err: any) {
+          console.log(`[daily-brief] Failed for ${sub.email}:`, err?.message || err);
         }
       }
     }

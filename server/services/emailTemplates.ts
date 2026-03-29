@@ -4,7 +4,12 @@
 
 import Handlebars from "handlebars";
 import { readFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+// ESM-compatible __dirname (tsx runs files as ESM modules)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = dirname(__filename);
 
 // ── Template cache: compiled once per process ──────────────────────────────────
 
