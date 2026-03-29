@@ -11,6 +11,7 @@ import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./i
 import QRCode from "qrcode";
 
 // ── Modular imports ───────────────────────────────────────────────────────────
+import { getIO } from "./socketServer";
 import {
   CRYPTO_SYMS, CRYPTO_BASE, BINANCE_MAP, BINANCE_SYMS,
   HL_PERP_SYMS, HL_TO_APP, APP_TO_HL,
@@ -1042,8 +1043,9 @@ function startFinnhubWebSocket() {
             batch[commodityMapping] = { price: +price.toFixed(3), chg, type: "metal" };
           }
         }
-        if (Object.keys(batch).length && sseClients.size > 0) {
-          broadcastSSE(batch);
+        if (Object.keys(batch).length) {
+          if (sseClients.size > 0) broadcastSSE(batch);
+          getIO()?.emit("market_update", batch);
         }
       } catch {}
     });
