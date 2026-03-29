@@ -486,41 +486,32 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // COMMODITIES TAB
 // ─────────────────────────────────────────────────────────────────────────────
-function CommoditiesTab({ metalPrices, flashes, storePerps }) {
-  const [sub, setSub] = useState("spot");
+function CommoditiesTab({ metalPrices, flashes }) {
   const anyLive = Object.values(metalPrices).some(d => d.live);
 
   return (
     <div>
       <PanelHeader
         title="Commodities · Gold-API & Finnhub"
-        subtitle="gold-api.com · metals spot  |  finnhub · energy ETF proxies"
+        subtitle="gold-api.com · XAU/XAG/Pt/Cu  |  finnhub OANDA CFD · WTI/Brent/NatGas"
         live={anyLive}
       />
-      <SubTabs
-        tabs={[{ val: "spot", label: "SPOT · GOLD-API/FH" }, { val: "perp", label: "PERP · HYPERLIQUID" }]}
-        value={sub} onChange={setSub}
-      />
-
-      {sub === "spot" ? (
-        <div>
-          {METALS_SYMS.map(sym => {
-            const d = metalPrices[sym] || {};
-            return (
-              <FlashRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} price={d.price} chg={d.chg} flash={flashes[sym]}>
-                <Badge label={d.live ? "LIVE" : "SIM"} color={d.live ? C.green : C.orange} />
-              </FlashRow>
-            );
-          })}
-        </div>
-      ) : (
-        <div>
-          {METALS_SYMS.map(sym => {
-            const perp = hlPerpFor(sym, storePerps);
-            return <PerpRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} asset={perp} />;
-          })}
-        </div>
-      )}
+      <div style={{
+        fontFamily: MONO, fontSize: 8, color: C.muted, marginBottom: 8,
+        letterSpacing: "0.06em", padding: "4px 2px",
+      }}>
+        SPOT PRICES ONLY — Commodity perpetual markets are not listed on Hyperliquid
+      </div>
+      <div>
+        {METALS_SYMS.map(sym => {
+          const d = metalPrices[sym] || {};
+          return (
+            <FlashRow key={sym} sym={sym} label={METAL_LABEL[sym] || sym} price={d.price} chg={d.chg} flash={flashes[sym]}>
+              <Badge label={d.live ? "LIVE" : "LOADING"} color={d.live ? C.green : C.muted} />
+            </FlashRow>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -598,7 +589,7 @@ export default function MarketTab({ cryptoPrices = {}, equityPrices = {}, metalP
       {/* ── Content ── */}
       {cls === "crypto"      && <CryptoTab      cryptoPrices={cryptoPrices} flashes={flashes} storePerps={storePerps} storeByClass={storeByClass} />}
       {cls === "equities"    && <EquitiesTab    equityPrices={equityPrices} flashes={flashes} storePerps={storePerps} />}
-      {cls === "commodities" && <CommoditiesTab metalPrices={metalPrices}   flashes={flashes} storePerps={storePerps} />}
+      {cls === "commodities" && <CommoditiesTab metalPrices={metalPrices}   flashes={flashes} />}
       {cls === "forex"       && <ForexTab       forexPrices={forexPrices}   flashes={flashes} />}
     </div>
   );
