@@ -33,7 +33,14 @@ import {
   type PricePoint,
 } from "./services/ta";
 
-import { broadcastSignalPushParallel, startNotificationWorker } from "./workers/notifications";
+import {
+  broadcastSignalPushParallel,
+  startNotificationWorker,
+  enqueueDailyBrief,
+  enqueuePromoEmail,
+  enqueueServiceApology,
+  enqueueApologyBrief,
+} from "./workers/notifications";
 import { startHlRefreshWorker } from "./workers/hlRefreshWorker";
 import { startStockRefreshWorker } from "./workers/stockRefreshWorker";
 import {
@@ -2867,9 +2874,8 @@ Every level must be technically defensible. Return JSON only.`;
 
   app.post("/api/send-test-brief", async (req, res) => {
     try {
-      const { sendDailyBriefEmails } = await import("./dailyBrief");
-      sendDailyBriefEmails().catch((e: any) => console.log("[test-brief] Error:", e.message));
-      res.json({ ok: true, message: "Brief generation started — check server logs" });
+      enqueueDailyBrief().catch((e: any) => console.log("[test-brief] Enqueue error:", e.message));
+      res.json({ ok: true, message: "Brief enqueued — check server logs" });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -2885,9 +2891,8 @@ Every level must be technically defensible. Return JSON only.`;
       if (userEmail !== "mikeclaver@gmail.com") {
         return res.status(403).json({ error: "Owner only" });
       }
-      const { sendApologyBriefEmails } = await import("./dailyBrief");
-      sendApologyBriefEmails().catch((e: any) => console.log("[apology-brief] Error:", e.message));
-      res.json({ ok: true, message: "Apology brief sending started — check server logs" });
+      await enqueueApologyBrief();
+      res.json({ ok: true, message: "Apology brief enqueued — check server logs" });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -2900,8 +2905,7 @@ Every level must be technically defensible. Return JSON only.`;
       const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
       const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
       if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
-      const { sendServiceApologyEmail } = await import("./dailyBrief");
-      const result = await sendServiceApologyEmail();
+      const result = await enqueueServiceApology();
       res.json({ ok: true, ...result });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2915,8 +2919,7 @@ Every level must be technically defensible. Return JSON only.`;
       const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
       const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
       if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
-      const { sendPromoEmail } = await import("./dailyBrief");
-      const result = await sendPromoEmail();
+      const result = await enqueuePromoEmail();
       res.json({ ok: true, ...result });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
