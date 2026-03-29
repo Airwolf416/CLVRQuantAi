@@ -2,6 +2,10 @@ import { pool } from "./db";
 import { getUncachableResendClient } from "./resendClient";
 import { renderDailyBriefEmail } from "./services/emailTemplates";
 import { chunkArray } from "./services/ta";
+import { enqueueDailyBrief } from "./workers/notifications";
+
+const BATCH_SIZE = 50;
+const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
 
 const BRIEF_HOUR_ET = 6;
 const BRIEF_MINUTE_ET = 0;
@@ -392,14 +396,11 @@ async function sendDailyBriefEmails() {
 
   try {
     const { client } = await getUncachableResendClient();
-    const BATCH_SIZE = 50;
-    const RATE_LIMIT_DELAY = 600; // ms between batches — stays under Resend's 2 req/s limit
-
     const chunks = chunkArray(subs, BATCH_SIZE);
 
     for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
       const chunk = chunks[chunkIdx];
-      if (chunkIdx > 0) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY));
+      if (chunkIdx > 0) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
 
       const results = await Promise.allSettled(
         chunk.map(async (sub) => {
@@ -511,37 +512,47 @@ async function sendApologyBriefEmails() {
     subs.push({ email: ownerEmail, name: "Mike", tier: "pro" });
   }
 
-  console.log(`[daily-brief] Sending apology brief to ${subs.length} recipients...`);
+  console.log(`[daily-brief] Sending apology brief to ${subs.length} recipients in parallel batches of ${BATCH_SIZE}...`);
+  let sentCount = 0;
   try {
     const { client } = await getUncachableResendClient();
-    for (let i = 0; i < subs.length; i++) {
-      const sub = subs[i];
-      const isPro = sub.tier === "pro";
-      // Stay well under Resend's 2 req/s rate limit
-      if (i > 0) await new Promise(r => setTimeout(r, 600));
-      try {
-        const briefHtml = renderDailyBriefEmail(briefJson, today, marketData, isPro, sub.email);
-        const apologyHtml = briefHtml.replace(
-          `<div style="padding:24px 24px 8px">`,
-          apologyNote + `<div style="padding:24px 24px 8px">`
-        );
-        const resp = await client.emails.send({
-          from: "CLVRQuant <noreply@clvrquantai.com>",
-          to: sub.email,
-          replyTo: "MikeClaver@CLVRQuantAI.com",
-          subject: `📊 CLVRQuant Morning Brief — ${today}`,
-          html: apologyHtml,
-        });
-        if ((resp as any).error) {
-          console.log(`[daily-brief] Resend API error for ${sub.email}:`, JSON.stringify((resp as any).error));
+    const chunks = chunkArray(subs, BATCH_SIZE);
+
+    for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+      if (chunkIdx > 0) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));
+      const chunk = chunks[chunkIdx];
+
+      const results = await Promise.allSettled(
+        chunk.map(async (sub) => {
+          const isPro = sub.tier === "pro" || sub.tier === "elite";
+          const briefHtml = renderDailyBriefEmail(briefJson, today, marketData, isPro, sub.email);
+          const apologyHtml = briefHtml.replace(
+            `<div style="padding:24px 24px 8px">`,
+            apologyNote + `<div style="padding:24px 24px 8px">`
+          );
+          const resp = await client.emails.send({
+            from: "CLVRQuant <noreply@clvrquantai.com>",
+            to: sub.email,
+            replyTo: "MikeClaver@CLVRQuantAI.com",
+            subject: `📊 CLVRQuant Morning Brief — ${today}`,
+            html: apologyHtml,
+          });
+          if ((resp as any).error) throw new Error(JSON.stringify((resp as any).error));
+          return { email: sub.email, id: (resp as any).data?.id || "unknown" };
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          console.log(`[daily-brief] Apology sent to ${result.value.email} — id: ${result.value.id}`);
+          sentCount++;
         } else {
-          console.log(`[daily-brief] Apology brief sent to ${sub.email} [${sub.tier}] — id: ${(resp as any).data?.id || "unknown"}`);
+          console.log(`[daily-brief] Apology batch ${chunkIdx + 1} failure:`, result.reason?.message || result.reason);
         }
-      } catch (e: any) {
-        console.log(`[daily-brief] Failed to send apology to ${sub.email}:`, e.message);
       }
     }
-    console.log("[daily-brief] Apology brief complete");
+
+    console.log(`[daily-brief] Apology brief complete — ${sentCount}/${subs.length} sent across ${chunks.length} batch(es)`);
   } catch (e: any) {
     console.log("[daily-brief] Resend client error:", e.message);
   }
@@ -578,15 +589,18 @@ export async function sendServiceApologyEmail(): Promise<{ sent: number; skipped
     recipients.push({ email: ownerEmail, name: "Mike" });
   }
 
-  console.log(`[service-apology] Sending apology to ${recipients.length} recipients...`);
+  console.log(`[service-apology] Sending apology to ${recipients.length} recipients in parallel batches of ${BATCH_SIZE}...`);
   const { client } = await getUncachableResendClient();
   let sent = 0;
+  const chunks = chunkArray(recipients, BATCH_SIZE);
 
-  for (let i = 0; i < recipients.length; i++) {
-    const r = recipients[i];
-    if (i > 0) await new Promise(res => setTimeout(res, 600));
-    try {
-      const html = `
+  for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+    if (chunkIdx > 0) await new Promise(res => setTimeout(res, RATE_LIMIT_DELAY_MS));
+    const chunk = chunks[chunkIdx];
+
+    const results = await Promise.allSettled(
+      chunk.map(async (r) => {
+        const html = `
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Service Update — CLVRQuant</title></head>
 <body style="margin:0;padding:0;background:#050709;font-family:Georgia,serif">
@@ -626,19 +640,29 @@ export async function sendServiceApologyEmail(): Promise<{ sent: number; skipped
   </div>
   <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">You are receiving this email because you subscribed to CLVRQuant market intelligence.<br>To stop receiving these emails, <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(r.email)}" style="color:#4a5d80;text-decoration:underline">unsubscribe here</a>.<br>CLVRQuant · 100 King St W, Toronto, ON, Canada · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div>
 </div></body></html>`;
-      const resp = await client.emails.send({
-        from: "CLVRQuant <noreply@clvrquantai.com>",
-        to: r.email,
-        replyTo: "Support@CLVRQuantAI.com",
-        subject: "A Message from the CLVRQuant Team",
-        html,
-      });
-      if (!(resp as any).error) { sent++; console.log(`[service-apology] Sent to ${r.email}`); }
-    } catch (e: any) {
-      console.log(`[service-apology] Failed for ${r.email}:`, e.message);
+        const resp = await client.emails.send({
+          from: "CLVRQuant <noreply@clvrquantai.com>",
+          to: r.email,
+          replyTo: "Support@CLVRQuantAI.com",
+          subject: "A Message from the CLVRQuant Team",
+          html,
+        });
+        if ((resp as any).error) throw new Error(JSON.stringify((resp as any).error));
+        return r.email;
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        console.log(`[service-apology] Sent to ${result.value}`);
+        sent++;
+      } else {
+        console.log(`[service-apology] Batch ${chunkIdx + 1} failure:`, result.reason?.message || result.reason);
+      }
     }
   }
-  console.log(`[service-apology] Done — ${sent}/${recipients.length} sent`);
+
+  console.log(`[service-apology] Done — ${sent}/${recipients.length} sent across ${chunks.length} batch(es)`);
   return { sent, skipped: recipients.length - sent };
 }
 
@@ -660,17 +684,20 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
   );
   const recipients: { id: number; email: string; name: string; referral_code: string }[] = usersResult.rows;
 
-  console.log(`[promo-email] Sending promo to ${recipients.length} recipients...`);
+  console.log(`[promo-email] Sending promo to ${recipients.length} recipients in parallel batches of ${BATCH_SIZE}...`);
   const { client } = await getUncachableResendClient();
   let sent = 0;
+  const chunks = chunkArray(recipients, BATCH_SIZE);
 
-  for (let i = 0; i < recipients.length; i++) {
-    const r = recipients[i];
-    if (i > 0) await new Promise(res => setTimeout(res, 600));
+  for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+    if (chunkIdx > 0) await new Promise(res => setTimeout(res, RATE_LIMIT_DELAY_MS));
+    const chunk = chunks[chunkIdx];
+
+    const results = await Promise.allSettled(
+      chunk.map(async (r) => {
     const refCode = r.referral_code || "CLVR-REF-XXXXXX";
     const appUrl = "https://clvrquantai.com";
-    try {
-      const html = `
+        const html = `
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Share CLVRQuant — Earn Free Pro Access</title></head>
 <body style="margin:0;padding:0;background:#050709;font-family:Georgia,serif">
@@ -720,19 +747,29 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
   </div>
   <div style="padding:12px 24px 20px;text-align:center;border-top:1px solid #0d1525"><div style="font-family:monospace;font-size:8px;color:#2a3650;letter-spacing:0.1em;line-height:2">You are receiving this email because you subscribed to CLVRQuant market intelligence.<br>To stop receiving these emails, <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(r.email)}" style="color:#4a5d80;text-decoration:underline">unsubscribe here</a>.<br>CLVRQuant · 100 King St W, Toronto, ON, Canada · <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none">Support@CLVRQuantAI.com</a></div></div>
 </div></body></html>`;
-      const resp = await client.emails.send({
-        from: "CLVRQuant <noreply@clvrquantai.com>",
-        to: r.email,
-        replyTo: "MikeClaver@CLVRQuantAI.com",
-        subject: "🎁 Share CLVRQuant & Earn 1 Week Free Pro",
-        html,
-      });
-      if (!(resp as any).error) { sent++; console.log(`[promo-email] Sent to ${r.email}`); }
-    } catch (e: any) {
-      console.log(`[promo-email] Failed for ${r.email}:`, e.message);
+        const resp = await client.emails.send({
+          from: "CLVRQuant <noreply@clvrquantai.com>",
+          to: r.email,
+          replyTo: "MikeClaver@CLVRQuantAI.com",
+          subject: "🎁 Share CLVRQuant & Earn 1 Week Free Pro",
+          html,
+        });
+        if ((resp as any).error) throw new Error(JSON.stringify((resp as any).error));
+        return r.email;
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        console.log(`[promo-email] Sent to ${result.value}`);
+        sent++;
+      } else {
+        console.log(`[promo-email] Batch ${chunkIdx + 1} failure:`, result.reason?.message || result.reason);
+      }
     }
   }
-  console.log(`[promo-email] Done — ${sent}/${recipients.length} sent`);
+
+  console.log(`[promo-email] Done — ${sent}/${recipients.length} sent across ${chunks.length} batch(es)`);
   return { sent, skipped: recipients.length - sent };
 }
 
@@ -752,7 +789,7 @@ export function startDailyBriefScheduler() {
         if (!alreadySent) {
           console.log("[daily-brief] Missed 6 AM brief detected on startup — sending catch-up brief now");
           lastBriefDate = dateKey;
-          await sendDailyBriefEmails();
+          await enqueueDailyBrief();
         } else {
           lastBriefDate = dateKey;
           console.log("[daily-brief] Today's brief already sent — skipping catch-up");
@@ -772,7 +809,7 @@ export function startDailyBriefScheduler() {
 
     if (hour === BRIEF_HOUR_ET && minute === BRIEF_MINUTE_ET && dateKey !== lastBriefDate) {
       lastBriefDate = dateKey;
-      sendDailyBriefEmails().catch(e => console.log("[daily-brief] Error:", e.message));
+      enqueueDailyBrief().catch(e => console.log("[daily-brief] Enqueue error:", e.message));
     }
   }, 30_000);
 }
