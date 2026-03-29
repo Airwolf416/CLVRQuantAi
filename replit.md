@@ -83,6 +83,16 @@ Stripe is integrated for subscription management, handling product definitions, 
 -   **Twitter API45 (via RapidAPI)**: For Twitter/X influencer feeds (requires `RAPIDAPI_KEY`).
 -   **CryptoPanic**: Hot news (optional, requires `CRYPTOPANIC_API_KEY`).
 
+### Modular Server Architecture
+
+-   **`server/config/assets.ts`**: Single source of truth for all symbol arrays, maps, and base prices. Exports: `CRYPTO_SYMS`, `EQUITY_SYMS`, `METALS_BASE`, `FOREX_BASE`, `HL_PERP_SYMS`, `HL_TO_APP`, `HL_SCALE_FACTORS` (kPEPE ×0.001 fix), `BASKET_EQUITIES_US`, `BASKET_INTL_FH`, `BASKET_COMMODITIES`, `ENERGY_ETF_MAP` (intentionally empty — energy uses Yahoo Finance futures), `SESSION_THRESHOLDS`, `BACKTEST_WIN_RATES`, and other constants.
+-   **`server/services/ta.ts`**: Pure technical analysis functions (RSI, ATR, Momentum, ZScore, Bollinger, pattern detection, EMA, backtest win-rate lookup).
+-   **`server/services/marketData.ts`**: Data-fetching functions: `fhQuoteSafe`, `fetchForex`, `fetchMetals`, `fetchEnergyCommodities` (Yahoo Finance CL=F/BZ=F/NG=F), `fetchBinancePrices`.
+-   **`server/workers/hlRefreshWorker.ts`**: Hyperliquid perp data every 5s. Applies `HL_SCALE_FACTORS` (kPEPE ÷1000) so PEPE price is correctly per-token, not per-1000-tokens.
+-   **`server/workers/stockRefreshWorker.ts`**: Finnhub REST + metals + energy futures + forex every 120s. Energy merged into `cache["finnhub"].data.metals` so basket pricing reads WTI/BRENT/NATGAS via `metalsKey`.
+-   **`server/workers/notifications.ts`**: 4 job types (daily_brief, promo_email, service_apology, apology_brief), Promise.allSettled batches of 50.
+-   **`server/state.ts`**: Shared in-process state (hlData, livePrices, priceHistory, metalsRef, sseClients, etc.).
+
 ### NPM Packages
 
 -   **@solana/web3.js**: Solana SDK for wallet transactions.

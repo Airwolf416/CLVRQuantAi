@@ -18,6 +18,7 @@ import {
   METALS_BASE, BASKET_YAHOO_MAP, ENERGY_ETF_MAP, FOREX_BASE,
   BASKET_PRICE_TTL, SESSION_THRESHOLDS, HIGH_IMPACT_KEYWORDS,
   MOVE_WINDOW, SIGNAL_COOLDOWN, AI_CACHE_TTL,
+  BASKET_EQUITIES_US, BASKET_INTL_FH, BASKET_COMMODITIES,
 } from "./config/assets";
 
 import {
@@ -187,9 +188,6 @@ function getSessionET(): { session: string; label: string; warning: string | nul
 }
 
 
-function calcATR(sym: string): number {
-  return taCalcATR(priceHistory[sym]);
-}
 
 function calcMasterScore(sym: string, dir: string): { score: number; riskOn: number; reasoning: string[] } {
   const hl = hlData[sym];
@@ -233,20 +231,6 @@ function calcMasterScore(sym: string, dir: string): { score: number; riskOn: num
   return { score, riskOn, reasoning };
 }
 
-// ─── STATISTICAL: Z-SCORE OF RECENT PRICE MOVE ───────────────────────────────
-function calcZScore(sym: string): { zScore: number; label: string; pts: number } {
-  return taCalcZScore(priceHistory[sym]);
-}
-
-// ─── TECHNICAL: BOLLINGER BAND BREAKOUT ──────────────────────────────────────
-function calcBollingerBreakout(sym: string, dir: string): { breakout: boolean; pctFromBand: number; pts: number } {
-  return taCalcBollingerBreakout(priceHistory[sym], dir);
-}
-
-// ─── PATTERN DETECTION: BUILD SYNTHETIC CANDLES FROM PRICE HISTORY ───────────
-function buildSyntheticCandles(sym: string, count = 60): { c: number; h: number; l: number; o: number }[] {
-  return taBuildSyntheticCandles(priceHistory[sym], count);
-}
 
 
 // ─── ADVANCED 6-DIMENSION SIGNAL SCORE ───────────────────────────────────────
@@ -281,12 +265,12 @@ function computeAdvancedScore(sym: string, dir: string, session: string, pattern
     else if (dir === "SHORT" && cur < ema20 && ema20 < ema50) { technicalPts += 10; techDetails.push("EMA bear stack ✓"); }
     else techDetails.push("EMA neutral");
   }
-  const bb = calcBollingerBreakout(sym, dir);
+  const bb = taCalcBollingerBreakout(priceHistory[sym], dir);
   if (bb.breakout) { technicalPts += 8; techDetails.push(`BB breakout ${bb.pctFromBand}% from band`); }
   technicalPts = Math.min(30, technicalPts);
 
   // ── 2. Statistical (max 20 pts): Z-score standard deviations ────────────────
-  const zs = calcZScore(sym);
+  const zs = taCalcZScore(priceHistory[sym]);
   const statisticalPts = Math.min(20, zs.pts);
 
   // ── 3. News Sentiment (max 15 pts): CryptoPanic per-token sentiment ──────────
@@ -638,10 +622,6 @@ function calcLiquidityIndex() {
   };
 }
 
-function detectPatterns(candles: any[]): { patterns: string[]; detected: { head_and_shoulders: boolean; bull_flag: boolean } } {
-  return taDetectPatterns(candles) as any;
-}
-
 function detectMoves() {
   const now = Date.now();
   for (const sym of CRYPTO_SYMS) {
@@ -732,7 +712,7 @@ function detectMoves() {
     const fundingStr = hl?.funding ? ` Funding: ${hl.funding >= 0 ? "+" : ""}${(hl.funding).toFixed(4)}%/8h.` : "";
     const oiStr = hl?.oi ? ` OI: $${(hl.oi / 1e6).toFixed(0)}M.` : "";
 
-    const atr = calcATR(sym);
+    const atr = taCalcATR(priceHistory[sym]);
     const entry = current.price;
 
     // FIX 6a: Minimum TP distance — at least 0.5% for TP1, 1.0% for TP2
@@ -827,9 +807,9 @@ function detectMoves() {
     if (sessionInfo.session === "NY") tags.push({ l: "NY SESSION", c: "green" });
 
     // ── 6-DIMENSION ADVANCED SCORING ────────────────────────────────────────
-    const syntheticCandles = buildSyntheticCandles(sym, 60);
+    const syntheticCandles = taBuildSyntheticCandles(priceHistory[sym], 60);
     const { patterns: detectedPatterns } = syntheticCandles.length >= 20
-      ? detectPatterns(syntheticCandles) : { patterns: [] as string[] };
+      ? taDetectPatterns(syntheticCandles) : { patterns: [] as string[] };
     const advanced = computeAdvancedScore(sym, dir, sessionInfo.session || "DEFAULT", detectedPatterns);
     if (advanced.isStrong) tags.push({ l: "⚡ STRONG SIGNAL", c: "green" });
     if (detectedPatterns.length > 0) {
@@ -1669,34 +1649,6 @@ export async function registerRoutes(
     AVAX:"avalanche-2",LINK:"chainlink",BNB:"binancecoin",ADA:"cardano",
     SUI:"sui",DOT:"polkadot",HYPE:"hyperliquid",
   };
-  const BASKET_EQUITIES_US = [
-    "AAPL","NVDA","MSFT","GOOGL","AMZN","META","TSLA","MSTR","AMD","PLTR",
-    "COIN","NFLX","JPM","V","XOM","WMT","BAC","UNH","DIS","CRM",
-    "RY","TD","CNQ","SU","BCE",
-    "ASML","SAP","AZN","NVO","SHEL","TTE","BP","SIEGY","TCEHY",
-    "TSM","BABA","PDD","JD","INFY",
-  ];
-  const BASKET_INTL_FH: Record<string, { fhTick: string; currency: string }> = {
-    NESN:{fhTick:"NESN.SW",currency:"CHF"},LVMH:{fhTick:"MC.PA",currency:"EUR"},
-    HSBA:{fhTick:"HSBA.L",currency:"GBP"},ULVR:{fhTick:"ULVR.L",currency:"GBP"},
-    "2222.SR":{fhTick:"2222.SR",currency:"SAR"},"2010.SR":{fhTick:"2010.SR",currency:"SAR"},
-    QNBK:{fhTick:"QNBK.QA",currency:"QAR"},EMIRATESNBD:{fhTick:"ENBD.DU",currency:"AED"},
-    ADNOCDIST:{fhTick:"ADNOCDIST.AD",currency:"AED"},ETISALAT:{fhTick:"ETISALAT.AD",currency:"AED"},
-    "005930":{fhTick:"005930.KS",currency:"KRW"},"9984.T":{fhTick:"9984.T",currency:"JPY"},
-    "7203.T":{fhTick:"7203.T",currency:"JPY"},"7974.T":{fhTick:"7974.T",currency:"JPY"},
-    "0700.HK":{fhTick:"0700.HK",currency:"HKD"},RELIANCE:{fhTick:"RELIANCE.NS",currency:"INR"},
-  };
-  const BASKET_COMMODITIES: Record<string, { metalsKey?: string; etfSym?: string; base: number }> = {
-    XAU:{metalsKey:"XAU",base:3100},XAG:{metalsKey:"XAG",base:35},
-    PLATINUM:{metalsKey:"PLATINUM",base:920},PALLADIUM:{metalsKey:"PALLADIUM",base:1000},
-    COPPER:{metalsKey:"COPPER",base:5.8},WTI:{metalsKey:"WTI",base:70},
-    BRENT:{metalsKey:"BRENT",base:72},NATGAS:{metalsKey:"NATGAS",base:4},
-    WHEAT:{etfSym:"WEAT",base:5.8},CORN:{etfSym:"CORN",base:22},
-    SOYBEANS:{etfSym:"SOYB",base:24},COFFEE:{etfSym:"JO",base:45},
-    SUGAR:{etfSym:"SGG",base:35},URANIUM:{etfSym:"URA",base:28},
-    DUBAI:{etfSym:"BNO",base:35},LNG:{etfSym:"UNG",base:10},
-  };
-
   // Seed initial basket price cache with base prices so first request is instant
   (function seedBasketCache() {
     const init: Record<string, any> = {};
@@ -2197,7 +2149,7 @@ export async function registerRoutes(
       if (!ind) return res.status(500).json({ error: "Insufficient candle data for indicators." });
 
       const confluence      = computeMultiTFConfluence(candles15m, candles4h, candles1d);
-      const patternResult   = detectPatterns(candles);
+      const patternResult   = taDetectPatterns(candles);
       const bayesian        = computeBayesianScore(ind, confluence, patternResult.patterns, fng.signal);
       const macroKillSwitch = checkMacroKillSwitch(macroCache.data || []);
 
