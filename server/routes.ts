@@ -34,6 +34,19 @@ import {
 } from "./services/ta";
 
 import { broadcastSignalPushParallel, startNotificationWorker } from "./workers/notifications";
+import { startHlRefreshWorker } from "./workers/hlRefreshWorker";
+import { startStockRefreshWorker } from "./workers/stockRefreshWorker";
+import {
+  hlData, priceHistory, livePrices, cache, metalsRef,
+  sseClients, serverPriceCache, alertLastFiredMs,
+  liveSignals, nextSignalId, tokenSentimentCache,
+  lastSignalTime, whaleAlerts, sharedMacroCache,
+  recordPrice, broadcastSSE,
+  updateSharedMacroCache,
+} from "./state";
+import {
+  fetchBinancePrices, fetchForex, fetchMetals, fhQuoteSafe, delay,
+} from "./services/marketData";
 
 // ── VAPID Web Push (locked-screen notifications) ─────────────────────────────
 const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
@@ -78,11 +91,9 @@ async function sendWebPushToUser(userId: string, title: string, body: string, ta
 }
 
 const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
+let finnhubFetchLock: Promise<any> | null = null;
 
-const metalsRef: Record<string, {price:number,ts:number}> = {};
 
-const cache: Record<string, { data: any; ts: number }> = {};
-const FINNHUB_TTL = 120000;
 
 // ── SHARED AI RESPONSE CACHE ──────────────────────────────────────────────
 // One Claude call per unique prompt per 5 minutes, regardless of user count.
@@ -135,25 +146,11 @@ setInterval(() => {
   }
 }, 600000);
 
-let finnhubFetchLock: Promise<any> | null = null;
-let stockRefreshRunning = false;
-let hlRefreshRunning = false;
-const hlData: Record<string, { funding: number; oi: number; perpPrice: number; volume: number; dayChg: number }> = {};
 
-const priceHistory: Record<string, { price: number; ts: number }[]> = {};
-const liveSignals: any[] = [];
-let signalIdCounter = 10000;
 
 // ─── PER-TOKEN NEWS SENTIMENT CACHE (populated by background loop) ────────────
-const tokenSentimentCache: Record<string, { score: number; label: string; bullish: number; bearish: number; ts: number }> = {};
-const lastSignalTime: Record<string, number> = {};
 
-const whaleAlerts: { sym: string; ts: number; type: string; amount: string }[] = [];
 
-// ─── MACRO RISK ENGINE ──────────────────────────────────────────────────────
-// Shared cache so detectMoves can access upcoming macro events
-let sharedMacroCache: { events: any[]; ts: number } = { events: [], ts: 0 };
-export function updateSharedMacroCache(events: any[]) { sharedMacroCache = { events, ts: Date.now() }; }
 
 function getMacroRisk(): { highRisk: boolean; flags: string[]; confPenalty: number } {
   const flags: string[] = [];
@@ -182,13 +179,6 @@ function getSessionET(): { session: string; label: string; warning: string | nul
   return { session: "OVERNIGHT", label: "Overnight", warning: "Late session — Asian open, reduced liquidity" };
 }
 
-function recordPrice(sym: string, price: number) {
-  if (!price || price <= 0) return;
-  const now = Date.now();
-  if (!priceHistory[sym]) priceHistory[sym] = [];
-  priceHistory[sym].push({ price, ts: now });
-  priceHistory[sym] = priceHistory[sym].filter(p => now - p.ts < 15 * 60 * 1000);
-}
 
 function calcATR(sym: string): number {
   return taCalcATR(priceHistory[sym]);
@@ -840,7 +830,7 @@ function detectMoves() {
     }
 
     const signal = {
-      id: signalIdCounter++,
+      id: nextSignalId(),
       icon,
       dir,
       token: sym,
@@ -899,268 +889,12 @@ function fmt2(p: number, sym: string): string {
   return p.toFixed(6);
 }
 
-function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
-async function fetchBinancePrices(): Promise<Record<string, any>> {
-  const symbols = encodeURIComponent(JSON.stringify(BINANCE_SYMS));
-  const r = await fetch(
-    `https://api.binance.us/api/v3/ticker/24hr?symbols=${symbols}`,
-    { signal: AbortSignal.timeout(5000) }
-  );
-  if (!r.ok) throw new Error(`Binance ${r.status}`);
-  const data: any[] = await r.json();
-  const reverseMap: Record<string, string> = {};
-  for (const [k, v] of Object.entries(BINANCE_MAP)) reverseMap[v] = k;
-  const result: Record<string, any> = {};
-  for (const t of data) {
-    const sym = reverseMap[t.symbol];
-    if (sym) {
-      const price = parseFloat(t.lastPrice);
-      if (price > 0) {
-        recordPrice(sym, price);
-        result[sym] = {
-          price,
-          chg: parseFloat(t.priceChangePercent),
-          funding: hlData[sym]?.funding || 0,
-          oi: hlData[sym]?.oi || 0,
-          perpPrice: hlData[sym]?.perpPrice || 0,
-          volume: hlData[sym]?.volume || 0,
-          live: true,
-        };
-      }
-    }
-  }
-  const missingSym = CRYPTO_SYMS.filter(s => !result[s]);
-  if (missingSym.length > 0) {
-    try {
-      const hlr = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "allMids" }),
-        signal: AbortSignal.timeout(5000),
-      });
-      const mids: any = await hlr.json();
-      for (const sym of missingSym) {
-        if (mids[sym]) {
-          const price = parseFloat(mids[sym]);
-          recordPrice(sym, price);
-          result[sym] = {
-            price,
-            chg: hlData[sym]?.dayChg ?? (CRYPTO_BASE[sym] ? +((price - CRYPTO_BASE[sym]) / CRYPTO_BASE[sym] * 100).toFixed(2) : 0),
-            funding: hlData[sym]?.funding || 0,
-            oi: hlData[sym]?.oi || 0,
-            perpPrice: price,
-            volume: hlData[sym]?.volume || 0,
-            live: true,
-          };
-        }
-      }
-    } catch {}
-  }
-  detectMoves();
-  return result;
-}
 
-async function startHyperliquidRefreshLoop() {
-  if (hlRefreshRunning) return;
-  hlRefreshRunning = true;
-  while (true) {
-    try {
-      const [r1, r2] = await Promise.all([
-        fetch("https://api.hyperliquid.xyz/info", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "allMids" }),
-          signal: AbortSignal.timeout(5000),
-        }),
-        fetch("https://api.hyperliquid.xyz/info", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "metaAndAssetCtxs" }),
-          signal: AbortSignal.timeout(5000),
-        }),
-      ]);
-      const mids: any = await r1.json();
-      const meta: any = await r2.json();
-      const universe = meta[0].universe;
-      const ctxs = meta[1];
-      universe.forEach((asset: any, i: number) => {
-        if (HL_PERP_SYMS.includes(asset.name)) {
-          const appName = HL_TO_APP[asset.name] || asset.name;
-          const markPx = parseFloat(ctxs[i]?.markPx || 0);
-          const prevDayPx = parseFloat(ctxs[i]?.prevDayPx || 0);
-          const dayChg = prevDayPx > 0 ? +((markPx - prevDayPx) / prevDayPx * 100).toFixed(2) : 0;
-          hlData[appName] = {
-            funding: +(parseFloat(ctxs[i]?.funding || 0) * 100).toFixed(4),
-            oi: parseFloat(ctxs[i]?.openInterest || 0) * markPx,
-            perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) : 0,
-            volume: parseFloat(ctxs[i]?.dayNtlVlm || 0),
-            dayChg,
-          };
-          if (markPx > 0) recordPrice(appName, markPx);
-        }
-      });
-      detectMoves();
-    } catch (e: any) {
-      console.error("Hyperliquid refresh error:", e.message);
-    }
-    await delay(5000);
-  }
-}
 
-async function fhQuoteSafe(symbol: string): Promise<{price:number,chg:number,live:boolean}> {
-  try {
-    const r = await fetch(
-      `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_KEY}`,
-      { signal: AbortSignal.timeout(5000) }
-    );
-    if (r.status === 429 || r.status === 503) {
-      throw new Error(`rate limited ${r.status}`);
-    }
-    if (!r.ok) throw new Error(`Finnhub ${r.status}`);
-    const d: any = await r.json();
-    if (!d || !d.c || d.c === 0) throw new Error("zero price");
-    return {
-      price: d.c,
-      chg: d.dp ?? (d.pc ? ((d.c - d.pc) / d.pc * 100) : 0),
-      live: true
-    };
-  } catch {
-    return { price: EQUITY_BASE[symbol] || 0, chg: 0, live: false };
-  }
-}
 
-async function startStockRefreshLoop() {
-  if (stockRefreshRunning) return;
-  stockRefreshRunning = true;
 
-  while (true) {
-    try {
-      const stocks: Record<string, any> = {};
-      for (const sym of EQUITY_SYMS) {
-        const fhSym = EQUITY_FH_MAP[sym] || sym;
-        const q = await fhQuoteSafe(fhSym);
-        if (!q.live) q.price = EQUITY_BASE[sym] || q.price;
-        stocks[sym] = q;
-        await delay(1500);
-      }
 
-      try {
-        const vixQ = await fhQuoteSafe("UVXY");
-        if (vixQ.live && vixQ.price > 0) {
-          const approxVIX = vixQ.price * 0.65 + 12;
-          recordPrice("VIX", approxVIX);
-        }
-      } catch {}
-
-      const [metals, forex] = await Promise.all([fetchMetals(), fetchForex()]);
-      const result = { stocks, metals, forex };
-      cache["finnhub"] = { data: result, ts: Date.now() };
-    } catch (e: any) {
-      console.error("Stock refresh error:", e.message);
-    }
-
-    await delay(120000);
-  }
-}
-
-async function fetchForex(): Promise<Record<string, any>> {
-  const forex: Record<string, any> = {};
-  try {
-    const r = await fetch("https://api.exchangerate-api.com/v4/latest/USD",
-      { signal: AbortSignal.timeout(5000) });
-    if (!r.ok) throw new Error(`ExchangeRate ${r.status}`);
-    const data: any = await r.json();
-    const rates = data.rates || {};
-    const pairs: Record<string, { to: string; invert: boolean }> = {
-      EURUSD: { to: "EUR", invert: true },
-      GBPUSD: { to: "GBP", invert: true },
-      USDJPY: { to: "JPY", invert: false },
-      USDCHF: { to: "CHF", invert: false },
-      AUDUSD: { to: "AUD", invert: true },
-      USDCAD: { to: "CAD", invert: false },
-      NZDUSD: { to: "NZD", invert: true },
-      USDMXN: { to: "MXN", invert: false },
-      USDZAR: { to: "ZAR", invert: false },
-      USDTRY: { to: "TRY", invert: false },
-      USDSGD: { to: "SGD", invert: false },
-    };
-    const crossPairs: Record<string, { base: string; quote: string }> = {
-      EURGBP: { base: "EUR", quote: "GBP" },
-      EURJPY: { base: "EUR", quote: "JPY" },
-      GBPJPY: { base: "GBP", quote: "JPY" },
-    };
-    for (const [sym, cfg] of Object.entries(pairs)) {
-      const rate = rates[cfg.to];
-      if (rate) {
-        const price = cfg.invert ? +(1 / rate).toFixed(4) : +rate.toFixed(4);
-        const base = FOREX_BASE[sym];
-        forex[sym] = { price, chg: base ? +((price - base) / base * 100).toFixed(2) : 0, live: true };
-      } else {
-        forex[sym] = { price: FOREX_BASE[sym], chg: 0, live: false };
-      }
-    }
-    for (const [sym, cfg] of Object.entries(crossPairs)) {
-      const baseRate = rates[cfg.base];
-      const quoteRate = rates[cfg.quote];
-      if (baseRate && quoteRate) {
-        const price = +(quoteRate / baseRate).toFixed(4);
-        const base = FOREX_BASE[sym];
-        forex[sym] = { price, chg: base ? +((price - base) / base * 100).toFixed(2) : 0, live: true };
-      } else {
-        forex[sym] = { price: FOREX_BASE[sym], chg: 0, live: false };
-      }
-    }
-  } catch {
-    for (const sym of Object.keys(FOREX_BASE)) {
-      forex[sym] = { price: FOREX_BASE[sym], chg: 0, live: false };
-    }
-  }
-  return forex;
-}
-
-async function fetchMetals(): Promise<Record<string, any>> {
-  const metals: Record<string, any> = {};
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  for (const sym of ["XAU", "XAG", "XPT", "HG"] as const) {
-    const appSym = sym === "XPT" ? "PLATINUM" : sym === "HG" ? "COPPER" : sym;
-    try {
-      const r = await fetch(
-        `https://api.gold-api.com/price/${sym}`,
-        { signal: AbortSignal.timeout(5000) }
-      );
-      if (r.ok) {
-        const d: any = await r.json();
-        if (d?.price && d.price > 0) {
-          const now = Date.now();
-          if (!metalsRef[appSym] || now - metalsRef[appSym].ts > DAY_MS) {
-            metalsRef[appSym] = { price: d.price, ts: now };
-          }
-          const ref = metalsRef[appSym].price;
-          const chg = ref ? +((d.price - ref) / ref * 100).toFixed(2) : 0;
-          metals[appSym] = { price: d.price, chg, live: true };
-          continue;
-        }
-      }
-    } catch {}
-    metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
-  }
-  for (const [appSym, cfg] of Object.entries(ENERGY_ETF_MAP)) {
-    try {
-      const q = await fhQuoteSafe(cfg.etfSym);
-      if (q.live && q.price > 0) {
-        const commodityPrice = +(q.price * cfg.factor).toFixed(2);
-        metals[appSym] = { price: commodityPrice, chg: q.chg, live: true };
-      } else {
-        metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
-      }
-    } catch {
-      metals[appSym] = { price: METALS_BASE[appSym] || 0, chg: 0, live: false };
-    }
-    await delay(300);
-  }
-  return metals;
-}
 
 // ─── Finnhub WebSocket for real-time equity + commodity ETF prices ───
 const FH_WS_SYMS: Record<string, string> = {};
@@ -1182,12 +916,8 @@ const FOREX_FH_SYMS: Record<string, string> = {
   "OANDA:USD_TRY":"USDTRY","OANDA:USD_SGD":"USDSGD",
 };
 
-const livePrices: Record<string, { price: number; chg: number; ts: number; type: string }> = {};
-const sseClients: Set<Response> = new Set();
 
 // ── Server-side price cache for alert checking (crypto via Binance REST) ──────
-const serverPriceCache: Record<string, { price: number; chg: number; updatedAt: number }> = {};
-const alertLastFiredMs: Map<number, number> = new Map();
 const ALERT_COOLDOWN_MS = 5 * 60 * 1000; // don't re-fire same alert within 5 min
 
 async function refreshServerPriceCache() {
@@ -1251,12 +981,6 @@ async function checkServerAlerts() {
   }
 }
 
-function broadcastSSE(data: Record<string, any>) {
-  const msg = `data: ${JSON.stringify(data)}\n\n`;
-  for (const res of sseClients) {
-    try { res.write(msg); } catch { sseClients.delete(res); }
-  }
-}
 
 let fhWsConnected = false;
 function startFinnhubWebSocket() {
@@ -1429,8 +1153,8 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   await seedAccessCodes();
-  startStockRefreshLoop();
-  startHyperliquidRefreshLoop();
+  startStockRefreshWorker();
+  startHlRefreshWorker(detectMoves);
   startNotificationWorker();
   // Delay WS startup by 5s to let server settle and avoid 429 on rapid restarts
   setTimeout(startFinnhubWebSocket, 5000);
@@ -1465,6 +1189,7 @@ export async function registerRoutes(
     }
     try {
       const result = await fetchBinancePrices();
+      detectMoves();
       cache["crypto"] = { data: result, ts: Date.now() };
       res.json(result);
     } catch (e: any) {
@@ -2018,7 +1743,7 @@ export async function registerRoutes(
           const batch = intlEntries.slice(i, i + CONCURRENCY);
           await Promise.all(batch.map(async ([appSym, { fhTick, currency }]) => {
             try {
-              const q = await fhQuoteSafe(fhTick);
+              const q = await fhQuoteSafe(fhTick, FINNHUB_KEY);
               if (q.price > 0) results[appSym] = { price: q.price, chg: q.chg, currency, live: q.live };
             } catch {}
           }));
@@ -2038,7 +1763,7 @@ export async function registerRoutes(
             results[appSym] = { price: lp.price, chg: lp.chg, currency: "USD", live: true };
           } else if (FINNHUB_KEY) {
             try {
-              const q = await fhQuoteSafe(etfSym);
+              const q = await fhQuoteSafe(etfSym, FINNHUB_KEY);
               if (q.price > 0) results[appSym] = { price: q.price, chg: q.chg, currency: "USD", live: q.live };
             } catch {}
           }
