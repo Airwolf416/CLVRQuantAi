@@ -417,6 +417,10 @@ export default function AITab() {
       setStep(LOAD_STEPS[5]);
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || "✦ PRO FEATURE — Upgrade to Pro to unlock CLVR Quant AI.");
+        }
         const txt = await response.text();
         throw new Error(`Analysis failed (${response.status}): ${txt}`);
       }

@@ -147,6 +147,31 @@ function checkAiRateLimit(userId: string, isPro: boolean): boolean {
   return true;
 }
 
+/**
+ * Returns the effective tier for a user, enforcing access-code expiry.
+ * If promo_expires_at has passed (and the user has no active Stripe subscription),
+ * the DB is updated to 'free' and 'free' is returned so AI gates block immediately.
+ */
+async function getEffectiveTier(user: any): Promise<string> {
+  if (!user) return "free";
+  // Owner always elite
+  if (user.email === OWNER_EMAIL) return "elite";
+  // Active Stripe subscription — trust the DB tier (Stripe webhooks manage this)
+  if (user.stripeSubscriptionId) return user.tier || "free";
+  // Check access-code / promo expiry
+  if (user.promoExpiresAt && new Date(user.promoExpiresAt) < new Date()) {
+    // Expired — downgrade to free in DB so subsequent checks are fast
+    try {
+      await pool.query(
+        "UPDATE users SET tier = 'free', promo_code = NULL, promo_expires_at = NULL WHERE id = $1 AND tier != 'free'",
+        [user.id]
+      );
+    } catch (_) { /* best-effort */ }
+    return "free";
+  }
+  return user.tier || "free";
+}
+
 // Cleanup stale AI cache entries every 10 minutes
 setInterval(() => {
   const now = Date.now();
@@ -2144,6 +2169,20 @@ export async function registerRoutes(
   app.post("/api/quant", async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
+
+    // Auth + tier gate — Quant Engine is Pro/Elite only
+    const quantUserId = (req.session as any)?.userId;
+    if (!quantUserId) return res.status(401).json({ error: "Sign in required to use CLVR Quant." });
+    const quantUser = await storage.getUser(quantUserId);
+    if (!quantUser) return res.status(401).json({ error: "Sign in required to use CLVR Quant." });
+    const quantTier = await getEffectiveTier(quantUser);
+    if (quantTier !== "pro" && quantTier !== "elite") {
+      return res.status(403).json({ error: "CLVR Quant is a Pro feature. Upgrade to Pro to unlock full AI-powered analysis." });
+    }
+    if (!checkAiRateLimit(quantUserId, true)) {
+      return res.status(429).json({ error: "Rate limit reached. You can make up to 60 AI requests per hour on Pro." });
+    }
+
     try {
       const { ticker, marketType, userQuery, riskId, timeframeId, assetClass, twitterContext } = req.body;
       if (!ticker || !marketType || !riskId || !timeframeId) return res.status(400).json({ error: "Missing required parameters." });
@@ -2313,7 +2352,8 @@ Every level must be technically defensible. Return JSON only.`;
     if (!dbUser) {
       return res.status(401).json({ error: "Sign in required to use AI." });
     }
-    const isPro = dbUser.tier === "pro" || dbUser.email === "mikeclaver@gmail.com";
+    const effectiveTier = await getEffectiveTier(dbUser);
+    const isPro = effectiveTier === "pro" || effectiveTier === "elite";
     if (!isPro) {
       return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock CLVR AI analysis." });
     }
@@ -3692,10 +3732,10 @@ Every level must be technically defensible. Return JSON only.`;
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) return res.status(401).json({ error: "Invalid email or password" });
       const ownerMatch = user.email === OWNER_EMAIL;
-      const tier = ownerMatch ? "elite" : user.tier;
       if (ownerMatch && user.tier !== "elite") {
         await pool.query("UPDATE users SET tier = 'elite' WHERE id = $1", [user.id]);
       }
+      const tier = ownerMatch ? "elite" : await getEffectiveTier(user);
       const mustChangePassword = !!(user as any).mustChangePassword;
       (req.session as any).userId = user.id;
       req.session.save(() => {
@@ -3731,7 +3771,7 @@ Every level must be technically defensible. Return JSON only.`;
     try {
       const user = await storage.getUser(userId);
       if (!user) return res.json({ user: null });
-      const tier = user.email === OWNER_EMAIL ? "elite" : user.tier;
+      const tier = await getEffectiveTier(user);
       const pendingVerification = !user.emailVerified && !!user.emailVerificationToken;
       res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification } });
     } catch {
@@ -3942,7 +3982,7 @@ Every level must be technically defensible. Return JSON only.`;
     try {
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
-      const tier = user.email === OWNER_EMAIL ? "elite" : user.tier;
+      const tier = await getEffectiveTier(user);
       const subRow = await pool.query("SELECT active FROM subscribers WHERE email = $1", [user.email]);
       const dailyEmail = subRow.rows.length > 0 ? subRow.rows[0].active : false;
       let stripeInfo: any = null;
