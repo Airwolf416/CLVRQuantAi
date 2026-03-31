@@ -147,6 +147,9 @@ function checkAiRateLimit(userId: string, isPro: boolean): boolean {
   return true;
 }
 
+// Module-level constant so getEffectiveTier (below) and registerRoutes both share it
+const OWNER_EMAIL = "mikeclaver@gmail.com";
+
 /**
  * Returns the effective tier for a user, enforcing access-code expiry.
  * If promo_expires_at has passed (and the user has no active Stripe subscription),
@@ -3232,7 +3235,6 @@ Every level must be technically defensible. Return JSON only.`;
   });
 
   const OWNER_CODE = process.env.OWNER_CODE || "CLVR-OWNER-2026";
-  const OWNER_EMAIL = "mikeclaver@gmail.com";
 
   async function isOwner(userId: string): Promise<boolean> {
     if (!userId) return false;
