@@ -2169,6 +2169,127 @@ export async function registerRoutes(
     }
   }
 
+  // ── SIGNAL SUPPRESSION ENGINE (6 rules run before signal finalization) ────────
+  function checkSignalSuppressionRules(params: {
+    ticker: string; cls: string; ind: any;
+    candles1h: any[] | null; candles1d: any[] | null; candles15m: any[] | null;
+    bayesian: any; macroKillSwitch: any; fundingRate: number;
+  }) {
+    const { cls, ind, candles1h, candles1d, candles15m, bayesian, macroKillSwitch, fundingRate } = params;
+    const isRiskAsset = cls === "crypto" || cls === "equity" || cls === "commodity";
+
+    const triggered: { id: number; name: string; action: "SUPPRESS"|"DOWNGRADE"|"FLAG"; message: string }[] = [];
+    const flagsForAI: string[] = [];
+    let adjustedProbability = bayesian.probability;
+    let convictionDowngraded = false;
+
+    // ── RULE 1 — MACRO EVENT OVERRIDE ─────────────────────────────────────────
+    if (!macroKillSwitch.safe && isRiskAsset) {
+      const adjusted = bayesian.probability - 15;
+      if (adjusted < 80) {
+        triggered.push({ id:1, name:"MACRO EVENT OVERRIDE", action:"SUPPRESS",
+          message:`SIGNAL SUPPRESSED — MACRO EVENT OVERRIDE (${macroKillSwitch.nearest_event?.name || "HIGH IMPACT EVENT"})` });
+      } else {
+        adjustedProbability = adjusted;
+        convictionDowngraded = true;
+        triggered.push({ id:1, name:"MACRO EVENT OVERRIDE", action:"DOWNGRADE",
+          message:`⚠️ MACRO RISK EVENT ACTIVE — Conviction -15pts (${macroKillSwitch.nearest_event?.name} in ${macroKillSwitch.nearest_event?.hours_away}h)` });
+        flagsForAI.push(`⚠️ MACRO RISK EVENT ACTIVE — ${macroKillSwitch.nearest_event?.name} in ${macroKillSwitch.nearest_event?.hours_away}h. Conviction reduced 15pts. Downgrade any STRONG_LONG/STRONG_SHORT by one tier.`);
+      }
+    }
+
+    // ── RULE 2 — INTRADAY TREND FILTER (1H lower highs + lower lows) ──────────
+    let rule2DowntrendDetected = false;
+    if (candles1h && candles1h.length >= 5) {
+      const recent = candles1h.slice(-5);
+      const lhCount = recent.slice(1).filter((c: any, i: number) => c.h < recent[i].h).length;
+      const llCount = recent.slice(1).filter((c: any, i: number) => c.l < recent[i].l).length;
+      if (lhCount >= 3 && llCount >= 3) {
+        rule2DowntrendDetected = true;
+        triggered.push({ id:2, name:"INTRADAY TREND FILTER", action:"FLAG",
+          message:"⚠️ SUPPRESSED — 1H DOWNTREND STRUCTURE INTACT (lower highs + lower lows)" });
+        flagsForAI.push("⚠️ 1H DOWNTREND STRUCTURE INTACT (lower highs and lower lows confirmed over last 5 bars). Do NOT issue LONG or STRONG_LONG. If no valid SHORT setup exists, return NEUTRAL.");
+      }
+    }
+
+    // ── RULE 3 — MARKET OPEN VOLATILITY WINDOW (9:30–9:50 AM ET) ─────────────
+    const nowUtc = new Date();
+    const etOffsetMins = -240; // EDT (UTC-4); in EST (winter) use -300
+    const etMs = nowUtc.getTime() + etOffsetMins * 60000;
+    const etDate = new Date(etMs);
+    const etTotalMins = etDate.getUTCHours() * 60 + etDate.getUTCMinutes();
+    const inNYWindow = etTotalMins >= 570 && etTotalMins < 590; // 9:30–9:50 AM ET
+    if (inNYWindow) {
+      let confirmedBid = false;
+      if (candles15m && candles15m.length >= 3) {
+        const r = candles15m.slice(-3);
+        confirmedBid = r[1].l > r[0].l && r[2].l > r[1].l; // ascending lows = bid confirmed
+      }
+      if (bayesian.probability < 80 || !confirmedBid) {
+        triggered.push({ id:3, name:"NY OPEN VOLATILITY", action:"SUPPRESS",
+          message:"⚠️ NY OPEN VOLATILITY WINDOW — ENTRY RISK ELEVATED (9:30–9:50 AM ET, conviction or bid unconfirmed)" });
+      } else {
+        flagsForAI.push("⚠️ NY OPEN VOLATILITY WINDOW (9:30–9:50 AM ET) — High conviction + confirmed bid detected. Proceed cautiously, widen stops by 0.5× ATR.");
+      }
+    }
+
+    // ── RULE 4 — SUPPORT CONFIRMATION REQUIREMENT ─────────────────────────────
+    if (ind.nearestSupport && ind.nearestSupport > 0) {
+      const proxPct = ((ind.currentPrice - ind.nearestSupport) / ind.nearestSupport) * 100;
+      const nearSupport = proxPct >= 0 && proxPct < 1.5;
+      if (nearSupport) {
+        const lastC = candles1h && candles1h.length > 0 ? candles1h[candles1h.length - 1] : null;
+        const rejectionWick = lastC ? (lastC.c - lastC.l) / Math.max(lastC.h - lastC.l, 0.0001) > 0.35 : false;
+        const volSpike = (ind.volumeRatio ?? ind.volRatio ?? 1) > 1.5 || ind.volumeSignal === "SURGE";
+        const negativeFunding = fundingRate < -0.005;
+        const oversold = ind.rsi < 30;
+        if (!rejectionWick && !volSpike && !negativeFunding && !oversold) {
+          adjustedProbability -= 10;
+          triggered.push({ id:4, name:"SUPPORT UNCONFIRMED", action:"DOWNGRADE",
+            message:"⚠️ SUPPORT UNCONFIRMED — AWAITING STRUCTURE (no rejection wick, vol spike, negative funding, or oversold RSI)" });
+          flagsForAI.push("⚠️ SUPPORT UNCONFIRMED — AWAITING STRUCTURE. Reduce conviction by 10pts. Proximity to support is NOT sufficient as sole entry justification.");
+        }
+      }
+    }
+
+    // ── RULE 5 — DAY-OF DRAWDOWN FILTER ──────────────────────────────────────
+    let intradayDrawdownPct = 0;
+    if (candles1d && candles1d.length > 0) {
+      const todayOpen = candles1d[candles1d.length - 1].o;
+      if (todayOpen > 0) intradayDrawdownPct = ((ind.currentPrice - todayOpen) / todayOpen) * 100;
+    }
+    if (intradayDrawdownPct < -3) {
+      triggered.push({ id:5, name:"DAY-OF DRAWDOWN", action:"SUPPRESS",
+        message:`⚠️ SUPPRESSED — EXCESSIVE INTRADAY DRAWDOWN (${intradayDrawdownPct.toFixed(1)}% on the day). No confirmed reversal catalyst — do NOT generate LONG.` });
+    }
+
+    // ── RULE 6 — COMBINED RISK KILL SWITCH (2+ suppress rules) ───────────────
+    const suppressRules = triggered.filter(r => r.action === "SUPPRESS");
+    if (suppressRules.length >= 2) {
+      return {
+        hardSuppressed: true,
+        suppressionMessage: `SIGNAL KILLED — MULTIPLE RISK FILTERS TRIGGERED\nRules violated: ${suppressRules.map(r => `Rule ${r.id} (${r.name})`).join(", ")}`,
+        triggered, adjustedProbability, convictionDowngraded, flagsForAI,
+        rule2DowntrendDetected, intradayDrawdownPct,
+      };
+    }
+    const singleSuppress = suppressRules[0];
+    if (singleSuppress) {
+      return {
+        hardSuppressed: true,
+        suppressionMessage: singleSuppress.message,
+        triggered, adjustedProbability, convictionDowngraded, flagsForAI,
+        rule2DowntrendDetected, intradayDrawdownPct,
+      };
+    }
+    return {
+      hardSuppressed: false,
+      suppressionMessage: null,
+      triggered, adjustedProbability, convictionDowngraded, flagsForAI,
+      rule2DowntrendDetected, intradayDrawdownPct,
+    };
+  }
+
   app.post("/api/quant", async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
@@ -2194,11 +2315,12 @@ export async function registerRoutes(
       if (!risk || !tf) return res.status(400).json({ error: "Invalid risk or timeframe." });
       const cls: string = assetClass || (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(ticker) ? "equity" : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(ticker) ? "commodity" : "crypto");
 
-      const [candles, candles15m, candles4h, candles1d, fng] = await Promise.all([
+      const [candles, candles15m, candles4h, candles1d, candles1h, fng] = await Promise.all([
         fetchQuantCandles(ticker, cls, tf.interval, tf.count),
         fetchQuantCandles(ticker, cls, "15m",  50),
         fetchQuantCandles(ticker, cls, "4h",   60),
         fetchQuantCandles(ticker, cls, "1d",   30),
+        fetchQuantCandles(ticker, cls, "1h",   48),
         fetchFearAndGreed(),
       ]);
       if (!candles) return res.status(502).json({ error: "Failed to fetch market data." });
@@ -2209,6 +2331,32 @@ export async function registerRoutes(
       const patternResult   = taDetectPatterns(candles);
       const bayesian        = computeBayesianScore(ind, confluence, patternResult.patterns, fng.signal);
       const macroKillSwitch = checkMacroKillSwitch(macroCache.data || []);
+
+      // Get live funding rate from HL data (crypto only)
+      const fundingRate: number = cls === "crypto" ? (hlData[ticker]?.funding || 0) : 0;
+
+      // ── Run Signal Suppression Rules BEFORE calling AI ────────────────────────
+      const suppression = checkSignalSuppressionRules({
+        ticker, cls, ind, candles1h, candles1d, candles15m, bayesian, macroKillSwitch, fundingRate,
+      });
+
+      // If hard suppressed → return immediately without AI call
+      if (suppression.hardSuppressed) {
+        return res.json({
+          signal: "SUPPRESSED",
+          suppressed: true,
+          suppression_message: suppression.suppressionMessage,
+          suppression_rules: suppression.triggered,
+          win_probability: suppression.adjustedProbability,
+          indicators: ind,
+          multi_tf: confluence,
+          bayesian,
+          macro_kill_switch: macroKillSwitch,
+          patterns: patternResult,
+          fear_greed: fng,
+          conviction_tier: bayesian.tier,
+        });
+      }
 
       const fngEmoji = fng.value <= 25 ? "🟢 Extreme Fear (contrarian bull)" : fng.value >= 75 ? "🔴 Extreme Greed (distribution risk)" : fng.value <= 45 ? "😨 Fear" : fng.value >= 60 ? "😎 Greed" : "😐 Neutral";
       const patternsStr = patternResult.patterns.length > 0 ? patternResult.patterns.join(", ") : "none detected";
@@ -2275,7 +2423,10 @@ ABSOLUTE RULES:
 4. Leverage must respect ${risk.leverage[0]}x–${risk.leverage[1]}x range.
 5. TP1 and TP2 must be at logical resistance levels or ATR multiples.
 6. Hold duration must respect the profile horizon: ${risk.holdHorizon}.
-7. If MACD, RSI, EMA, and volume all conflict → NEUTRAL. Confluence required.
+7. If MACD, RSI, EMA, and volume all conflict → NEUTRAL. Confluence required.${suppression.flagsForAI.length > 0 ? `
+
+SIGNAL SUPPRESSION OVERRIDES (enforce these before finalizing signal):
+${suppression.flagsForAI.map((f, i) => `${i + 8}. ${f}`).join("\n")}` : ""}
 
 Respond ONLY with valid JSON. No markdown. No backticks.
 
@@ -2326,6 +2477,13 @@ Every level must be technically defensible. Return JSON only.`;
       parsed.conviction_tier   = bayesian.tier;
       parsed.patterns          = patternResult;
       parsed.fear_greed        = fng;
+      parsed.suppression       = {
+        triggered: suppression.triggered,
+        flags: suppression.flagsForAI,
+        adjusted_probability: suppression.adjustedProbability,
+        conviction_downgraded: suppression.convictionDowngraded,
+        intraday_drawdown_pct: suppression.intradayDrawdownPct,
+      };
       if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
         const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
         const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);

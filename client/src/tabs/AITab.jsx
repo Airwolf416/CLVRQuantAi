@@ -426,9 +426,9 @@ export default function AITab() {
       }
 
       const data = await response.json();
-      if (!data.signal || !data.win_probability || !data.entry?.price) {
-        throw new Error("Incomplete data from Quant Engine.");
-      }
+      // Allow suppressed signals through without requiring entry/price fields
+      if (!data.signal) throw new Error("Incomplete data from Quant Engine.");
+      if (data.signal !== "SUPPRESSED" && !data.entry?.price) throw new Error("Incomplete data from Quant Engine.");
       if (data.rr === undefined && data.tp1?.price && data.stopLoss?.price && data.entry?.price) {
         const r = Math.abs(data.entry.price - data.stopLoss.price);
         const w = Math.abs(data.tp1.price - data.entry.price);
@@ -586,12 +586,13 @@ export default function AITab() {
           <div style={{ fontSize:8, color:"#d4af37", letterSpacing:2, marginBottom:8, fontWeight:700 }}>◆ MASTERBRAIN ENGINES</div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
             {[
-              { icon:"🔀", label:"Multi-TF Confluence",   desc:"15m · 4h · 1d EMA9/EMA21 trend alignment" },
-              { icon:"🎯", label:"Bayesian Scoring",      desc:"9 weighted signals · A/B/C/D conviction tiers" },
-              { icon:"📊", label:"Pattern Recognition",   desc:"Head & Shoulders · Bull Flag · Pivot analysis" },
-              { icon:"😱", label:"Fear & Greed Index",    desc:"Crypto sentiment · Contrarian signal detection" },
-              { icon:"🛡", label:"Macro Kill Switch",     desc:"Halts near HIGH impact events within 4h" },
-              { icon:"🤖", label:"CLVR AI (Claude)",      desc:"HL · Binance · Finnhub · claude-sonnet-4" },
+              { icon:"🔀", label:"Multi-TF Confluence",      desc:"15m · 1h · 4h · 1d EMA9/EMA21 trend alignment" },
+              { icon:"🎯", label:"Bayesian Scoring",         desc:"9 weighted signals · A/B/C/D conviction tiers" },
+              { icon:"📊", label:"Pattern Recognition",      desc:"Head & Shoulders · Bull Flag · Pivot analysis" },
+              { icon:"😱", label:"Fear & Greed Index",       desc:"Crypto sentiment · Contrarian signal detection" },
+              { icon:"🛡", label:"Macro Kill Switch",        desc:"Halts near HIGH impact events within 4h" },
+              { icon:"🚫", label:"Signal Suppression Rules", desc:"6-rule engine: macro · trend · drawdown · support · NY open · kill switch" },
+              { icon:"🤖", label:"CLVR AI (Claude)",         desc:"HL · Binance · Finnhub · claude-sonnet-4" },
             ].map(({ icon, label, desc }) => (
               <div key={label} style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
                 <span style={{ fontSize:14, flexShrink:0 }}>{icon}</span>
@@ -636,12 +637,75 @@ export default function AITab() {
       {/* LOADING BRAIN */}
       {loading && <LoadingBrain step={step} />}
 
-      {/* RESULTS */}
-      {result && !loading && !error && (
+      {/* RESULTS — SUPPRESSED SIGNAL */}
+      {result && result.signal === "SUPPRESSED" && !loading && !error && (
+        <div style={{ animation:"fadeIn 0.5s ease" }}>
+          <div style={{ background:"rgba(255,45,85,0.06)", border:"2px solid rgba(255,45,85,0.4)", borderRadius:14, padding:"20px 16px", marginBottom:14 }}>
+            <div style={{ fontSize:8, color:"#ff2d55", letterSpacing:2, marginBottom:8, fontWeight:700 }}>◆ SIGNAL ENGINE DECISION</div>
+            <div style={{ fontSize:22, fontWeight:900, color:"#ff2d55", fontFamily:mono, marginBottom:8, lineHeight:1.2 }}>
+              {result.suppression_message || "SIGNAL SUPPRESSED"}
+            </div>
+            <div style={{ fontSize:11, color:"#6b7a99", marginBottom:16, lineHeight:1.6 }}>
+              The CLVR Signal Suppression Engine blocked this signal before AI analysis. Capital preservation takes priority — no trade is better than a bad trade.
+            </div>
+            {result.suppression_rules?.length > 0 && (
+              <div>
+                <div style={{ fontSize:8, color:"#ff2d55", letterSpacing:1.5, marginBottom:8, fontWeight:700 }}>RULES TRIGGERED:</div>
+                {result.suppression_rules.map((rule, i) => (
+                  <div key={i} style={{
+                    background:"rgba(255,45,85,0.04)", border:"1px solid rgba(255,45,85,0.2)",
+                    borderRadius:8, padding:"8px 12px", marginBottom:6,
+                    display:"flex", gap:10, alignItems:"flex-start",
+                  }}>
+                    <span style={{ fontSize:10, color:"#ff2d55", fontWeight:700, flexShrink:0 }}>R{rule.id}</span>
+                    <div>
+                      <div style={{ fontSize:9, color:"#e8e8f0", fontWeight:700 }}>{rule.name}</div>
+                      <div style={{ fontSize:8, color:"#6b7a99", marginTop:2 }}>{rule.message}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop:14, padding:"10px 12px", background:"rgba(212,175,55,0.04)", border:"1px solid rgba(212,175,55,0.15)", borderRadius:8 }}>
+              <div style={{ fontSize:8, color:"#d4af37", letterSpacing:1, marginBottom:4 }}>BAYESIAN SCORE AT SUPPRESSION</div>
+              <div style={{ fontSize:14, fontWeight:700, color:"#d4af37", fontFamily:mono }}>{result.win_probability}% — {result.bayesian?.interpretation || "N/A"}</div>
+              <div style={{ fontSize:8, color:"#3a4560", marginTop:3 }}>Signal would need ≥80% conviction after rule adjustments to proceed</div>
+            </div>
+          </div>
+          {result.bayesian && <BayesianMeter probability={result.win_probability} tier={result.conviction_tier || result.bayesian.tier} interpretation={result.bayesian.interpretation} />}
+          {result.multi_tf && <MultiTFStrip multiTf={result.multi_tf} />}
+          <FearGreedPanel fng={result.fear_greed} />
+        </div>
+      )}
+
+      {/* RESULTS — NORMAL SIGNAL */}
+      {result && result.signal !== "SUPPRESSED" && !loading && !error && (
         <div style={{ animation:"fadeIn 0.5s ease" }}>
 
           {/* Macro Kill Switch Warning */}
           <MacroKillBanner macroKillSwitch={result.macro_kill_switch} />
+
+          {/* Active Suppression Flags (soft rules — DOWNGRADE / FLAG) */}
+          {result.suppression?.triggered?.length > 0 && (
+            <div style={{ marginBottom:12 }}>
+              {result.suppression.triggered.map((rule, i) => (
+                <div key={i} style={{
+                  background: rule.action === "DOWNGRADE" ? "rgba(245,158,11,0.06)" : "rgba(0,229,255,0.04)",
+                  border:`1px solid ${rule.action === "DOWNGRADE" ? "rgba(245,158,11,0.3)" : "rgba(0,229,255,0.2)"}`,
+                  borderRadius:8, padding:"8px 12px", marginBottom:6,
+                  display:"flex", gap:8, alignItems:"flex-start",
+                }}>
+                  <span style={{ fontSize:14, flexShrink:0 }}>{rule.action === "DOWNGRADE" ? "⚠️" : "🔵"}</span>
+                  <div>
+                    <div style={{ fontSize:8, fontWeight:700, color: rule.action === "DOWNGRADE" ? "#f59e0b" : "#00e5ff" }}>
+                      RULE {rule.id} — {rule.name}
+                    </div>
+                    <div style={{ fontSize:8, color:"#6b7a99", marginTop:2 }}>{rule.message}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Bayesian Confidence Meter + Conviction Tier */}
           {result.bayesian && (

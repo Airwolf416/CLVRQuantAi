@@ -1,0 +1,52 @@
+## SIGNAL SUPPRESSION & DOWNGRADE RULES
+
+These rules run BEFORE any trade signal is finalized. If any condition is met, apply the corresponding action.
+
+---
+
+### RULE 1 — MACRO EVENT OVERRIDE
+If a high-impact macro event is scheduled or currently in progress today (examples: tariff announcements, Fed decisions, CPI, NFP, FOMC minutes, major geopolitical escalation):
+- Reduce conviction score on ALL risk-asset longs (crypto, equities, commodities) by 15 points
+- If adjusted conviction falls below 80%, suppress the signal entirely and return: "SIGNAL SUPPRESSED — MACRO EVENT OVERRIDE"
+- If conviction remains ≥ 80%, downgrade tier by 1 and add flag: ⚠️ MACRO RISK EVENT ACTIVE
+
+---
+
+### RULE 2 — INTRADAY TREND FILTER
+If the asset is making lower highs and lower lows on the 1H timeframe at the time of signal generation:
+- Do NOT generate a long signal regardless of proximity to support
+- Return flag: ⚠️ SUPPRESSED — 1H DOWNTREND STRUCTURE INTACT
+- Short signals on the same asset may proceed normally
+
+---
+
+### RULE 3 — MARKET OPEN VOLATILITY WINDOW
+If the current time is within the first 20 minutes of the New York equity session (09:30–09:50 AM ET):
+- Suppress all new long entries unless conviction is ≥ 80% AND the asset is showing a confirmed bid (e.g. higher low printed on 5m chart)
+- Add flag: ⚠️ NY OPEN VOLATILITY WINDOW — ENTRY RISK ELEVATED
+
+---
+
+### RULE 4 — SUPPORT CONFIRMATION REQUIREMENT
+A signal must NOT use "proximity to support" as its sole entry justification.
+At least ONE of the following must also be true:
+- A rejection candle (wick) has printed at or near the support level
+- Volume spike with price holding the zone for 2+ candles
+- Funding rate is significantly negative (below -0.005%) as a contrarian squeeze setup
+- RSI is below 30 on the entry timeframe
+If none of these are present, reduce conviction by 10 points and add flag: ⚠️ SUPPORT UNCONFIRMED — AWAITING STRUCTURE
+
+---
+
+### RULE 5 — DAY-OF DRAWDOWN FILTER
+If the asset is already down more than 3% on the day at signal generation time:
+- Do NOT generate a long signal unless there is a confirmed macro catalyst for a reversal (e.g. data print, news event)
+- Add flag: ⚠️ SUPPRESSED — EXCESSIVE INTRADAY DRAWDOWN, NO REVERSAL CATALYST
+
+---
+
+### RULE 6 — COMBINED RISK KILL SWITCH
+If 2 or more of the above rules are triggered simultaneously for the same signal:
+- Hard suppress the signal regardless of conviction score
+- Return: "SIGNAL KILLED — MULTIPLE RISK FILTERS TRIGGERED"
+- List which rules were violated
