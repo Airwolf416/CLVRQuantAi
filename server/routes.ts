@@ -2358,6 +2358,111 @@ export async function registerRoutes(
         });
       }
 
+      // ── CLVR Signal Validation Gate — pre-computed (cannot be overridden by AI) ─
+      const oiM = cls === "crypto"
+        ? Math.round((hlData[ticker]?.oi || 0) / 1e6)
+        : cls === "equity" ? 2000 : 50;  // equities always liquid; commodities default
+
+      const oiFactor = oiM < 5 ? 0          // HARD BLOCK
+                     : oiM < 10 ? 0.60
+                     : oiM < 20 ? 0.70
+                     : oiM < 100 ? 0.90
+                     : 1.00;
+
+      const macroFactor = macroKillSwitch.safe ? 1.00
+                        : (macroKillSwitch.warning || "").toUpperCase().includes("HIGH") ? 0.75
+                        : 0.85;
+
+      const nowET  = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const etH    = nowET.getHours(), etMin2 = nowET.getMinutes();
+      const etDec  = etH + etMin2 / 60;
+      const isWeekend = [0, 6].includes(nowET.getDay());
+      const sessionFactor = isWeekend ? 0.75
+        : (etDec >= 9.5  && etDec < 11.0) ? 1.10   // NY Open 90 min
+        : (etDec >= 8.0  && etDec < 9.5)  ? 1.05   // London Open 90 min
+        : (etDec >= 21.0 || etDec < 3.0)  ? 0.85   // Asia / off-hours
+        : 1.00;
+
+      const atrPctNum     = parseFloat(ind.atrPct);
+      const momentumFactor = atrPctNum > 1.5 ? 0.70   // spike too fast (noise)
+                           : atrPctNum >= 0.5 ? 1.00   // normal 3–8 min formation
+                           : 1.10;                      // slow, sustained build
+
+      const rawScore  = bayesian.probability;
+      const adjScore  = oiFactor > 0
+        ? Math.round(rawScore * oiFactor * macroFactor * sessionFactor * momentumFactor)
+        : 0;
+      const signalTier = adjScore < 55 ? "BLOCKED" : adjScore < 65 ? "WATCH_ONLY"
+                       : adjScore < 75 ? "MED" : adjScore < 85 ? "HIGH" : "STRONG";
+
+      const pWin  = adjScore < 65 ? 0.45 : adjScore < 75 ? 0.52 : adjScore < 85 ? 0.60 : 0.68;
+      const pLoss = 1 - pWin;
+
+      const slDistPct  = risk.slMultiplier * atrPctNum;
+      const tp1DistPct = slDistPct * risk.tpRatios[0];
+      const evPct      = parseFloat(((pWin * tp1DistPct) - (pLoss * slDistPct)).toFixed(3));
+
+      const kellyB    = risk.tpRatios[0];
+      const kellyF    = (kellyB * pWin - pLoss) / kellyB;
+      const kellyPct  = Math.max(0, parseFloat((kellyF * 100).toFixed(1)));
+      const posTier   = kellyF <= 0 ? "BLOCKED" : kellyF < 0.10 ? "MINIMAL"
+                      : kellyF < 0.20 ? "SMALL" : kellyF < 0.35 ? "MEDIUM" : "STANDARD";
+      let marginPctRaw = posTier === "MINIMAL" ? 5 : posTier === "SMALL" ? 10
+                       : posTier === "MEDIUM" ? 17 : 22;
+      if (!macroKillSwitch.safe)                         marginPctRaw = Math.round(marginPctRaw * 0.50);
+      if (oiM < 20 && cls === "crypto")                  marginPctRaw = Math.round(marginPctRaw * 0.70);
+      if (adjScore < 65)                                  marginPctRaw = Math.round(marginPctRaw * 0.60);
+      if (isWeekend || etDec >= 21.0 || etDec < 3.0)     marginPctRaw = Math.round(marginPctRaw * 0.75);
+      const finalMarginPct = Math.min(Math.max(marginPctRaw, 2), 25);
+
+      const spikeHigh    = ind.high24;
+      const spikeLow     = ind.low24;
+      const spikeRange   = spikeHigh - spikeLow;
+      const fibConserv   = parseFloat((spikeHigh - spikeRange * 0.382).toFixed(6));
+      const fibAggr      = parseFloat((spikeHigh - spikeRange * 0.500).toFixed(6));
+      const useAggr      = adjScore >= 80 && oiM > 50 && macroKillSwitch.safe;
+      const fibEntry     = useAggr ? fibAggr : fibConserv;
+
+      const entryWindowMin   = oiM < 20 ? "2–5" : oiM < 100 ? "4–10" : "8–20";
+      const momentumHalfLife = oiM < 20 ? "3–5 min" : oiM < 100 ? "6–10 min" : "12–23 min";
+
+      const baseFormMin  = atrPctNum > 1.5 ? 3 : atrPctNum > 0.5 ? 6 : 12;
+      const sHoldMult    = isWeekend ? 0.60 : (etDec >= 9.5 && etDec < 11.0) ? 0.80
+                         : (etDec >= 21.0 || etDec < 3.0) ? 1.30 : 1.00;
+      const formationMin = Math.max(2, Math.round(baseFormMin * sHoldMult));
+      const targetExitMin = Math.round(formationMin * 1.5);
+      const hardExitMin   = Math.round(formationMin * 2.0);
+
+      const sessionLabel = isWeekend ? "Weekend" : (etDec >= 9.5 && etDec < 11.0) ? "NY Open 90min"
+        : (etDec >= 8.0 && etDec < 9.5) ? "London Open 90min"
+        : (etDec >= 21.0 || etDec < 3.0) ? "Asia/Off-hours" : "Regular";
+
+      // OI hard block
+      if (oiFactor === 0) {
+        return res.json({
+          signal: "SUPPRESSED", suppressed: true,
+          suppression_message: `SIGNAL BLOCKED — Open Interest too low ($${oiM}M < $5M minimum)`,
+          suppression_rules: [{ id: 0, name: "OI Liquidity Block", action: "KILL",
+            message: `$${oiM}M OI is insufficient. Minimum $5M required for a valid signal.` }],
+          win_probability: adjScore, adjusted_score: adjScore, ev: evPct,
+          indicators: ind, multi_tf: confluence, bayesian, macro_kill_switch: macroKillSwitch,
+          patterns: patternResult, fear_greed: fng, conviction_tier: bayesian.tier,
+        });
+      }
+
+      // EV hard block
+      if (evPct <= 0) {
+        return res.json({
+          signal: "SUPPRESSED", suppressed: true,
+          suppression_message: `SIGNAL BLOCKED — Negative Expected Value (EV: ${evPct.toFixed(3)}%)`,
+          suppression_rules: [{ id: 0, name: "EV Hard Block", action: "KILL",
+            message: `EV=${evPct.toFixed(3)}%: P_win=${(pWin*100).toFixed(0)}%, TP=${tp1DistPct.toFixed(2)}% vs SL=${slDistPct.toFixed(2)}%. Reward does not justify risk.` }],
+          win_probability: adjScore, adjusted_score: adjScore, ev: evPct,
+          indicators: ind, multi_tf: confluence, bayesian, macro_kill_switch: macroKillSwitch,
+          patterns: patternResult, fear_greed: fng, conviction_tier: bayesian.tier,
+        });
+      }
+
       const fngEmoji = fng.value <= 25 ? "🟢 Extreme Fear (contrarian bull)" : fng.value >= 75 ? "🔴 Extreme Greed (distribution risk)" : fng.value <= 45 ? "😨 Fear" : fng.value >= 60 ? "😎 Greed" : "😐 Neutral";
       const patternsStr = patternResult.patterns.length > 0 ? patternResult.patterns.join(", ") : "none detected";
 
@@ -2406,45 +2511,117 @@ Volume: ${ind.volumeSignal} (${ind.volumeRatio}× average)
 Momentum Score: ${ind.momentumScore}/100
 ${mtfStr}`;
 
-      const system = `You are the most elite quantitative analyst and systematic trader on the planet. You think like a hybrid of Paul Tudor Jones + Stan Druckenmiller + a senior quant desk head. Capital preservation first. Never force a trade.
+      const system = `You are CLVRQuantAI Signal Engine — a precision trade signal generator for leveraged perpetual futures. Think like Paul Tudor Jones + Stan Druckenmiller. Capital preservation first. Never force a trade.
 
 PROFILE: ${risk.label}
-Stop Loss: exactly ${risk.slMultiplier}× ATR from entry OR nearest structural level (whichever is tighter)
-Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x maximum
-Risk per trade: ${risk.riskPct}% of portfolio
-Minimum win probability to issue trade: ${risk.minWinProb}%
-TP1 ratio: ${risk.tpRatios[0]}:1 minimum | TP2 ratio: ${risk.tpRatios[1]}:1 minimum
-Typical hold: ${risk.holdHorizon}
+Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x | Risk/trade: ${risk.riskPct}% | Min win prob: ${risk.minWinProb}%
+TP1 ratio: ${risk.tpRatios[0]}:1 | TP2 ratio: ${risk.tpRatios[1]}:1 | Horizon: ${risk.holdHorizon}
 
-ABSOLUTE RULES:
-1. If setup probability < ${risk.minWinProb}% → signal MUST be NEUTRAL. Never force a trade.
-2. SL must be at ${risk.slMultiplier}× ATR OR structural support/resistance — cite which and why.
-3. Every price level must be justified by specific technical data.
-4. Leverage must respect ${risk.leverage[0]}x–${risk.leverage[1]}x range.
-5. TP1 and TP2 must be at logical resistance levels or ATR multiples.
-6. Hold duration must respect the profile horizon: ${risk.holdHorizon}.
-7. If MACD, RSI, EMA, and volume all conflict → NEUTRAL. Confluence required.${suppression.flagsForAI.length > 0 ? `
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1 — SIGNAL VALIDATION GATE (pre-computed — DO NOT recalculate)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Open Interest:      $${oiM}M  (OI factor: ${oiFactor}×)
+Macro Risk:         ${macroKillSwitch.safe ? "CLEAR" : (macroKillSwitch.warning || "HIGH RISK ACTIVE")} (macro factor: ${macroFactor}×)
+Session:            ${sessionLabel} (session factor: ${sessionFactor}×)
+Momentum Speed:     ATR ${atrPctNum.toFixed(2)}% (momentum factor: ${momentumFactor}×)
+ADJUSTED SCORE:     ${adjScore}/100 → ${signalTier}
+P_WIN:              ${(pWin*100).toFixed(0)}%
+EXPECTED VALUE:     ${evPct > 0 ? "+" : ""}${evPct.toFixed(3)}% (PASSED — EV positive)
+KELLY f*:           ${kellyPct.toFixed(1)}% → ${posTier} tier → use ${finalMarginPct}% of margin max
+OI HALF-LIFE:       ${momentumHalfLife}
 
-SIGNAL SUPPRESSION OVERRIDES (enforce these before finalizing signal):
-${suppression.flagsForAI.map((f, i) => `${i + 8}. ${f}`).join("\n")}` : ""}
+Echo these exact values in your JSON output:
+  adjusted_score = ${adjScore}
+  ev = ${evPct}
+  position_size.tier = "${posTier}"
+  position_size.kelly_fraction = ${kellyPct}
+  position_size.margin_pct = ${finalMarginPct}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2 — ENTRY: FIBONACCI RETRACEMENT (MANDATORY — never enter at spike top)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+24h Spike Range: $${spikeLow.toFixed(4)} → $${spikeHigh.toFixed(4)} (range: $${spikeRange.toFixed(4)})
+  Conservative entry (0.382 fib): $${fibConserv}
+  Aggressive entry  (0.500 fib): $${fibAggr}
+  RECOMMENDED: ${useAggr ? "AGGRESSIVE" : "CONSERVATIVE"} = $${fibEntry}
+  (Aggressive only if: adj_score ≥ 80 AND OI > $50M AND macro clear — ${useAggr ? "all met" : "not all met"})
+
+Set entry.price near $${fibEntry}. Adjust ± for structural support/resistance you detect in the data.
+Entry window: ${entryWindowMin} min. If price does NOT retrace to entry zone within ${entryWindowMin} min — VOID.
+Signal is immediately VOID if price breaks below the spike low ($${spikeLow.toFixed(4)}).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — HOLD TIME & EXIT TIMING (include exact minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Estimated spike formation: ~${formationMin} min (session: ${sHoldMult}× multiplier)
+  ⏱ Target exit: ${targetExitMin} min after entry
+  🔴 Hard exit:  ${hardExitMin} min after entry — close ENTIRE position regardless of P&L
+  ⚠️  If TP1 not hit within ${targetExitMin} min → cut position by 50% immediately
+
+These are MAXIMUMS. If TP1 is hit before target exit → move SL to breakeven immediately.
+Once price is halfway to TP2 → trail SL to TP1 level.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — TAKE PROFIT (momentum half-life: ${momentumHalfLife})
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TP1 (60% position): Entry + (SL_distance × ${risk.tpRatios[0]}). Must be reachable within 1 half-life.
+TP2 (30% position): Entry + (SL_distance × ${risk.tpRatios[1]}). ${oiM >= 20 ? `OI $${oiM}M > $20M — INCLUDE TP2.` : `OI $${oiM}M < $20M — OMIT TP2. Single target only.`}
+TP3 (10% runner):   ${adjScore >= 85 && oiM > 100 ? `Adj score ${adjScore} ≥ 85 AND OI $${oiM}M > $100M — INCLUDE TP3 = Entry + (SL × 4.0).` : `OMIT — requires adj_score ≥ 85 AND OI > $100M (current: ${adjScore}, $${oiM}M).`}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ABSOLUTE RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. win_probability < ${risk.minWinProb}% → signal MUST be NEUTRAL.
+2. NEVER set entry at spike high. Use Fibonacci levels above.
+3. SL must be below structural low with ${risk.slMultiplier}× ATR buffer.
+4. R:R ≥ 1.5:1 required. If not achievable → NEUTRAL.
+5. Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x range only.
+6. ALWAYS include target_exit_min and hard_exit_min in hold object.
+7. If MACD, RSI, EMA, and volume all conflict → NEUTRAL. Confluence required.
+8. Output risk_flags for every active concern: macro, OI, session, funding, pattern.${suppression.flagsForAI.length > 0 ? `
+
+SIGNAL SUPPRESSION OVERRIDES (enforce before finalizing):
+${suppression.flagsForAI.map((f, i) => `${i + 9}. ${f}`).join("\n")}` : ""}
 
 Respond ONLY with valid JSON. No markdown. No backticks.
 
 {
   "signal": "STRONG_LONG"|"LONG"|"NEUTRAL"|"SHORT"|"STRONG_SHORT",
   "win_probability": 0-100,
+  "adjusted_score": ${adjScore},
   "opportunity_score": 0-100,
-  "entry": { "price": number, "zone_low": number, "zone_high": number, "rationale": "string" },
+  "ev": ${evPct},
+  "entry": {
+    "price": number,
+    "zone_low": number,
+    "zone_high": number,
+    "fib_level": "${useAggr ? "0.500 aggressive" : "0.382 conservative"}",
+    "window_min": "${entryWindowMin}",
+    "rationale": "string"
+  },
   "stopLoss": { "price": number, "distance_pct": number, "rationale": "string" },
-  "tp1": { "price": number, "gain_pct": number, "rr_ratio": number, "rationale": "string" },
-  "tp2": { "price": number, "gain_pct": number, "rr_ratio": number, "rationale": "string" },
+  "tp1": { "price": number, "gain_pct": number, "rr_ratio": number, "rationale": "string", "size_pct": 60 },
+  "tp2": { "price": number, "gain_pct": number, "rr_ratio": number, "rationale": "string", "size_pct": 30 },
+  ${adjScore >= 85 && oiM > 100 ? `"tp3": { "price": number, "gain_pct": number, "rr_ratio": number, "rationale": "string", "size_pct": 10 },` : ""}
   "leverage": { "recommended": number, "max": number, "rationale": "string" },
-  "hold": { "duration": "string", "key_events": ["string"], "exit_conditions": ["string"] },
+  "hold": {
+    "duration": "string",
+    "target_exit_min": ${targetExitMin},
+    "hard_exit_min": ${hardExitMin},
+    "key_events": ["string"],
+    "exit_conditions": ["string"]
+  },
+  "position_size": {
+    "tier": "${posTier}",
+    "kelly_fraction": ${kellyPct},
+    "margin_pct": ${finalMarginPct},
+    "rationale": "string"
+  },
   "technical_summary": { "trend": "string", "key_levels": "string", "momentum": "string", "volume": "string", "pattern": "string" },
   "quant_rationale": "string",
   "risks": ["string"],
-  "invalidation": "string",
-  "hold_duration": "string"
+  "risk_flags": ["string — format: CATEGORY: description"],
+  "invalidation": "string"
 }`;
 
       const userMsg = `ASSET: ${ticker} | MARKET: ${marketType} | CLASS: ${cls.toUpperCase()}
@@ -2484,6 +2661,33 @@ Every level must be technically defensible. Return JSON only.`;
         conviction_downgraded: suppression.convictionDowngraded,
         intraday_drawdown_pct: suppression.intradayDrawdownPct,
       };
+      // Always enforce pre-computed validation gate values (cannot be overridden by AI)
+      parsed.adjusted_score = adjScore;
+      parsed.ev             = evPct;
+      parsed.signal_tier    = signalTier;
+      parsed.position_size  = {
+        ...(parsed.position_size || {}),
+        tier:           posTier,
+        kelly_fraction: kellyPct,
+        margin_pct:     finalMarginPct,
+        rationale:      parsed.position_size?.rationale || `Kelly f*=${kellyPct.toFixed(1)}% → ${posTier} sizing, max ${finalMarginPct}% of margin`,
+      };
+      parsed.fib_entry = {
+        spike_high:   spikeHigh,
+        spike_low:    spikeLow,
+        conservative: fibConserv,
+        aggressive:   fibAggr,
+        recommended:  fibEntry,
+        fib_level:    useAggr ? "0.500 aggressive" : "0.382 conservative",
+        window_min:   entryWindowMin,
+      };
+      // Enforce hold time fields
+      if (!parsed.hold) parsed.hold = {};
+      parsed.hold.target_exit_min = targetExitMin;
+      parsed.hold.hard_exit_min   = hardExitMin;
+      if (!parsed.hold.duration) parsed.hold.duration = `Target: ${targetExitMin} min | Hard exit: ${hardExitMin} min`;
+      // Remove tp3 if AI hallucinated it when conditions not met
+      if (!(adjScore >= 85 && oiM > 100)) delete parsed.tp3;
       if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
         const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
         const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);
