@@ -755,6 +755,25 @@ function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched,marketClosed}){
   );
 }
 
+// Derive a human-readable hold window from signal timeframe
+function holdWindowLabel(tf){
+  if(!tf)return{label:"Intraday – 24 hrs",sub:"suggested hold window",color:"#00e5ff"};
+  const t=tf.toLowerCase().replace(/\s/g,"");
+  if(t==="1m"||t==="5m")return{label:"15 – 60 min",sub:"scalp — exit before next candle closes",color:"#f59e0b"};
+  if(t==="15m")return{label:"30 min – 3 hrs",sub:"short-term scalp window",color:"#f59e0b"};
+  if(t==="30m")return{label:"1 – 6 hrs",sub:"intraday window",color:"#00e5ff"};
+  if(t==="1h"||t==="60m")return{label:"2 – 8 hrs",sub:"intraday swing",color:"#00e5ff"};
+  if(t==="2h"||t==="120m")return{label:"4 – 12 hrs",sub:"intraday swing",color:"#00e5ff"};
+  if(t==="4h"||t==="240m")return{label:"4 hrs – 24 hrs",sub:"intraday to overnight swing",color:"#00e5ff"};
+  if(t==="6h")return{label:"6 hrs – 2 days",sub:"short swing",color:"#a78bfa"};
+  if(t==="8h")return{label:"8 hrs – 3 days",sub:"short swing",color:"#a78bfa"};
+  if(t==="12h")return{label:"12 hrs – 4 days",sub:"swing trade window",color:"#a78bfa"};
+  if(t==="1d"||t==="daily")return{label:"1 – 7 days",sub:"swing trade — plan around daily closes",color:"#a78bfa"};
+  if(t==="3d")return{label:"3 – 14 days",sub:"medium swing",color:"#d4af37"};
+  if(t==="1w"||t==="weekly")return{label:"1 – 4 weeks",sub:"position trade — weekly structure",color:"#d4af37"};
+  return{label:"2 hrs – 24 hrs",sub:"intraday default",color:"#00e5ff"};
+}
+
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
 function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts}){
   const[expanded,setExpanded]=useState(false);
@@ -816,6 +835,16 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
                 <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green+"aa"}}>{sig.tp2?fmt(sig.tp2,sig.token):"—"}</div>
               </div>
             </div>
+            {/* Hold window — always visible */}
+            {(()=>{const hw=holdWindowLabel(sig.timeframe);return(
+              <div style={{background:`rgba(0,0,0,.2)`,border:`1px solid ${hw.color}33`,borderRadius:2,padding:"7px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>⏳ HOLD WINDOW</div>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:1}}>
+                  <div style={{fontFamily:MONO,fontSize:11,fontWeight:800,color:hw.color}}>{hw.label}</div>
+                  <div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{hw.sub}</div>
+                </div>
+              </div>
+            );})()}
             {sig.macroFlags&&sig.macroFlags.length>0&&<div style={{background:"rgba(255,64,96,.06)",border:"1px solid rgba(255,64,96,.25)",borderRadius:2,padding:"5px 10px",marginBottom:6,fontFamily:MONO,fontSize:9,color:C.red,lineHeight:1.6}}>⚠️ {sig.macroFlags[0]}</div>}
             <div style={{marginTop:4,marginBottom:6,paddingRight:56}}>
               <StrengthMeter value={strength} C={C}/>

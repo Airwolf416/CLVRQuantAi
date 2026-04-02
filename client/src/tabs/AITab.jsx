@@ -915,37 +915,37 @@ export default function AITab() {
               )}
             </div>
             <div style={{ background:"rgba(0,229,255,0.06)", border:"1px solid rgba(0,229,255,0.2)", borderRadius:10, padding:"13px 14px" }}>
-              <div style={{ fontSize:8, color:"#3a4560", marginBottom:5 }}>HOLD DURATION</div>
-              {result.hold?.target_exit_min ? (
+              <div style={{ fontSize:8, color:"#3a4560", marginBottom:6, letterSpacing:2 }}>HOLD DURATION</div>
+
+              {/* Strategic horizon — always shown prominently */}
+              <div style={{ fontSize:14, fontWeight:900, color:"#00e5ff", fontFamily:mono, lineHeight:1.3, marginBottom:6 }}>
+                {result.hold?.duration || "Monitor actively"}
+              </div>
+
+              {/* Tactical minute timers — supplementary, only when present */}
+              {result.hold?.target_exit_min && (
                 <>
+                  <div style={{ fontSize:7, color:"#6b7a99", marginBottom:5, letterSpacing:1 }}>TACTICAL EXIT WINDOWS</div>
                   <div style={{ display:"flex", gap:6, marginBottom:6 }}>
                     <div style={{ flex:1, background:"rgba(0,229,255,0.06)", border:"1px solid rgba(0,229,255,0.2)", borderRadius:5, padding:"4px 7px", textAlign:"center" }}>
                       <div style={{ fontSize:7, color:"#6b7a99", marginBottom:2 }}>⏱ TARGET EXIT</div>
-                      <div style={{ fontSize:14, fontWeight:900, color:"#00e5ff", fontFamily:mono }}>{result.hold.target_exit_min}<span style={{ fontSize:8 }}>m</span></div>
+                      <div style={{ fontSize:13, fontWeight:900, color:"#00e5ff", fontFamily:mono }}>{result.hold.target_exit_min}<span style={{ fontSize:8 }}>m</span></div>
                     </div>
                     <div style={{ flex:1, background:"rgba(255,45,85,0.06)", border:"1px solid rgba(255,45,85,0.2)", borderRadius:5, padding:"4px 7px", textAlign:"center" }}>
                       <div style={{ fontSize:7, color:"#6b7a99", marginBottom:2 }}>🔴 HARD EXIT</div>
-                      <div style={{ fontSize:14, fontWeight:900, color:"#ff2d55", fontFamily:mono }}>{result.hold.hard_exit_min}<span style={{ fontSize:8 }}>m</span></div>
+                      <div style={{ fontSize:13, fontWeight:900, color:"#ff2d55", fontFamily:mono }}>{result.hold.hard_exit_min}<span style={{ fontSize:8 }}>m</span></div>
                     </div>
                   </div>
                   <div style={{ fontSize:7, color:"#f59e0b", lineHeight:1.4 }}>
                     ⚠ If TP1 not hit within {result.hold.target_exit_min}m → cut 50% immediately
                   </div>
-                  {result.hold?.exit_conditions?.[0] && (
-                    <div style={{ fontSize:7, color:"#a0aec0", marginTop:4, lineHeight:1.4 }}>Exit: {result.hold.exit_conditions[0]}</div>
-                  )}
                 </>
-              ) : (
-                <>
-                  <div style={{ fontSize:13, fontWeight:800, color:"#00e5ff", fontFamily:mono, lineHeight:1.3 }}>
-                    {result.hold?.duration || "Monitor actively"}
-                  </div>
-                  {result.hold?.exit_conditions?.[0] && (
-                    <div style={{ fontSize:8, color:"#a0aec0", marginTop:7, lineHeight:1.5 }}>
-                      Exit if: {result.hold.exit_conditions[0]}
-                    </div>
-                  )}
-                </>
+              )}
+
+              {result.hold?.exit_conditions?.[0] && (
+                <div style={{ fontSize:7, color:"#a0aec0", marginTop:6, lineHeight:1.5 }}>
+                  Exit if: {result.hold.exit_conditions[0]}
+                </div>
               )}
             </div>
           </div>
