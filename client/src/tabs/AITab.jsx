@@ -774,19 +774,89 @@ export default function AITab() {
             </div>
           </div>
 
-          {/* Entry zone */}
-          {result.entry?.zone_low && (
+          {/* Signal Validation Gate Panel */}
+          {(result.adjusted_score != null || result.ev != null) && (
+            <div style={{ background:"rgba(212,175,55,0.03)", border:"1px solid rgba(212,175,55,0.15)", borderRadius:12, padding:"13px 14px", marginBottom:12 }}>
+              <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2, marginBottom:11, fontWeight:700 }}>◆ SIGNAL VALIDATION GATE</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:10 }}>
+                <div style={{ background:"rgba(0,0,0,0.2)", borderRadius:7, padding:"8px 10px" }}>
+                  <div style={{ fontSize:7, color:"#6b7a99", letterSpacing:1, marginBottom:4 }}>ADJUSTED SCORE</div>
+                  <div style={{ fontSize:18, fontWeight:900, color: result.adjusted_score >= 85 ? "#00ff88" : result.adjusted_score >= 75 ? "#d4af37" : result.adjusted_score >= 65 ? "#f59e0b" : "#ff2d55", fontFamily:mono }}>
+                    {result.adjusted_score}
+                  </div>
+                  <div style={{ fontSize:7, color:"#3a4560" }}>{result.signal_tier || ""}</div>
+                </div>
+                <div style={{ background:"rgba(0,0,0,0.2)", borderRadius:7, padding:"8px 10px" }}>
+                  <div style={{ fontSize:7, color:"#6b7a99", letterSpacing:1, marginBottom:4 }}>EXPECTED VALUE</div>
+                  <div style={{ fontSize:18, fontWeight:900, color: result.ev > 0 ? "#00ff88" : "#ff2d55", fontFamily:mono }}>
+                    {result.ev > 0 ? "+" : ""}{result.ev?.toFixed(3)}%
+                  </div>
+                  <div style={{ fontSize:7, color:"#3a4560" }}>per trade</div>
+                </div>
+                <div style={{ background:"rgba(0,0,0,0.2)", borderRadius:7, padding:"8px 10px" }}>
+                  <div style={{ fontSize:7, color:"#6b7a99", letterSpacing:1, marginBottom:4 }}>KELLY f*</div>
+                  <div style={{ fontSize:18, fontWeight:900, color:"#d4af37", fontFamily:mono }}>
+                    {result.position_size?.kelly_fraction?.toFixed(1)}%
+                  </div>
+                  <div style={{ fontSize:7, color:"#3a4560" }}>{result.position_size?.tier}</div>
+                </div>
+              </div>
+              {result.position_size && (
+                <div style={{ background:"rgba(212,175,55,0.06)", border:"1px solid rgba(212,175,55,0.2)", borderRadius:7, padding:"8px 12px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <div>
+                    <div style={{ fontSize:8, color:"#d4af37", fontWeight:700, letterSpacing:0.5 }}>📦 POSITION SIZE: {result.position_size.tier}</div>
+                    <div style={{ fontSize:8, color:"#6b7a99", marginTop:2 }}>
+                      Use max <span style={{ color:"#d4af37", fontWeight:700 }}>{result.position_size.margin_pct}%</span> of margin
+                    </div>
+                  </div>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ fontSize:8, color:"#a0aec0", maxWidth:160, lineHeight:1.4 }}>{result.position_size.rationale}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Entry zone — Fibonacci */}
+          {result.entry?.price && (
             <div style={{ background:"rgba(212,175,55,0.06)", border:"1px solid rgba(212,175,55,0.2)", borderRadius:10, padding:"11px 14px", marginBottom:12 }}>
-              <div style={{ fontSize:8, color:"#d4af37", letterSpacing:1.5, marginBottom:5 }}>ENTRY ZONE</div>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                <div style={{ fontSize:8, color:"#d4af37", letterSpacing:1.5, fontWeight:700 }}>⏳ ENTRY ZONE</div>
+                {result.fib_entry && (
+                  <div style={{ fontSize:7, color:"#6b7a99", background:"rgba(212,175,55,0.08)", border:"1px solid rgba(212,175,55,0.2)", borderRadius:4, padding:"2px 7px" }}>
+                    Fib {result.fib_entry.fib_level}
+                  </div>
+                )}
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                 <div style={{ fontSize:20, fontWeight:900, color:"#d4af37", fontFamily:mono }}>{fmtPrice(result.entry.price)}</div>
                 <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:9, color:"#6b7a99" }}>{fmtPrice(result.entry.zone_low)} — {fmtPrice(result.entry.zone_high)}</div>
+                  {result.entry.zone_low && <div style={{ fontSize:9, color:"#6b7a99" }}>{fmtPrice(result.entry.zone_low)} — {fmtPrice(result.entry.zone_high)}</div>}
                   <div style={{ fontSize:7, color:"#3a4560" }}>entry zone</div>
                 </div>
               </div>
+              {result.fib_entry && (
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:8 }}>
+                  <div style={{ background:"rgba(0,0,0,0.15)", borderRadius:5, padding:"5px 8px" }}>
+                    <div style={{ fontSize:7, color:"#6b7a99", marginBottom:2 }}>0.382 CONSERVATIVE</div>
+                    <div style={{ fontSize:10, fontWeight:700, color:"#d4af37", fontFamily:mono }}>{fmtPrice(result.fib_entry.conservative)}</div>
+                  </div>
+                  <div style={{ background:"rgba(0,0,0,0.15)", borderRadius:5, padding:"5px 8px" }}>
+                    <div style={{ fontSize:7, color:"#6b7a99", marginBottom:2 }}>0.500 AGGRESSIVE</div>
+                    <div style={{ fontSize:10, fontWeight:700, color:"#d4af37", fontFamily:mono }}>{fmtPrice(result.fib_entry.aggressive)}</div>
+                  </div>
+                </div>
+              )}
+              <div style={{ display:"flex", gap:6, alignItems:"center", marginBottom:result.entry.rationale ? 6 : 0 }}>
+                <div style={{ background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.25)", borderRadius:5, padding:"4px 8px", fontSize:7, color:"#f59e0b", fontWeight:700 }}>
+                  ⏱ ENTER WITHIN {result.fib_entry?.window_min || result.entry.window_min || "4–10"} MIN
+                </div>
+                <div style={{ background:"rgba(255,45,85,0.07)", border:"1px solid rgba(255,45,85,0.2)", borderRadius:5, padding:"4px 8px", fontSize:7, color:"#ff2d55", fontWeight:700 }}>
+                  VOID IF MISSED
+                </div>
+              </div>
               {result.entry.rationale && (
-                <div style={{ fontSize:8, color:"#a0aec0", marginTop:5, lineHeight:1.5 }}>{result.entry.rationale}</div>
+                <div style={{ fontSize:8, color:"#a0aec0", marginTop:6, lineHeight:1.5 }}>{result.entry.rationale}</div>
               )}
             </div>
           )}
@@ -795,17 +865,25 @@ export default function AITab() {
           <div style={{ background:"#0d1321", border:"1px solid #1a2235", borderRadius:12, padding:"14px 16px", marginBottom:12 }}>
             <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2, marginBottom:12, fontWeight:700 }}>◆ TRADE LEVELS</div>
             <LevelRow
-              label="TP1 — First Target"
+              label={`TP1 — First Target${result.tp1?.size_pct ? ` (${result.tp1.size_pct}% position)` : " (60% position)"}`}
               price={result.tp1?.price}
               color="#00ff88"
               note={result.tp1?.gain_pct ? `+${result.tp1.gain_pct?.toFixed(2)}% · R:R ${result.rr?.toFixed(2)}:1` : `R:R ${result.rr?.toFixed(2)}:1`}
             />
             {result.tp2?.price && (
               <LevelRow
-                label="TP2 — Final Target"
+                label={`TP2 — Extended Target${result.tp2?.size_pct ? ` (${result.tp2.size_pct}% position)` : " (30% position)"}`}
                 price={result.tp2.price}
                 color="#4ade80"
-                note={result.tp2.gain_pct ? `+${result.tp2.gain_pct?.toFixed(2)}% · R:R ${result.tp2.rr_ratio?.toFixed(2)}:1` : "final target"}
+                note={result.tp2.gain_pct ? `+${result.tp2.gain_pct?.toFixed(2)}% · R:R ${result.tp2.rr_ratio?.toFixed(2)}:1` : "extended target"}
+              />
+            )}
+            {result.tp3?.price && (
+              <LevelRow
+                label="TP3 — Runner (10% position)"
+                price={result.tp3.price}
+                color="#a78bfa"
+                note={result.tp3.gain_pct ? `+${result.tp3.gain_pct?.toFixed(2)}% · R:R ${result.tp3.rr_ratio?.toFixed(2)}:1 · runner` : "runner target"}
               />
             )}
             <LevelRow
@@ -814,9 +892,15 @@ export default function AITab() {
               color="#ff2d55"
               note={result.stopLoss?.distance_pct ? `-${result.stopLoss.distance_pct?.toFixed(2)}% · ${result.stopLoss.rationale || ""}` : ""}
             />
+            {result.tp1?.price && result.stopLoss?.price && (
+              <div style={{ marginTop:10, paddingTop:8, borderTop:"1px solid #1a2235", fontSize:8, color:"#6b7a99", lineHeight:1.8 }}>
+                <span style={{ color:"#00ff88" }}>✓ TP1 hit</span> → move SL to entry (breakeven) ·{" "}
+                <span style={{ color:"#4ade80" }}>✓ Halfway to TP2</span> → trail SL to TP1 level
+              </div>
+            )}
           </div>
 
-          {/* Leverage + Hold */}
+          {/* Leverage + Hold Timers */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
             <div style={{ background:`rgba(${profile.hex},0.08)`, border:`1px solid rgba(${profile.hex},0.2)`, borderRadius:10, padding:"13px 14px" }}>
               <div style={{ fontSize:8, color:"#3a4560", marginBottom:5 }}>RECOMMENDED LEVERAGE</div>
@@ -832,13 +916,36 @@ export default function AITab() {
             </div>
             <div style={{ background:"rgba(0,229,255,0.06)", border:"1px solid rgba(0,229,255,0.2)", borderRadius:10, padding:"13px 14px" }}>
               <div style={{ fontSize:8, color:"#3a4560", marginBottom:5 }}>HOLD DURATION</div>
-              <div style={{ fontSize:13, fontWeight:800, color:"#00e5ff", fontFamily:mono, lineHeight:1.3 }}>
-                {result.hold?.duration || result.hold_duration || "Monitor actively"}
-              </div>
-              {result.hold?.exit_conditions?.[0] && (
-                <div style={{ fontSize:8, color:"#a0aec0", marginTop:7, lineHeight:1.5 }}>
-                  Exit if: {result.hold.exit_conditions[0]}
-                </div>
+              {result.hold?.target_exit_min ? (
+                <>
+                  <div style={{ display:"flex", gap:6, marginBottom:6 }}>
+                    <div style={{ flex:1, background:"rgba(0,229,255,0.06)", border:"1px solid rgba(0,229,255,0.2)", borderRadius:5, padding:"4px 7px", textAlign:"center" }}>
+                      <div style={{ fontSize:7, color:"#6b7a99", marginBottom:2 }}>⏱ TARGET EXIT</div>
+                      <div style={{ fontSize:14, fontWeight:900, color:"#00e5ff", fontFamily:mono }}>{result.hold.target_exit_min}<span style={{ fontSize:8 }}>m</span></div>
+                    </div>
+                    <div style={{ flex:1, background:"rgba(255,45,85,0.06)", border:"1px solid rgba(255,45,85,0.2)", borderRadius:5, padding:"4px 7px", textAlign:"center" }}>
+                      <div style={{ fontSize:7, color:"#6b7a99", marginBottom:2 }}>🔴 HARD EXIT</div>
+                      <div style={{ fontSize:14, fontWeight:900, color:"#ff2d55", fontFamily:mono }}>{result.hold.hard_exit_min}<span style={{ fontSize:8 }}>m</span></div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize:7, color:"#f59e0b", lineHeight:1.4 }}>
+                    ⚠ If TP1 not hit within {result.hold.target_exit_min}m → cut 50% immediately
+                  </div>
+                  {result.hold?.exit_conditions?.[0] && (
+                    <div style={{ fontSize:7, color:"#a0aec0", marginTop:4, lineHeight:1.4 }}>Exit: {result.hold.exit_conditions[0]}</div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize:13, fontWeight:800, color:"#00e5ff", fontFamily:mono, lineHeight:1.3 }}>
+                    {result.hold?.duration || "Monitor actively"}
+                  </div>
+                  {result.hold?.exit_conditions?.[0] && (
+                    <div style={{ fontSize:8, color:"#a0aec0", marginTop:7, lineHeight:1.5 }}>
+                      Exit if: {result.hold.exit_conditions[0]}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -894,14 +1001,25 @@ export default function AITab() {
             </div>
           </div>
 
-          {/* Risks */}
-          {result.risks && (
-            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:16 }}>
-              {result.risks.map((r, i) => (
-                <span key={i} style={{ background:"rgba(255,45,85,0.07)", border:"1px solid rgba(255,45,85,0.2)", borderRadius:5, padding:"3px 9px", fontSize:8, color:"#f87171" }}>
-                  ⚠ {r}
-                </span>
-              ))}
+          {/* Risk Flags */}
+          {(result.risk_flags?.length > 0 || result.risks?.length > 0) && (
+            <div style={{ marginBottom:16 }}>
+              <div style={{ fontSize:9, color:"#d4af37", letterSpacing:2, marginBottom:8, fontWeight:700 }}>⚠ RISK FLAGS</div>
+              <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                {(result.risk_flags || result.risks || []).map((r, i) => {
+                  const isMacro = r.toLowerCase().includes("macro") || r.toLowerCase().includes("fed") || r.toLowerCase().includes("cpi");
+                  const isOI    = r.toLowerCase().includes("oi") || r.toLowerCase().includes("interest");
+                  const isSess  = r.toLowerCase().includes("session") || r.toLowerCase().includes("weekend") || r.toLowerCase().includes("asia");
+                  const col     = isMacro ? "#f59e0b" : isOI ? "#a78bfa" : isSess ? "#00e5ff" : "#f87171";
+                  const bg      = isMacro ? "rgba(245,158,11,0.07)" : isOI ? "rgba(167,139,250,0.07)" : isSess ? "rgba(0,229,255,0.07)" : "rgba(255,45,85,0.07)";
+                  const border  = isMacro ? "rgba(245,158,11,0.25)" : isOI ? "rgba(167,139,250,0.25)" : isSess ? "rgba(0,229,255,0.25)" : "rgba(255,45,85,0.2)";
+                  return (
+                    <span key={i} style={{ background:bg, border:`1px solid ${border}`, borderRadius:5, padding:"4px 9px", fontSize:8, color:col }}>
+                      ⚠ {r}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           )}
 
