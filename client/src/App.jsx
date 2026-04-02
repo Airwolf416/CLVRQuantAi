@@ -1230,6 +1230,9 @@ function Dashboard({user,setUser,onShowAuth}){
   const [checkoutLoading,setCheckoutLoading]=useState(false);
   const isElite=userTier==="elite";
   const isPro=userTier==="pro"||isElite;
+  // Stable ref so useCallback closures (addAlert etc.) always see current tier
+  const isProRef=useRef(isPro);
+  useEffect(()=>{isProRef.current=isPro;},[isPro]);
 
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
@@ -1261,6 +1264,7 @@ function Dashboard({user,setUser,onShowAuth}){
   },[]);
 
   const addAlert=useCallback((alert)=>{
+    if(!isProRef.current)return;
     const key=alert.id||alert.title+Date.now();
     const dedupeKey=alert.id||alert.title;
     if(firedAlerts.current.has(dedupeKey))return;
@@ -2745,14 +2749,23 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             ):null}
             {/* ── Alerts / Push ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-              <span style={{fontFamily:MONO,fontSize:6,color:notifPerm==="granted"&&!pushDisabled?C.gold:C.red,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>ALERTS</span>
+              <span style={{fontFamily:MONO,fontSize:6,color:isPro?(notifPerm==="granted"&&!pushDisabled?C.gold:C.red):C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>ALERTS</span>
               <div style={{position:"relative",display:"inline-flex"}}>
-                <button data-testid="btn-push-notif" onClick={requestPush}
-                  title={notifPerm==="granted"&&!pushDisabled?"Alerts ON — tap to pause":notifPerm==="granted"&&pushDisabled?"Alerts paused — tap to re-enable":"Tap to enable alerts"}
-                  style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  {notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}
-                </button>
-                {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
+                {isPro?(
+                  <>
+                    <button data-testid="btn-push-notif" onClick={requestPush}
+                      title={notifPerm==="granted"&&!pushDisabled?"Alerts ON — tap to pause":notifPerm==="granted"&&pushDisabled?"Alerts paused — tap to re-enable":"Tap to enable alerts"}
+                      style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      {notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}
+                    </button>
+                    {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
+                  </>
+                ):(
+                  <button data-testid="btn-alerts-locked" onClick={()=>{setUpgradeDefaultTier(null);setShowPricingModal(true);}} title="Upgrade to Pro for real-time alerts"
+                    style={{background:"rgba(201,168,76,.05)",border:"1px solid rgba(201,168,76,.18)",borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    🔒
+                  </button>
+                )}
               </div>
             </div>
             {/* ── Tier badge (clickable) ── */}
@@ -2895,7 +2908,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             <span style={{fontSize:16}}>📷</span> SCAN ACCESS CODE
           </button>
 
-          {alertHistory.length>0&&<div style={{marginBottom:12}}>
+          {isPro&&alertHistory.length>0&&<div style={{marginBottom:12}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
               <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em"}}>ALERT HISTORY ({alertHistory.length})</div>
               <button onClick={clearAllAlertHistory} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"2px 8px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em"}}>CLEAR ALL</button>
