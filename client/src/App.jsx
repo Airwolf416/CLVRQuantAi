@@ -448,7 +448,7 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai","watchlist"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About"};
@@ -776,7 +776,7 @@ function holdWindowLabel(tf){
 }
 
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
-function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts}){
+function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade}){
   const[expanded,setExpanded]=useState(false);
   const isLong=sig.dir==="LONG";
   const dirColor=isLong?C.green:C.red;
@@ -863,7 +863,13 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
           <ScoreRing score={qScore} C={C}/>
         </div>
       </div>
-      {expanded&&<div style={{padding:"0 14px 14px"}}>
+      {expanded&&<div style={{padding:"0 14px 14px",position:"relative"}}>
+        {sig.locked&&<div style={{position:"absolute",inset:0,zIndex:10,backdropFilter:"blur(8px)",background:"rgba(5,7,9,.88)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,borderRadius:2}}>
+          <span style={{fontSize:28}}>🔒</span>
+          <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.gold2}}>Real-time Signals — Pro Feature</div>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,letterSpacing:"0.1em",textAlign:"center",maxWidth:240,lineHeight:1.7}}>Unlock real-time signals, full AI reasoning, confidence breakdown, and entry/exit targets</div>
+          <button data-testid="btn-upgrade-signal" onClick={onUpgrade} style={{background:"rgba(201,168,76,.14)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:4,padding:"9px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
+        </div>}
         {sig.reasoning&&sig.reasoning.length>0&&<div style={{background:"rgba(201,168,76,.04)",border:`1px solid ${C.gold}22`,borderRadius:2,padding:"10px 12px",marginBottom:10}}>
           <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:6}}>AI TRADE REASONING</div>
           {sig.reasoning.map((r,i)=><div key={i} style={{fontFamily:MONO,fontSize:10,color:C.muted2,lineHeight:1.7,display:"flex",gap:6,marginBottom:2}}><span style={{color:C.gold,flexShrink:0}}>•</span><span>{r}</span></div>)}
@@ -1057,6 +1063,246 @@ function HelpItem({q,a}){
       {open&&<div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.85,paddingBottom:4}}>{a}</div>}
     </div>
   );
+}
+
+// ─── TRACK RECORD TAB ─────────────────────────────────────
+function TrackRecordTab({isPro,onUpgrade}){
+  const[stats,setStats]=useState(null);
+  const[history,setHistory]=useState([]);
+  const[histLocked,setHistLocked]=useState(false);
+  const[loading,setLoading]=useState(true);
+  useEffect(()=>{
+    Promise.all([
+      fetch("/api/track-record").then(r=>r.json()).catch(()=>null),
+      fetch("/api/signal-history?limit=30").then(r=>r.json()).catch(()=>({signals:[],isPaidUser:false})),
+    ]).then(([s,h])=>{
+      if(s)setStats(s);
+      setHistory(h.signals||[]);
+      setHistLocked(!h.isPaidUser);
+    }).finally(()=>setLoading(false));
+  },[]);
+  const panel2={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,marginBottom:10};
+  const winRate=stats?.winRate||0;
+  const winColor=winRate>=60?C.green:winRate>=50?C.orange:C.red;
+  const maxBar=stats?.weeklyData?Math.max(...stats.weeklyData.map(w=>w.wins+w.losses),1):1;
+  if(loading)return<div style={{padding:32,textAlign:"center",fontFamily:MONO,fontSize:10,color:C.muted}}>Loading track record…</div>;
+  return(<>
+    <div style={{...panel2,border:`1px solid rgba(201,168,76,.18)`}}>
+      <div style={{padding:"22px 18px 12px",textAlign:"center"}}>
+        <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.white}}>Signal <span style={{color:C.gold}}>Track Record</span></div>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.3em",marginTop:4}}>LIVE PERFORMANCE ANALYTICS</div>
+        {!stats?.total&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:10,lineHeight:1.7}}>Track record is building — signals are logged automatically and outcomes resolved every 30 minutes.</div>}
+      </div>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+      {[
+        {l:"WIN RATE",v:`${winRate}%`,c:winColor,s:"resolved signals"},
+        {l:"TOTAL SIGNALS",v:stats?.total||0,c:C.white,s:"all-time tracked"},
+        {l:"AVG PnL",v:stats?.avgPnl?`${stats.avgPnl>=0?"+":""}${stats.avgPnl}%`:"—",c:C.green,s:"per resolved signal"},
+        {l:"WINS / LOSSES",v:`${stats?.wins||0} / ${stats?.losses||0}`,c:C.muted2,s:"resolved outcomes"},
+      ].map(({l,v,c,s})=>(
+        <div key={l} style={{...panel2,marginBottom:0,padding:"14px",textAlign:"center"}}>
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",marginBottom:4}}>{l}</div>
+          <div style={{fontFamily:MONO,fontSize:18,fontWeight:800,color:c}}>{v}</div>
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted2,marginTop:2}}>{s}</div>
+        </div>
+      ))}
+    </div>
+    {stats?.weeklyData&&stats.weeklyData.length>0&&(
+      <div style={panel2}>
+        <div style={{padding:"12px 16px 16px"}}>
+          <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em",marginBottom:12}}>WEEKLY WIN / LOSS</div>
+          <div style={{display:"flex",gap:4,alignItems:"flex-end",height:72}}>
+            {stats.weeklyData.map((w,i)=>(
+              <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                <div style={{width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",height:56,gap:2}}>
+                  <div style={{width:"100%",height:`${Math.max((w.wins/maxBar)*48,2)}px`,background:C.green+"88",borderRadius:"2px 2px 0 0",minHeight:2}}/>
+                  <div style={{width:"100%",height:`${Math.max((w.losses/maxBar)*48,2)}px`,background:C.red+"66",borderRadius:"2px 2px 0 0",minHeight:2}}/>
+                </div>
+                <div style={{fontFamily:MONO,fontSize:6,color:C.muted,marginTop:2}}>{w.week?.slice(5)||""}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:14,marginTop:8}}>
+            <span style={{fontFamily:MONO,fontSize:7,color:C.green}}>■ Wins</span>
+            <span style={{fontFamily:MONO,fontSize:7,color:C.red}}>■ Losses</span>
+          </div>
+        </div>
+      </div>
+    )}
+    {isPro&&stats?.byAsset&&stats.byAsset.length>0&&(
+      <div style={panel2}>
+        <div style={{padding:"12px 16px"}}>
+          <div style={{fontFamily:MONO,fontSize:9,color:C.cyan,letterSpacing:"0.2em",marginBottom:10}}>BREAKDOWN BY ASSET</div>
+          {stats.byAsset.map(a=>(
+            <div key={a.token} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:C.white,width:52}}>{a.token}</span>
+              <span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>{a.total} signals</span>
+              <span style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:a.winRate>=60?C.green:C.orange}}>{a.winRate}% W</span>
+              <span style={{fontFamily:MONO,fontSize:9,color:a.avgPnl>=0?C.green:C.red}}>{a.avgPnl>=0?"+":""}{a.avgPnl}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+    {isPro&&stats?.byDirection&&(
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+        {stats.byDirection.map(d=>(
+          <div key={d.direction} style={{...panel2,marginBottom:0,padding:"14px",textAlign:"center"}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginBottom:5}}>{d.direction}</div>
+            <div style={{fontFamily:MONO,fontSize:20,fontWeight:800,color:d.direction==="LONG"?C.green:C.red}}>{d.winRate}%</div>
+            <div style={{fontFamily:MONO,fontSize:7,color:C.muted2}}>{d.total} signals</div>
+          </div>
+        ))}
+      </div>
+    )}
+    <div style={panel2}>
+      <div style={{padding:"12px 16px 8px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em"}}>SIGNAL HISTORY</div>
+        {histLocked&&<span style={{fontFamily:MONO,fontSize:8,color:C.orange}}>🔒 Pro & Elite</span>}
+      </div>
+      {history.length===0?(
+        <div style={{padding:"24px 16px",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted}}>Signal history is building — new signals are tracked automatically.</div>
+      ):history.map(sig=>(
+        <div key={sig.id} style={{borderTop:`1px solid ${C.border}`,padding:"10px 16px",position:"relative"}}>
+          {histLocked?(
+            <>
+              <div style={{display:"flex",alignItems:"center",gap:8,filter:"blur(5px)",userSelect:"none",pointerEvents:"none"}}>
+                <span style={{fontFamily:MONO,fontSize:11,fontWeight:800,color:C.white}}>███████</span>
+                <span style={{fontFamily:MONO,fontSize:9,color:C.muted}}>████</span>
+                <span style={{fontFamily:MONO,fontSize:9,color:C.muted2,flex:1}}>████████████</span>
+              </div>
+              <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(5,7,9,.75)",backdropFilter:"blur(4px)"}}>
+                <button data-testid="btn-unlock-history" onClick={onUpgrade} style={{fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:11,color:C.gold2,background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,padding:"6px 16px",cursor:"pointer"}}>🔒 Upgrade to unlock full history</button>
+              </div>
+            </>
+          ):(
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <span style={{fontFamily:MONO,fontSize:9,padding:"2px 6px",borderRadius:2,background:sig.direction==="LONG"?"rgba(0,199,135,.08)":"rgba(255,64,96,.08)",color:sig.direction==="LONG"?C.green:C.red,border:`1px solid ${sig.direction==="LONG"?C.green:C.red}44`,fontWeight:700}}>{sig.direction}</span>
+              <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:C.white}}>{sig.token}</span>
+              {sig.entry&&<span style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>Entry: {parseFloat(sig.entry).toLocaleString()}</span>}
+              {sig.tp1&&<span style={{fontFamily:MONO,fontSize:9,color:C.green}}>TP1: {parseFloat(sig.tp1).toLocaleString()}</span>}
+              {sig.stopLoss&&<span style={{fontFamily:MONO,fontSize:9,color:C.red}}>SL: {parseFloat(sig.stopLoss).toLocaleString()}</span>}
+              <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{new Date(sig.ts).toLocaleDateString()}</span>
+              <span style={{fontFamily:MONO,fontSize:9,padding:"2px 6px",borderRadius:2,background:sig.outcome==="WIN"?"rgba(0,199,135,.08)":sig.outcome==="LOSS"?"rgba(255,64,96,.08)":"rgba(255,140,0,.06)",color:sig.outcome==="WIN"?C.green:sig.outcome==="LOSS"?C.red:C.orange,border:`1px solid ${sig.outcome==="WIN"?C.green:sig.outcome==="LOSS"?C.red:C.orange}44`,fontWeight:700}}>{sig.outcome}</span>
+              {sig.pnlPct&&sig.outcome!=="PENDING"&&<span style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:parseFloat(sig.pnlPct)>=0?C.green:C.red}}>{parseFloat(sig.pnlPct)>=0?"+":""}{sig.pnlPct}% PnL</span>}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+    <div style={{fontFamily:MONO,fontSize:7,color:C.muted,padding:"4px 0 12px",textAlign:"center"}}>
+      Last updated: {stats?.lastUpdated?new Date(stats.lastUpdated).toLocaleString():"—"} · Win/Loss based on TP1 price target hit
+    </div>
+  </>);
+}
+
+// ─── WATCHLIST TAB ─────────────────────────────────────────
+function WatchlistTab({isPro,onUpgrade,liveSignals}){
+  const[items,setItems]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[newToken,setNewToken]=useState("");
+  const[newMinConf,setNewMinConf]=useState(70);
+  const[adding,setAdding]=useState(false);
+  const[err,setErr]=useState(null);
+  const panel2={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,marginBottom:10};
+
+  useEffect(()=>{
+    if(!isPro){setLoading(false);return;}
+    fetch("/api/watchlist").then(r=>r.json()).then(d=>setItems(d.items||[])).catch(()=>{}).finally(()=>setLoading(false));
+  },[isPro]);
+
+  const addItem=async()=>{
+    if(!newToken.trim())return;
+    setAdding(true);setErr(null);
+    try{
+      const r=await fetch("/api/watchlist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:newToken.toUpperCase(),minConf:newMinConf})});
+      const d=await r.json();
+      if(d.error==="already_in_watchlist"){setErr("Already in watchlist");return;}
+      if(d.error==="max_watchlist_size_20"){setErr("Max 20 assets reached");return;}
+      if(d.item)setItems(prev=>[...prev,d.item]);
+      setNewToken("");
+    }catch(e){setErr("Failed to add");}finally{setAdding(false);}
+  };
+
+  const removeItem=async(id)=>{
+    await fetch(`/api/watchlist/${id}`,{method:"DELETE"});
+    setItems(prev=>prev.filter(i=>i.id!==id));
+  };
+
+  const watchedTokens=new Set(items.map(i=>i.token));
+  const matchingSigs=(liveSignals||[]).filter(s=>watchedTokens.has(s.token)&&!s.locked);
+
+  if(!isPro)return(
+    <div style={{...panel2,textAlign:"center",padding:"40px 20px"}}>
+      <div style={{fontFamily:SERIF,fontSize:20,fontWeight:900,color:C.gold,marginBottom:6}}>My Watchlist</div>
+      <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.14em",marginBottom:20}}>PRO & ELITE FEATURE</div>
+      <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.8,marginBottom:24,maxWidth:300,margin:"0 auto 24px"}}>
+        Track your favourite assets and get alerted when a high-confidence signal fires on them.
+      </div>
+      <button data-testid="btn-upgrade-watchlist" onClick={onUpgrade} style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:4,padding:"10px 24px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
+    </div>
+  );
+
+  return(<>
+    <div style={{...panel2,border:`1px solid rgba(201,168,76,.18)`}}>
+      <div style={{padding:"16px 18px 12px"}}>
+        <div style={{fontFamily:SERIF,fontSize:20,fontWeight:900,color:C.white}}>My <span style={{color:C.gold}}>Watchlist</span></div>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.25em",marginTop:3}}>CUSTOM SIGNAL ALERTS · {items.length}/20</div>
+      </div>
+    </div>
+
+    {matchingSigs.length>0&&(
+      <div style={{...panel2,border:`1px solid rgba(0,199,135,.3)`}}>
+        <div style={{padding:"10px 14px 6px"}}>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.green,letterSpacing:"0.18em",marginBottom:8,animation:"pulse 2s infinite"}}>⚡ LIVE SIGNALS ON WATCHED ASSETS</div>
+          {matchingSigs.map(sig=>(
+            <div key={sig.id} data-testid={`watchlist-signal-${sig.id}`} style={{padding:"7px 0",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <span style={{fontFamily:MONO,fontSize:9,padding:"2px 6px",borderRadius:2,background:sig.dir==="LONG"?"rgba(0,199,135,.08)":"rgba(255,64,96,.08)",color:sig.dir==="LONG"?C.green:C.red,border:`1px solid ${sig.dir==="LONG"?C.green:C.red}44`,fontWeight:700}}>{sig.dir}</span>
+              <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:C.white}}>{sig.token}</span>
+              <span style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>Score: {sig.advancedScore||sig.conf||"—"}</span>
+              <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{Math.floor((Date.now()-(sig.ts||0))/60000)}m ago</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    <div style={panel2}>
+      <div style={{padding:"14px 16px"}}>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.12em",marginBottom:10}}>ADD ASSET TO WATCHLIST</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <input data-testid="input-watchlist-token" value={newToken} onChange={e=>setNewToken(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&addItem()} placeholder="BTC, ETH, SOL…" style={{flex:"1 1 100px",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:4,padding:"8px 12px",fontFamily:MONO,fontSize:12,color:C.white,outline:"none"}}/>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>Min conf:</span>
+            <input data-testid="input-watchlist-conf" type="number" min="0" max="100" value={newMinConf} onChange={e=>setNewMinConf(Number(e.target.value))} style={{width:50,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:4,padding:"8px 8px",fontFamily:MONO,fontSize:12,color:C.white,outline:"none",textAlign:"center"}}/>
+          </div>
+          <button data-testid="btn-add-watchlist" onClick={addItem} disabled={adding||!newToken.trim()} style={{padding:"8px 18px",background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,fontFamily:MONO,fontSize:11,color:C.gold2,cursor:adding||!newToken.trim()?"not-allowed":"pointer",opacity:adding||!newToken.trim()?0.5:1}}>
+            {adding?"Adding…":"+ Add"}
+          </button>
+        </div>
+        {err&&<div style={{fontFamily:MONO,fontSize:9,color:C.red,marginTop:6}}>{err}</div>}
+        <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:6}}>Alert fires when a signal fires on a watched token with confidence ≥ your threshold. Max 20 assets.</div>
+      </div>
+    </div>
+
+    {loading?<div style={{padding:24,textAlign:"center",fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>
+    :items.length===0?(
+      <div style={{...panel2,padding:"24px 16px",textAlign:"center"}}>
+        <div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>No assets in your watchlist yet.</div>
+        <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,marginTop:6}}>Add BTC, ETH, SOL or any tracked token above.</div>
+      </div>
+    ):items.map(item=>(
+      <div key={item.id} data-testid={`watchlist-item-${item.id}`} style={{...panel2,padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontFamily:MONO,fontSize:14,fontWeight:800,color:C.white}}>{item.token}</span>
+          <span style={{fontFamily:MONO,fontSize:8,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"2px 6px"}}>conf ≥ {item.minConf}</span>
+          {matchingSigs.some(s=>s.token===item.token)&&<span style={{fontFamily:MONO,fontSize:8,color:C.green,animation:"pulse 2s infinite"}}>● SIGNAL</span>}
+        </div>
+        <button data-testid={`btn-remove-watchlist-${item.id}`} onClick={()=>removeItem(item.id)} style={{background:"rgba(255,64,96,.07)",border:`1px solid rgba(255,64,96,.22)`,borderRadius:2,padding:"4px 10px",fontFamily:MONO,fontSize:9,color:C.red,cursor:"pointer"}}>Remove</button>
+      </div>
+    ))}
+  </>);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2510,6 +2756,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
+    {k:"track",icon:"📈",label:"RECORD"},
+    {k:"watchlist",icon:"🔖",label:"WATCH"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -3407,7 +3655,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         </>}
 
         {/* ══ SIGNALS ══ */}
-        {tab==="signals"&&isPro&&<>
+        {tab==="signals"&&<>
           <div style={{marginBottom:10}}><SLabel>Quant AI Signals</SLabel></div>
 
           {/* ── Store price strip (top 6 assets by volume) ── */}
@@ -3447,6 +3695,12 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               <div style={{fontFamily:MONO,fontSize:7,color:`${C.purple}88`,letterSpacing:"0.12em"}}>DETECTED</div>
             </div>
           </div>
+
+          {/* ── Free-user delay banner ── */}
+          {!isPro&&<div style={{background:"rgba(255,140,0,.07)",border:`1px solid rgba(255,140,0,.35)`,borderRadius:4,padding:"8px 14px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+            <span style={{fontFamily:MONO,fontSize:9,color:C.orange,lineHeight:1.6}}>⏱ You are seeing signals <b>delayed by 30 minutes</b> — Upgrade for real-time</span>
+            <button data-testid="btn-upgrade-signal-banner" onClick={onUpgrade} style={{fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:11,color:C.gold2,background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,padding:"5px 12px",cursor:"pointer",flexShrink:0}}>Upgrade →</button>
+          </div>}
 
           {/* Filters */}
           <div style={{display:"flex",gap:4,marginBottom:10,overflowX:"auto"}}>
@@ -3511,9 +3765,15 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 Signals appear when any tracked token moves &gt;0.8% within a 5-minute window.<br/>
                 Tracking {sigTracking} tokens in real-time. Detector is armed.
               </div>}
-            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts}/>);
+            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade}/>);
           })()}
         </>}
+
+        {/* ══ TRACK RECORD ══ */}
+        {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
+
+        {/* ══ WATCHLIST ══ */}
+        {tab==="watchlist"&&<WatchlistTab isPro={isPro} onUpgrade={onUpgrade} liveSignals={liveSignals}/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>
