@@ -791,17 +791,17 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
               ← Back to Preview
             </button>
           )}
-          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: "clamp(40px,10vw,64px)", color: C.gold2, letterSpacing: "0.04em", lineHeight: 1, marginBottom: 6, textShadow: "0 0 40px rgba(201,168,76,.3)" }}>
-            CLVRQuant
+          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: "clamp(40px,10vw,64px)", letterSpacing: "0.04em", lineHeight: 1, marginBottom: 6, textShadow: "0 0 40px rgba(201,168,76,.3)" }}>
+            <span style={{ color: isDark ? C.gold2 : "#0d1b35" }}>CLVR</span><span style={{ color: C.gold }}>Quant</span>
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.gold, letterSpacing: "0.35em", marginBottom: 28, fontWeight: 600 }}>AI · MARKET INTELLIGENCE</div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: isDark ? C.gold : "#0d1b35", letterSpacing: "0.35em", marginBottom: 28, fontWeight: 600 }}>AI · MARKET INTELLIGENCE</div>
 
           <p style={{ fontFamily: SANS, fontSize: 14, color: C.muted2, lineHeight: 1.8, marginBottom: 10, maxWidth: 380, margin: "0 auto 20px" }}>
             Your personal quantitative market intelligence terminal. Real-time signals, AI-powered analysis, macro calendar, and Phantom Wallet — all in one place.
           </p>
 
           <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: "14px 18px", marginBottom: 28, fontSize: 11, color: C.muted2, lineHeight: 1.7, textAlign: "left" }}>
-            <span style={{ fontFamily: MONO, fontSize: 9, color: C.gold, letterSpacing: "0.15em", fontWeight: 700 }}>EDUCATION & INFORMATION PLATFORM</span>
+            <span style={{ fontFamily: MONO, fontSize: 9, color: isDark ? C.gold : "#0d1b35", letterSpacing: "0.15em", fontWeight: 700 }}>EDUCATION & INFORMATION PLATFORM</span>
             <div style={{ marginTop: 6 }}>
               CLVRQuant does <strong style={{ color: C.white }}>not</strong> execute trades, manage funds, or provide financial advice.
               All content is for <strong style={{ color: C.white }}>informational and learning purposes only.</strong>
