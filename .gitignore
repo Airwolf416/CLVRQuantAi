@@ -4,3 +4,28 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+
+# Database dump files — may contain hashed passwords, secrets, or PII
+*.sql
+*_dump.sql
+*_backup.sql
+data_backup*
+clvrquantai_dump*
+
+# Environment secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Local secrets / key files
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS / editor
+.idea
+.vscode
+*.swp
+*.swo
+Thumbs.db

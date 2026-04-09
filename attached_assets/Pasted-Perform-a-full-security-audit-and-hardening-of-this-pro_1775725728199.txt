@@ -1,0 +1,29 @@
+Perform a full security audit and hardening of this project. Do the following:
+
+1. **API Key & Secret Exposure Scan**
+   - Search all files (including .env, config files, frontend JS/JSX, and any hardcoded strings) for exposed API keys, secrets, or tokens (Anthropic, Coinglass, any exchange APIs, database URLs, JWT secrets, etc.)
+   - If any keys are found hardcoded in frontend or client-side code, flag them immediately — they must be moved server-side
+   - Ensure all secrets are stored only in Replit Secrets (environment variables) and never committed to the repo or bundled into the frontend build
+
+2. **Frontend vs Backend Secret Separation**
+   - Confirm that NO secret keys are accessible in the browser (check network requests, window objects, or exposed via API responses)
+   - All calls to Anthropic API, Coinglass API, or any third-party service must be proxied through backend endpoints — never called directly from the frontend
+
+3. **Access Control Verification**
+   - Verify that paid-tier feature gates (e.g., Alert History) are enforced server-side, not just hidden in the UI
+   - Ensure all protected API routes require valid authentication before returning data
+   - Check that there is no way to bypass tier checks by calling backend endpoints directly
+
+4. **Environment Configuration**
+   - Confirm .env or any file containing secrets is in .gitignore
+   - Check that no sensitive config is logged to the console in production
+   - Ensure NODE_ENV or equivalent is set correctly for production vs development
+
+5. **General Hardening**
+   - Add or verify CORS policy on backend — only allow requests from clvrquantai.com
+   - Check for any open debug endpoints or admin routes that lack authentication
+   - Ensure rate limiting is in place on signal generation and AI endpoints to prevent abuse
+
+6. **Report**
+   - Provide a summary of every issue found, its severity (Critical / High / Medium / Low), and the fix applied
+   - Flag anything that requires my manual action (e.g., rotating a key that was previously exposed)

@@ -1,4 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -23,6 +26,54 @@ process.on('SIGINT', () => { shuttingDown = true; });
 
 const app = express();
 const httpServer = createServer(app);
+
+const isProduction = process.env.NODE_ENV === "production";
+
+// ── Security headers (helmet) ─────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+
+// ── CORS — restrict cross-origin API calls in production ──────────────────────
+const ALLOWED_ORIGINS = isProduction
+  ? [
+      "https://clvrquantai.com",
+      "https://www.clvrquantai.com",
+    ]
+  : true;
+
+app.use(cors({
+  origin: ALLOWED_ORIGINS,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+}));
+
+// ── Global API rate limiter — 300 requests / 5 minutes per IP ─────────────────
+const globalLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !req.path.startsWith("/api/"),
+  message: { error: "Too many requests. Please slow down." },
+});
+app.use(globalLimiter);
+
+// ── AI/Quant endpoint rate limiter — 30 requests / 15 minutes per IP ──────────
+export const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { keyGeneratorIpFallback: false },
+  message: { error: "AI rate limit reached. Please wait before trying again." },
+  keyGenerator: (req) => {
+    const userId = (req.session as any)?.userId;
+    return userId ? `user:${userId}` : req.ip || "anon";
+  },
+});
 
 // ── Stripe webhook — MUST be registered before app.use(express.json()) ───────
 // express.raw() captures the unmodified body buffer Stripe needs for HMAC verification.
@@ -355,7 +406,6 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { pool } from "./db";
 const PgSession = connectPgSimple(session);
-const isProduction = process.env.NODE_ENV === "production";
 app.set("trust proxy", 1);
 app.use(session({
   store: new PgSession({
