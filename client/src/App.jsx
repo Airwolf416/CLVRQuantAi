@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────
 
 import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { SiInstagram, SiTiktok } from "react-icons/si";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
@@ -3854,6 +3855,58 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               </button>
             </div>
           </div>
+          {/* Social media panel */}
+          <div style={{...panel,border:`1px solid rgba(201,168,76,.18)`}}>
+            <div style={{padding:"18px 18px"}}>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em",marginBottom:6}}>FOLLOW CLVRQUANT</div>
+              <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.7,marginBottom:16}}>
+                Follow for live signals, market insights, and daily trade setups.
+              </div>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                <a
+                  data-testid="link-instagram-about"
+                  href="https://www.instagram.com/clvrquantai?igsh=MTU0d25zcm5uaGp1cg%3D%3D&utm_source=qr"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display:"flex",alignItems:"center",gap:9,
+                    minHeight:44,padding:"0 18px",
+                    borderRadius:6,
+                    background:"rgba(201,168,76,0.07)",
+                    border:`1px solid rgba(201,168,76,0.25)`,
+                    color:C.gold2,
+                    textDecoration:"none",
+                    fontFamily:MONO,fontSize:11,letterSpacing:"0.08em",
+                    fontWeight:600,
+                  }}
+                >
+                  <SiInstagram size={18} />
+                  <span>@clvrquantai</span>
+                </a>
+                <a
+                  data-testid="link-tiktok-about"
+                  href="https://www.tiktok.com/@clvrquantai"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display:"flex",alignItems:"center",gap:9,
+                    minHeight:44,padding:"0 18px",
+                    borderRadius:6,
+                    background:"rgba(201,168,76,0.07)",
+                    border:`1px solid rgba(201,168,76,0.25)`,
+                    color:C.gold2,
+                    textDecoration:"none",
+                    fontFamily:MONO,fontSize:11,letterSpacing:"0.08em",
+                    fontWeight:600,
+                  }}
+                >
+                  <SiTiktok size={17} />
+                  <span>@clvrquantai</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
           <div style={{...panel,border:`1px solid rgba(201,168,76,.12)`}}>
             <div style={{padding:"14px 16px",textAlign:"center"}}>
               <div style={{fontFamily:SERIF,fontSize:13,color:C.muted2,fontStyle:"italic",lineHeight:1.8}}>
