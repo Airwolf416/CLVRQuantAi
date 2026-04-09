@@ -199,6 +199,8 @@ async function fetchCompanyForm4s(
   }
 }
 
+const MAX_SCAN_MS = 5 * 60 * 1000; // 5-minute hard cap
+
 async function runEdgarScan(): Promise<void> {
   if (scanInProgress) return;
   scanInProgress = true;
@@ -213,6 +215,10 @@ async function runEdgarScan(): Promise<void> {
     const allFilings: FilingInfo[] = [];
 
     for (let i = 0; i < WATCHLIST.length; i += CONCURRENCY) {
+      if (Date.now() - startMs > MAX_SCAN_MS) {
+        console.warn("[insider] scan hit 5-min cap during submissions phase — using partial results");
+        break;
+      }
       const batch = WATCHLIST.slice(i, i + CONCURRENCY);
       const batchResults = await Promise.all(
         batch.map(async ({ ticker, cik }) => {
@@ -231,6 +237,11 @@ async function runEdgarScan(): Promise<void> {
     scanProgress = { done: 0, total: allFilings.length, phase: "filings" };
     const allTrades: InsiderTrade[] = [];
     for (let i = 0; i < allFilings.length; i++) {
+      if (Date.now() - startMs > MAX_SCAN_MS) {
+        console.warn(`[insider] scan hit 5-min cap at filing ${i}/${allFilings.length} — using partial results`);
+        scanProgress.done = allFilings.length; // mark as complete so frontend stops spinning
+        break;
+      }
       const f = allFilings[i];
       const trades = await fetchForm4Xml(f.filerCik, f.adsh, f.filingDate, f.ticker);
       allTrades.push(...trades);
