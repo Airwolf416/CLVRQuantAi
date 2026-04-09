@@ -1,6 +1,6 @@
-import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, users, accessCodes, referrals, userAlerts, webauthnCredentials } from "@shared/schema";
+import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type WatchlistItem, type InsertWatchlistItem, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, watchlistItems } from "@shared/schema";
 import { db } from "./db";
-import { eq, sql, and, gt, lt } from "drizzle-orm";
+import { eq, sql, and, gt, lt, desc, ne } from "drizzle-orm";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -38,6 +38,24 @@ export interface IStorage {
   setEmailVerificationToken(userId: string, token: string): Promise<void>;
   getUserByEmailVerificationToken(token: string): Promise<User | undefined>;
   markEmailVerified(userId: string): Promise<void>;
+  // Signal history
+  saveSignalRecord(data: {
+    signalId: number; token: string; direction: string; conf: number;
+    advancedScore: number; entry: string; tp1?: string; stopLoss?: string;
+    leverage?: string; pctMove?: string; tp1Pct?: string; stopPct?: string;
+    reasoning?: string[]; scoreBreakdown?: string; isStrongSignal: boolean;
+    ts: Date;
+  }): Promise<void>;
+  getSignalHistory(limit: number, offset: number): Promise<SignalHistoryRecord[]>;
+  getPendingSignals(): Promise<SignalHistoryRecord[]>;
+  resolveSignalOutcome(signalId: number, outcome: string, pnlPct: string): Promise<void>;
+  getSignalStats(): Promise<{ total: number; wins: number; losses: number; pending: number; avgPnl: number; weeklyData: any[]; byAsset: any[]; byDirection: any[] }>;
+  // Watchlist
+  getWatchlistByUser(userId: string): Promise<WatchlistItem[]>;
+  addWatchlistItem(data: InsertWatchlistItem): Promise<WatchlistItem>;
+  removeWatchlistItem(id: number, userId: string): Promise<void>;
+  updateWatchlistMinConf(id: number, userId: string, minConf: number): Promise<void>;
+  getAllWatchlists(): Promise<WatchlistItem[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -209,6 +227,101 @@ export class DatabaseStorage implements IStorage {
 
   async markEmailVerified(userId: string): Promise<void> {
     await db.update(users).set({ emailVerified: true, emailVerificationToken: null }).where(eq(users.id, userId));
+  }
+
+  // ── Signal History ──────────────────────────────────────────────────────────
+  async saveSignalRecord(data: {
+    signalId: number; token: string; direction: string; conf: number;
+    advancedScore: number; entry: string; tp1?: string; stopLoss?: string;
+    leverage?: string; pctMove?: string; tp1Pct?: string; stopPct?: string;
+    reasoning?: string[]; scoreBreakdown?: string; isStrongSignal: boolean;
+    ts: Date;
+  }): Promise<void> {
+    await db.insert(signalHistory).values(data).onConflictDoNothing();
+  }
+
+  async getSignalHistory(limit: number, offset: number): Promise<SignalHistoryRecord[]> {
+    return db.select().from(signalHistory).orderBy(desc(signalHistory.ts)).limit(limit).offset(offset);
+  }
+
+  async getPendingSignals(): Promise<SignalHistoryRecord[]> {
+    const cutoff = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    return db.select().from(signalHistory)
+      .where(and(eq(signalHistory.outcome, "PENDING"), gt(signalHistory.ts, cutoff)));
+  }
+
+  async resolveSignalOutcome(signalId: number, outcome: string, pnlPct: string): Promise<void> {
+    await db.update(signalHistory)
+      .set({ outcome, pnlPct, updatedAt: new Date() })
+      .where(eq(signalHistory.signalId, signalId));
+  }
+
+  async getSignalStats(): Promise<{ total: number; wins: number; losses: number; pending: number; avgPnl: number; weeklyData: any[]; byAsset: any[]; byDirection: any[] }> {
+    const all = await db.select().from(signalHistory).orderBy(desc(signalHistory.ts)).limit(500);
+    const wins = all.filter(s => s.outcome === "WIN").length;
+    const losses = all.filter(s => s.outcome === "LOSS").length;
+    const pending = all.filter(s => s.outcome === "PENDING").length;
+    const resolved = all.filter(s => s.pnlPct && s.outcome !== "PENDING");
+    const avgPnl = resolved.length > 0
+      ? resolved.reduce((sum, s) => sum + parseFloat(s.pnlPct || "0"), 0) / resolved.length
+      : 0;
+    // Weekly data (last 8 weeks)
+    const weeklyMap: Record<string, { wins: number; losses: number; week: string }> = {};
+    for (const s of all) {
+      const d = new Date(s.ts);
+      const weekStart = new Date(d);
+      weekStart.setDate(d.getDate() - d.getDay());
+      const key = weekStart.toISOString().slice(0, 10);
+      if (!weeklyMap[key]) weeklyMap[key] = { wins: 0, losses: 0, week: key };
+      if (s.outcome === "WIN") weeklyMap[key].wins++;
+      if (s.outcome === "LOSS") weeklyMap[key].losses++;
+    }
+    const weeklyData = Object.values(weeklyMap).sort((a, b) => a.week.localeCompare(b.week)).slice(-8);
+    // By asset
+    const assetMap: Record<string, { wins: number; total: number; pnlSum: number }> = {};
+    for (const s of all) {
+      if (!assetMap[s.token]) assetMap[s.token] = { wins: 0, total: 0, pnlSum: 0 };
+      assetMap[s.token].total++;
+      if (s.outcome === "WIN") assetMap[s.token].wins++;
+      if (s.pnlPct) assetMap[s.token].pnlSum += parseFloat(s.pnlPct);
+    }
+    const byAsset = Object.entries(assetMap).map(([token, v]) => ({
+      token, total: v.total, winRate: v.total > 0 ? Math.round(v.wins / v.total * 100) : 0,
+      avgPnl: v.total > 0 ? +(v.pnlSum / v.total).toFixed(2) : 0,
+    })).sort((a, b) => b.total - a.total).slice(0, 10);
+    // By direction
+    const dirMap: Record<string, { wins: number; total: number }> = { LONG: { wins: 0, total: 0 }, SHORT: { wins: 0, total: 0 } };
+    for (const s of all) {
+      if (!dirMap[s.direction]) continue;
+      dirMap[s.direction].total++;
+      if (s.outcome === "WIN") dirMap[s.direction].wins++;
+    }
+    const byDirection = Object.entries(dirMap).map(([direction, v]) => ({
+      direction, total: v.total, winRate: v.total > 0 ? Math.round(v.wins / v.total * 100) : 0,
+    }));
+    return { total: all.length, wins, losses, pending, avgPnl: +avgPnl.toFixed(2), weeklyData, byAsset, byDirection };
+  }
+
+  // ── Watchlist ───────────────────────────────────────────────────────────────
+  async getWatchlistByUser(userId: string): Promise<WatchlistItem[]> {
+    return db.select().from(watchlistItems).where(eq(watchlistItems.userId, userId));
+  }
+
+  async addWatchlistItem(data: InsertWatchlistItem): Promise<WatchlistItem> {
+    const [item] = await db.insert(watchlistItems).values(data).returning();
+    return item;
+  }
+
+  async removeWatchlistItem(id: number, userId: string): Promise<void> {
+    await db.delete(watchlistItems).where(and(eq(watchlistItems.id, id), eq(watchlistItems.userId, userId)));
+  }
+
+  async updateWatchlistMinConf(id: number, userId: string, minConf: number): Promise<void> {
+    await db.update(watchlistItems).set({ minConf }).where(and(eq(watchlistItems.id, id), eq(watchlistItems.userId, userId)));
+  }
+
+  async getAllWatchlists(): Promise<WatchlistItem[]> {
+    return db.select().from(watchlistItems).where(eq(watchlistItems.alertEnabled, true));
   }
 }
 

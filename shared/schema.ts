@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, serial, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -113,3 +113,48 @@ export type Referral = typeof referrals.$inferSelect;
 export type InsertReferral = z.infer<typeof insertReferralSchema>;
 export type UserAlert = typeof userAlerts.$inferSelect;
 export type InsertUserAlert = z.infer<typeof insertUserAlertSchema>;
+
+// ── Signal History (persistent record of every fired signal) ─────────────────
+export const signalHistory = pgTable("signal_history", {
+  id: serial("id").primaryKey(),
+  signalId: integer("signal_id").notNull(),
+  token: text("token").notNull(),
+  direction: text("direction").notNull(),
+  conf: integer("conf").notNull().default(0),
+  advancedScore: integer("advanced_score").default(0),
+  entry: text("entry").notNull(),
+  tp1: text("tp1"),
+  stopLoss: text("stop_loss"),
+  leverage: text("leverage"),
+  pctMove: text("pct_move"),
+  tp1Pct: text("tp1_pct"),
+  stopPct: text("stop_pct"),
+  reasoning: text("reasoning").array(),
+  scoreBreakdown: text("score_breakdown"),
+  isStrongSignal: boolean("is_strong_signal").default(false),
+  outcome: text("outcome").default("PENDING"),
+  pnlPct: text("pnl_pct"),
+  ts: timestamp("ts").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type SignalHistoryRecord = typeof signalHistory.$inferSelect;
+
+// ── Watchlist Items (per-user list of tracked tokens) ─────────────────────────
+export const watchlistItems = pgTable("watchlist_items", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  token: text("token").notNull(),
+  minConf: integer("min_conf").notNull().default(70),
+  alertEnabled: boolean("alert_enabled").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type WatchlistItem = typeof watchlistItems.$inferSelect;
+export const insertWatchlistItemSchema = createInsertSchema(watchlistItems).pick({
+  userId: true,
+  token: true,
+  minConf: true,
+});
+export type InsertWatchlistItem = z.infer<typeof insertWatchlistItemSchema>;

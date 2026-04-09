@@ -1,0 +1,118 @@
+Implement the following features on CLVRQuantAI to drive free-to-paid conversions. 
+Work through each section carefully and preserve all existing functionality.
+
+---
+
+## 1. LOCKED SIGNAL HISTORY WITH HYPOTHETICAL PnL (FOMO UPSELL)
+
+- On the Signal History page, free users see a feed of past signals but the 
+  details are blurred/locked with a overlay showing a lock icon and 
+  "Upgrade to Paid to unlock full signal history"
+- Paid users see the full feed including: signal direction, entry price, 
+  target, stop, outcome (Win/Loss), and hypothetical PnL %
+- PnL calculation: track the price at signal time vs peak price in the 
+  signal direction within 24h — store this in the database per signal
+- The locked blur effect should be CSS-based (backdrop-filter: blur) with 
+  a centered upgrade CTA button that links to the subscription/pricing page
+- This must be enforced server-side — free users must not receive full 
+  signal data from the API, not just hidden in the UI
+
+---
+
+## 2. DELAYED SIGNALS FOR FREE USERS (CORE UPSELL MECHANIC)
+
+- Free users receive signals with a 30-minute delay
+- Paid users receive signals in real-time (current behavior)
+- Implementation:
+  - When a signal is generated and stored, record the exact timestamp
+  - Free user API endpoint: only return signals where 
+    (current_time - signal_timestamp) >= 30 minutes
+  - Paid user API endpoint: return signals immediately as today
+- On the free user UI, add a visible banner on the signals feed: 
+  "⚡ You are seeing signals delayed by 30 minutes — Upgrade for real-time"
+- The banner should have an Upgrade button linking to the pricing page
+
+---
+
+## 3. SIGNAL CONFIDENCE BREAKDOWN (PAID ONLY)
+
+- Each signal already has underlying data: OI, funding rate, macro filter, 
+  trend direction — surface this for paid users
+- For each signal card in the feed, paid users see an expandable section:
+  - Confidence Score (0–100) derived from: OI trend weight + funding rate 
+    weight + macro filter pass/fail + intraday trend alignment
+  - Breakdown panel showing each factor with a label and value:
+    • Open Interest Trend: Bullish / Bearish / Neutral
+    • Funding Rate: Positive / Negative / Neutral  
+    • Macro Filter: Clear / Caution / Blocked
+    • Trend Alignment: Aligned / Diverging
+  - Color code each factor: green / yellow / red
+- Free users see the signal card with a blurred/locked breakdown section 
+  and "Upgrade to see full signal reasoning"
+- Enforce server-side: free user signal API response must exclude the 
+  breakdown fields entirely
+
+---
+
+## 4. CUSTOM WATCHLIST & ALERTS (PAID ONLY)
+
+- Add a new "My Watchlist" page accessible only to paid users
+- Free users who navigate to it see a locked page with upgrade prompt
+- Features for paid users:
+  - Add/remove trading pairs to a personal watchlist (BTC, ETH, SOL, etc.)
+  - Set a custom alert threshold: e.g. "notify me when a signal fires on 
+    BTC with confidence score >= 70"
+  - Alerts delivered as in-app notifications (notification bell in navbar)
+  - Store watchlist and alert preferences in the database per user
+  - When a new signal is generated, check all paid users' watchlist 
+    preferences and trigger in-app alerts accordingly
+
+---
+
+## 5. SIGNAL ACCURACY / TRACK RECORD DASHBOARD (PUBLIC + PAID DETAIL)
+
+- Create a public-facing "/track-record" page visible to all users 
+  (no login required) — this is a trust-builder for conversion
+- Public view shows:
+  - Overall win rate % (last 30 days and all-time)
+  - Total signals generated
+  - Average hypothetical PnL per signal
+  - Simple chart: Win vs Loss count per week (bar chart)
+  - Last updated timestamp
+- Paid users see an extended view on this page:
+  - Breakdown by asset (BTC, ETH, SOL, etc.)
+  - Breakdown by signal type (Long vs Short win rate)
+  - Best and worst performing signals with full details
+- All statistics must be computed dynamically from the signals database, 
+  not hardcoded
+
+---
+
+## 6. UPGRADE / PRICING PAGE
+
+- Ensure there is a clean, compelling /pricing page that is linked from 
+  all upgrade CTAs added above
+- Display two tiers clearly: Free vs Paid
+- Paid tier feature list must include all of the above:
+  ✅ Real-time signals (no delay)  
+  ✅ Full signal history with PnL  
+  ✅ Signal confidence breakdown  
+  ✅ Custom watchlist & alerts  
+  ✅ Full track record analytics  
+- Add urgency/social proof if possible: e.g. "X traders upgraded this week"
+- Ensure the subscribe/payment flow is connected to the existing 
+  subscription system
+
+---
+
+## GENERAL REQUIREMENTS
+
+- All paid-only features must be gated server-side — UI hiding alone is 
+  not sufficient. Middleware or route-level auth checks must validate the 
+  user's subscription tier before returning any paid data
+- Do not break any existing signal generation, Coinglass OI/funding rate 
+  integration, or Anthropic AI engine functionality
+- Maintain existing brand design language (colors, fonts, component style)
+- All new pages must be mobile responsive
+- Provide a summary of every file changed and any new database 
+  schema additions made
