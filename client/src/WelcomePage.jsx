@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { SiInstagram, SiTiktok } from "react-icons/si";
 
 // ── WebAuthn / Face ID helpers ─────────────────────────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -644,7 +645,56 @@ export default function WelcomePage({ onEnter, onBack }) {
             <span data-testid="link-full-disclaimer" onClick={() => setShowLegal(true)} style={{ color: C.gold, cursor: "pointer", textDecoration: "underline" }}>Read full disclaimer →</span>
           </div>
 
-          <div style={{ marginTop: 20, fontFamily: MONO, fontSize: 8, color: C.muted }}>© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</div>
+          {/* Social media links */}
+          <div style={{ marginTop: 28, marginBottom: 4 }}>
+            <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, letterSpacing: "0.18em", marginBottom: 14, textTransform: "uppercase" }}>
+              Follow for live signals &amp; market insights
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 14 }}>
+              <a
+                data-testid="link-instagram"
+                href="https://www.instagram.com/clvrquantai?igsh=MTU0d25zcm5uaGp1cg%3D%3D&utm_source=qr"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  minWidth: 44, minHeight: 44, padding: "0 16px",
+                  borderRadius: 8,
+                  background: "rgba(201,168,76,0.07)",
+                  border: "1px solid rgba(201,168,76,0.22)",
+                  color: C.gold2,
+                  textDecoration: "none",
+                  fontFamily: MONO, fontSize: 10, letterSpacing: "0.1em",
+                  justifyContent: "center",
+                }}
+              >
+                <SiInstagram size={18} />
+                <span>Instagram</span>
+              </a>
+              <a
+                data-testid="link-tiktok"
+                href="https://www.tiktok.com/@clvrquantai"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  minWidth: 44, minHeight: 44, padding: "0 16px",
+                  borderRadius: 8,
+                  background: "rgba(201,168,76,0.07)",
+                  border: "1px solid rgba(201,168,76,0.22)",
+                  color: C.gold2,
+                  textDecoration: "none",
+                  fontFamily: MONO, fontSize: 10, letterSpacing: "0.1em",
+                  justifyContent: "center",
+                }}
+              >
+                <SiTiktok size={17} />
+                <span>TikTok</span>
+              </a>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 18, fontFamily: MONO, fontSize: 8, color: C.muted }}>© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</div>
         </div>
       )}
 
