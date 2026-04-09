@@ -114,6 +114,16 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
     return () => clearInterval(poll);
   }, [isPro, scanLoading, loadInsider]);
 
+  // Safety timeout: if still loading after 6 minutes, force-complete and show whatever data we have
+  useEffect(() => {
+    if (!scanLoading) return;
+    const timeout = setTimeout(() => {
+      setScanLoading(false);
+      loadInsider();
+    }, 6 * 60 * 1000);
+    return () => clearTimeout(timeout);
+  }, [scanLoading, loadInsider]);
+
   useEffect(() => {
     if (isPro) {
       loadInsider();

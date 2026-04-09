@@ -3892,9 +3892,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           })()}
         </>}
 
-        {/* ══ WATCHLIST ══ */}
-        {tab==="watchlist"&&<WatchlistTab isPro={isPro} onUpgrade={onUpgrade} liveSignals={liveSignals}/>}
-
         {/* ══ TRACK RECORD ══ */}
         {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 

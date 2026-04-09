@@ -133,6 +133,35 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── signal_history ───────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS signal_history (
+        id          SERIAL PRIMARY KEY,
+        signal_id   INTEGER NOT NULL,
+        token       TEXT NOT NULL,
+        direction   TEXT NOT NULL,
+        entry       TEXT,
+        tp1         TEXT,
+        sl          TEXT,
+        confidence  INTEGER,
+        outcome     TEXT NOT NULL DEFAULT 'PENDING',
+        pnl_pct     TEXT,
+        ts          TIMESTAMP NOT NULL DEFAULT NOW(),
+        resolved_at TIMESTAMP
+      )
+    `);
+
+    // ── watchlist_items ──────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS watchlist_items (
+        id          SERIAL PRIMARY KEY,
+        user_id     TEXT NOT NULL,
+        asset       TEXT NOT NULL,
+        min_conf    INTEGER NOT NULL DEFAULT 70,
+        created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
   } catch (err) {
