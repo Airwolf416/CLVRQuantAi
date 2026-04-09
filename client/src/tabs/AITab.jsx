@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fmtPrice } from "../store/MarketDataStore";
 import { useTwitterIntelligence, buildAssetTwitterContext } from "../store/TwitterIntelligence";
+import KronosPanel from "../components/KronosPanel";
 
 const mono  = "'IBM Plex Mono', monospace";
 const serif = "'Playfair Display', serif";
@@ -605,6 +606,9 @@ export default function AITab() {
           </div>
         </div>
       )}
+
+      {/* ── KRONOS FORECAST ENGINE ── */}
+      <KronosPanel defaultAsset={asset} />
 
       {/* ANALYZE BUTTON */}
       <button

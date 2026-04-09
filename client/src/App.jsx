@@ -15,6 +15,7 @@ import QRScanner from "./QRScanner";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import InsiderTab from "./tabs/InsiderTab";
+import KronosPanel from "./components/KronosPanel";
 import AIQuantTab from "./tabs/AITab";
 import PricingModal from "./components/PricingModal.jsx";
 import MyBasket from "./components/MyBasket.jsx";
@@ -3866,6 +3867,32 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             </div>
             <div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`,fontFamily:MONO,fontSize:8,color:C.green}}>⚡ Score ≥ 80 = STRONG SIGNAL → push notification sent to your device as LONG or SHORT</div>
           </div>
+
+          {/* ── KRONOS FORECAST ENGINE — Elite gate ── */}
+          {isElite ? (
+            <KronosPanel />
+          ) : (
+            <div style={{
+              background:"rgba(155,140,255,0.04)",
+              border:"1px solid rgba(155,140,255,0.15)",
+              borderRadius:10, padding:"12px 14px", marginBottom:12,
+              display:"flex", alignItems:"center", justifyContent:"space-between",
+              cursor:"pointer",
+            }} onClick={onUpgrade}>
+              <div>
+                <div style={{fontFamily:MONO,fontSize:9,color:"#9b8cff",fontWeight:800,letterSpacing:1.5}}>
+                  ⏱ KRONOS FORECAST ENGINE
+                </div>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:3}}>
+                  Multi-trajectory K-line forecasting · 5-candle BULL/BASE/BEAR trajectories · Elite only
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:"#9b8cff",background:"rgba(155,140,255,0.1)",border:"1px solid rgba(155,140,255,0.25)",borderRadius:3,padding:"3px 8px"}}>ELITE</div>
+                <div style={{fontSize:14}}>🔒</div>
+              </div>
+            </div>
+          )}
 
           {/* Score legend */}
           <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
