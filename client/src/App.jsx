@@ -40,13 +40,13 @@ const DARK_C = {
   navBg:"#050709", navBorder:"#141e35", inputBg:"#080d18",
 };
 const LIGHT_C = {
-  bg:"#f5f3ee", navy:"#ede9e0", panel:"#ffffff",
-  border:"#dbd5c8", border2:"#c8c0b2",
-  gold:"#c9a84c", gold2:"#b8922a", gold3:"#8a6a1a",
-  text:"#2a3545", muted:"#7a8090", muted2:"#9aa0ac", white:"#1a2035",
-  green:"#15803d", red:"#be123c", orange:"#b45309",
-  cyan:"#0e7490", blue:"#1d4ed8", teal:"#0f766e", purple:"#7e22ce", pink:"#be185d",
-  navBg:"#ffffff", navBorder:"#dbd5c8", inputBg:"#f0ede6",
+  bg:"#0b1a30", navy:"#081426", panel:"#0f2040",
+  border:"#1c3264", border2:"#243d78",
+  gold:"#c9a84c", gold2:"#e8c96d", gold3:"#f7e0a0",
+  text:"#c8d4ee", muted:"#4a6090", muted2:"#6b84b8", white:"#f0f4ff",
+  green:"#00c787", red:"#ff4060", orange:"#ff8c00",
+  cyan:"#00d4ff", blue:"#3b82f6", teal:"#14b8a6", purple:"#a855f7", pink:"#ec4899",
+  navBg:"#0b1a30", navBorder:"#1c3264", inputBg:"#081426",
 };
 // module-level fallback (dark) for simple utility components
 const C = DARK_C;
@@ -145,8 +145,8 @@ function Sparkline({data,color,width=80,height=22}){
   const up=data[data.length-1]>=data[0];
   return(
     <svg width={width} height={height} style={{overflow:"visible",flexShrink:0}}>
-      <polyline points={pts} fill="none" stroke={color||(up?C.green:C.red)} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
-      <circle cx={(data.length-1)/(data.length-1)*width} cy={height-((data[data.length-1]-min)/range)*(height-2)+1} r="2.5" fill={color||(up?C.green:C.red)}/>
+      <polyline points={pts} fill="none" stroke={color||(up?C.gold:"#ff4060")} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+      <circle cx={(data.length-1)/(data.length-1)*width} cy={height-((data[data.length-1]-min)/range)*(height-2)+1} r="2.5" fill={color||(up?C.gold:"#ff4060")}/>
     </svg>
   );
 }
@@ -1130,7 +1130,7 @@ function TrackRecordTab({isPro,onUpgrade}){
             {stats.weeklyData.map((w,i)=>(
               <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
                 <div style={{width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",height:56,gap:2}}>
-                  <div style={{width:"100%",height:`${Math.max((w.wins/maxBar)*48,2)}px`,background:C.green+"88",borderRadius:"2px 2px 0 0",minHeight:2}}/>
+                  <div style={{width:"100%",height:`${Math.max((w.wins/maxBar)*48,2)}px`,background:C.gold+"99",borderRadius:"2px 2px 0 0",minHeight:2,boxShadow:`0 0 6px ${C.gold}44`}}/>
                   <div style={{width:"100%",height:`${Math.max((w.losses/maxBar)*48,2)}px`,background:C.red+"66",borderRadius:"2px 2px 0 0",minHeight:2}}/>
                 </div>
                 <div style={{fontFamily:MONO,fontSize:6,color:C.muted,marginTop:2}}>{w.week?.slice(5)||""}</div>
@@ -1138,7 +1138,7 @@ function TrackRecordTab({isPro,onUpgrade}){
             ))}
           </div>
           <div style={{display:"flex",gap:14,marginTop:8}}>
-            <span style={{fontFamily:MONO,fontSize:7,color:C.green}}>■ Wins</span>
+            <span style={{fontFamily:MONO,fontSize:7,color:C.gold}}>■ Wins</span>
             <span style={{fontFamily:MONO,fontSize:7,color:C.red}}>■ Losses</span>
           </div>
         </div>
@@ -2807,8 +2807,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         ::-webkit-scrollbar{display:none;}
         button{cursor:pointer;}
         body{background:${C.bg};margin:0;}
-        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(${isDark?"rgba(20,30,53,.35)":"rgba(180,165,140,.12)"} 1px,transparent 1px),linear-gradient(90deg,${isDark?"rgba(20,30,53,.35)":"rgba(180,165,140,.12)"} 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;}
-        body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(201,168,76,.05) 0%,transparent 60%);pointer-events:none;z-index:0;}
+        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(28,50,100,.4) 1px,transparent 1px),linear-gradient(90deg,rgba(28,50,100,.4) 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;}
+        body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(201,168,76,.07) 0%,transparent 60%);pointer-events:none;z-index:0;}
         @keyframes slideUp{from{transform:translateX(-50%) translateY(16px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
         @keyframes slideDown{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
