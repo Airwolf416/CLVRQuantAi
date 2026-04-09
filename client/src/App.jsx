@@ -825,7 +825,8 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
               <span style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:C.white,letterSpacing:"0.05em"}}>{sig.token}</span>
               <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:dirBg,color:dirColor,border:`1px solid ${dirColor}44`,fontFamily:MONO,letterSpacing:"0.1em"}}>{sig.dir}</span>
               {sig.real&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,199,135,.06)",color:C.green,border:"1px solid rgba(0,199,135,.25)",fontFamily:MONO,letterSpacing:"0.1em",animation:"pulse 2s infinite"}}>LIVE</span>}
-              <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.06)",color:C.gold,border:"1px solid rgba(201,168,76,.25)",fontFamily:MONO,letterSpacing:"0.1em"}}>ALPHA-DETECT</span>
+              {!sig.locked&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.06)",color:C.gold,border:"1px solid rgba(201,168,76,.25)",fontFamily:MONO,letterSpacing:"0.1em"}}>ALPHA-DETECT</span>}
+              {sig.locked&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(255,140,0,.08)",color:"#ff8c00",border:"1px solid rgba(255,140,0,.35)",fontFamily:MONO,letterSpacing:"0.1em"}}>⏱ 30M DELAYED</span>}
               {whaleMatch&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,212,255,.08)",color:C.cyan,border:"1px solid rgba(0,212,255,.3)",fontFamily:MONO,letterSpacing:"0.08em",animation:"gold-pulse 2s infinite"}}>🐋 {i18n.whaleAligned}</span>}
               <span style={{fontFamily:MONO,fontSize:9,color:sig.pctMove>0?C.green:C.red,fontWeight:700}}>{sig.pctMove>0?"+":""}{sig.pctMove}%</span>
               <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
@@ -877,11 +878,17 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
         </div>
       </div>
       {expanded&&<div style={{padding:"0 14px 14px",position:"relative"}}>
-        {sig.locked&&<div style={{position:"absolute",inset:0,zIndex:10,backdropFilter:"blur(8px)",background:"rgba(5,7,9,.88)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,borderRadius:2}}>
-          <span style={{fontSize:28}}>🔒</span>
-          <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.gold2}}>Real-time Signals — Pro Feature</div>
-          <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,letterSpacing:"0.1em",textAlign:"center",maxWidth:240,lineHeight:1.7}}>Unlock real-time signals, full AI reasoning, confidence breakdown, and entry/exit targets</div>
-          <button data-testid="btn-upgrade-signal" onClick={onUpgrade} style={{background:"rgba(201,168,76,.14)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:4,padding:"9px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
+        {sig.locked&&<div style={{position:"absolute",inset:0,zIndex:10,backdropFilter:"blur(8px)",background:"rgba(5,7,9,.88)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,borderRadius:2,padding:"12px 16px"}}>
+          <span style={{fontSize:26}}>🔒</span>
+          <div style={{fontFamily:SERIF,fontWeight:900,fontSize:15,color:C.gold2,textAlign:"center"}}>Pro Signal Intelligence</div>
+          <div style={{display:"flex",flexDirection:"column",gap:4,width:"100%",maxWidth:220}}>
+            {[["📍","Entry, Stop-Loss & Take-Profit"],["📊","AI Confidence Breakdown"],["🧠","Full AI Trade Reasoning"],["🎯","Score Factors & Checks"]].map(([icon,txt])=>(
+              <div key={txt} style={{display:"flex",alignItems:"center",gap:6,fontFamily:MONO,fontSize:8,color:C.muted2,lineHeight:1.5}}>
+                <span style={{flexShrink:0}}>{icon}</span><span>{txt}</span>
+              </div>
+            ))}
+          </div>
+          <button data-testid="btn-upgrade-signal" onClick={onUpgrade} style={{background:"rgba(201,168,76,.14)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:4,padding:"9px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",marginTop:2}}>Upgrade to Pro →</button>
         </div>}
         {sig.reasoning&&sig.reasoning.length>0&&<div style={{background:"rgba(201,168,76,.04)",border:`1px solid ${C.gold}22`,borderRadius:2,padding:"10px 12px",marginBottom:10}}>
           <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",marginBottom:6}}>AI TRADE REASONING</div>
@@ -1092,7 +1099,7 @@ function TrackRecordTab({isPro,onUpgrade}){
     ]).then(([s,h])=>{
       if(s)setStats(s);
       setHistory(h.signals||[]);
-      setHistLocked(!h.isPaidUser);
+      setHistLocked(!isPro);
     }).finally(()=>setLoading(false));
   },[]);
   const panel2={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,marginBottom:10};
@@ -1144,6 +1151,17 @@ function TrackRecordTab({isPro,onUpgrade}){
         </div>
       </div>
     )}
+    {!isPro&&(
+      <div style={{...panel2,background:"rgba(0,212,255,.03)",border:`1px solid rgba(0,212,255,.15)`}}>
+        <div style={{padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+          <div>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.cyan,letterSpacing:"0.18em",marginBottom:4}}>ASSET BREAKDOWN — PRO</div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>Win rate & avg PnL per token, LONG vs SHORT split</div>
+          </div>
+          <button onClick={onUpgrade} style={{flexShrink:0,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:11,color:C.gold2,background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,padding:"6px 14px",cursor:"pointer"}}>Unlock →</button>
+        </div>
+      </div>
+    )}
     {isPro&&stats?.byAsset&&stats.byAsset.length>0&&(
       <div style={panel2}>
         <div style={{padding:"12px 16px"}}>
@@ -1175,21 +1193,31 @@ function TrackRecordTab({isPro,onUpgrade}){
         <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.2em"}}>SIGNAL HISTORY</div>
         {histLocked&&<span style={{fontFamily:MONO,fontSize:8,color:C.orange}}>🔒 Pro & Elite</span>}
       </div>
+      {histLocked&&(
+        <div style={{margin:"0 12px 12px",background:"rgba(201,168,76,.04)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:4,padding:"14px 16px"}}>
+          <div style={{fontFamily:SERIF,fontSize:13,fontWeight:700,color:C.gold2,marginBottom:8}}>What Pro unlocks in Signal History</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:12}}>
+            {[["📍","Entry, TP & Stop-Loss prices"],["📊",`PnL % per resolved signal`],["🏆","Asset-by-asset win rates"],["🧠","Full AI reasoning per trade"]].map(([icon,txt])=>(
+              <div key={txt} style={{display:"flex",alignItems:"center",gap:6,fontFamily:MONO,fontSize:8,color:C.muted2}}>
+                <span style={{flexShrink:0,fontSize:11}}>{icon}</span><span>{txt}</span>
+              </div>
+            ))}
+          </div>
+          <button data-testid="btn-unlock-history" onClick={onUpgrade} style={{width:"100%",padding:"9px 0",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:4,cursor:"pointer"}}>Upgrade to Pro — from $29.99/mo →</button>
+        </div>
+      )}
       {history.length===0?(
         <div style={{padding:"24px 16px",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted}}>Signal history is building — new signals are tracked automatically.</div>
-      ):history.map(sig=>(
+      ):(histLocked?history.slice(0,5):history).map(sig=>(
         <div key={sig.id} style={{borderTop:`1px solid ${C.border}`,padding:"10px 16px",position:"relative"}}>
           {histLocked?(
-            <>
-              <div style={{display:"flex",alignItems:"center",gap:8,filter:"blur(5px)",userSelect:"none",pointerEvents:"none"}}>
-                <span style={{fontFamily:MONO,fontSize:11,fontWeight:800,color:C.white}}>███████</span>
-                <span style={{fontFamily:MONO,fontSize:9,color:C.muted}}>████</span>
-                <span style={{fontFamily:MONO,fontSize:9,color:C.muted2,flex:1}}>████████████</span>
-              </div>
-              <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(5,7,9,.75)",backdropFilter:"blur(4px)"}}>
-                <button data-testid="btn-unlock-history" onClick={onUpgrade} style={{fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:11,color:C.gold2,background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,padding:"6px 16px",cursor:"pointer"}}>🔒 Upgrade to unlock full history</button>
-              </div>
-            </>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <span style={{fontFamily:MONO,fontSize:9,padding:"2px 6px",borderRadius:2,background:sig.direction==="LONG"?"rgba(0,199,135,.08)":"rgba(255,64,96,.08)",color:sig.direction==="LONG"?C.green:C.red,border:`1px solid ${sig.direction==="LONG"?C.green:C.red}44`,fontWeight:700}}>{sig.direction}</span>
+              <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:C.white}}>{sig.token}</span>
+              <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{new Date(sig.ts).toLocaleDateString()}</span>
+              <span style={{fontFamily:MONO,fontSize:9,padding:"2px 6px",borderRadius:2,background:sig.outcome==="WIN"?"rgba(0,199,135,.08)":sig.outcome==="LOSS"?"rgba(255,64,96,.08)":"rgba(255,140,0,.06)",color:sig.outcome==="WIN"?C.green:sig.outcome==="LOSS"?C.red:C.orange,border:`1px solid ${sig.outcome==="WIN"?C.green:sig.outcome==="LOSS"?C.red:C.orange}44`,fontWeight:700}}>{sig.outcome}</span>
+              <span style={{fontFamily:MONO,fontSize:8,color:C.muted,filter:"blur(4px)",userSelect:"none"}}>Entry: ████ · TP1: ████ · SL: ████</span>
+            </div>
           ):(
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
               <span style={{fontFamily:MONO,fontSize:9,padding:"2px 6px",borderRadius:2,background:sig.direction==="LONG"?"rgba(0,199,135,.08)":"rgba(255,64,96,.08)",color:sig.direction==="LONG"?C.green:C.red,border:`1px solid ${sig.direction==="LONG"?C.green:C.red}44`,fontWeight:700}}>{sig.direction}</span>
@@ -1204,6 +1232,11 @@ function TrackRecordTab({isPro,onUpgrade}){
           )}
         </div>
       ))}
+      {histLocked&&history.length>5&&(
+        <div style={{padding:"10px 16px",borderTop:`1px solid ${C.border}`,textAlign:"center"}}>
+          <button onClick={onUpgrade} style={{fontFamily:MONO,fontSize:8,color:C.muted,background:"none",border:"none",cursor:"pointer",letterSpacing:"0.08em"}}>+ {history.length-5} more signals hidden — upgrade to see full history</button>
+        </div>
+      )}
     </div>
     <div style={{fontFamily:MONO,fontSize:7,color:C.muted,padding:"4px 0 12px",textAlign:"center"}}>
       Last updated: {stats?.lastUpdated?new Date(stats.lastUpdated).toLocaleString():"—"} · Win/Loss based on TP1 price target hit
@@ -1249,13 +1282,27 @@ function WatchlistTab({isPro,onUpgrade,liveSignals}){
   const matchingSigs=(liveSignals||[]).filter(s=>watchedTokens.has(s.token)&&!s.locked);
 
   if(!isPro)return(
-    <div style={{...panel2,textAlign:"center",padding:"40px 20px"}}>
-      <div style={{fontFamily:SERIF,fontSize:20,fontWeight:900,color:C.gold,marginBottom:6}}>My Watchlist</div>
-      <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.14em",marginBottom:20}}>PRO & ELITE FEATURE</div>
-      <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.8,marginBottom:24,maxWidth:300,margin:"0 auto 24px"}}>
-        Track your favourite assets and get alerted when a high-confidence signal fires on them.
+    <div style={{...panel2,padding:"32px 20px"}}>
+      <div style={{textAlign:"center",marginBottom:20}}>
+        <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.white,marginBottom:4}}>My <span style={{color:C.gold}}>Watchlist</span></div>
+        <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.25em"}}>PRO & ELITE FEATURE</div>
       </div>
-      <button data-testid="btn-upgrade-watchlist" onClick={onUpgrade} style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:4,padding:"10px 24px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
+      <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24,maxWidth:320,margin:"0 auto 24px"}}>
+        {[
+          ["📋","Build a watchlist of up to 20 assets"],
+          ["⚡","Instant alert when a high-confidence signal fires on your assets"],
+          ["🎯","Filter the signal feed to only your watched assets"],
+          ["🔔","Set per-asset minimum confidence threshold"],
+        ].map(([icon,txt])=>(
+          <div key={txt} style={{display:"flex",alignItems:"flex-start",gap:10,fontFamily:MONO,fontSize:10,color:C.muted2,lineHeight:1.5}}>
+            <span style={{flexShrink:0,fontSize:14}}>{icon}</span><span>{txt}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{textAlign:"center"}}>
+        <button data-testid="btn-upgrade-watchlist" onClick={onUpgrade} style={{background:"rgba(201,168,76,.14)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:6,padding:"12px 32px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:15,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
+        <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:8,letterSpacing:"0.1em"}}>FROM $29.99/MO · CANCEL ANYTIME</div>
+      </div>
     </div>
   );
 
@@ -1322,6 +1369,50 @@ function WatchlistTab({isPro,onUpgrade,liveSignals}){
 
 // ═══════════════════════════════════════════════════════════
 // APP
+// ─── RESPONSIVE DEVICE HOOK ────────────────────────────────
+function useWindowSize(){
+  const [size,setSize]=useState(()=>({w:typeof window!=="undefined"?window.innerWidth:1200}));
+  useEffect(()=>{
+    const fn=()=>setSize({w:window.innerWidth});
+    window.addEventListener("resize",fn);
+    return()=>window.removeEventListener("resize",fn);
+  },[]);
+  return{w:size.w,isMobile:size.w<768,isTablet:size.w>=768&&size.w<1200,isDesktop:size.w>=1200};
+}
+
+// ─── SIDE NAV (tablet / desktop) ───────────────────────────
+function SideNav({items,tab,onTab,C,MONO,SERIF,PRO_TABS_GATE2,isPro,isElite,isPreview,upcomingCount,isDark,toggleTheme,wide}){
+  return(
+    <div style={{position:"fixed",left:0,top:0,bottom:0,width:wide?180:64,background:isDark?"rgba(5,7,9,.98)":"rgba(255,255,255,.98)",borderRight:`1px solid ${C.border}`,backdropFilter:"blur(14px)",zIndex:100,display:"flex",flexDirection:"column",overflow:"hidden",paddingTop:"env(safe-area-inset-top,0px)"}}>
+      <div style={{padding:wide?"16px 14px 14px":"16px 0 14px",textAlign:"center",borderBottom:`1px solid ${C.border}`}}>
+        {wide?(<><div style={{fontFamily:SERIF,fontSize:14,fontWeight:900,color:C.gold,lineHeight:1}}>✦ CLVRQuant</div><div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.2em",marginTop:3}}>AI · INTELLIGENCE</div></>):(<div style={{fontFamily:SERIF,fontSize:18,fontWeight:900,color:C.gold}}>✦</div>)}
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"4px 0"}}>
+        {items.map(item=>{
+          const active=tab===item.k;
+          const macroAlert=item.k==="macro"&&upcomingCount>0;
+          const previewFreeTab=["about","help","account"].includes(item.k);
+          const eliteGated=!isPreview&&["insider"].includes(item.k)&&!isElite;
+          const proGated=!isPreview&&PRO_TABS_GATE2.includes(item.k)&&!isPro;
+          const locked=(isPreview&&!previewFreeTab)||eliteGated||proGated;
+          return(
+            <button key={item.k} data-testid={`sidenav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}onTab(item.k);}} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:wide?"flex-start":"center",gap:wide?10:0,padding:wide?"9px 14px":"10px 0",background:"none",border:"none",borderLeft:`3px solid ${active?C.gold:"transparent"}`,cursor:"pointer",position:"relative",transition:"border-color .2s"}}>
+              <span style={{fontSize:item.k==="ai"?11:14,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:locked?C.muted:C.muted2,flexShrink:0}}>{item.icon}</span>
+              {wide&&<span style={{fontFamily:MONO,fontSize:9,color:active?C.gold:locked?C.muted:C.muted2,letterSpacing:"0.06em",fontWeight:active?700:400,textTransform:"uppercase"}}>{item.label}</span>}
+              {macroAlert&&!active&&<div style={{position:"absolute",top:6,right:wide?8:2,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
+              {locked&&!active&&<div style={{position:"absolute",top:3,right:wide?6:1,fontSize:6,lineHeight:1}}>{isPreview?"🔐":"🔒"}</div>}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 0",textAlign:"center"}}>
+        <button data-testid="btn-sidenav-theme" onClick={toggleTheme} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,padding:"4px 8px"}} title={isDark?"Switch to light mode":"Switch to dark mode"}>{isDark?"☀️":"🌙"}</button>
+        {wide&&<div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.1em",marginTop:2}}>{isDark?"LIGHT":"DARK"}</div>}
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════
 export default function App(){
   const [user,setUser]=useState(null);
@@ -1376,6 +1467,8 @@ export default function App(){
 
 function Dashboard({user,setUser,onShowAuth}){
   const {C,isDark,toggle:toggleTheme}=useContext(ThemeCtx);
+  const {isMobile,isTablet,isDesktop}=useWindowSize();
+  const sidebarW=isDesktop?180:isTablet?64:0;
   const [tab,setTab]=useState("radar");
   const [clockTick,setClockTick]=useState(0);
   // ── Global market bell state ───────────────────────────────────────────────
@@ -2786,8 +2879,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
+    {k:"watchlist",icon:"📋",label:"WATCH"},
     {k:"track",icon:"📈",label:"RECORD"},
-    {k:"watchlist",icon:"🔖",label:"WATCH"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -2799,7 +2892,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
   const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
 
   return(
-    <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:76,paddingTop:"env(safe-area-inset-top,0px)",maxWidth:780,margin:"0 auto",position:"relative"}}>
+    <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:isMobile?76:24,paddingTop:"env(safe-area-inset-top,0px)",paddingLeft:isMobile?0:sidebarW,maxWidth:isMobile?780:undefined,margin:isMobile?"0 auto":0,position:"relative"}}>
+      {!isMobile&&<SideNav items={NAV} tab={tab} onTab={setTab} C={C} MONO={MONO} SERIF={SERIF} PRO_TABS_GATE2={PRO_TABS_GATE} isPro={isPro} isElite={isElite} isPreview={isPreview} upcomingCount={upcomingCount} isDark={isDark} toggleTheme={toggleTheme} wide={isDesktop}/>}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=IBM+Plex+Mono:wght@300;400;500;600&family=Barlow:wght@300;400;500;600;700&display=swap');
         *{-webkit-tap-highlight-color:transparent;box-sizing:border-box;}
@@ -3799,11 +3893,11 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           })()}
         </>}
 
-        {/* ══ TRACK RECORD ══ */}
-        {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
-
         {/* ══ WATCHLIST ══ */}
         {tab==="watchlist"&&<WatchlistTab isPro={isPro} onUpgrade={onUpgrade} liveSignals={liveSignals}/>}
+
+        {/* ══ TRACK RECORD ══ */}
+        {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>
@@ -4290,8 +4384,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       {/* ── ONBOARDING TOUR ── */}
       {showTour&&<OnboardingTour isPro={isPro} onClose={()=>setShowTour(false)} onNavigateTab={(t)=>{setTab(t);setShowTour(false);}}/>}
 
-      {/* ── BOTTOM NAV ── */}
-      <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:isDark?"rgba(5,7,9,.97)":"rgba(255,255,255,.97)",borderTop:`1px solid ${C.navBorder}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
+      {/* ── BOTTOM NAV (mobile only) ── */}
+      {isMobile&&<div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:isDark?"rgba(5,7,9,.97)":"rgba(255,255,255,.97)",borderTop:`1px solid ${C.navBorder}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
           const previewFreeTab=["about","help","account"].includes(item.k);
@@ -4312,7 +4406,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <span style={{fontSize:13,lineHeight:1}}>{isDark?"☀️":"🌙"}</span>
           <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:C.muted,letterSpacing:"0.06em"}}>{isDark?"LIGHT":"DARK"}</span>
         </button>
-      </div>
+      </div>}
     </div>
   );
 }
