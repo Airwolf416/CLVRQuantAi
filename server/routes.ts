@@ -2,7 +2,9 @@ import type { Express, Response, Request, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { pool } from "./db";
+import { pool, db } from "./db";
+import { signalHistory, watchlistItems } from "@shared/schema";
+import { eq, and, lte, gt, desc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import WebSocket from "ws";
@@ -906,6 +908,26 @@ function detectMoves() {
     lastSignalTime[sym] = now;
     console.log(`[SIGNAL] ${sym} ${dir} ${absPct}% in ${elapsed}min — price $${fmt2(current.price, sym)} | MasterScore: ${master.score} | AdvancedScore: ${advanced.advancedScore}${advanced.isStrong ? " ⚡ STRONG" : ""}`);
 
+    // ── PERSIST SIGNAL TO DATABASE (non-blocking) ──────────────────────────
+    storage.saveSignalRecord({
+      signalId: signal.id,
+      token: signal.token,
+      direction: signal.dir,
+      conf: signal.conf,
+      advancedScore: signal.advancedScore || 0,
+      entry: String(signal.entry || 0),
+      tp1: signal.tp1 ? String(signal.tp1) : undefined,
+      stopLoss: signal.stopLoss ? String(signal.stopLoss) : undefined,
+      leverage: signal.lev || undefined,
+      pctMove: signal.pctMove !== undefined ? String(signal.pctMove) : undefined,
+      tp1Pct: signal.tp1Pct !== undefined ? String(signal.tp1Pct) : undefined,
+      stopPct: signal.stopPct !== undefined ? String(signal.stopPct) : undefined,
+      reasoning: Array.isArray(signal.reasoning) ? signal.reasoning : [],
+      scoreBreakdown: signal.scoreBreakdown ? JSON.stringify(signal.scoreBreakdown) : undefined,
+      isStrongSignal: signal.isStrongSignal || false,
+      ts: new Date(signal.ts),
+    }).catch(e => console.error("[signal-db] persist failed:", e));
+
     // ── BROADCAST PUSH NOTIFICATION FOR STRONG SIGNALS (score ≥ 80) ─────────
     if (advanced.isStrong) {
       broadcastSignalPushParallel(signal).catch(() => {});
@@ -1204,6 +1226,40 @@ export async function registerRoutes(
   refreshTokenSentiment().catch(() => {});
   setInterval(() => refreshTokenSentiment().catch(() => {}), 5 * 60 * 1000);
 
+  // ── Signal outcome resolver: every 30 min check pending DB signals ──────
+  async function resolveSignalOutcomes() {
+    try {
+      const pending = await storage.getPendingSignals();
+      if (pending.length === 0) return;
+      for (const sig of pending) {
+        const tp1 = sig.tp1 ? parseFloat(sig.tp1) : null;
+        const sl  = sig.stopLoss ? parseFloat(sig.stopLoss) : null;
+        const entry = parseFloat(sig.entry);
+        if (!tp1 || !sl || !entry) continue;
+        // Get current price from in-memory state
+        const h = priceHistory[sig.token];
+        const currentPrice = h && h.length > 0 ? h[h.length - 1].price : null;
+        if (!currentPrice) continue;
+        let outcome: string | null = null;
+        let pnlPct = "0";
+        if (sig.direction === "LONG") {
+          if (currentPrice >= tp1)  { outcome = "WIN";  pnlPct = sig.tp1Pct || String(+((tp1 / entry - 1) * 100).toFixed(2)); }
+          else if (currentPrice <= sl) { outcome = "LOSS"; pnlPct = sig.stopPct ? `-${sig.stopPct}` : String(+((sl / entry - 1) * 100).toFixed(2)); }
+        } else {
+          if (currentPrice <= tp1) { outcome = "WIN";  pnlPct = sig.tp1Pct || String(+((entry / tp1 - 1) * 100).toFixed(2)); }
+          else if (currentPrice >= sl) { outcome = "LOSS"; pnlPct = sig.stopPct ? `-${sig.stopPct}` : String(+((entry / sl - 1) * 100).toFixed(2)); }
+        }
+        // Expire signals older than 24h
+        if (!outcome && Date.now() - sig.ts.getTime() > 24 * 60 * 60 * 1000) {
+          outcome = "EXPIRED"; pnlPct = "0";
+        }
+        if (outcome) await storage.resolveSignalOutcome(sig.signalId, outcome, pnlPct);
+      }
+    } catch (e: any) { console.error("[signal-resolver]", e.message); }
+  }
+  resolveSignalOutcomes().catch(() => {});
+  setInterval(resolveSignalOutcomes, 30 * 60 * 1000);
+
   app.get("/api/stream", (req, res) => {
     if (sseClients.size >= 50) {
       return res.status(503).json({ error: "Too many stream connections" });
@@ -1337,9 +1393,34 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/signals", (_req, res) => {
-    const since = parseInt(_req.query.since as string) || 0;
-    const filtered = since ? liveSignals.filter(s => s.ts > since) : liveSignals;
+  app.get("/api/signals", async (req, res) => {
+    const since = parseInt(req.query.since as string) || 0;
+    // Determine user tier (free vs paid) for delay + field gating
+    const userId = (req.session as any)?.userId;
+    let isPaidUser = false;
+    if (userId) {
+      try {
+        const dbUser = await storage.getUser(userId);
+        if (dbUser) {
+          const tier = await getEffectiveTier(dbUser);
+          isPaidUser = tier === "pro" || tier === "elite";
+        }
+      } catch { /* non-blocking */ }
+    }
+    const DELAY_MS = 30 * 60 * 1000; // 30-min delay for free users
+    let allFiltered = since ? liveSignals.filter(s => s.ts > since) : liveSignals;
+    let signals: any[];
+    if (isPaidUser) {
+      signals = allFiltered;
+    } else {
+      // Free: apply 30-min delay and strip premium fields
+      const delayedSignals = allFiltered.filter(s => Date.now() - s.ts >= DELAY_MS);
+      signals = delayedSignals.map(s => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { scoreBreakdown, reasoning, checks, advancedScore, masterScore, riskOn, ...rest } = s;
+        return { ...rest, locked: true };
+      });
+    }
     let globalRiskOn = 50;
     const allSyms = Object.keys(priceHistory);
     let upCount = 0, totalCount = 0;
@@ -1351,7 +1432,8 @@ export async function registerRoutes(
     }
     if (totalCount > 0) globalRiskOn = Math.round((upCount / totalCount) * 100);
     res.json({
-      signals: filtered,
+      signals,
+      isPaidUser,
       tracking: Object.keys(priceHistory).length,
       historyDepth: Object.values(priceHistory).reduce((sum, h) => sum + h.length, 0),
       globalRiskOn,
@@ -1361,6 +1443,108 @@ export async function registerRoutes(
 
   app.get("/api/whales", (_req, res) => {
     res.json({ whales: whaleAlerts.filter(w => Date.now() - w.ts < 600000) });
+  });
+
+  // ── SIGNAL HISTORY (paid = full data, free = locked) ─────────────────────
+  app.get("/api/signal-history", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.json({ signals: [], locked: true, isPaidUser: false });
+    let isPaidUser = false;
+    try {
+      const dbUser = await storage.getUser(userId);
+      if (dbUser) {
+        const tier = await getEffectiveTier(dbUser);
+        isPaidUser = tier === "pro" || tier === "elite";
+      }
+    } catch { /* */ }
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const records = await storage.getSignalHistory(limit, offset);
+    if (isPaidUser) {
+      return res.json({ signals: records, isPaidUser: true });
+    }
+    // Free users: return stripped data (no entry, stop, TP, reasoning)
+    const stripped = records.map(r => ({
+      id: r.id, signalId: r.signalId, token: r.token, direction: r.direction,
+      conf: r.conf, advancedScore: r.advancedScore, isStrongSignal: r.isStrongSignal,
+      outcome: r.outcome, ts: r.ts, locked: true,
+    }));
+    return res.json({ signals: stripped, isPaidUser: false });
+  });
+
+  // ── TRACK RECORD (public stats + paid extended view) ─────────────────────
+  app.get("/api/track-record", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    let isPaidUser = false;
+    if (userId) {
+      try {
+        const dbUser = await storage.getUser(userId);
+        if (dbUser) {
+          const tier = await getEffectiveTier(dbUser);
+          isPaidUser = tier === "pro" || tier === "elite";
+        }
+      } catch { /* */ }
+    }
+    const stats = await storage.getSignalStats();
+    const winRate = (stats.wins + stats.losses) > 0
+      ? Math.round(stats.wins / (stats.wins + stats.losses) * 100)
+      : 0;
+    const publicData = {
+      winRate, total: stats.total, wins: stats.wins, losses: stats.losses,
+      pending: stats.pending, avgPnl: stats.avgPnl,
+      weeklyData: stats.weeklyData, lastUpdated: new Date().toISOString(),
+      isPaidUser,
+    };
+    if (isPaidUser) {
+      return res.json({ ...publicData, byAsset: stats.byAsset, byDirection: stats.byDirection });
+    }
+    return res.json(publicData);
+  });
+
+  // ── WATCHLIST CRUD (paid users only) ─────────────────────────────────────
+  app.get("/api/watchlist", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Login required" });
+    const dbUser = await storage.getUser(userId);
+    if (!dbUser) return res.status(401).json({ error: "User not found" });
+    const tier = await getEffectiveTier(dbUser);
+    if (tier === "free") return res.status(403).json({ error: "upgrade_required" });
+    const items = await storage.getWatchlistByUser(userId);
+    res.json({ items });
+  });
+
+  app.post("/api/watchlist", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Login required" });
+    const dbUser = await storage.getUser(userId);
+    if (!dbUser) return res.status(401).json({ error: "User not found" });
+    const tier = await getEffectiveTier(dbUser);
+    if (tier === "free") return res.status(403).json({ error: "upgrade_required" });
+    const { token, minConf = 70 } = req.body;
+    if (!token || typeof token !== "string") return res.status(400).json({ error: "token required" });
+    const existing = await storage.getWatchlistByUser(userId);
+    if (existing.some(i => i.token.toUpperCase() === token.toUpperCase())) {
+      return res.status(409).json({ error: "already_in_watchlist" });
+    }
+    if (existing.length >= 20) return res.status(400).json({ error: "max_watchlist_size_20" });
+    const item = await storage.addWatchlistItem({ userId, token: token.toUpperCase(), minConf: Math.max(0, Math.min(100, Number(minConf))) });
+    res.json({ item });
+  });
+
+  app.delete("/api/watchlist/:id", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Login required" });
+    await storage.removeWatchlistItem(Number(req.params.id), userId);
+    res.json({ ok: true });
+  });
+
+  app.patch("/api/watchlist/:id", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Login required" });
+    const { minConf } = req.body;
+    if (minConf === undefined) return res.status(400).json({ error: "minConf required" });
+    await storage.updateWatchlistMinConf(Number(req.params.id), userId, Number(minConf));
+    res.json({ ok: true });
   });
 
   app.get("/api/regime", (_req, res) => {
