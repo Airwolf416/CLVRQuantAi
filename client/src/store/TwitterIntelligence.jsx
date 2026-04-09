@@ -137,7 +137,7 @@ function TweetCard({ tweet, sentiment, whale, isViral, assets, ago }) {
         <span style={{ fontSize:8, color:"#3a4560", fontFamily:MONO }}>♥ {tweet.likes?.toLocaleString()}</span>
         <span style={{ fontSize:8, color:"#3a4560", fontFamily:MONO }}>↺ {tweet.retweets?.toLocaleString()}</span>
         {assets?.length > 0 && <span style={{ fontSize:8, color:"#6b7a99", fontFamily:MONO }}>{assets.join(" · ")}</span>}
-        {tweet.url && <a href={tweet.url} target="_blank" rel="noreferrer" style={{ fontSize:7, color:"#4a5d80", fontFamily:MONO, textDecoration:"none" }}>View ↗</a>}
+        {tweet.url && /^https?:\/\//i.test(tweet.url) && <a href={tweet.url} target="_blank" rel="noreferrer noopener" style={{ fontSize:7, color:"#4a5d80", fontFamily:MONO, textDecoration:"none" }}>View ↗</a>}
       </div>
     </div>
   );

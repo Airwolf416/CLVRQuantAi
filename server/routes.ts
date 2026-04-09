@@ -1,4 +1,4 @@
-import type { Express, Response } from "express";
+import type { Express, Response, Request, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -9,6 +9,21 @@ import WebSocket from "ws";
 import webpush from "web-push";
 import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./insider";
 import QRCode from "qrcode";
+import rateLimit from "express-rate-limit";
+
+// Per-IP rate limiter for AI / Quant endpoints: 30 requests per 15 min
+const aiIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { keyGeneratorIpFallback: false },
+  message: { error: "AI rate limit reached. Please wait before trying again." },
+  keyGenerator: (req: Request) => {
+    const userId = (req.session as any)?.userId;
+    return userId ? `ai:user:${userId}` : `ai:ip:${req.ip || "anon"}`;
+  },
+});
 
 // ── Modular imports ───────────────────────────────────────────────────────────
 import { getIO } from "./socketServer";
@@ -2290,7 +2305,7 @@ export async function registerRoutes(
     };
   }
 
-  app.post("/api/quant", async (req, res) => {
+  app.post("/api/quant", aiIpLimiter, async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
 
@@ -2700,7 +2715,7 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
-  app.post("/api/ai/analyze", async (req, res) => {
+  app.post("/api/ai/analyze", aiIpLimiter, async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
 
@@ -3245,6 +3260,11 @@ Every level must be technically defensible. Return JSON only.`;
   });
 
   app.post("/api/send-test-brief", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+    const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+    if (userEmail !== OWNER_EMAIL) return res.status(403).json({ error: "Owner only" });
     try {
       enqueueDailyBrief().catch((e: any) => console.log("[test-brief] Enqueue error:", e.message));
       res.json({ ok: true, message: "Brief enqueued — check server logs" });
