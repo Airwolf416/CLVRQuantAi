@@ -49,6 +49,7 @@ export interface IStorage {
   getSignalHistory(limit: number, offset: number): Promise<SignalHistoryRecord[]>;
   getPendingSignals(): Promise<SignalHistoryRecord[]>;
   resolveSignalOutcome(signalId: number, outcome: string, pnlPct: string): Promise<void>;
+  updateSignalOutcomeById(id: number, outcome: string, pnlPct?: string): Promise<void>;
   getSignalStats(): Promise<{ total: number; wins: number; losses: number; pending: number; avgPnl: number; weeklyData: any[]; byAsset: any[]; byDirection: any[] }>;
   // Watchlist
   getWatchlistByUser(userId: string): Promise<WatchlistItem[]>;
@@ -254,6 +255,12 @@ export class DatabaseStorage implements IStorage {
     await db.update(signalHistory)
       .set({ outcome, pnlPct, updatedAt: new Date() })
       .where(eq(signalHistory.signalId, signalId));
+  }
+
+  async updateSignalOutcomeById(id: number, outcome: string, pnlPct?: string): Promise<void> {
+    await db.update(signalHistory)
+      .set({ outcome, ...(pnlPct !== undefined ? { pnlPct } : {}), updatedAt: new Date() })
+      .where(eq(signalHistory.id, id));
   }
 
   async getSignalStats(): Promise<{ total: number; wins: number; losses: number; pending: number; avgPnl: number; weeklyData: any[]; byAsset: any[]; byDirection: any[] }> {

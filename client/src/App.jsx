@@ -1368,6 +1368,124 @@ function WatchlistTab({isPro,onUpgrade,liveSignals}){
   </>);
 }
 
+// ─── SIGNAL HISTORY PANEL (Elite) ──────────────────────────
+function SignalHistoryPanel({isElite,onUpgrade}){
+  const{C}=useContext(ThemeCtx);
+  const[markingId,setMarkingId]=useState(null);
+  const[pnlInput,setPnlInput]=useState("");
+  const[mutating,setMutating]=useState(false);
+  const{data,isLoading,refetch}=useQuery({queryKey:["/api/signal-history"],queryFn:async()=>{const r=await fetch("/api/signal-history?limit=50");return r.json();},refetchInterval:60000});
+  const sigs=data?.signals||[];
+  const wins=sigs.filter(s=>s.outcome==="WIN").length;
+  const losses=sigs.filter(s=>s.outcome==="LOSS").length;
+  const pending=sigs.filter(s=>s.outcome==="PENDING").length;
+  const resolved=wins+losses;
+  const winRate=resolved>0?Math.round(wins/resolved*100):null;
+  // Per-asset stats
+  const byAsset={};
+  sigs.forEach(s=>{
+    if(!byAsset[s.token])byAsset[s.token]={wins:0,losses:0,pending:0};
+    if(s.outcome==="WIN")byAsset[s.token].wins++;
+    else if(s.outcome==="LOSS")byAsset[s.token].losses++;
+    else byAsset[s.token].pending++;
+  });
+  const assetList=Object.entries(byAsset).sort((a,b)=>(b[1].wins+b[1].losses+b[1].pending)-(a[1].wins+a[1].losses+a[1].pending)).slice(0,6);
+  async function markOutcome(id,outcome){
+    setMutating(true);
+    try{
+      await fetch(`/api/signal-history/${id}/outcome`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({outcome,pnlPct:pnlInput||undefined})});
+      setMarkingId(null);setPnlInput("");refetch();
+    }catch(e){}
+    setMutating(false);
+  }
+  const panelS={background:"rgba(255,255,255,0.02)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:6,marginBottom:10};
+  if(!isElite)return(
+    <div style={{...panelS,padding:"20px 18px",textAlign:"center",marginTop:14}}>
+      <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.gold,letterSpacing:"0.14em",marginBottom:6}}>⚡ SIGNAL PERFORMANCE TRACKER</div>
+      <div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginBottom:14,lineHeight:1.7}}>Elite unlocks full signal history — win rate per asset,<br/>entry prices, outcomes, and manual mark controls.</div>
+      <button onClick={onUpgrade} style={{padding:"8px 22px",background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:4,fontFamily:MONO,fontSize:10,color:C.gold2,cursor:"pointer",letterSpacing:"0.1em"}}>UPGRADE TO ELITE</button>
+    </div>
+  );
+  return(<>
+    <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:C.gold,letterSpacing:"0.16em",marginBottom:8,marginTop:14}}>⚡ SIGNAL PERFORMANCE TRACKER</div>
+    {/* Summary stats */}
+    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+      {[
+        {label:"TOTAL",val:sigs.length,col:C.white},
+        {label:"WINS",val:wins,col:C.green},
+        {label:"LOSSES",val:losses,col:C.red},
+        {label:"OPEN",val:pending,col:C.muted},
+        {label:"WIN RATE",val:winRate!=null?`${winRate}%`:"—",col:winRate!=null?(winRate>=55?C.green:winRate>=45?"#d4af37":C.red):C.muted},
+      ].map(({label,val,col})=>(
+        <div key={label} style={{background:"rgba(0,0,0,0.3)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:4,padding:"8px 14px",textAlign:"center",minWidth:64}}>
+          <div style={{fontFamily:MONO,fontSize:16,fontWeight:800,color:col}}>{val}</div>
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.1em"}}>{label}</div>
+        </div>
+      ))}
+    </div>
+    {/* Per-asset win rates */}
+    {assetList.length>0&&(
+      <div style={{...panelS,padding:"10px 14px",marginBottom:10}}>
+        <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.14em",marginBottom:8}}>WIN RATE BY ASSET</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {assetList.map(([token,st])=>{
+            const r=st.wins+st.losses;
+            const wr=r>0?Math.round(st.wins/r*100):null;
+            return(
+              <div key={token} style={{background:"rgba(0,0,0,0.3)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:4,padding:"6px 12px",textAlign:"center",minWidth:56}}>
+                <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:C.white}}>{token}</div>
+                <div style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:wr!=null?(wr>=55?C.green:wr>=45?"#d4af37":C.red):C.muted}}>{wr!=null?`${wr}%`:"—"}</div>
+                <div style={{fontFamily:MONO,fontSize:6,color:C.muted}}>{r} resolved</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
+    {/* Signal list */}
+    <div style={{...panelS,overflow:"hidden"}}>
+      <div style={{padding:"10px 14px",borderBottom:`1px solid rgba(255,255,255,0.05)`}}>
+        <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.14em"}}>LAST 50 SIGNALS · TAP OPEN TO MARK OUTCOME</div>
+      </div>
+      {isLoading?(
+        <div style={{padding:24,textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted}}>Loading history…</div>
+      ):sigs.length===0?(
+        <div style={{padding:24,textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted}}>No signal history yet — signals are logged when fired.</div>
+      ):(
+        <div style={{maxHeight:420,overflowY:"auto"}}>
+          {sigs.map((s,i)=>{
+            const outcomeCol=s.outcome==="WIN"?C.green:s.outcome==="LOSS"?C.red:C.muted;
+            const outcomeBg=s.outcome==="WIN"?"rgba(0,199,135,.08)":s.outcome==="LOSS"?"rgba(255,64,96,.08)":"rgba(255,255,255,.04)";
+            const isMarking=markingId===s.id;
+            return(
+              <div key={s.id} data-testid={`signal-history-${s.id}`} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",borderBottom:i<sigs.length-1?`1px solid rgba(255,255,255,0.04)`:"none",flexWrap:"wrap"}}>
+                <span style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.white,minWidth:38}}>{s.token}</span>
+                <span style={{fontFamily:MONO,fontSize:9,color:s.direction==="LONG"?C.green:C.red,fontWeight:700,minWidth:36}}>{s.direction}</span>
+                <span style={{fontFamily:MONO,fontSize:8,color:"#d4af37",minWidth:30}}>{s.advancedScore||s.conf}%</span>
+                <span style={{fontFamily:MONO,fontSize:8,color:C.muted,flex:1}}>{s.entry?`@ ${s.entry}`:"—"}</span>
+                <span style={{fontFamily:MONO,fontSize:7,color:C.muted,minWidth:60,textAlign:"right"}}>{s.ts?new Date(s.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"—"}</span>
+                <span style={{background:outcomeBg,border:`1px solid ${outcomeCol}44`,borderRadius:3,padding:"2px 8px",fontFamily:MONO,fontSize:8,color:outcomeCol,minWidth:52,textAlign:"center"}}>{s.outcome==="PENDING"?"OPEN":s.outcome}</span>
+                {s.outcome==="PENDING"&&(
+                  isMarking?(
+                    <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                      <input data-testid={`input-pnl-${s.id}`} value={pnlInput} onChange={e=>setPnlInput(e.target.value)} placeholder="P&L%" style={{width:52,background:"rgba(0,0,0,0.4)",border:`1px solid rgba(255,255,255,0.1)`,borderRadius:3,padding:"3px 6px",fontFamily:MONO,fontSize:9,color:C.white,outline:"none"}}/>
+                      <button data-testid={`btn-mark-win-${s.id}`} disabled={mutating} onClick={()=>markOutcome(s.id,"WIN")} style={{padding:"3px 8px",background:"rgba(0,199,135,.15)",border:`1px solid rgba(0,199,135,.4)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.green,cursor:"pointer"}}>WIN</button>
+                      <button data-testid={`btn-mark-loss-${s.id}`} disabled={mutating} onClick={()=>markOutcome(s.id,"LOSS")} style={{padding:"3px 8px",background:"rgba(255,64,96,.12)",border:`1px solid rgba(255,64,96,.35)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.red,cursor:"pointer"}}>LOSS</button>
+                      <button data-testid={`btn-mark-cancel-${s.id}`} onClick={()=>{setMarkingId(null);setPnlInput("");}} style={{padding:"3px 6px",background:"transparent",border:`1px solid rgba(255,255,255,0.1)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer"}}>✕</button>
+                    </div>
+                  ):(
+                    <button data-testid={`btn-mark-open-${s.id}`} onClick={()=>{setMarkingId(s.id);setPnlInput("");}} style={{padding:"3px 10px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer"}}>Mark</button>
+                  )
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </>);
+}
+
 // ═══════════════════════════════════════════════════════════
 // APP
 // ─── RESPONSIVE DEVICE HOOK ────────────────────────────────
@@ -3917,6 +4035,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               </div>}
             </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade}/>);
           })()}
+
+          {/* ── Signal Performance Tracker (Elite) ── */}
+          <SignalHistoryPanel isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>
         </>}
 
         {/* ══ TRACK RECORD ══ */}

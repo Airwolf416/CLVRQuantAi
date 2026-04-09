@@ -1,0 +1,46 @@
+I need you to implement the following improvements to CLVRQuantAI. Do them one at a time and confirm each before moving to the next.
+
+---
+
+1. SIGNAL PERFORMANCE TRACKER
+Add a "Signal History" section in the Signals tab (Elite only). Every time a QuantBrain signal fires (score ≥ 55), log it to a new DB table: signal_history (id, user_id, token, direction, entry_price, score, timeframe, created_at, outcome, outcome_pct, closed_at). Add a UI card showing the last 50 signals per asset with: direction, score, entry price, and outcome (WIN/LOSS/OPEN). Compute and display a live win rate % per asset and overall. Add a "Mark Outcome" button so Elite users can manually close a signal as WIN or LOSS with the exit price. Show a rolling 30-day win rate badge at the top of the Signals tab.
+
+---
+
+2. KRONOS ENSEMBLE FLIP PUSH NOTIFICATION
+When the /api/kronos endpoint returns a result, compare the ensemble_signal to the last cached result for the same asset+timeframe. If the signal has changed (e.g. NEUTRAL → LONG, or LONG → SHORT), trigger a push notification to the user with the format: "⏱ Kronos Flip — [ASSET] [TF]: [OLD] → [NEW] ([CONFIDENCE]% confidence)". Cache the last Kronos result per asset+timeframe in memory (no DB needed). Only notify if confidence ≥ 65%.
+
+---
+
+3. REGIME-AWARE SIGNAL CONFIDENCE ROUTING
+In the QuantBrain signal scoring logic, pull the current market regime from the MarketDataStore (the regime field — BULL_TREND, BEAR_TREND, RANGING, etc.). Apply a confidence multiplier to the final score before display:
+- BULL_TREND or BEAR_TREND: multiply by 1.1 (trending = signals more reliable)
+- RANGING or CHOPPY: multiply by 0.80 (mean-reversion environment = higher false-fire risk)
+- CRISIS or HIGH_VOLATILITY: multiply by 0.70
+Cap the adjusted score at 100. Display a small regime badge next to each signal card showing the active regime and the multiplier applied (e.g. "RANGING ×0.8").
+
+---
+
+4. HOW TO USE A SIGNAL — ONBOARDING GUIDE
+Add a collapsible "How to use this signal" card at the top of the Signals tab, visible to all Pro users. It should show a real example trade walkthrough:
+- Step 1: Wait for score ≥ 75 + direction confirmed
+- Step 2: Check macro kill switch is CLEAR
+- Step 3: Use Kelly % to size your position
+- Step 4: Enter at the suggested zone, set stop immediately
+- Step 5: Take 50% off at TP1, trail stop to entry for the rest
+- Step 6: Exit fully at TP2 or on invalidation
+Style it consistently with the existing panel design (dark background, MONO font, gold headers). Collapsed by default.
+
+---
+
+5. TRADE JOURNAL (Elite only)
+Add a new "Journal" tab to the bottom navigation (icon: 📓, label: JOURNAL). Elite users can log trades with: asset, direction (LONG/SHORT), entry price, stop price, TP1, TP2, position size, notes, and outcome. Store in a new DB table: trade_journal (id, user_id, asset, direction, entry, stop, tp1, tp2, size, notes, outcome, pnl_pct, created_at, closed_at). Display a trade list with P&L per trade, total P&L, win rate, average R:R, and best/worst trade. Non-Elite users see a locked preview with upgrade prompt. Use the same dark UI style as the rest of the app.
+
+---
+
+General rules for all features:
+- Match the existing dark UI style exactly: background #060a13, MONO font 'IBM Plex Mono', gold #c9a84c / #d4af37, panel borders rgba(255,255,255,0.06)
+- Elite gating follows the same pattern as Squawk Box and SEC Insider: isElite check server-side on API routes, locked teaser UI for Pro users
+- No breaking changes to existing tabs or routes
+- Each feature gets its own API route(s) where needed
+- Confirm with me before starting each numbered item
