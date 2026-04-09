@@ -1472,6 +1472,26 @@ export async function registerRoutes(
     return res.json({ signals: stripped, isPaidUser: false });
   });
 
+  // ── MARK SIGNAL OUTCOME (Elite) ───────────────────────────────────────────
+  app.patch("/api/signal-history/:id/outcome", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const dbUser = await storage.getUser(userId);
+      if (!dbUser) return res.status(401).json({ error: "User not found" });
+      const tier = await getEffectiveTier(dbUser);
+      if (tier !== "elite") return res.status(403).json({ error: "Requires Elite tier" });
+    } catch {
+      return res.status(500).json({ error: "Auth check failed" });
+    }
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
+    const { outcome, pnlPct } = req.body;
+    if (!["WIN", "LOSS", "PENDING"].includes(outcome)) return res.status(400).json({ error: "Invalid outcome" });
+    await storage.updateSignalOutcomeById(id, outcome, pnlPct);
+    res.json({ ok: true });
+  });
+
   // ── TRACK RECORD (public stats + paid extended view) ─────────────────────
   app.get("/api/track-record", async (req, res) => {
     const userId = (req.session as any)?.userId;
