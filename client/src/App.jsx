@@ -40,13 +40,13 @@ const DARK_C = {
   navBg:"#050709", navBorder:"#141e35", inputBg:"#080d18",
 };
 const LIGHT_C = {
-  bg:"#0b1a30", navy:"#081426", panel:"#0f2040",
-  border:"#1c3264", border2:"#243d78",
-  gold:"#c9a84c", gold2:"#e8c96d", gold3:"#f7e0a0",
-  text:"#c8d4ee", muted:"#4a6090", muted2:"#6b84b8", white:"#f0f4ff",
-  green:"#00c787", red:"#ff4060", orange:"#ff8c00",
-  cyan:"#00d4ff", blue:"#3b82f6", teal:"#14b8a6", purple:"#a855f7", pink:"#ec4899",
-  navBg:"#0b1a30", navBorder:"#1c3264", inputBg:"#081426",
+  bg:"#f5f3ee", navy:"#ede9e0", panel:"#ffffff",
+  border:"#dbd5c8", border2:"#c8c0b2",
+  gold:"#c9a84c", gold2:"#b8922a", gold3:"#8a6a1a",
+  text:"#2a3545", muted:"#7a8090", muted2:"#9aa0ac", white:"#1a2035",
+  green:"#15803d", red:"#be123c", orange:"#b45309",
+  cyan:"#0e7490", blue:"#1d4ed8", teal:"#0f766e", purple:"#7e22ce", pink:"#be185d",
+  navBg:"#ffffff", navBorder:"#dbd5c8", inputBg:"#f0ede6",
 };
 // module-level fallback (dark) for simple utility components
 const C = DARK_C;
