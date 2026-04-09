@@ -1,0 +1,93 @@
+# ================================================================
+KRONOS FORECAST ENGINE — Integration Instructions
+
+TWO FILES TO ADD:
+
+1. kronos_backend_route.ts  → paste into server/routes.ts
+1. KronosPanel.jsx          → new file at client/src/components/KronosPanel.jsx
+
+# ================================================================
+STEP 1 — Backend (server/routes.ts)
+
+Open server/routes.ts. Find the closing bracket of /api/quant route (around line 5027):
+
+});   ← end of /api/quant
+
+Paste the full contents of kronos_backend_route.ts right after that line.
+
+No other backend changes needed — it uses your existing fetchQuantCandles() helper.
+
+# ================================================================
+STEP 2 — Frontend (AITab.jsx)
+
+File: client/src/tabs/AITab.jsx
+
+ADD IMPORT at the top (line ~3, after existing imports):
+import KronosPanel from “../components/KronosPanel”;
+
+ADD COMPONENT inside the return, right after the MasterBrain Capability Overview
+div ends (the div ending around line 15350 with </div> after the map of engines):
+
+{/* ── KRONOS FORECAST ENGINE ── */}
+<KronosPanel defaultAsset={asset} />
+
+This puts it between the capability overview and the Analyze button.
+When the user changes asset, KronosPanel picks it up via defaultAsset={asset}.
+
+# ================================================================
+STEP 3 — Frontend (App.jsx / main file, Signals tab)
+
+In your main App file, find the signals tab section (around line 19966):
+
+{tab===“signals”&&isPro&&<>
+
+ADD IMPORT at the very top of the file with other imports:
+import KronosPanel from “./components/KronosPanel”;
+
+ADD COMPONENT right after the 6-Dimension methodology panel closes (after line ~20047,
+the closing </div> of the “6-DIMENSION ANALYSIS ENGINE” block):
+
+{/* ── KRONOS FORECAST ENGINE ── */}
+<KronosPanel />
+
+# ================================================================
+WHAT IT DOES
+
+The panel is collapsed by default (shows just the header row with signal badge).
+User clicks to expand, picks asset + timeframe, taps “Run Kronos Forecast”.
+
+Calls POST /api/kronos → backend fetches 48 candles → computes historical vol →
+sends OHLCV sequence to Claude with Kronos methodology prompt → returns:
+
+- ensemble_signal       STRONG_LONG / LONG / NEUTRAL / SHORT / STRONG_SHORT
+- ensemble_confidence   0–100%
+- volatility_forecast   regime + annualized % + per-candle range estimate
+- trajectories.bull     5 price points + probability + catalyst
+- trajectories.base     5 price points + probability + catalyst
+- trajectories.bear     5 price points + probability + catalyst
+- key_levels            resistance + support
+- sequence_pattern      detected K-line pattern in the sequence
+
+Each trajectory has a mini sparkline chart rendered inline.
+
+# ================================================================
+TIER GATING (optional)
+
+To restrict Kronos to Elite only, wrap the component:
+
+{isElite ? (
+<KronosPanel defaultAsset={asset} />
+) : (
+<div style={{…your standard locked panel style…}}>
+🔒 KRONOS FORECAST — Elite Only
+</div>
+)}
+
+Or leave it open to all Pro users as a differentiator.
+
+# ================================================================
+NO NEW ENV VARS or INFRASTRUCTURE NEEDED
+
+Uses ANTHROPIC_API_KEY (already set) + fetchQuantCandles (already exists).
+Model: claude-sonnet-4-20250514 (same as your /api/quant route).
+Costs ~500–700 tokens per forecast call.
