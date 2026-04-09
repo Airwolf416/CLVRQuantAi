@@ -40,18 +40,25 @@ function uint8ToB64(arr) {
 
 const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide financial advice, investment recommendations, or trading signals. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.\n\nAI DISCLOSURE: CLVR AI uses the Claude API by Anthropic to power its AI analysis engine.`;
 
-const C = {
+const DARK_C = {
   bg: "#050709", panel: "#0c1220", border: "#141e35", border2: "#1c2b4a",
   gold: "#c9a84c", gold2: "#e8c96d", gold3: "#f7e0a0",
   text: "#c8d4ee", muted: "#4a5d80", muted2: "#6b7fa8", white: "#f0f4ff",
   green: "#00c787", red: "#ff4060", orange: "#ff8c00", cyan: "#00d4ff",
   inputBg: "#080d18",
 };
+const LIGHT_C = {
+  bg: "#f5f3ee", panel: "#ffffff", border: "#dbd5c8", border2: "#c8c0b2",
+  gold: "#c9a84c", gold2: "#b8922a", gold3: "#8a6a1a",
+  text: "#2a3545", muted: "#7a8090", muted2: "#9aa0ac", white: "#1a2035",
+  green: "#15803d", red: "#be123c", orange: "#b45309", cyan: "#0e7490",
+  inputBg: "#f0ede6",
+};
 const SERIF = "'Playfair Display', Georgia, serif";
 const MONO = "'IBM Plex Mono', monospace";
 const SANS = "'Barlow', system-ui, sans-serif";
 
-function Particles() {
+function Particles({ C }) {
   const [pts] = useState(() =>
     Array.from({ length: 18 }, (_, i) => ({
       x: Math.random() * 100, y: Math.random() * 100,
@@ -73,7 +80,192 @@ function Particles() {
   );
 }
 
-export default function WelcomePage({ onEnter, onBack }) {
+function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
+  const [step, setStep] = useState(0);
+  const TOTAL = 5;
+  const STEPS = [
+    {
+      icon: "✦", label: "WELCOME",
+      title: "The Intelligent Trader's Edge",
+      sub: "Professional-grade market intelligence — accessible to everyone.",
+      content: (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 20 }}>
+          {[
+            { icon: "⚡", t: "Live Signals", d: "Real-time quant signals with confidence scoring" },
+            { icon: "🤖", t: "CLVR AI", d: "Claude-powered market analyst at your fingertips" },
+            { icon: "📈", t: "Track Record", d: "Transparent signal history with verified outcomes" },
+            { icon: "📅", t: "Macro Calendar", d: "Fed meetings, CPI, earnings — never miss a catalyst" },
+          ].map(({ icon, t, d }) => (
+            <div key={t} style={{ background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 10px" }}>
+              <div style={{ fontSize: 20, marginBottom: 6 }}>{icon}</div>
+              <div style={{ fontFamily: MONO, fontSize: 10, color: C.gold, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 4 }}>{t}</div>
+              <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{d}</div>
+            </div>
+          ))}
+        </div>
+      ),
+    },
+    {
+      icon: "⚡", label: "SIGNALS",
+      title: "Real-Time Quant Signals",
+      sub: "AI-scored signals with risk management built-in.",
+      content: (
+        <div style={{ marginTop: 20, background: isDark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)", border: `1px solid rgba(201,168,76,.25)`, borderRadius: 10, padding: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.text, fontWeight: 700, letterSpacing: "0.08em" }}>BTC/USD</div>
+              <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 2 }}>PERPETUAL · BINANCE</div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <span style={{ fontFamily: MONO, fontSize: 9, background: "rgba(0,199,135,.15)", color: "#00c787", border: "1px solid rgba(0,199,135,.3)", borderRadius: 3, padding: "3px 8px" }}>LONG</span>
+              <span style={{ fontFamily: MONO, fontSize: 9, background: "rgba(201,168,76,.15)", color: C.gold, border: `1px solid rgba(201,168,76,.3)`, borderRadius: 3, padding: "3px 8px" }}>82%</span>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            {[["Entry", "$97,240"], ["Target", "$103,800"], ["Stop", "$94,500"]].map(([l, v]) => (
+              <div key={l} style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, letterSpacing: "0.1em" }}>{l}</div>
+                <div style={{ fontFamily: MONO, fontSize: 11, color: C.text, fontWeight: 700, marginTop: 2 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: "rgba(255,140,0,.08)", border: "1px solid rgba(255,140,0,.2)", borderRadius: 4, padding: "6px 10px", fontFamily: MONO, fontSize: 9, color: "#ff8c00", textAlign: "center", letterSpacing: "0.08em" }}>
+            🕐 PRO: Real-time · FREE: 30-min delay
+          </div>
+        </div>
+      ),
+    },
+    {
+      icon: "🤖", label: "CLVR AI",
+      title: "AI-Powered Market Analysis",
+      sub: "Ask anything. Get institutional-grade insights instantly.",
+      content: (
+        <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 14px", fontFamily: SANS, fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
+            <span style={{ fontFamily: MONO, fontSize: 9, color: C.gold, display: "block", marginBottom: 4 }}>YOU</span>
+            What's the macro outlook for BTC this week?
+          </div>
+          <div style={{ background: "rgba(201,168,76,.06)", border: "1px solid rgba(201,168,76,.2)", borderRadius: 8, padding: "10px 14px", fontFamily: SANS, fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+            <span style={{ fontFamily: MONO, fontSize: 9, color: C.gold, display: "block", marginBottom: 4 }}>✦ CLVR AI</span>
+            BTC faces a critical week with FOMC minutes Wednesday. Risk-on positioning has been building — watch the $96K support as the key level. A hold there targets $105K by Friday if CPI prints soft.
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, textAlign: "center", letterSpacing: "0.1em" }}>POWERED BY CLAUDE · PRO & ELITE ONLY</div>
+        </div>
+      ),
+    },
+    {
+      icon: "📈", label: "TRACK RECORD",
+      title: "Fully Transparent Track Record",
+      sub: "See every signal — wins, losses, and outcomes verified.",
+      content: (
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+            {[["73%", "WIN RATE"], ["142", "SIGNALS"], ["4.2×", "AVG R:R"]].map(([v, l]) => (
+              <div key={l} style={{ background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 8px", textAlign: "center" }}>
+                <div style={{ fontFamily: MONO, fontSize: 20, fontWeight: 700, color: C.gold, lineHeight: 1 }}>{v}</div>
+                <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 4, letterSpacing: "0.1em" }}>{l}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {[
+              { sym: "ETH", dir: "LONG", res: "WIN", pct: "+18.4%" },
+              { sym: "BTC", dir: "SHORT", res: "WIN", pct: "+12.1%" },
+              { sym: "SOL", dir: "LONG", res: "LOSS", pct: "-4.2%" },
+            ].map(({ sym, dir, res, pct }) => (
+              <div key={sym+dir} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: isDark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px" }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, color: C.text, fontWeight: 700 }}>{sym}</span>
+                <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>{dir}</span>
+                <span style={{ fontFamily: MONO, fontSize: 9, color: res === "WIN" ? "#00c787" : "#ff4060", fontWeight: 700 }}>{res}</span>
+                <span style={{ fontFamily: MONO, fontSize: 10, color: res === "WIN" ? "#00c787" : "#ff4060", fontWeight: 700 }}>{pct}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      icon: "🚀", label: "PLANS",
+      title: "Choose Your Intelligence Level",
+      sub: "Start free. Upgrade anytime.",
+      content: (
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+          {[
+            { tier: "FREE", price: "$0", features: ["Signals (30-min delay)", "Macro Calendar", "Basic Markets"], highlight: false, cta: "Start Free", action: "free" },
+            { tier: "PRO", price: "$29.99/mo", features: ["Real-time Signals", "CLVR AI Analyst", "Price Alerts + Watchlist", "Daily Brief"], highlight: true, cta: "Start Pro", action: "signup" },
+            { tier: "ELITE", price: "$49.99/mo", features: ["Everything in Pro", "Insider Intelligence", "Priority AI Access", "Phantom Wallet"], highlight: false, cta: "Go Elite", action: "signup" },
+          ].map(({ tier, price, features, highlight, cta, action }) => (
+            <div key={tier} style={{ border: `1px solid ${highlight ? "rgba(201,168,76,.5)" : C.border}`, borderRadius: 8, padding: "12px 14px", background: highlight ? "rgba(201,168,76,.06)" : "transparent", position: "relative" }}>
+              {highlight && <div style={{ position: "absolute", top: -1, left: "50%", transform: "translateX(-50%)", fontFamily: MONO, fontSize: 7, background: C.gold, color: "#0a0a0a", padding: "2px 10px", borderRadius: "0 0 4px 4px", fontWeight: 700, letterSpacing: "0.1em" }}>MOST POPULAR</div>}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, color: highlight ? C.gold : C.text, letterSpacing: "0.1em" }}>{tier}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted, fontWeight: 700 }}>{price}</span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
+                {features.map(f => <span key={f} style={{ fontFamily: MONO, fontSize: 8, color: C.muted, background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", borderRadius: 3, padding: "2px 6px" }}>✓ {f}</span>)}
+              </div>
+              <button onClick={() => action === "free" ? onEnterFree() : onSignUp()} style={{ width: "100%", background: highlight ? "rgba(201,168,76,.15)" : "transparent", border: `1px solid ${highlight ? "rgba(201,168,76,.4)" : C.border}`, borderRadius: 4, padding: "8px", fontFamily: MONO, fontSize: 11, fontWeight: 700, color: highlight ? C.gold : C.muted2, cursor: "pointer", letterSpacing: "0.06em" }}>
+                {cta} →
+              </button>
+            </div>
+          ))}
+        </div>
+      ),
+    },
+  ];
+  const s = STEPS[step];
+  return (
+    <div data-testid="walking-tour" style={{ position: "fixed", inset: 0, zIndex: 500, background: isDark ? "rgba(5,7,9,.97)" : "rgba(245,243,238,.97)", backdropFilter: "blur(20px)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+      <div style={{ maxWidth: 480, width: "100%", margin: "0 auto", padding: "20px 20px 120px", flex: 1, display: "flex", flexDirection: "column" }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
+          <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 900, color: C.gold }}>{s.icon} CLVRQuant</div>
+          <button onClick={onClose} data-testid="btn-tour-close" style={{ background: "none", border: "none", fontFamily: MONO, fontSize: 10, color: C.muted, cursor: "pointer", letterSpacing: "0.08em", padding: "6px 10px" }}>SKIP ✕</button>
+        </div>
+
+        {/* Step indicator */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 28 }}>
+          {STEPS.map((_, i) => (
+            <div key={i} onClick={() => setStep(i)} style={{ flex: 1, height: 3, borderRadius: 2, background: i <= step ? C.gold : isDark ? "rgba(255,255,255,.1)" : "rgba(0,0,0,.1)", cursor: "pointer", transition: "background .3s" }} />
+          ))}
+        </div>
+
+        {/* Step label */}
+        <div style={{ fontFamily: MONO, fontSize: 9, color: C.gold, letterSpacing: "0.2em", marginBottom: 8 }}>STEP {step + 1} OF {TOTAL} · {s.label}</div>
+
+        {/* Title */}
+        <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: "clamp(22px,5vw,30px)", color: C.text, lineHeight: 1.2, marginBottom: 6 }}>{s.title}</div>
+        <div style={{ fontFamily: SANS, fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{s.sub}</div>
+
+        {/* Content */}
+        {s.content}
+      </div>
+
+      {/* Fixed bottom nav */}
+      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, padding: "16px 20px", background: isDark ? "rgba(5,7,9,.98)" : "rgba(245,243,238,.98)", borderTop: `1px solid ${C.border}`, backdropFilter: "blur(14px)" }}>
+        <div style={{ maxWidth: 480, margin: "0 auto", display: "flex", gap: 10 }}>
+          {step > 0 && (
+            <button onClick={() => setStep(s => s - 1)} data-testid="btn-tour-back" style={{ flex: 1, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, padding: "12px", fontFamily: MONO, fontSize: 12, color: C.muted, cursor: "pointer", letterSpacing: "0.06em" }}>
+              ← Back
+            </button>
+          )}
+          {step < TOTAL - 1 ? (
+            <button onClick={() => setStep(s => s + 1)} data-testid="btn-tour-next" style={{ flex: 2, background: "rgba(201,168,76,.12)", border: "1px solid rgba(201,168,76,.4)", borderRadius: 6, padding: "12px", fontFamily: MONO, fontSize: 12, fontWeight: 700, color: C.gold, cursor: "pointer", letterSpacing: "0.06em" }}>
+              Next →
+            </button>
+          ) : (
+            <button onClick={onSignUp} data-testid="btn-tour-signup" style={{ flex: 2, background: "rgba(201,168,76,.15)", border: "1px solid rgba(201,168,76,.5)", borderRadius: 6, padding: "12px", fontFamily: SERIF, fontStyle: "italic", fontSize: 14, fontWeight: 700, color: C.gold, cursor: "pointer", letterSpacing: "0.02em" }}>
+              Create Free Account →
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTheme }) {
+  const C = isDark ? DARK_C : LIGHT_C;
   const [mode, setMode] = useState("welcome");
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false, referralCode: "" });
   const [loading, setLoading] = useState(false);
@@ -573,13 +765,23 @@ export default function WelcomePage({ onEnter, onBack }) {
         @keyframes float2{0%,100%{transform:translateY(0)}50%{transform:translateY(-24px)}}
         @keyframes goldPulse{0%,100%{box-shadow:0 0 30px rgba(201,168,76,.15)}50%{box-shadow:0 0 60px rgba(201,168,76,.3)}}
         @keyframes goldShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
-        body{background:#050709;margin:0;}
+        body{background:${C.bg};margin:0;}
         *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
         input:focus{border-color:${C.gold} !important;}
       `}</style>
 
-      <Particles />
+      <Particles C={C} />
       <div style={{ position: "absolute", top: "25%", left: "50%", transform: "translateX(-50%)", width: 500, height: 500, background: "radial-gradient(circle,rgba(201,168,76,.06) 0%,transparent 70%)", pointerEvents: "none" }} />
+
+      {mode === "tour" && (
+        <WalkingTour
+          C={C}
+          isDark={isDark}
+          onSignUp={() => setMode("signup")}
+          onEnterFree={() => onBack ? onBack() : onEnter && onEnter({ preview: true, tier: "free", name: "Guest" })}
+          onClose={() => setMode("welcome")}
+        />
+      )}
 
       {mode === "welcome" && (
         <div data-testid="welcome-screen" style={{ textAlign: "center", maxWidth: 480, width: "100%", position: "relative", zIndex: 1 }}>
@@ -634,11 +836,20 @@ export default function WelcomePage({ onEnter, onBack }) {
                 Sign In with Password
               </button>
             )}
-            <button data-testid="btn-guest" onClick={() => onBack ? onBack() : onEnter && onEnter({ preview: true, tier: "free", name: "Guest" })}
-              style={{ ...btnGhost, fontSize: 11, color: C.muted, borderColor: C.border }}>
-              Enter without signing in
+            <button data-testid="btn-explore" onClick={() => setMode("tour")}
+              style={{ ...btnGhost, fontSize: 11, color: C.gold, borderColor: "rgba(201,168,76,.3)", letterSpacing: "0.08em" }}>
+              Explore Features →
             </button>
           </div>
+
+          {/* Theme toggle */}
+          {onToggleTheme && (
+            <div style={{ marginTop: 16, marginBottom: 4, textAlign: "center" }}>
+              <button data-testid="btn-welcome-theme-toggle" onClick={onToggleTheme} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 20, padding: "5px 14px", fontFamily: MONO, fontSize: 9, color: C.muted, cursor: "pointer", letterSpacing: "0.1em", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {isDark ? "☀️ Light Mode" : "🌙 Dark Mode"}
+              </button>
+            </div>
+          )}
 
           <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, lineHeight: 1.8, maxWidth: 380, margin: "0 auto" }}>
             By using CLVRQuant you agree that all market data and AI analysis is for informational purposes only. Trading involves substantial risk of loss. CLVRQuant, Mike Claver, and affiliated entities bear <strong style={{ color: C.muted2 }}>no liability</strong> for any financial decisions or losses.{" "}
@@ -836,9 +1047,9 @@ export default function WelcomePage({ onEnter, onBack }) {
               Need an account? Create one
             </button>
 
-            <button data-testid="btn-guest-signin" onClick={() => onBack ? onBack() : onEnter && onEnter({ preview: true, tier: "free", name: "Guest" })}
+            <button data-testid="btn-guest-signin" onClick={() => setMode("tour")}
               style={{ ...btnGhost, fontSize: 10, color: C.muted, borderColor: C.border }}>
-              Enter without signing in
+              Explore Features →
             </button>
           </div>
         </div>
