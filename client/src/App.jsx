@@ -6,7 +6,7 @@
 // Backend-proxied API calls (keys stored server-side)
 // ─────────────────────────────────────────────────────────
 
-import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { useState, useEffect, useRef, useCallback, memo, createContext, useContext } from "react";
 import { SiInstagram, SiTiktok } from "react-icons/si";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
@@ -30,7 +30,7 @@ function storeWACred(credentialId, userId) { try { localStorage.setItem(WA_STORE
 function uint8ToB64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 
 // ─── CLVRQuant Theme ──────────────────────────────────────
-const C = {
+const DARK_C = {
   bg:"#050709", navy:"#080d18", panel:"#0c1220",
   border:"#141e35", border2:"#1c2b4a",
   gold:"#c9a84c", gold2:"#e8c96d", gold3:"#f7e0a0",
@@ -39,6 +39,18 @@ const C = {
   cyan:"#00d4ff", blue:"#3b82f6", teal:"#14b8a6", purple:"#a855f7", pink:"#ec4899",
   navBg:"#050709", navBorder:"#141e35", inputBg:"#080d18",
 };
+const LIGHT_C = {
+  bg:"#f5f3ee", navy:"#ede9e0", panel:"#ffffff",
+  border:"#dbd5c8", border2:"#c8c0b2",
+  gold:"#c9a84c", gold2:"#b8922a", gold3:"#8a6a1a",
+  text:"#2a3545", muted:"#7a8090", muted2:"#9aa0ac", white:"#1a2035",
+  green:"#15803d", red:"#be123c", orange:"#b45309",
+  cyan:"#0e7490", blue:"#1d4ed8", teal:"#0f766e", purple:"#7e22ce", pink:"#be185d",
+  navBg:"#ffffff", navBorder:"#dbd5c8", inputBg:"#f0ede6",
+};
+// module-level fallback (dark) for simple utility components
+const C = DARK_C;
+const ThemeCtx = createContext({C:DARK_C,isDark:true,toggle:()=>{}});
 const SERIF = "'Playfair Display', Georgia, serif";
 const MONO  = "'IBM Plex Mono', monospace";
 const SANS  = "'Barlow', system-ui, sans-serif";
@@ -777,6 +789,7 @@ function holdWindowLabel(tf){
 
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
 function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade}){
+  const{C}=useContext(ThemeCtx);
   const[expanded,setExpanded]=useState(false);
   const isLong=sig.dir==="LONG";
   const dirColor=isLong?C.green:C.red;
@@ -1067,6 +1080,7 @@ function HelpItem({q,a}){
 
 // ─── TRACK RECORD TAB ─────────────────────────────────────
 function TrackRecordTab({isPro,onUpgrade}){
+  const{C}=useContext(ThemeCtx);
   const[stats,setStats]=useState(null);
   const[history,setHistory]=useState([]);
   const[histLocked,setHistLocked]=useState(false);
@@ -1199,6 +1213,7 @@ function TrackRecordTab({isPro,onUpgrade}){
 
 // ─── WATCHLIST TAB ─────────────────────────────────────────
 function WatchlistTab({isPro,onUpgrade,liveSignals}){
+  const{C}=useContext(ThemeCtx);
   const[items,setItems]=useState([]);
   const[loading,setLoading]=useState(true);
   const[newToken,setNewToken]=useState("");
@@ -1312,6 +1327,9 @@ export default function App(){
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
   const [sessionChecked,setSessionChecked]=useState(false);
+  const [isDark,setIsDark]=useState(()=>{try{return localStorage.getItem("clvr_theme")!=="light";}catch{return true;}});
+  const toggleTheme=useCallback(()=>{setIsDark(d=>{const next=!d;try{localStorage.setItem("clvr_theme",next?"dark":"light");}catch{}return next;});},[]);
+  const themeVal={C:isDark?DARK_C:LIGHT_C,isDark,toggle:toggleTheme};
 
   // Check for existing session on mount
   useEffect(()=>{
@@ -1334,18 +1352,30 @@ export default function App(){
 
   // Sign-up / sign-in screen (triggered from locked-tab CTA while in preview)
   if(showAuth){
-    return <WelcomePage onEnter={(u)=>{setUser(u);setShowAuth(false);}} onBack={()=>setShowAuth(false)}/>;
+    return(
+      <ThemeCtx.Provider value={themeVal}>
+        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);setShowAuth(false);}} onBack={()=>setShowAuth(false)}/>
+      </ThemeCtx.Provider>
+    );
   }
 
-  // Not logged in → show WelcomePage (landing: sign up / sign in / enter without signing in)
   if(!user){
-    return <WelcomePage onEnter={(u)=>setUser(u)}/>;
+    return(
+      <ThemeCtx.Provider value={themeVal}>
+        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>setUser(u)}/>
+      </ThemeCtx.Provider>
+    );
   }
 
-  return <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>;
+  return(
+    <ThemeCtx.Provider value={themeVal}>
+      <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>
+    </ThemeCtx.Provider>
+  );
 }
 
 function Dashboard({user,setUser,onShowAuth}){
+  const {C,isDark,toggle:toggleTheme}=useContext(ThemeCtx);
   const [tab,setTab]=useState("radar");
   const [clockTick,setClockTick]=useState(0);
   // ── Global market bell state ───────────────────────────────────────────────
@@ -2776,8 +2806,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         select,input,textarea{outline:none;}
         ::-webkit-scrollbar{display:none;}
         button{cursor:pointer;}
-        body{background:#050709;margin:0;}
-        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(20,30,53,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(20,30,53,.35) 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;}
+        body{background:${C.bg};margin:0;}
+        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(${isDark?"rgba(20,30,53,.35)":"rgba(180,165,140,.12)"} 1px,transparent 1px),linear-gradient(90deg,${isDark?"rgba(20,30,53,.35)":"rgba(180,165,140,.12)"} 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;}
         body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(201,168,76,.05) 0%,transparent 60%);pointer-events:none;z-index:0;}
         @keyframes slideUp{from{transform:translateX(-50%) translateY(16px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
         @keyframes slideDown{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -4261,7 +4291,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       {showTour&&<OnboardingTour isPro={isPro} onClose={()=>setShowTour(false)} onNavigateTab={(t)=>{setTab(t);setShowTour(false);}}/>}
 
       {/* ── BOTTOM NAV ── */}
-      <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:"rgba(5,7,9,.97)",borderTop:`1px solid ${C.border}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
+      <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:100,background:isDark?"rgba(5,7,9,.97)":"rgba(255,255,255,.97)",borderTop:`1px solid ${C.navBorder}`,backdropFilter:"blur(14px)",display:"flex",paddingBottom:"env(safe-area-inset-bottom,0px)",overflowX:"auto"}}>
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
           const previewFreeTab=["about","help","account"].includes(item.k);
@@ -4278,6 +4308,10 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             </button>
           );
         })}
+        <button data-testid="btn-theme-toggle" onClick={toggleTheme} title={isDark?"Switch to light mode":"Switch to dark mode"} style={{flex:"0 0 auto",minWidth:44,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:"2px solid transparent",cursor:"pointer"}}>
+          <span style={{fontSize:13,lineHeight:1}}>{isDark?"☀️":"🌙"}</span>
+          <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:C.muted,letterSpacing:"0.06em"}}>{isDark?"LIGHT":"DARK"}</span>
+        </button>
       </div>
     </div>
   );
