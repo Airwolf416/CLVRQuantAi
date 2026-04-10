@@ -59,6 +59,7 @@ import {
   enqueuePromoEmail,
   enqueueServiceApology,
   enqueueApologyBrief,
+  broadcastKronosFlipPush,
 } from "./workers/notifications";
 import { startHlRefreshWorker } from "./workers/hlRefreshWorker";
 import { startStockRefreshWorker } from "./workers/stockRefreshWorker";
@@ -78,6 +79,9 @@ import {
 const VAPID_PUBLIC_KEY  = "BGY47DEls18XHZ7xJiYDf7yNNvF9UhfjA16bkErYfhrJAVxF-P5mhrEz1rI5qp0JT2gdPc80f7swZBVgRMw3PMs";
 const VAPID_PRIVATE_KEY = "JYSHjiS26v9DWkwQ-kc-fdoBjn2sBlaTyJOo8JPttoI";
 webpush.setVapidDetails("mailto:noreply@clvrquantai.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
+// ── Kronos flip cache: asset+timeframe → last ensemble result (in-memory) ────
+const kronosFlipCache = new Map<string, { ensemble_signal: string; ensemble_confidence: number }>();
 
 // Helper: send a web push to all subscriptions of a user
 const PUSH_ORIGIN = process.env.APP_URL
@@ -1564,6 +1568,58 @@ export async function registerRoutes(
     const { minConf } = req.body;
     if (minConf === undefined) return res.status(400).json({ error: "minConf required" });
     await storage.updateWatchlistMinConf(Number(req.params.id), userId, Number(minConf));
+    res.json({ ok: true });
+  });
+
+  // ── TRADE JOURNAL (Elite) ─────────────────────────────────────────────────
+  async function requireElite(req: any, res: any): Promise<string | null> {
+    const userId = (req.session as any)?.userId;
+    if (!userId) { res.status(401).json({ error: "Not authenticated" }); return null; }
+    try {
+      const dbUser = await storage.getUser(userId);
+      if (!dbUser) { res.status(401).json({ error: "User not found" }); return null; }
+      const tier = await getEffectiveTier(dbUser);
+      if (tier !== "elite") { res.status(403).json({ error: "Requires Elite tier" }); return null; }
+      return userId;
+    } catch { res.status(500).json({ error: "Auth check failed" }); return null; }
+  }
+
+  app.get("/api/journal", async (req, res) => {
+    const userId = await requireElite(req, res);
+    if (!userId) return;
+    const entries = await storage.getTradeJournal(userId);
+    res.json({ entries });
+  });
+
+  app.post("/api/journal", async (req, res) => {
+    const userId = await requireElite(req, res);
+    if (!userId) return;
+    const { asset, direction, entry, stop, tp1, tp2, size, notes } = req.body;
+    if (!asset || !direction || !entry) return res.status(400).json({ error: "asset, direction, entry required" });
+    if (!["LONG","SHORT"].includes(direction)) return res.status(400).json({ error: "direction must be LONG or SHORT" });
+    const newEntry = await storage.addTradeJournalEntry({ userId, asset: asset.toUpperCase(), direction, entry, stop: stop||null, tp1: tp1||null, tp2: tp2||null, size: size||null, notes: notes||null, outcome: "OPEN", pnlPct: null });
+    res.json({ entry: newEntry });
+  });
+
+  app.patch("/api/journal/:id", async (req, res) => {
+    const userId = await requireElite(req, res);
+    if (!userId) return;
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
+    const allowed = ["outcome","pnlPct","notes","stop","tp1","tp2","size"];
+    const updates: any = {};
+    for (const k of allowed) { if (req.body[k] !== undefined) updates[k] = req.body[k]; }
+    if (updates.outcome && !["OPEN","WIN","LOSS"].includes(updates.outcome)) return res.status(400).json({ error: "Invalid outcome" });
+    await storage.updateTradeJournalEntry(id, userId, updates);
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/journal/:id", async (req, res) => {
+    const userId = await requireElite(req, res);
+    if (!userId) return;
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
+    await storage.deleteTradeJournalEntry(id, userId);
     res.json({ ok: true });
   });
 
@@ -3183,6 +3239,20 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
       }
 
       parsed.generated_at = new Date().toISOString();
+
+      // ── Kronos flip push notification ────────────────────────────────────────
+      try {
+        const cacheKey = `${ticker}:${timeframe}`;
+        const prior = kronosFlipCache.get(cacheKey);
+        const newSignal: string = parsed.ensemble_signal;
+        const newConf: number = parsed.ensemble_confidence ?? 0;
+        if (prior && prior.ensemble_signal !== newSignal && newConf >= 65) {
+          broadcastKronosFlipPush(ticker, timeframe, prior.ensemble_signal, newSignal, newConf).catch(() => {});
+        }
+        kronosFlipCache.set(cacheKey, { ensemble_signal: newSignal, ensemble_confidence: newConf });
+      } catch { /* non-fatal */ }
+      // ─────────────────────────────────────────────────────────────────────────
+
       res.json(parsed);
 
     } catch (err: any) {

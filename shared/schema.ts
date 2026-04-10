@@ -158,3 +158,27 @@ export const insertWatchlistItemSchema = createInsertSchema(watchlistItems).pick
   minConf: true,
 });
 export type InsertWatchlistItem = z.infer<typeof insertWatchlistItemSchema>;
+
+// ── Trade Journal (Elite) ──────────────────────────────────────────────────────
+export const tradeJournal = pgTable("trade_journal", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  asset: text("asset").notNull(),
+  direction: text("direction").notNull(), // LONG | SHORT
+  entry: text("entry").notNull(),
+  stop: text("stop"),
+  tp1: text("tp1"),
+  tp2: text("tp2"),
+  size: text("size"),
+  notes: text("notes"),
+  outcome: text("outcome").default("OPEN"), // OPEN | WIN | LOSS
+  pnlPct: text("pnl_pct"),
+  createdAt: timestamp("created_at").defaultNow(),
+  closedAt: timestamp("closed_at"),
+});
+
+export type TradeJournalEntry = typeof tradeJournal.$inferSelect;
+export const insertTradeJournalSchema = createInsertSchema(tradeJournal).omit({
+  id: true, createdAt: true, closedAt: true,
+});
+export type InsertTradeJournalEntry = z.infer<typeof insertTradeJournalSchema>;

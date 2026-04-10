@@ -118,6 +118,55 @@ export async function broadcastSignalPushParallel(sig: any): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PUSH — Kronos Ensemble Flip broadcast (Elite only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function broadcastKronosFlipPush(
+  asset: string,
+  timeframe: string,
+  oldSignal: string,
+  newSignal: string,
+  confidence: number
+): Promise<void> {
+  const pushOrigin =
+    process.env.APP_URL ||
+    (process.env.REPLIT_DOMAINS
+      ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}`
+      : "https://clvrquantai.com");
+
+  const title = `⏱ Kronos Flip — ${asset} ${timeframe}`;
+  const body = `${oldSignal} → ${newSignal} (${confidence}% confidence)`;
+  const tag = `kronos-flip-${asset}-${timeframe}`.replace(/[^a-zA-Z0-9\-_.~%]/g, "-").slice(0, 32);
+
+  try {
+    const rows = await pool.query(
+      `SELECT ps.id, ps.subscription FROM push_subscriptions ps
+       JOIN users u ON u.id = ps.user_id
+       WHERE u.tier = 'elite' OR u.email = $1`,
+      ["mikeclaver@gmail.com"]
+    );
+    const subscriptions: Array<{ id: number; subscription: any }> = rows.rows;
+    if (subscriptions.length === 0) return;
+
+    const queued = await addToQueue("signal_push", {
+      type: "signal_push",
+      title,
+      body,
+      tag,
+      iconBase: pushOrigin,
+      subscriptions,
+    } as SignalPushJobData);
+
+    if (!queued) {
+      await sendPushBatch(subscriptions, title, body, tag, pushOrigin);
+    }
+    console.log(`[PUSH] Kronos flip broadcast ${queued ? "queued" : "sent"}: ${asset} ${timeframe} ${oldSignal} → ${newSignal}`);
+  } catch (e: any) {
+    console.error("[PUSH] broadcastKronosFlipPush error:", e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PUSH — core batch sender
 // ─────────────────────────────────────────────────────────────────────────────
 

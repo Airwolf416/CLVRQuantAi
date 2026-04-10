@@ -464,8 +464,8 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About"};
-  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
+  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
       {/* Icon + heading */}
@@ -789,7 +789,7 @@ function holdWindowLabel(tf){
 }
 
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
-function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade}){
+function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade,regimeName,regimeMult}){
   const{C}=useContext(ThemeCtx);
   const[expanded,setExpanded]=useState(false);
   const isLong=sig.dir==="LONG";
@@ -829,6 +829,14 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
               {!sig.locked&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.06)",color:C.gold,border:"1px solid rgba(201,168,76,.25)",fontFamily:MONO,letterSpacing:"0.1em"}}>ALPHA-DETECT</span>}
               {sig.locked&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(255,140,0,.08)",color:"#ff8c00",border:"1px solid rgba(255,140,0,.35)",fontFamily:MONO,letterSpacing:"0.1em"}}>⏱ 30M DELAYED</span>}
               {whaleMatch&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,212,255,.08)",color:C.cyan,border:"1px solid rgba(0,212,255,.3)",fontFamily:MONO,letterSpacing:"0.08em",animation:"gold-pulse 2s infinite"}}>🐋 {i18n.whaleAligned}</span>}
+              {regimeName&&regimeName!=="UNKNOWN"&&regimeMult!=null&&(()=>{
+                const multLabel=regimeMult>=1.1?"×1.1":regimeMult<=0.70?"×0.7":regimeMult<=0.80?"×0.8":"×1.0";
+                const isBull=["BULL_TREND","BEAR_TREND"].includes(regimeName);
+                const isLow=["CRISIS","HIGH_VOLATILITY"].includes(regimeName);
+                const rc=isBull?"rgba(0,199,135,.7)":isLow?"rgba(255,64,96,.7)":"rgba(255,200,100,.7)";
+                const rbg=isBull?"rgba(0,199,135,.08)":isLow?"rgba(255,64,96,.08)":"rgba(255,200,100,.06)";
+                return<span style={{fontSize:8,fontWeight:700,padding:"2px 6px",borderRadius:2,background:rbg,color:rc,border:`1px solid ${rc}55`,fontFamily:MONO,letterSpacing:"0.06em",flexShrink:0}}>{regimeName.replace("_"," ")} {multLabel}</span>;
+              })()}
               <span style={{fontFamily:MONO,fontSize:9,color:sig.pctMove>0?C.green:C.red,fontWeight:700}}>{sig.pctMove>0?"+":""}{sig.pctMove}%</span>
               <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
             </div>
@@ -1366,6 +1374,202 @@ function WatchlistTab({isPro,onUpgrade,liveSignals}){
       </div>
     ))}
   </>);
+}
+
+// ─── TRADE JOURNAL TAB (Elite) ─────────────────────────────
+function TradeJournalTab({isElite,onUpgrade}){
+  const{C}=useContext(ThemeCtx);
+  const[showForm,setShowForm]=useState(false);
+  const[deleting,setDeleting]=useState(null);
+  const[closing,setClosing]=useState(null);
+  const[closeData,setCloseData]=useState({outcome:"WIN",pnlPct:""});
+  const[form,setForm]=useState({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:""});
+  const[saving,setSaving]=useState(false);
+  const{data,isLoading,refetch}=useQuery({queryKey:["/api/journal"],queryFn:async()=>{const r=await fetch("/api/journal");return r.json();},enabled:isElite,refetchInterval:120000});
+  const entries=data?.entries||[];
+  const closed=entries.filter(e=>e.outcome!=="OPEN");
+  const wins=closed.filter(e=>e.outcome==="WIN").length;
+  const losses=closed.filter(e=>e.outcome==="LOSS").length;
+  const winRate=closed.length>0?Math.round(wins/closed.length*100):null;
+  const pnls=closed.filter(e=>e.pnlPct).map(e=>parseFloat(e.pnlPct));
+  const totalPnl=pnls.length>0?pnls.reduce((a,b)=>a+b,0):null;
+  const bestTrade=pnls.length>0?Math.max(...pnls):null;
+  const worstTrade=pnls.length>0?Math.min(...pnls):null;
+  const avgRR=(()=>{
+    const rrs=entries.filter(e=>e.entry&&e.stop&&e.tp1).map(e=>{
+      const en=parseFloat(e.entry),st=parseFloat(e.stop),t1=parseFloat(e.tp1);
+      if(!en||!st||!t1||en===st)return null;
+      return Math.abs(t1-en)/Math.abs(en-st);
+    }).filter(Boolean);
+    return rrs.length>0?(rrs.reduce((a,b)=>a+b,0)/rrs.length).toFixed(2):null;
+  })();
+  const panelS={background:"rgba(255,255,255,0.02)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:6,marginBottom:10};
+  async function addEntry(){
+    if(!form.asset||!form.entry)return;
+    setSaving(true);
+    try{
+      await fetch("/api/journal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)});
+      setForm({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:""});
+      setShowForm(false);refetch();
+    }catch(e){}
+    setSaving(false);
+  }
+  async function closeEntry(id){
+    await fetch(`/api/journal/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({outcome:closeData.outcome,pnlPct:closeData.pnlPct||undefined})});
+    setClosing(null);setCloseData({outcome:"WIN",pnlPct:""});refetch();
+  }
+  async function deleteEntry(id){
+    setDeleting(id);
+    await fetch(`/api/journal/${id}`,{method:"DELETE"});
+    setDeleting(null);refetch();
+  }
+  const inp={background:"rgba(0,0,0,0.4)",border:`1px solid rgba(255,255,255,0.1)`,borderRadius:4,padding:"8px 10px",fontFamily:MONO,fontSize:11,color:"#e8d5b7",outline:"none",width:"100%",boxSizing:"border-box"};
+  if(!isElite)return(
+    <div style={{...panelS,padding:"32px 20px",textAlign:"center",marginTop:10}}>
+      <div style={{fontSize:28,marginBottom:12}}>📓</div>
+      <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:"#d4af37",letterSpacing:"0.14em",marginBottom:8}}>TRADE JOURNAL</div>
+      <div style={{fontFamily:MONO,fontSize:9,color:"#8b7d5a",marginBottom:18,lineHeight:1.7}}>Elite members can log every trade with entry, stop, targets, sizing and notes.<br/>Track your P&amp;L, win rate, average R:R, and best/worst trades.</div>
+      <button onClick={onUpgrade} style={{padding:"10px 28px",background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:4,fontFamily:MONO,fontSize:10,color:"#d4af37",cursor:"pointer",letterSpacing:"0.1em"}}>UPGRADE TO ELITE</button>
+    </div>
+  );
+  return(<>
+    <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:"#d4af37",letterSpacing:"0.16em",marginBottom:10}}>📓 TRADE JOURNAL</div>
+    {/* Stats bar */}
+    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+      {[
+        {label:"TOTAL",val:entries.length,col:"#e8d5b7"},
+        {label:"OPEN",val:entries.filter(e=>e.outcome==="OPEN").length,col:"#8b7d5a"},
+        {label:"WIN RATE",val:winRate!=null?`${winRate}%`:"—",col:winRate!=null?(winRate>=55?C.green:winRate>=45?"#d4af37":C.red):"#8b7d5a"},
+        {label:"TOTAL P&L",val:totalPnl!=null?`${totalPnl>0?"+":""}${totalPnl.toFixed(1)}%`:"—",col:totalPnl!=null?(totalPnl>0?C.green:C.red):"#8b7d5a"},
+        {label:"AVG R:R",val:avgRR?`${avgRR}:1`:"—",col:"#d4af37"},
+        {label:"BEST",val:bestTrade!=null?`+${bestTrade.toFixed(1)}%`:"—",col:C.green},
+        {label:"WORST",val:worstTrade!=null?`${worstTrade.toFixed(1)}%`:"—",col:C.red},
+      ].map(({label,val,col})=>(
+        <div key={label} style={{background:"rgba(0,0,0,0.3)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:4,padding:"7px 12px",textAlign:"center",minWidth:60}}>
+          <div style={{fontFamily:MONO,fontSize:14,fontWeight:800,color:col}}>{val}</div>
+          <div style={{fontFamily:MONO,fontSize:6,color:"#8b7d5a",letterSpacing:"0.1em"}}>{label}</div>
+        </div>
+      ))}
+    </div>
+    {/* Add trade button */}
+    <div style={{marginBottom:10}}>
+      <button data-testid="btn-journal-add" onClick={()=>setShowForm(v=>!v)} style={{padding:"9px 18px",background:"rgba(201,168,76,.1)",border:"1px solid rgba(201,168,76,.35)",borderRadius:4,fontFamily:MONO,fontSize:10,color:"#d4af37",cursor:"pointer",letterSpacing:"0.1em"}}>{showForm?"✕ CANCEL":"+ LOG NEW TRADE"}</button>
+    </div>
+    {/* Add trade form */}
+    {showForm&&(
+      <div style={{...panelS,padding:"16px"}}>
+        <div style={{fontFamily:MONO,fontSize:8,color:"#8b7d5a",letterSpacing:"0.12em",marginBottom:12}}>NEW TRADE ENTRY</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>ASSET *</div><input data-testid="input-journal-asset" value={form.asset} onChange={e=>setForm(f=>({...f,asset:e.target.value.toUpperCase()}))} placeholder="BTC" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>DIRECTION *</div>
+            <select data-testid="input-journal-direction" value={form.direction} onChange={e=>setForm(f=>({...f,direction:e.target.value}))} style={{...inp}}>
+              <option value="LONG">LONG</option><option value="SHORT">SHORT</option>
+            </select>
+          </div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>ENTRY PRICE *</div><input data-testid="input-journal-entry" value={form.entry} onChange={e=>setForm(f=>({...f,entry:e.target.value}))} placeholder="71500" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>STOP LOSS</div><input data-testid="input-journal-stop" value={form.stop} onChange={e=>setForm(f=>({...f,stop:e.target.value}))} placeholder="70100" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>TP1</div><input data-testid="input-journal-tp1" value={form.tp1} onChange={e=>setForm(f=>({...f,tp1:e.target.value}))} placeholder="73200" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>TP2</div><input data-testid="input-journal-tp2" value={form.tp2} onChange={e=>setForm(f=>({...f,tp2:e.target.value}))} placeholder="75800" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>POSITION SIZE</div><input data-testid="input-journal-size" value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="0.5 BTC / $5000 / 2%" style={inp}/></div>
+        </div>
+        <div style={{marginBottom:8}}><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>NOTES</div><textarea data-testid="input-journal-notes" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Why you took this trade, market context, thesis..." style={{...inp,minHeight:56,resize:"vertical"}}/></div>
+        <button data-testid="btn-journal-save" disabled={saving||!form.asset||!form.entry} onClick={addEntry} style={{padding:"9px 22px",background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.35)",borderRadius:4,fontFamily:MONO,fontSize:10,color:C.green,cursor:saving||!form.asset||!form.entry?"not-allowed":"pointer",opacity:saving||!form.asset||!form.entry?0.5:1}}>{saving?"Saving…":"SAVE TRADE"}</button>
+      </div>
+    )}
+    {/* Trade list */}
+    {isLoading?(
+      <div style={{padding:24,textAlign:"center",fontFamily:MONO,fontSize:9,color:"#8b7d5a"}}>Loading journal…</div>
+    ):entries.length===0?(
+      <div style={{...panelS,padding:"24px",textAlign:"center",fontFamily:MONO,fontSize:9,color:"#8b7d5a"}}>No trades logged yet. Tap "+ LOG NEW TRADE" to start your journal.</div>
+    ):(
+      entries.map((e,i)=>{
+        const isOpen=e.outcome==="OPEN";
+        const oc=e.outcome==="WIN"?C.green:e.outcome==="LOSS"?C.red:"#8b7d5a";
+        const obg=e.outcome==="WIN"?"rgba(0,199,135,.07)":e.outcome==="LOSS"?"rgba(255,64,96,.07)":"rgba(255,255,255,.02)";
+        const rr=(()=>{if(!e.entry||!e.stop||!e.tp1)return null;const en=parseFloat(e.entry),st=parseFloat(e.stop),t1=parseFloat(e.tp1);if(!en||!st||!t1||en===st)return null;return(Math.abs(t1-en)/Math.abs(en-st)).toFixed(2);})();
+        return(
+          <div key={e.id} data-testid={`journal-entry-${e.id}`} style={{...panelS,background:obg,overflow:"hidden"}}>
+            <div style={{padding:"12px 14px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
+                <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:"#e8d5b7"}}>{e.asset}</span>
+                <span style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:e.direction==="LONG"?C.green:C.red,background:e.direction==="LONG"?"rgba(0,199,135,.08)":"rgba(255,64,96,.07)",border:`1px solid ${e.direction==="LONG"?"rgba(0,199,135,.3)":"rgba(255,64,96,.3)"}`,borderRadius:3,padding:"2px 7px"}}>{e.direction}</span>
+                <span style={{fontFamily:MONO,fontSize:8,color:oc,background:obg,border:`1px solid ${oc}44`,borderRadius:3,padding:"2px 7px"}}>{isOpen?"OPEN":e.outcome}{e.pnlPct?` · ${parseFloat(e.pnlPct)>0?"+":""}${e.pnlPct}%`:""}</span>
+                {rr&&<span style={{fontFamily:MONO,fontSize:8,color:"#d4af37",border:"1px solid rgba(201,168,76,.2)",borderRadius:3,padding:"2px 7px"}}>R:R {rr}:1</span>}
+                <span style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginLeft:"auto"}}>{e.createdAt?new Date(e.createdAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"2-digit"}):"—"}</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(90px,1fr))",gap:4,marginBottom:e.notes?6:0}}>
+                {[["Entry",e.entry],[" Stop",e.stop],["TP1",e.tp1],["TP2",e.tp2],["Size",e.size]].filter(([,v])=>v).map(([label,val])=>(
+                  <div key={label} style={{background:"rgba(0,0,0,.25)",borderRadius:3,padding:"4px 8px"}}>
+                    <div style={{fontFamily:MONO,fontSize:6,color:"#8b7d5a"}}>{label}</div>
+                    <div style={{fontFamily:MONO,fontSize:9,color:"#e8d5b7",fontWeight:700}}>{val}</div>
+                  </div>
+                ))}
+              </div>
+              {e.notes&&<div style={{fontFamily:MONO,fontSize:8,color:"#8b7d5a",marginTop:6,lineHeight:1.5,fontStyle:"italic"}}>"{e.notes}"</div>}
+              <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+                {isOpen&&(
+                  closing===e.id?(
+                    <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                      <select value={closeData.outcome} onChange={ev=>setCloseData(d=>({...d,outcome:ev.target.value}))} style={{...inp,width:"auto",padding:"4px 8px",fontSize:9}}>
+                        <option value="WIN">WIN</option><option value="LOSS">LOSS</option>
+                      </select>
+                      <input value={closeData.pnlPct} onChange={ev=>setCloseData(d=>({...d,pnlPct:ev.target.value}))} placeholder="P&L %" style={{...inp,width:70,padding:"4px 8px",fontSize:9}}/>
+                      <button data-testid={`btn-journal-close-confirm-${e.id}`} onClick={()=>closeEntry(e.id)} style={{padding:"4px 12px",background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.35)",borderRadius:3,fontFamily:MONO,fontSize:8,color:C.green,cursor:"pointer"}}>Confirm</button>
+                      <button onClick={()=>setClosing(null)} style={{padding:"4px 8px",background:"transparent",border:"1px solid rgba(255,255,255,.1)",borderRadius:3,fontFamily:MONO,fontSize:8,color:"#8b7d5a",cursor:"pointer"}}>✕</button>
+                    </div>
+                  ):(
+                    <button data-testid={`btn-journal-close-${e.id}`} onClick={()=>setClosing(e.id)} style={{padding:"4px 12px",background:"rgba(201,168,76,.08)",border:"1px solid rgba(201,168,76,.25)",borderRadius:3,fontFamily:MONO,fontSize:8,color:"#d4af37",cursor:"pointer"}}>Close Trade</button>
+                  )
+                )}
+                <button data-testid={`btn-journal-delete-${e.id}`} disabled={deleting===e.id} onClick={()=>deleteEntry(e.id)} style={{padding:"4px 10px",background:"rgba(255,64,96,.06)",border:"1px solid rgba(255,64,96,.2)",borderRadius:3,fontFamily:MONO,fontSize:8,color:C.red,cursor:"pointer",opacity:deleting===e.id?0.5:1}}>{deleting===e.id?"…":"Delete"}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })
+    )}
+  </>);
+}
+
+// ─── SIGNAL GUIDE CARD (collapsible, Pro+) ─────────────────
+const SIGNAL_STEPS=[
+  {n:1,title:"Wait for Score ≥ 75 + Direction Confirmed",body:"Only act on signals that score 75 or above AND have a clear directional bias (LONG or SHORT). Lower scores are informational — not actionable entries."},
+  {n:2,title:"Check Macro Kill Switch is CLEAR",body:"Head to the Radar tab and confirm the Macro Kill Switch shows CLEAR. If it shows ARMED (CPI, NFP, Fed day), skip the trade — macro events can invalidate any technical setup instantly."},
+  {n:3,title:"Use Kelly % to Size Your Position",body:'CLVRQuant displays a Kelly fraction on every signal. Use it. Example: a 65% win-rate signal at 2:1 R:R gives Kelly ≈ 22.5% of risk capital. Never risk more than 2% of account on one signal regardless of Kelly output — this is the "half-Kelly" rule.'},
+  {n:4,title:"Enter at the Suggested Zone, Set Stop Immediately",body:"Enter at or near the Entry price shown on the card. Place your stop-loss at the SL level before anything else. No stop = no trade. The engine calculates stops from recent ATR so they are volatility-adjusted."},
+  {n:5,title:"Take 50% Off at TP1, Trail Stop to Entry",body:"When price reaches TP1, close half the position and move your stop to breakeven. This locks in a free trade — worst case from here is 0% loss. Let the remaining half run."},
+  {n:6,title:"Exit Fully at TP2 or on Invalidation",body:"Close the remaining position at TP2. If price closes back through your entry zone (invalidation), exit early regardless of TP — the thesis is broken. Never hold a signal through a regime change."},
+];
+function SignalGuideCard({isPro}){
+  const{C}=useContext(ThemeCtx);
+  const[open,setOpen]=useState(false);
+  if(!isPro)return null;
+  return(
+    <div style={{background:"rgba(0,0,0,0.35)",border:`1px solid rgba(201,168,76,0.18)`,borderRadius:6,marginBottom:12,overflow:"hidden"}}>
+      <button data-testid="btn-signal-guide-toggle" onClick={()=>setOpen(v=>!v)} style={{width:"100%",background:"none",border:"none",cursor:"pointer",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontFamily:MONO,fontSize:10,color:C.gold,fontWeight:700,letterSpacing:"0.12em"}}>📘 HOW TO USE A SIGNAL</span>
+          <span style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.08em"}}>Trade walkthrough — 6 steps</span>
+        </div>
+        <span style={{fontFamily:MONO,fontSize:10,color:C.gold,transform:open?"rotate(180deg)":"rotate(0deg)",transition:"transform .25s"}}>▾</span>
+      </button>
+      {open&&(
+        <div style={{padding:"0 16px 16px"}}>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em",marginBottom:12,borderTop:`1px solid rgba(255,255,255,0.06)`,paddingTop:12}}>EXAMPLE: BTC LONG · Score 82/100 · Entry $71,500 · TP1 $73,200 · TP2 $75,800 · SL $70,100</div>
+          {SIGNAL_STEPS.map(step=>(
+            <div key={step.n} style={{display:"flex",gap:12,marginBottom:12}}>
+              <div style={{flexShrink:0,width:22,height:22,background:"rgba(201,168,76,0.12)",border:`1px solid rgba(201,168,76,0.35)`,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:MONO,fontSize:10,fontWeight:800,color:C.gold,marginTop:1}}>{step.n}</div>
+              <div>
+                <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:C.gold2,marginBottom:3,letterSpacing:"0.06em"}}>{step.title}</div>
+                <div style={{fontFamily:MONO,fontSize:9,color:C.muted,lineHeight:1.65}}>{step.body}</div>
+              </div>
+            </div>
+          ))}
+          <div style={{marginTop:8,padding:"8px 12px",background:"rgba(255,64,96,0.06)",border:"1px solid rgba(255,64,96,0.2)",borderRadius:4,fontFamily:MONO,fontSize:8,color:"#ff6b6b",lineHeight:1.6}}>⚠ DISCLAIMER: CLVRQuant signals are for informational purposes only and do not constitute financial advice. All trading involves significant risk of loss. Past signal performance does not guarantee future results.</div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── SIGNAL HISTORY PANEL (Elite) ──────────────────────────
@@ -3003,6 +3207,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
+    {k:"journal",icon:"📓",label:"JOURNAL"},
     {k:"about",icon:"📖",label:i18n.about},
     {k:"help",icon:"❓",label:"HELP"},
     {k:"account",icon:"⚙",label:i18n.account},
@@ -3900,6 +4105,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {tab==="signals"&&<>
           <div style={{marginBottom:10}}><SLabel>Quant AI Signals</SLabel></div>
 
+          {/* ── How to Use a Signal guide (collapsible, Pro+) ── */}
+          <SignalGuideCard isPro={isPro}/>
+
           {/* ── Store price strip (top 6 assets by volume) ── */}
           {storeMode&&(
             <div style={{background:"rgba(255,255,255,0.02)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:8,padding:"8px 10px",marginBottom:10,overflowX:"auto"}}>
@@ -4022,7 +4230,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
           {/* Signal feed */}
           {(()=>{
-            const getSigScore=(s)=>s.advancedScore!=null?s.advancedScore:scoreSignal({priceMoveAbs:Math.abs(s.pctMove||0),direction:s.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[s.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[s.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total;
+            const regimeName=storeMode?.regime||"UNKNOWN";
+            const regimeMult=["BULL_TREND","BEAR_TREND"].includes(regimeName)?1.1:["RANGING","CHOPPY"].includes(regimeName)?0.80:["CRISIS","HIGH_VOLATILITY"].includes(regimeName)?0.70:1.0;
+            const getSigScore=(s)=>Math.min(100,Math.round((s.advancedScore!=null?s.advancedScore:scoreSignal({priceMoveAbs:Math.abs(s.pctMove||0),direction:s.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[s.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[s.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total)*regimeMult));
             let pool=highConfOnly?filtSigs.filter(s=>getSigScore(s)>=75):filtSigs;
             const sorted=sigSort==="score"?[...pool].sort((a,b)=>getSigScore(b)-getSigScore(a)):pool;
             return sorted.length===0?<div style={{padding:32,textAlign:"center"}}>
@@ -4033,7 +4243,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 Signals appear when any tracked token moves &gt;0.8% within a 5-minute window.<br/>
                 Tracking {sigTracking} tokens in real-time. Detector is armed.
               </div>}
-            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade}/>);
+            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult}/>);
           })()}
 
           {/* ── Signal Performance Tracker (Elite) ── */}
@@ -4051,6 +4261,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
             onAskAI={(q)=>{setAiInput(q);setTab("ai");}}
           />
         </>}
+
+        {/* ══ JOURNAL ══ */}
+        {tab==="journal"&&<TradeJournalTab isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ ALERTS ══ */}
         {tab==="alerts"&&isPro&&<>
