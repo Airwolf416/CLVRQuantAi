@@ -1467,15 +1467,17 @@ export async function registerRoutes(
     const offset = parseInt(req.query.offset as string) || 0;
     const records = await storage.getSignalHistory(limit, offset);
     if (isPaidUser) {
-      return res.json({ signals: records, isPaidUser: true });
+      return res.json({ signals: records, isPaidUser: true, isDelayed: false });
     }
-    // Free users: return stripped data (no entry, stop, TP, reasoning)
-    const stripped = records.map(r => ({
+    // Free users: 30-min delay + strip entry/stop/TP/reasoning
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const delayed = records.filter(r => new Date(r.ts) < thirtyMinAgo);
+    const stripped = delayed.map(r => ({
       id: r.id, signalId: r.signalId, token: r.token, direction: r.direction,
       conf: r.conf, advancedScore: r.advancedScore, isStrongSignal: r.isStrongSignal,
       outcome: r.outcome, ts: r.ts, locked: true,
     }));
-    return res.json({ signals: stripped, isPaidUser: false });
+    return res.json({ signals: stripped, isPaidUser: false, isDelayed: true });
   });
 
   // ── MARK SIGNAL OUTCOME (Elite) ───────────────────────────────────────────

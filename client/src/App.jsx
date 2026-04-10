@@ -709,6 +709,7 @@ function SquawkBox({signals,soundEnabled,isPro,muted}){
 
 // ─── AI INPUT (stable, memoized to prevent mobile keyboard retraction) ──
 const AIInput=memo(function AIInput({value,onChange,placeholder}){
+  const{C}=useContext(ThemeCtx);
   const ref=useRef(null);
   useEffect(()=>{
     if(ref.current&&document.activeElement!==ref.current){
@@ -718,7 +719,7 @@ const AIInput=memo(function AIInput({value,onChange,placeholder}){
   return<textarea ref={ref} data-testid="input-ai-query" defaultValue={value}
     onChange={e=>onChange(e.target.value)}
     placeholder={placeholder}
-    style={{width:"100%",background:"rgba(12,18,32,1)",border:"1px solid #141e35",borderRadius:2,padding:12,color:"#c8d0e0",fontFamily:"'Barlow',sans-serif",fontSize:16,resize:"none",height:76,lineHeight:1.7}}/>;
+    style={{width:"100%",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:12,color:C.text,fontFamily:"'Barlow',sans-serif",fontSize:16,resize:"none",height:76,lineHeight:1.7}}/>;
 });
 
 // ─── BADGE ──────────────────────────────────────────────
@@ -842,23 +843,28 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
               <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{minutesAgo}m ago</span>
             </div>
             <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,marginTop:5,lineHeight:1.55}}>{sig.desc}</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginTop:8,marginBottom:6}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginTop:8,marginBottom:6,position:"relative"}}>
               <div style={{background:"rgba(0,0,0,.25)",border:`1px solid ${C.border}`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.08em"}}>📍 Entry</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):fmt(md.price,sig.token)}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white,filter:sig.locked?"blur(5px)":"none",userSelect:sig.locked?"none":"auto"}}>{sig.entry?fmt(sig.entry,sig.token):fmt(md.price,sig.token)}</div>
               </div>
               <div style={{background:"rgba(255,64,96,.04)",border:`1px solid rgba(255,64,96,.25)`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:8,color:C.red+"99",letterSpacing:"0.08em"}}>🛑 Stop{sig.stopPct?` −${sig.stopPct}%`:""}</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.red+"99",letterSpacing:"0.08em"}}>🛑 Stop{!sig.locked&&sig.stopPct?` −${sig.stopPct}%`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.red,filter:sig.locked?"blur(5px)":"none",userSelect:sig.locked?"none":"auto"}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div>
               </div>
               <div style={{background:"rgba(0,199,135,.05)",border:`1px solid rgba(0,199,135,.25)`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:8,color:C.green+"99",letterSpacing:"0.08em"}}>🎯 TP1{sig.tp1Pct?` +${sig.tp1Pct}%`:""}{sig.rr1?` · ${sig.rr1}:1`:""}</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green}}>{sig.tp1?fmt(sig.tp1,sig.token):sig.target?fmt(sig.target,sig.token):"—"}</div>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.green+"99",letterSpacing:"0.08em"}}>🎯 TP1{!sig.locked&&sig.tp1Pct?` +${sig.tp1Pct}%`:""}{!sig.locked&&sig.rr1?` · ${sig.rr1}:1`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green,filter:sig.locked?"blur(5px)":"none",userSelect:sig.locked?"none":"auto"}}>{sig.tp1?fmt(sig.tp1,sig.token):sig.target?fmt(sig.target,sig.token):"—"}</div>
               </div>
               <div style={{background:"rgba(0,199,135,.02)",border:`1px solid rgba(0,199,135,.14)`,borderRadius:2,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{fontFamily:MONO,fontSize:8,color:C.green+"66",letterSpacing:"0.08em"}}>🎯 TP2{sig.tp2Pct?` +${sig.tp2Pct}%`:""}{sig.rr2?` · ${sig.rr2}:1`:""}</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green+"aa"}}>{sig.tp2?fmt(sig.tp2,sig.token):"—"}</div>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.green+"66",letterSpacing:"0.08em"}}>🎯 TP2{!sig.locked&&sig.tp2Pct?` +${sig.tp2Pct}%`:""}{!sig.locked&&sig.rr2?` · ${sig.rr2}:1`:""}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.green+"aa",filter:sig.locked?"blur(5px)":"none",userSelect:sig.locked?"none":"auto"}}>{sig.tp2?fmt(sig.tp2,sig.token):"—"}</div>
               </div>
+              {sig.locked&&(
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+                  <div style={{background:"rgba(5,7,9,.7)",backdropFilter:"blur(2px)",borderRadius:3,padding:"4px 10px",fontFamily:MONO,fontSize:8,color:"#ff8c00",letterSpacing:"0.12em",border:"1px solid rgba(255,140,0,.25)"}}>🔒 UPGRADE FOR PRICE LEVELS</div>
+                </div>
+              )}
             </div>
             {/* Hold window — always visible */}
             {(()=>{const hw=holdWindowLabel(sig.timeframe);return(
@@ -1495,7 +1501,7 @@ function TradeJournalTab({isElite,onUpgrade}){
     }).filter(Boolean);
     return rrs.length>0?(rrs.reduce((a,b)=>a+b,0)/rrs.length).toFixed(2):null;
   })();
-  const panelS={background:"rgba(255,255,255,0.02)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:6,marginBottom:10};
+  const panelS={background:C.panel,border:`1px solid ${C.border}`,borderRadius:6,marginBottom:10};
   async function addEntry(){
     if(!form.asset||!form.entry)return;
     setSaving(true);
@@ -1515,7 +1521,7 @@ function TradeJournalTab({isElite,onUpgrade}){
     await fetch(`/api/journal/${id}`,{method:"DELETE"});
     setDeleting(null);refetch();
   }
-  const inp={background:"rgba(0,0,0,0.4)",border:`1px solid rgba(255,255,255,0.1)`,borderRadius:4,padding:"8px 10px",fontFamily:MONO,fontSize:11,color:"#e8d5b7",outline:"none",width:"100%",boxSizing:"border-box"};
+  const inp={background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:4,padding:"8px 10px",fontFamily:MONO,fontSize:11,color:C.text,outline:"none",width:"100%",boxSizing:"border-box"};
   if(!isElite)return(
     <div style={{...panelS,padding:"32px 20px",textAlign:"center",marginTop:10}}>
       <div style={{fontSize:28,marginBottom:12}}>📓</div>
@@ -1537,9 +1543,9 @@ function TradeJournalTab({isElite,onUpgrade}){
         {label:"BEST",val:bestTrade!=null?`+${bestTrade.toFixed(1)}%`:"—",col:C.green},
         {label:"WORST",val:worstTrade!=null?`${worstTrade.toFixed(1)}%`:"—",col:C.red},
       ].map(({label,val,col})=>(
-        <div key={label} style={{background:"rgba(0,0,0,0.3)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:4,padding:"7px 12px",textAlign:"center",minWidth:60}}>
+        <div key={label} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"7px 12px",textAlign:"center",minWidth:60}}>
           <div style={{fontFamily:MONO,fontSize:14,fontWeight:800,color:col}}>{val}</div>
-          <div style={{fontFamily:MONO,fontSize:6,color:"#8b7d5a",letterSpacing:"0.1em"}}>{label}</div>
+          <div style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em"}}>{label}</div>
         </div>
       ))}
     </div>
@@ -1607,7 +1613,7 @@ function TradeJournalTab({isElite,onUpgrade}){
                       </select>
                       <input value={closeData.pnlPct} onChange={ev=>setCloseData(d=>({...d,pnlPct:ev.target.value}))} placeholder="P&L %" style={{...inp,width:70,padding:"4px 8px",fontSize:9}}/>
                       <button data-testid={`btn-journal-close-confirm-${e.id}`} onClick={()=>closeEntry(e.id)} style={{padding:"4px 12px",background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.35)",borderRadius:3,fontFamily:MONO,fontSize:8,color:C.green,cursor:"pointer"}}>Confirm</button>
-                      <button onClick={()=>setClosing(null)} style={{padding:"4px 8px",background:"transparent",border:"1px solid rgba(255,255,255,.1)",borderRadius:3,fontFamily:MONO,fontSize:8,color:"#8b7d5a",cursor:"pointer"}}>✕</button>
+                      <button onClick={()=>setClosing(null)} style={{padding:"4px 8px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer"}}>✕</button>
                     </div>
                   ):(
                     <button data-testid={`btn-journal-close-${e.id}`} onClick={()=>setClosing(e.id)} style={{padding:"4px 12px",background:"rgba(201,168,76,.08)",border:"1px solid rgba(201,168,76,.25)",borderRadius:3,fontFamily:MONO,fontSize:8,color:"#d4af37",cursor:"pointer"}}>Close Trade</button>
@@ -1672,6 +1678,7 @@ function SignalHistoryPanel({isElite,onUpgrade}){
   const[mutating,setMutating]=useState(false);
   const{data,isLoading,refetch}=useQuery({queryKey:["/api/signal-history"],queryFn:async()=>{const r=await fetch("/api/signal-history?limit=50");return r.json();},refetchInterval:60000});
   const sigs=data?.signals||[];
+  const isDelayedHistory=data?.isDelayed||false;
   const wins=sigs.filter(s=>s.outcome==="WIN").length;
   const losses=sigs.filter(s=>s.outcome==="LOSS").length;
   const pending=sigs.filter(s=>s.outcome==="PENDING").length;
@@ -1694,7 +1701,7 @@ function SignalHistoryPanel({isElite,onUpgrade}){
     }catch(e){}
     setMutating(false);
   }
-  const panelS={background:"rgba(255,255,255,0.02)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:6,marginBottom:10};
+  const panelS={background:C.panel,border:`1px solid ${C.border}`,borderRadius:6,marginBottom:10};
   if(!isElite)return(
     <div style={{...panelS,padding:"20px 18px",textAlign:"center",marginTop:14}}>
       <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.gold,letterSpacing:"0.14em",marginBottom:6}}>⚡ SIGNAL PERFORMANCE TRACKER</div>
@@ -1713,7 +1720,7 @@ function SignalHistoryPanel({isElite,onUpgrade}){
         {label:"OPEN",val:pending,col:C.muted},
         {label:"WIN RATE",val:winRate!=null?`${winRate}%`:"—",col:winRate!=null?(winRate>=55?C.green:winRate>=45?"#d4af37":C.red):C.muted},
       ].map(({label,val,col})=>(
-        <div key={label} style={{background:"rgba(0,0,0,0.3)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:4,padding:"8px 14px",textAlign:"center",minWidth:64}}>
+        <div key={label} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"8px 14px",textAlign:"center",minWidth:64}}>
           <div style={{fontFamily:MONO,fontSize:16,fontWeight:800,color:col}}>{val}</div>
           <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.1em"}}>{label}</div>
         </div>
@@ -1728,7 +1735,7 @@ function SignalHistoryPanel({isElite,onUpgrade}){
             const r=st.wins+st.losses;
             const wr=r>0?Math.round(st.wins/r*100):null;
             return(
-              <div key={token} style={{background:"rgba(0,0,0,0.3)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:4,padding:"6px 12px",textAlign:"center",minWidth:56}}>
+              <div key={token} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"6px 12px",textAlign:"center",minWidth:56}}>
                 <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:C.white}}>{token}</div>
                 <div style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:wr!=null?(wr>=55?C.green:wr>=45?"#d4af37":C.red):C.muted}}>{wr!=null?`${wr}%`:"—"}</div>
                 <div style={{fontFamily:MONO,fontSize:6,color:C.muted}}>{r} resolved</div>
@@ -1738,9 +1745,20 @@ function SignalHistoryPanel({isElite,onUpgrade}){
         </div>
       </div>
     )}
+    {/* Delayed notice for free users */}
+    {isDelayedHistory&&(
+      <div data-testid="banner-history-delayed" style={{background:"rgba(255,140,0,.05)",border:"1px solid rgba(255,140,0,.2)",borderRadius:4,padding:"9px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:10}}>
+        <span style={{fontSize:14}}>⏱</span>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:MONO,fontSize:8,fontWeight:700,color:"#ff8c00",letterSpacing:"0.12em",marginBottom:2}}>HISTORY DELAYED 30 MINUTES</div>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.muted,lineHeight:1.5}}>Free accounts see signals with a 30-min delay. Upgrade to Elite for the full real-time record with entry prices &amp; outcomes.</div>
+        </div>
+        <button data-testid="btn-upgrade-from-history-delay" onClick={onUpgrade} style={{padding:"6px 14px",background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.35)",borderRadius:3,fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Upgrade →</button>
+      </div>
+    )}
     {/* Signal list */}
     <div style={{...panelS,overflow:"hidden"}}>
-      <div style={{padding:"10px 14px",borderBottom:`1px solid rgba(255,255,255,0.05)`}}>
+      <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`}}>
         <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.14em"}}>LAST 50 SIGNALS · TAP OPEN TO MARK OUTCOME</div>
       </div>
       {isLoading?(
@@ -1754,7 +1772,7 @@ function SignalHistoryPanel({isElite,onUpgrade}){
             const outcomeBg=s.outcome==="WIN"?"rgba(0,199,135,.08)":s.outcome==="LOSS"?"rgba(255,64,96,.08)":"rgba(255,255,255,.04)";
             const isMarking=markingId===s.id;
             return(
-              <div key={s.id} data-testid={`signal-history-${s.id}`} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",borderBottom:i<sigs.length-1?`1px solid rgba(255,255,255,0.04)`:"none",flexWrap:"wrap"}}>
+              <div key={s.id} data-testid={`signal-history-${s.id}`} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",borderBottom:i<sigs.length-1?`1px solid ${C.border}`:"none",flexWrap:"wrap"}}>
                 <span style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.white,minWidth:38}}>{s.token}</span>
                 <span style={{fontFamily:MONO,fontSize:9,color:s.direction==="LONG"?C.green:C.red,fontWeight:700,minWidth:36}}>{s.direction}</span>
                 <span style={{fontFamily:MONO,fontSize:8,color:"#d4af37",minWidth:30}}>{s.advancedScore||s.conf}%</span>
@@ -1764,10 +1782,10 @@ function SignalHistoryPanel({isElite,onUpgrade}){
                 {s.outcome==="PENDING"&&(
                   isMarking?(
                     <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                      <input data-testid={`input-pnl-${s.id}`} value={pnlInput} onChange={e=>setPnlInput(e.target.value)} placeholder="P&L%" style={{width:52,background:"rgba(0,0,0,0.4)",border:`1px solid rgba(255,255,255,0.1)`,borderRadius:3,padding:"3px 6px",fontFamily:MONO,fontSize:9,color:C.white,outline:"none"}}/>
+                      <input data-testid={`input-pnl-${s.id}`} value={pnlInput} onChange={e=>setPnlInput(e.target.value)} placeholder="P&L%" style={{width:52,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:3,padding:"3px 6px",fontFamily:MONO,fontSize:9,color:C.text,outline:"none"}}/>
                       <button data-testid={`btn-mark-win-${s.id}`} disabled={mutating} onClick={()=>markOutcome(s.id,"WIN")} style={{padding:"3px 8px",background:"rgba(0,199,135,.15)",border:`1px solid rgba(0,199,135,.4)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.green,cursor:"pointer"}}>WIN</button>
                       <button data-testid={`btn-mark-loss-${s.id}`} disabled={mutating} onClick={()=>markOutcome(s.id,"LOSS")} style={{padding:"3px 8px",background:"rgba(255,64,96,.12)",border:`1px solid rgba(255,64,96,.35)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.red,cursor:"pointer"}}>LOSS</button>
-                      <button data-testid={`btn-mark-cancel-${s.id}`} onClick={()=>{setMarkingId(null);setPnlInput("");}} style={{padding:"3px 6px",background:"transparent",border:`1px solid rgba(255,255,255,0.1)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer"}}>✕</button>
+                      <button data-testid={`btn-mark-cancel-${s.id}`} onClick={()=>{setMarkingId(null);setPnlInput("");}} style={{padding:"3px 6px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer"}}>✕</button>
                     </div>
                   ):(
                     <button data-testid={`btn-mark-open-${s.id}`} onClick={()=>{setMarkingId(s.id);setPnlInput("");}} style={{padding:"3px 10px",background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:3,fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer"}}>Mark</button>
@@ -1837,6 +1855,12 @@ export default function App(){
   const toggleTheme=useCallback(()=>{setIsDark(d=>{const next=!d;try{localStorage.setItem("clvr_theme",next?"dark":"light");}catch{}return next;});},[]);
   const themeVal={C:isDark?DARK_C:LIGHT_C,isDark,toggle:toggleTheme};
 
+  // Sync theme class on <html> for CSS overrides
+  useEffect(()=>{
+    document.documentElement.setAttribute("data-theme",isDark?"dark":"light");
+    document.documentElement.classList.toggle("light-mode",!isDark);
+  },[isDark]);
+
   // Check for existing session on mount
   useEffect(()=>{
     fetch("/api/auth/me",{credentials:"include"})
@@ -1849,9 +1873,9 @@ export default function App(){
   // Brief splash while checking session
   if(!sessionChecked){
     return(
-      <div style={{background:"#050709",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
+      <div style={{background:isDark?"#050709":LIGHT_C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
         <div style={{fontFamily:"'Playfair Display',Georgia,serif",fontSize:28,fontWeight:900,color:"#c9a84c",letterSpacing:"-0.02em"}}>CLVRQuant</div>
-        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:"#2a3650",letterSpacing:"0.25em"}}>LOADING...</div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isDark?"#2a3650":LIGHT_C.muted,letterSpacing:"0.25em"}}>LOADING...</div>
       </div>
     );
   }
@@ -3576,7 +3600,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                       style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
                       {notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}
                     </button>
-                    {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:"2px solid #050709",boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
+                    {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:`2px solid ${C.bg}`,boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
                   </>
                 ):(
                   <button data-testid="btn-alerts-locked" onClick={()=>{setUpgradeDefaultTier(null);setShowPricingModal(true);}} title="Upgrade to Pro for real-time alerts"
@@ -3634,7 +3658,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
         {/* ── Preview (unauthenticated) full-screen overlay — skips about/help/account ── */}
         {isPreview&&!["about","help","account"].includes(tab)&&(
-          <div style={{position:"fixed",top:54,left:0,right:0,bottom:60,background:"#050709",zIndex:50,overflowY:"auto"}}>
+          <div style={{position:"fixed",top:54,left:0,right:0,bottom:60,background:C.bg,zIndex:50,overflowY:"auto"}}>
             <PreviewGate tab={tab} C2={C} MONO2={MONO} SERIF2={SERIF}
               onSignUp={()=>onShowAuth&&onShowAuth()}
               onSignIn={()=>onShowAuth&&onShowAuth()}
@@ -4104,7 +4128,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           </div>
 
           {briefData&&<>
-            <div style={{background:"linear-gradient(135deg,#080d18,#0f1a2e)",borderRadius:2,border:`1px solid ${C.border2}`,padding:"22px 18px",marginBottom:10,textAlign:"center",position:"relative",overflow:"hidden"}}>
+            <div style={{background:isDark?"linear-gradient(135deg,#080d18,#0f1a2e)":C.panel,borderRadius:2,border:`1px solid ${C.border2}`,padding:"22px 18px",marginBottom:10,textAlign:"center",position:"relative",overflow:"hidden"}}>
               <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`}}/>
               <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.28em",marginBottom:5}}>CLVRQuant · MORNING BRIEF</div>
               <div style={{fontFamily:SERIF,fontWeight:900,fontSize:20,color:C.white,fontStyle:"italic",marginBottom:4}}>Market Summary</div>
@@ -4208,12 +4232,23 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {tab==="signals"&&<>
           <div style={{marginBottom:10}}><SLabel>Quant AI Signals</SLabel></div>
 
+          {/* ── 30-min delay banner for free users ── */}
+          {!isPro&&(
+            <div data-testid="banner-signal-delay" style={{background:isDark?"rgba(255,140,0,.06)":"rgba(179,90,0,.05)",border:`1px solid ${isDark?"rgba(255,140,0,.25)":"rgba(179,90,0,.2)"}`,borderRadius:4,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:160}}>
+                <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:C.orange,letterSpacing:"0.14em",marginBottom:3}}>⏱ SIGNALS DELAYED 30 MINUTES</div>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.muted,lineHeight:1.6}}>Free accounts see signals with a 30-minute delay. Entry, TP & Stop-Loss prices are hidden. Upgrade to Pro for real-time alerts with full trade data.</div>
+              </div>
+              <button data-testid="btn-upgrade-from-delay-banner" onClick={onUpgrade} style={{padding:"9px 20px",background:"rgba(201,168,76,.14)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:3,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Upgrade to Pro →</button>
+            </div>
+          )}
+
           {/* ── How to Use a Signal guide (collapsible, Pro+) ── */}
           <SignalGuideCard isPro={isPro}/>
 
           {/* ── Store price strip (top 6 assets by volume) ── */}
           {storeMode&&(
-            <div style={{background:"rgba(255,255,255,0.02)",border:`1px solid rgba(255,255,255,0.06)`,borderRadius:8,padding:"8px 10px",marginBottom:10,overflowX:"auto"}}>
+            <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",marginBottom:10,overflowX:"auto"}}>
               <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.18em",marginBottom:5}}>LIVE PRICES · {storeMode.regime} {storeMode.score}%</div>
               <div style={{display:"flex",gap:6}}>
                 {["BTC","ETH","SOL","NVDA","TSLA","GOLD"].map(t=>{
