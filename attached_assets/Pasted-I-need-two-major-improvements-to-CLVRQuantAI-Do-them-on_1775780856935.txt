@@ -1,0 +1,212 @@
+I need two major improvements to CLVRQuantAI. Do them one at a time
+and confirm before moving to the next.
+
+===================================================================
+
+1. UNIFIED LIVE DATA BUS — Wire all tabs to a single data source
+   ===================================================================
+
+Right now the Signals tab and AI tab fetch data independently.
+I need a single centralized data pipeline that all tabs read from.
+
+BACKEND CHANGES:
+
+Create a new server-side data bus in server/databus.ts that runs
+on a 30-second interval and maintains a single cached state object:
+
+dataBus = {
+prices:       { [ticker]: { price, change24h, high24, low24 } },
+funding:      { [ticker]: fundingRate },
+oi:           { [ticker]: openInterest },
+candles:      { [ticker]: { “15m”: [], “1h”: [], “4h”: [], “1d”: [] } },
+regime:       { score, label, trend },
+fearGreed:    { value, classification, signal },
+macroEvents:  [ …ForexFactory events ],
+macroNews:    [ …CryptoPanic breaking items ],
+killSwitch:   { active, reason, expiresAt },
+lastUpdated:  timestamp,
+}
+
+The data bus pre-fetches and caches candles for all tracked assets
+every 30 seconds. All API routes (/api/quant, /api/kronos, /api/signals,
+/api/ai/analyze) must read from this cache first before making
+external calls. Only fetch fresh if cache is older than 25 seconds.
+
+Add a new endpoint GET /api/databus/status that returns the current
+cache state (prices + regime + kill switch + last updated) so the
+frontend can display a “data freshness” indicator.
+
+FRONTEND CHANGES:
+
+Create a React Context called DataBusContext in
+client/src/store/DataBusContext.jsx that:
+
+- Polls GET /api/databus/status every 30 seconds
+- Exposes prices, regime, killSwitch, fearGreed, lastUpdated
+  to all components via useDataBus() hook
+
+Update the following components to consume DataBusContext instead
+of making their own fetch calls for prices and regime:
+
+- Signals tab (remove duplicate price fetches)
+- AI tab (pre-populate current price and regime before analysis)
+- Macro tab (read killSwitch state from bus instead of re-fetching)
+- Radar tab (read regime and prices from bus)
+
+Add a small “data freshness” dot in the app header (next to the
+CLVR AI badge). Green dot = data fresh (< 35s). Yellow = stale
+(35–60s). Red = offline (> 60s). Tooltip shows exact last updated
+time on tap.
+
+No breaking changes to existing fetch logic — the DataBusContext
+is additive. If the bus is unavailable, components fall back to
+their existing individual fetch logic.
+
+-----
+
+General rules for feature 1:
+
+- No new external API keys required
+- Use existing fetchQuantCandles, fetchFearAndGreed, macroCache
+  already in the codebase — consolidate them into the data bus
+- The bus runs server-side on a setInterval — not triggered by
+  user requests
+- Confirm with me before starting feature 2
+
+# ===================================================================
+2. FULL ASSET EXPANSION — All 8 categories in the AI tab
+
+Expand the AI tab and /api/quant backend to support all asset
+categories with correct data routing for SPOT vs PERP.
+
+ASSET LIST — replace the existing ASSETS array in AITab.jsx
+and update all backend routing accordingly:
+
+CRYPTO PERPS (Hyperliquid — use existing HL candle fetcher):
+BTC, ETH, SOL, HYPE, DOGE, AVAX, XRP, LINK, MATIC, ARB,
+OP, SUI, APT, INJ, TIA, WIF, TRUMP, PEPE, WLD, EIGEN
+
+CRYPTO SPOT (Binance — use existing Binance fetcher):
+BTC, ETH, SOL, BNB, XRP, ADA, AVAX, DOGE, LINK, DOT
+
+FX SPOT (Finnhub — use existing Finnhub fetcher):
+EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD,
+NZD/USD, USD/CHF, EUR/GBP, GBP/JPY, EUR/JPY
+
+FX PERPS (Hyperliquid — check if available, fallback to Finnhub):
+EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD
+
+COMMODITIES SPOT (Finnhub):
+XAU (Gold), XAG (Silver), CL (Crude Oil), BZ (Brent Oil),
+NG (Natural Gas), HG (Copper), PL (Platinum), PA (Palladium),
+ZW (Wheat), ZC (Corn)
+
+COMMODITIES PERPS (Hyperliquid — check if available,
+fallback to Finnhub spot with PERP label):
+XAU, XAG, CL, NG, HG
+
+EQUITIES SPOT (Finnhub):
+NVDA, TSLA, AAPL, MSFT, META, AMZN, GOOGL, AMD,
+MSTR, COIN, PLTR, HOOD, RIVN, SMCI, ARM, IONQ
+
+EQUITIES PERPS (Hyperliquid — check if available,
+fallback to Finnhub spot with PERP label):
+NVDA, TSLA, AAPL, MSFT, META, MSTR, COIN
+
+FRONTEND CHANGES — AITab.jsx:
+
+Replace the flat ASSETS array with a structured object:
+
+const ASSET_CATEGORIES = {
+“CRYPTO PERP”:    […],
+“CRYPTO SPOT”:    […],
+“FX SPOT”:        […],
+“FX PERP”:        […],
+“COMMODITIES SPOT”: […],
+“COMMODITIES PERP”: […],
+“EQUITIES SPOT”:  […],
+“EQUITIES PERP”:  […],
+}
+
+Replace the current flat asset button grid with a tabbed category
+selector. User first picks a category (horizontal scrollable tab
+row), then picks an asset from that category. The PERP/SPOT toggle
+below is auto-set based on the category selected but can still be
+manually overridden.
+
+Category tab colors:
+
+- CRYPTO PERP / SPOT: purple #9945ff
+- FX PERP / SPOT: teal #06b6d4
+- COMMODITIES PERP / SPOT: gold #d4af37
+- EQUITIES PERP / SPOT: blue #3b82f6
+
+Each asset button shows a live price pulled from DataBusContext
+(small subtitle under the ticker name) if available.
+
+BACKEND CHANGES — /api/quant route:
+
+Update the data fetching logic to correctly route by asset class
+AND market type:
+
+if (marketType === “PERP” && cls === “crypto”) {
+→ fetch from Hyperliquid candle endpoint (existing)
+}
+if (marketType === “SPOT” && cls === “crypto”) {
+→ fetch from Binance candle endpoint (existing)
+→ fallback to Hyperliquid if Binance unavailable
+}
+if (cls === “fx”) {
+→ fetch from Finnhub forex candle endpoint
+→ for FX PERP: attempt Hyperliquid first, fallback Finnhub
+→ normalize ticker format: “EUR/USD” → “EURUSD” for Finnhub
+}
+if (cls === “commodity”) {
+→ fetch from Finnhub commodity endpoint
+→ for COMMODITY PERP: attempt Hyperliquid, fallback Finnhub spot
+→ normalize: “XAU” → “OANDA:XAU_USD” for Finnhub
+}
+if (cls === “equity”) {
+→ fetch from Finnhub stock candle endpoint (existing)
+→ for EQUITY PERP: attempt Hyperliquid, fallback Finnhub spot
+}
+
+Add a “data_source” field to every /api/quant response JSON so the
+frontend can display where the candle data came from:
+“data_source”: “Hyperliquid” | “Binance” | “Finnhub” | “Fallback”
+
+Display the data source as a small badge in the AI tab results
+(e.g. “DATA · HYPERLIQUID” in the existing result header area).
+
+Update the AI system prompt in /api/quant to include the asset
+class and market type context so Claude reasons correctly:
+
+- For FX: reference pip values, central bank context, carry trade
+- For commodities: reference supply/demand, inventory cycles, USD correlation
+- For equity perps: reference earnings cycles, sector rotation, beta
+- For crypto perps: existing logic unchanged
+
+Also update the ASSETS list in the QuantBrain signal scanner
+(QuantBrain.jsx and the backend signal detection) to include
+the new FX and commodity tickers so signals are detected
+across all asset classes, not just crypto and equities.
+
+-----
+
+General rules for feature 2:
+
+- If a Hyperliquid PERP market does not exist for a given asset,
+  silently fallback to the SPOT data source and display
+  “SPOT DATA (PERP N/A)” badge in results. Never show an error
+  to the user for a missing perp market.
+- Finnhub ticker normalization must handle: EUR/USD → EURUSD,
+  XAU → OANDA:XAU_USD, CL → NYMEX:CL1!, BZ → NYMEX:BZ1!
+- All new assets must work with the existing Bayesian scoring,
+  multi-timeframe confluence, pattern recognition, and Kronos
+  forecast engine without modification to those systems
+- Match existing dark UI exactly: #060a13 background, IBM Plex Mono,
+  category colors as specified above
+- No breaking changes to existing asset functionality
+- Elite gating: no change — AI tab remains Pro+ as before
+- Confirm with me after completing each sub-section
+  (frontend first, then backend routing)
