@@ -23,6 +23,7 @@ import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
 import { playMarketBell, unlockAudio, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
+import { DataBusProvider, DataBusCtx, useDataBus, mapRegimeLabel, regimeMultiplier, fearGreedColor } from "./context/DataBusContext.jsx";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -1898,14 +1899,17 @@ export default function App(){
   }
 
   return(
-    <ThemeCtx.Provider value={themeVal}>
-      <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>
-    </ThemeCtx.Provider>
+    <DataBusProvider>
+      <ThemeCtx.Provider value={themeVal}>
+        <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>
+      </ThemeCtx.Provider>
+    </DataBusProvider>
   );
 }
 
 function Dashboard({user,setUser,onShowAuth}){
   const {C,isDark,toggle:toggleTheme}=useContext(ThemeCtx);
+  const {regime:dbRegime,fearGreed:dbFearGreed,killSwitch:dbKillSwitch}=useDataBus();
   const {isMobile,isTablet,isDesktop}=useWindowSize();
   const sidebarW=isDesktop?180:isTablet?64:0;
   const [tab,setTab]=useState("radar");
@@ -3656,6 +3660,21 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
       {/* ── CONTENT ── */}
       <div style={{padding:"10px 12px",position:"relative",zIndex:1}}>
 
+        {/* ── Kill Switch banner — shown when backend halts signal generation ── */}
+        {dbKillSwitch?.active&&(
+          <div data-testid="banner-kill-switch" style={{background:"rgba(255,20,50,.08)",border:"1px solid rgba(255,20,50,.5)",borderRadius:4,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <span style={{fontSize:20}}>🛑</span>
+            <div style={{flex:1,minWidth:160}}>
+              <div style={{fontFamily:MONO,fontSize:9,fontWeight:800,color:C.red,letterSpacing:"0.18em",marginBottom:3}}>CLVR MARKET HALT — SIGNAL ENGINE PAUSED</div>
+              <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,lineHeight:1.6}}>
+                {dbKillSwitch.reason||"High-impact macro event detected — trading signals suspended until volatility normalises."}
+                {dbKillSwitch.nearest_event&&<span style={{color:C.orange}}> Next: {dbKillSwitch.nearest_event}</span>}
+              </div>
+            </div>
+            <div style={{fontFamily:SERIF,fontSize:11,fontStyle:"italic",color:C.red,fontWeight:700,flexShrink:0}}>Exercise caution</div>
+          </div>
+        )}
+
         {/* ── Preview (unauthenticated) full-screen overlay — skips about/help/account ── */}
         {isPreview&&!["about","help","account"].includes(tab)&&(
           <div style={{position:"fixed",top:54,left:0,right:0,bottom:60,background:C.bg,zIndex:50,overflowY:"auto"}}>
@@ -4249,7 +4268,10 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           {/* ── Store price strip (top 6 assets by volume) ── */}
           {storeMode&&(
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",marginBottom:10,overflowX:"auto"}}>
-              <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.18em",marginBottom:5}}>LIVE PRICES · {storeMode.regime} {storeMode.score}%</div>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.18em",marginBottom:5,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <span>LIVE PRICES · {(dbRegime.label||"NEUTRAL").replace("_","-")} {dbRegime.score}%</span>
+                {dbFearGreed.value!=null&&<span style={{color:fearGreedColor(dbFearGreed.value)}}>F&amp;G {dbFearGreed.value} · {dbFearGreed.classification}</span>}
+              </div>
               <div style={{display:"flex",gap:6}}>
                 {["BTC","ETH","SOL","NVDA","TSLA","GOLD"].map(t=>{
                   const p=storePerps[t]||storeSpot[t];
@@ -4368,8 +4390,8 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
           {/* Signal feed */}
           {(()=>{
-            const regimeName=storeMode?.regime||"UNKNOWN";
-            const regimeMult=["BULL_TREND","BEAR_TREND"].includes(regimeName)?1.1:["RANGING","CHOPPY"].includes(regimeName)?0.80:["CRISIS","HIGH_VOLATILITY"].includes(regimeName)?0.70:1.0;
+            const regimeName=mapRegimeLabel(dbRegime?.label);
+            const regimeMult=regimeMultiplier(dbRegime?.label);
             const getSigScore=(s)=>Math.min(100,Math.round((s.advancedScore!=null?s.advancedScore:scoreSignal({priceMoveAbs:Math.abs(s.pctMove||0),direction:s.dir==="LONG"?"long":"short",fundingRate:(cryptoPrices[s.token]||{}).funding||0,oiM:Math.round(((cryptoPrices[s.token]||{}).oi||0)/1e6),volumeMultiplier:1}).total)*regimeMult));
             let pool=highConfOnly?filtSigs.filter(s=>getSigScore(s)>=75):filtSigs;
             const sorted=sigSort==="score"?[...pool].sort((a,b)=>getSigScore(b)-getSigScore(a)):pool;
