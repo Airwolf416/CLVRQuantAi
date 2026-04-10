@@ -114,13 +114,13 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
     return () => clearInterval(poll);
   }, [isPro, scanLoading, loadInsider]);
 
-  // Safety timeout: if still loading after 6 minutes, force-complete and show whatever data we have
+  // Safety timeout: if still loading after 90 seconds, show whatever data we have
   useEffect(() => {
     if (!scanLoading) return;
     const timeout = setTimeout(() => {
       setScanLoading(false);
       loadInsider();
-    }, 6 * 60 * 1000);
+    }, 90 * 1000);
     return () => clearTimeout(timeout);
   }, [scanLoading, loadInsider]);
 
@@ -248,8 +248,16 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
             </div>
           )}
           <div style={{ fontSize: 8, color: C.muted, marginTop: 8, opacity: 0.6 }}>
-            SEC EDGAR rate-limited · First load takes 2-4 min · Updates auto-refresh every 20 min
+            SEC EDGAR rate-limited · Building initial scan · Auto-refreshes every 20 min
           </div>
+          {scanLoading && (
+            <button
+              onClick={() => { setScanLoading(false); loadInsider(); }}
+              style={{ marginTop: 14, padding: "7px 18px", background: "rgba(201,168,76,.08)", border: `1px solid rgba(201,168,76,.3)`, borderRadius: 3, fontFamily: MONO, fontSize: 9, color: C.gold, cursor: "pointer", letterSpacing: "0.08em" }}
+            >
+              View available data →
+            </button>
+          )}
         </div>
       )}
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
