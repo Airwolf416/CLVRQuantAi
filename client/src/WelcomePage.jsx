@@ -49,9 +49,9 @@ const DARK_C = {
 };
 const LIGHT_C = {
   bg: "#f0f2f5", panel: "#ffffff", border: "#e2e6ea", border2: "#cdd2d8",
-  gold: "#d4af37", gold2: "#e8c96d", gold3: "#f7e0a0",
+  gold: "#8a6c18", gold2: "#a07820", gold3: "#c9a84c",
   text: "#0d1321", muted: "#4a5568", muted2: "#718096", white: "#0d1321",
-  green: "#00ff88", red: "#ff2d55", orange: "#ff8c00", cyan: "#00d4ff",
+  green: "#007a44", red: "#c41230", orange: "#b35a00", cyan: "#006e8a",
   inputBg: "#f0f2f5",
 };
 const SERIF = "'Playfair Display', Georgia, serif";
