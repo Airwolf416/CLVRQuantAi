@@ -1905,6 +1905,98 @@ export async function registerRoutes(
     res.json(deduped);
   });
 
+  // ── MACRO INTEL FEED (CryptoPanic — macro-filtered, for Elite) ──────────────
+  const MACRO_INTEL_CACHE: { data: any[]; ts: number } = { data: [], ts: 0 };
+  const MACRO_RED_KW = ["fed","fomc","cpi","nfp","rate hike","rate cut","rate decision","tariff","war","sanction","crash","default","recession","emergency rate","hike","pivot","liquidity crisis"];
+  const MACRO_ORANGE_KW = ["inflation","gdp","liquidity","sec","bankruptcy","unemployment","jobless","deficit","yield","treasury","sovereign"];
+  const MACRO_YELLOW_KW = ["rally","breakout","geopolitical","opec","political","oecd","imf","world bank","interest","monetary","fiscal","stimulus","taper","quantitative","central bank","bank of"];
+  const ALL_MACRO_KW = [...MACRO_RED_KW, ...MACRO_ORANGE_KW, ...MACRO_YELLOW_KW];
+  function macroImpactBadge(title: string): "red" | "orange" | "yellow" {
+    const t = title.toLowerCase();
+    if (MACRO_RED_KW.some(kw => t.includes(kw))) return "red";
+    if (MACRO_ORANGE_KW.some(kw => t.includes(kw))) return "orange";
+    return "yellow";
+  }
+  app.get("/api/macro-intel", async (_req, res) => {
+    if (MACRO_INTEL_CACHE.ts && Date.now() - MACRO_INTEL_CACHE.ts < 60000) {
+      return res.json({ items: MACRO_INTEL_CACHE.data });
+    }
+    const CPANIC_KEY = process.env.CRYPTOPANIC_API_KEY || "";
+    const items: any[] = [];
+    if (!CPANIC_KEY) return res.json({ items: [] });
+    try {
+      // Fetch "important" posts from CryptoPanic
+      const r = await fetch(
+        `https://cryptopanic.com/api/v1/posts/?auth_token=${CPANIC_KEY}&public=true&filter=important&kind=news`,
+        { headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; CLVRQuant/2.0)" }, signal: AbortSignal.timeout(8000) }
+      );
+      if (r.ok) {
+        const ct = r.headers.get("content-type") || "";
+        if (ct.includes("json")) {
+          const data: any = await r.json();
+          const posts: any[] = Array.isArray(data?.results) ? data.results : [];
+          for (const p of posts) {
+            const title: string = p.title || "";
+            const titleLower = title.toLowerCase();
+            const isMacro = ALL_MACRO_KW.some(kw => titleLower.includes(kw));
+            const isImportant = (p.votes?.important || 0) > 0;
+            if (!isMacro && !isImportant) continue;
+            const currencies: string[] = (p.currencies || []).map((c: any) => c.code).filter(Boolean);
+            const impact = macroImpactBadge(title);
+            items.push({
+              id: String(p.id),
+              title,
+              source: p.source?.title || "CryptoPanic",
+              ts: new Date(p.published_at || Date.now()).getTime(),
+              assets: currencies.slice(0, 5),
+              impact,
+              url: p.url || "#",
+              votes: p.votes || {},
+            });
+            if (items.length >= 20) break;
+          }
+        }
+      }
+    } catch (e: any) {
+      console.error("[macro-intel] CryptoPanic error:", e.message);
+    }
+    // Also scan the general feed (non-important) for high-priority macro keywords
+    if (items.length < 10 && CPANIC_KEY) {
+      try {
+        const r2 = await fetch(
+          `https://cryptopanic.com/api/v1/posts/?auth_token=${CPANIC_KEY}&public=true&filter=hot&kind=news`,
+          { headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; CLVRQuant/2.0)" }, signal: AbortSignal.timeout(8000) }
+        );
+        if (r2.ok) {
+          const ct2 = r2.headers.get("content-type") || "";
+          if (ct2.includes("json")) {
+            const data2: any = await r2.json();
+            const posts2: any[] = Array.isArray(data2?.results) ? data2.results : [];
+            const existingIds = new Set(items.map(i => i.id));
+            for (const p of posts2) {
+              if (existingIds.has(String(p.id))) continue;
+              const title: string = p.title || "";
+              const titleLower = title.toLowerCase();
+              const isMacro = [...MACRO_RED_KW, ...MACRO_ORANGE_KW].some(kw => titleLower.includes(kw));
+              if (!isMacro) continue;
+              const currencies: string[] = (p.currencies || []).map((c: any) => c.code).filter(Boolean);
+              const impact = macroImpactBadge(title);
+              items.push({ id: String(p.id), title, source: p.source?.title || "CryptoPanic", ts: new Date(p.published_at || Date.now()).getTime(), assets: currencies.slice(0, 5), impact, url: p.url || "#", votes: p.votes || {} });
+              if (items.length >= 20) break;
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error("[macro-intel] fallback fetch error:", e.message);
+      }
+    }
+    items.sort((a, b) => b.ts - a.ts);
+    const result = items.slice(0, 20);
+    MACRO_INTEL_CACHE.data = result;
+    MACRO_INTEL_CACHE.ts = Date.now();
+    res.json({ items: result });
+  });
+
   // ── INSIDER TRADING FEED ────────────────────────────────────────────────────
   app.get("/api/insider/status", (_req, res) => {
     res.json(getInsiderScanStatus());

@@ -1,0 +1,103 @@
+Implement a Live Macro Intelligence Feed for Elite users in CLVRQuantAI.
+This replaces the idea of embedding a live news stream. Instead we are
+building a proprietary real-time macro awareness system with three
+connected components. Do them one at a time and confirm before moving
+to the next.
+
+-----
+
+1. LIVE MACRO NEWS FEED (Elite only)
+
+Create a new section called “MACRO INTEL” inside the existing Macro tab,
+visible only to Elite users. Non-Elite users see a locked teaser card
+with upgrade prompt, consistent with Squawk Box and SEC Insider styling.
+
+Data source: Use the existing CryptoPanic API already integrated in the
+app. Filter for news items tagged as: “important” or containing any of
+these keywords in the headline: Fed, FOMC, CPI, NFP, rate, inflation,
+tariff, war, sanction, GDP, recession, default, bankruptcy, SEC,
+liquidity, crash, rally, breakout, geopolitical.
+
+Display each news item as a card with:
+
+- Headline text
+- Source name and timestamp (e.g. “Reuters · 4 min ago”)
+- Asset tags if available (e.g. BTC, ETH, XAU)
+- A color-coded impact badge:
+  RED = contains: Fed, FOMC, CPI, NFP, rate, tariff, war, sanction,
+  crash, default, recession
+  ORANGE = contains: inflation, GDP, liquidity, SEC, bankruptcy
+  YELLOW = all other filtered items
+- A small “Ask QuantBrain” button on each card that pre-fills the
+  AI chat with: “Analyze the market impact of: [headline]”
+
+Refresh the feed every 60 seconds. Show the last 20 items max.
+Mark new items since last refresh with a pulsing green dot.
+Style: dark background #060a13, MONO font, consistent with existing
+macro calendar panel design.
+
+-----
+
+1. BREAKING MACRO ALERT — AUTO KILL SWITCH TRIGGER
+
+Extend the existing macro kill switch logic to also monitor the live
+news feed (not just the ForexFactory calendar).
+
+When a new news item arrives containing any HIGH impact keyword
+(Fed, FOMC, CPI, NFP, rate hike, rate cut, tariff, war, sanction,
+default, crash, liquidity crisis):
+
+Step A: Immediately set the macro kill switch to ACTIVE for 90 minutes.
+Step B: Send a push notification to all Elite users with format:
+“🛑 Macro Kill Switch — [keyword detected] · Signals paused 90min”
+Example: “🛑 Macro Kill Switch — Fed rate decision · Signals paused 90min”
+Step C: Display a red breaking alert banner at the top of the app
+(above all tabs, below the header) that reads:
+“🛑 BREAKING MACRO EVENT — [headline truncated to 60 chars] · Kill switch active”
+This banner dismisses automatically after 90 minutes or manually
+on tap. Show to all Pro and Elite users.
+Step D: After 90 minutes, automatically deactivate the kill switch
+and send a second push notification:
+“✅ Macro Kill Switch cleared · Signals resuming”
+
+Deduplicate: if a kill switch is already active, do not re-trigger
+for the same keyword within a 90-minute window.
+
+-----
+
+1. SQUAWK BOX — BREAKING HEADLINE AUDIO ANNOUNCER (Elite only)
+
+Extend the existing Squawk Box feature (already built) to also announce
+breaking macro headlines via text-to-speech, not just QuantBrain signals.
+
+When a RED impact news item arrives (see keyword list in step 1) AND
+the Squawk Box is active AND the user is Elite:
+
+Step A: Pause any currently speaking announcement.
+Step B: Announce the headline using the device text-to-speech engine
+with this format:
+“Breaking macro alert. [headline text]. Kill switch is now active.”
+Step C: Resume normal signal announcements after the headline is spoken.
+
+Add a toggle in the Squawk Box UI called “MACRO VOICE” (on by default
+when Squawk is active for Elite users). If toggled off, macro headlines
+are not announced but signal announcements continue normally.
+
+Volume and voice settings follow the existing Squawk Box configuration.
+No new libraries needed — use the existing Web Speech API implementation.
+
+-----
+
+General rules for all three features:
+
+- Elite gating: isElite server-side check on all new API routes.
+  Pro users see locked teaser UI for features 1 and 3.
+  Feature 2 banner and push notification fire for all Pro + Elite users
+  since kill switch affects everyone.
+- Match existing dark UI exactly: #060a13 background, IBM Plex Mono,
+  gold #c9a84c / #d4af37, red #ff2d55, green #00ff88, panel borders
+  rgba(255,255,255,0.06).
+- No new paid API keys required — use CryptoPanic already integrated.
+- No breaking changes to existing tabs, routes, or the current kill
+  switch calendar logic. The news-based trigger is additive.
+- Confirm with me before starting each numbered item.

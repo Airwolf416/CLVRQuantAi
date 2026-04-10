@@ -1376,6 +1376,90 @@ function WatchlistTab({isPro,onUpgrade,liveSignals}){
   </>);
 }
 
+// ─── MACRO INTEL FEED (Elite only) ─────────────────────────
+const MACRO_IMPACT_COLORS={red:{bg:"rgba(255,45,85,.1)",border:"rgba(255,45,85,.4)",text:"#ff2d55",label:"HIGH IMPACT"},orange:{bg:"rgba(255,140,0,.08)",border:"rgba(255,140,0,.35)",text:"#ff8c00",label:"MARKET MOVING"},yellow:{bg:"rgba(201,168,76,.06)",border:"rgba(201,168,76,.3)",text:"#c9a84c",label:"MACRO NOTE"}};
+function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
+  const{C}=useContext(ThemeCtx);
+  const[items,setItems]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[lastFetchTs,setLastFetchTs]=useState(null);
+  const[newIds,setNewIds]=useState(new Set());
+  const seenRef=useRef(new Set());
+  const fetchItems=useCallback(async(isInitial=false)=>{
+    if(isInitial)setLoading(true);
+    try{
+      const r=await fetch("/api/macro-intel");
+      const d=await r.json();
+      const list=d.items||[];
+      if(!isInitial){
+        const fresh=new Set(list.map(i=>i.id).filter(id=>!seenRef.current.has(id)));
+        setNewIds(fresh);
+      }
+      list.forEach(i=>seenRef.current.add(i.id));
+      setItems(list);
+      setLastFetchTs(Date.now());
+    }catch(e){}
+    finally{if(isInitial)setLoading(false);}
+  },[]);
+  useEffect(()=>{
+    fetchItems(true);
+    const iv=setInterval(()=>fetchItems(false),60000);
+    return()=>clearInterval(iv);
+  },[fetchItems]);
+  const timeAgo=ts=>{const diff=Math.floor((Date.now()-ts)/1000);if(diff<60)return`${diff}s ago`;if(diff<3600)return`${Math.floor(diff/60)}m ago`;if(diff<86400)return`${Math.floor(diff/3600)}h ago`;return`${Math.floor(diff/86400)}d ago`;};
+  const panelBase={background:"#060a13",border:"1px solid rgba(255,255,255,.06)",borderRadius:4,marginBottom:8};
+  if(!isElite)return(
+    <div style={{...panelBase,marginTop:16,padding:"18px 16px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontFamily:MONO,fontSize:8,color:"#c9a84c",letterSpacing:"0.2em",marginBottom:6}}>MACRO INTEL FEED — ELITE</div>
+          <div style={{fontFamily:SERIF,fontSize:14,fontWeight:700,color:"#f0f4ff",marginBottom:6}}>Live Macro Intelligence</div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {[["🔴","High-impact Fed, CPI & NFP alerts"],["🟠","Tariff, war & sanction triggers"],["🟡","GDP, liquidity & SEC headlines"],["🤖","Ask QuantBrain on any headline"]].map(([icon,txt])=>(
+              <div key={txt} style={{display:"flex",alignItems:"center",gap:7,fontFamily:MONO,fontSize:8,color:"#4a5d80"}}><span>{icon}</span><span>{txt}</span></div>
+            ))}
+          </div>
+        </div>
+        <button data-testid="btn-upgrade-macro-intel" onClick={onUpgrade} style={{flexShrink:0,background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:4,padding:"9px 18px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:"#d4af37",cursor:"pointer"}}>Go Elite →</button>
+      </div>
+    </div>
+  );
+  return(
+    <div style={{marginTop:16}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <div style={{fontFamily:MONO,fontSize:8,color:"#c9a84c",letterSpacing:"0.2em"}}>MACRO INTEL FEED</div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {lastFetchTs&&<span style={{fontFamily:MONO,fontSize:7,color:"#4a5d80"}}>refreshed {timeAgo(lastFetchTs)}</span>}
+          <span style={{fontFamily:MONO,fontSize:7,color:"#00ff88",animation:"pulse 2s infinite"}}>● LIVE</span>
+        </div>
+      </div>
+      {loading&&<div style={{padding:24,textAlign:"center",fontFamily:MONO,fontSize:10,color:"#4a5d80"}}>Loading macro intel…</div>}
+      {!loading&&items.length===0&&<div style={{...panelBase,padding:"16px",fontFamily:MONO,fontSize:9,color:"#4a5d80",textAlign:"center"}}>No macro news items found — feed updates every 60 seconds.</div>}
+      {items.map(item=>{
+        const ic=MACRO_IMPACT_COLORS[item.impact]||MACRO_IMPACT_COLORS.yellow;
+        const isNew=newIds.has(item.id);
+        return(
+          <div key={item.id} data-testid={`macro-intel-${item.id}`} style={{...panelBase,border:`1px solid ${ic.border}`,background:ic.bg,position:"relative"}}>
+            {isNew&&<div style={{position:"absolute",top:8,right:8,width:7,height:7,borderRadius:"50%",background:"#00ff88",boxShadow:"0 0 6px #00ff88",animation:"pulse 1.5s ease-in-out infinite"}}/>}
+            <div style={{padding:"12px 14px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap"}}>
+                <span style={{fontFamily:MONO,fontSize:7,fontWeight:700,color:ic.text,background:"rgba(0,0,0,.3)",padding:"2px 7px",borderRadius:2,letterSpacing:"0.12em",border:`1px solid ${ic.border}`}}>{ic.label}</span>
+                {item.assets.map(a=><span key={a} style={{fontFamily:MONO,fontSize:7,color:"#4a5d80",background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:2,padding:"2px 5px"}}>{a}</span>)}
+              </div>
+              <div style={{fontFamily:MONO,fontSize:11,color:"#c8d4ee",lineHeight:1.55,marginBottom:8}}>{item.title}</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+                <span style={{fontFamily:MONO,fontSize:8,color:"#4a5d80"}}>{item.source} · {timeAgo(item.ts)}</span>
+                <button data-testid={`btn-macro-intel-ask-${item.id}`} onClick={()=>onAskAI(`Analyze the market impact of: ${item.title}`)} style={{background:"rgba(201,168,76,.08)",border:"1px solid rgba(201,168,76,.25)",borderRadius:2,padding:"5px 11px",fontFamily:MONO,fontSize:9,fontWeight:700,color:"#c9a84c",cursor:"pointer",letterSpacing:"0.06em",flexShrink:0}}>Ask QuantBrain →</button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      <div style={{fontFamily:MONO,fontSize:7,color:"#4a5d80",textAlign:"center",paddingTop:4,letterSpacing:"0.08em"}}>SOURCE: CRYPTOPANIC · MACRO-FILTERED · AUTO-REFRESHES 60s</div>
+    </div>
+  );
+}
+
 // ─── TRADE JOURNAL TAB (Elite) ─────────────────────────────
 function TradeJournalTab({isElite,onUpgrade}){
   const{C}=useContext(ThemeCtx);
@@ -3956,6 +4040,16 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           </div>
 
           <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",marginTop:4,letterSpacing:"0.1em"}}>CLVRQuant v2 · ALL DATA LIVE · Not financial advice</div>
+
+          {/* ── Macro Intel Feed (Elite) ── */}
+          <div style={{marginTop:6,marginBottom:4}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.2em",marginBottom:4}}>MACRO INTEL</div>
+            <MacroIntelFeed
+              isElite={isElite}
+              onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
+              onAskAI={(q)=>{setAiInput(q);setTab("ai");}}
+            />
+          </div>
 
           {macroAiEvent&&(
             <div data-testid="macro-ai-modal" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px 16px 72px"}} onClick={()=>{setMacroAiEvent(null);setMacroAiResp(null);}}>
