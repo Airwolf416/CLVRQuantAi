@@ -63,6 +63,7 @@ import {
 } from "./workers/notifications";
 import { startHlRefreshWorker } from "./workers/hlRefreshWorker";
 import { startStockRefreshWorker } from "./workers/stockRefreshWorker";
+import { startDataBus, getDataBusStatus, setDataBusMacroNews } from "./databus";
 import {
   hlData, priceHistory, livePrices, cache, metalsRef,
   sseClients, serverPriceCache, alertLastFiredMs,
@@ -1224,6 +1225,7 @@ export async function registerRoutes(
   startStockRefreshWorker();
   startHlRefreshWorker(detectMoves);
   startNotificationWorker();
+  startDataBus();
   // Delay WS startup by 5s to let server settle and avoid 429 on rapid restarts
   setTimeout(startFinnhubWebSocket, 5000);
   // Start news sentiment background refresh (every 5 minutes)
@@ -1635,6 +1637,11 @@ export async function registerRoutes(
     res.json(data);
   });
 
+  // ── DATA BUS STATUS ──────────────────────────────────────────────────────────
+  app.get("/api/databus/status", (_req, res) => {
+    res.json(getDataBusStatus());
+  });
+
   // ── Political keyword sets for market impact classification ─────────────────
   const POLITICAL_KEYWORDS = [
     "trump","tariff","tariffs","trade war","trade deal","china","sanctions","executive order",
@@ -1994,6 +2001,7 @@ export async function registerRoutes(
     const result = items.slice(0, 20);
     MACRO_INTEL_CACHE.data = result;
     MACRO_INTEL_CACHE.ts = Date.now();
+    setDataBusMacroNews(result);
     res.json({ items: result });
   });
 
