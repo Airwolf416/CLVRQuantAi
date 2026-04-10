@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clvrquant-v7';
+const CACHE_NAME = 'clvrquant-v8';
 const STATIC_ASSETS = ['/', '/manifest.json', '/favicon.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-1024.png'];
 
 self.addEventListener('install', (e) => {
