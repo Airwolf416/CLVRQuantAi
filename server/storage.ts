@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type WatchlistItem, type InsertWatchlistItem, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, watchlistItems } from "@shared/schema";
+import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type WatchlistItem, type InsertWatchlistItem, type TradeJournalEntry, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, watchlistItems, tradeJournal } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, and, gt, lt, desc, ne } from "drizzle-orm";
 
@@ -51,6 +51,11 @@ export interface IStorage {
   resolveSignalOutcome(signalId: number, outcome: string, pnlPct: string): Promise<void>;
   updateSignalOutcomeById(id: number, outcome: string, pnlPct?: string): Promise<void>;
   getSignalStats(): Promise<{ total: number; wins: number; losses: number; pending: number; avgPnl: number; weeklyData: any[]; byAsset: any[]; byDirection: any[] }>;
+  // Trade Journal
+  getTradeJournal(userId: string): Promise<TradeJournalEntry[]>;
+  addTradeJournalEntry(data: Omit<TradeJournalEntry, "id" | "createdAt" | "closedAt">): Promise<TradeJournalEntry>;
+  updateTradeJournalEntry(id: number, userId: string, updates: Partial<TradeJournalEntry>): Promise<void>;
+  deleteTradeJournalEntry(id: number, userId: string): Promise<void>;
   // Watchlist
   getWatchlistByUser(userId: string): Promise<WatchlistItem[]>;
   addWatchlistItem(data: InsertWatchlistItem): Promise<WatchlistItem>;
@@ -329,6 +334,28 @@ export class DatabaseStorage implements IStorage {
 
   async getAllWatchlists(): Promise<WatchlistItem[]> {
     return db.select().from(watchlistItems).where(eq(watchlistItems.alertEnabled, true));
+  }
+
+  // ── Trade Journal ─────────────────────────────────────────────────────────
+  async getTradeJournal(userId: string): Promise<TradeJournalEntry[]> {
+    return db.select().from(tradeJournal).where(eq(tradeJournal.userId, userId)).orderBy(desc(tradeJournal.createdAt)).limit(200);
+  }
+
+  async addTradeJournalEntry(data: Omit<TradeJournalEntry, "id" | "createdAt" | "closedAt">): Promise<TradeJournalEntry> {
+    const [entry] = await db.insert(tradeJournal).values(data).returning();
+    return entry;
+  }
+
+  async updateTradeJournalEntry(id: number, userId: string, updates: Partial<TradeJournalEntry>): Promise<void> {
+    const { id: _id, userId: _uid, createdAt: _ca, ...safeUpdates } = updates as any;
+    if (updates.outcome && updates.outcome !== "OPEN") {
+      (safeUpdates as any).closedAt = new Date();
+    }
+    await db.update(tradeJournal).set(safeUpdates).where(and(eq(tradeJournal.id, id), eq(tradeJournal.userId, userId)));
+  }
+
+  async deleteTradeJournalEntry(id: number, userId: string): Promise<void> {
+    await db.delete(tradeJournal).where(and(eq(tradeJournal.id, id), eq(tradeJournal.userId, userId)));
   }
 }
 

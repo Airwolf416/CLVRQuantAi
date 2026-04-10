@@ -162,6 +162,26 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── trade_journal ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trade_journal (
+        id          SERIAL PRIMARY KEY,
+        user_id     TEXT NOT NULL,
+        asset       TEXT NOT NULL,
+        direction   TEXT NOT NULL,
+        entry       TEXT NOT NULL,
+        stop        TEXT,
+        tp1         TEXT,
+        tp2         TEXT,
+        size        TEXT,
+        notes       TEXT,
+        outcome     TEXT NOT NULL DEFAULT 'OPEN',
+        pnl_pct     TEXT,
+        created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+        closed_at   TIMESTAMP
+      )
+    `);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
   } catch (err) {
