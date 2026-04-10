@@ -463,7 +463,7 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai","watchlist"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal",watchlist:"Watchlist"};
@@ -3323,7 +3323,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
     {k:"track",icon:"📈",label:"RECORD"},
-    {k:"watchlist",icon:"⭐",label:"WATCH"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -4305,12 +4304,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               <div style={{fontFamily:MONO,fontSize:7,color:`${C.purple}88`,letterSpacing:"0.12em"}}>DETECTED</div>
             </div>
           </div>
-
-          {/* ── Free-user delay banner ── */}
-          {!isPro&&<div style={{background:"rgba(255,140,0,.07)",border:`1px solid rgba(255,140,0,.35)`,borderRadius:4,padding:"8px 14px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
-            <span style={{fontFamily:MONO,fontSize:9,color:C.orange,lineHeight:1.6}}>⏱ You are seeing signals <b>delayed by 30 minutes</b> — Upgrade for real-time</span>
-            <button data-testid="btn-upgrade-signal-banner" onClick={onUpgrade} style={{fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:11,color:C.gold2,background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,padding:"5px 12px",cursor:"pointer",flexShrink:0}}>Upgrade →</button>
-          </div>}
 
           {/* Filters */}
           <div style={{display:"flex",gap:4,marginBottom:10,overflowX:"auto"}}>
