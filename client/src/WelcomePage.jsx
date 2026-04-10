@@ -48,11 +48,11 @@ const DARK_C = {
   inputBg: "#080d18",
 };
 const LIGHT_C = {
-  bg: "#f5f3ee", panel: "#ffffff", border: "#dbd5c8", border2: "#c8c0b2",
-  gold: "#c9a84c", gold2: "#b8922a", gold3: "#8a6a1a",
-  text: "#2a3545", muted: "#7a8090", muted2: "#9aa0ac", white: "#1a2035",
-  green: "#15803d", red: "#be123c", orange: "#b45309", cyan: "#0e7490",
-  inputBg: "#f0ede6",
+  bg: "#f0eee8", panel: "#ffffff", border: "#ccc8be", border2: "#b0a898",
+  gold: "#a07820", gold2: "#7d5c10", gold3: "#5a4008",
+  text: "#1a2035", muted: "#3d4a5c", muted2: "#596275", white: "#1a2035",
+  green: "#166534", red: "#9f1239", orange: "#92400e", cyan: "#0c6e8f",
+  inputBg: "#ebe8e2",
 };
 const SERIF = "'Playfair Display', Georgia, serif";
 const MONO = "'IBM Plex Mono', monospace";
@@ -187,28 +187,48 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
     {
       icon: "🚀", label: "PLANS",
       title: "Choose Your Intelligence Level",
-      sub: "Start free. Upgrade anytime.",
+      sub: "Start free. Upgrade anytime. Cancel anytime.",
       content: (
-        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
           {[
-            { tier: "FREE", price: "$0", features: ["Signals (30-min delay)", "Macro Calendar", "Basic Markets"], highlight: false, cta: "Start Free", action: "free" },
-            { tier: "PRO", price: "$29.99/mo", features: ["Real-time Signals", "CLVR AI Analyst", "Price Alerts + Watchlist", "Daily Brief"], highlight: true, cta: "Start Pro", action: "signup" },
-            { tier: "ELITE", price: "$49.99/mo", features: ["Everything in Pro", "Insider Intelligence", "Priority AI Access", "Phantom Wallet"], highlight: false, cta: "Go Elite", action: "signup" },
-          ].map(({ tier, price, features, highlight, cta, action }) => (
-            <div key={tier} style={{ border: `1px solid ${highlight ? "rgba(201,168,76,.5)" : C.border}`, borderRadius: 8, padding: "12px 14px", background: highlight ? "rgba(201,168,76,.06)" : "transparent", position: "relative" }}>
+            {
+              tier: "FREE", price: "$0", sub: "Always free",
+              features: ["Signals with 30-min delay", "Macro Calendar", "Live Market Prices"],
+              locked: ["Real-time signals", "AI Chat & Morning Brief", "Watchlist & Alerts"],
+              highlight: false, cta: "Start Free", action: "free", color: C.muted,
+            },
+            {
+              tier: "PRO", price: "$29.99", sub: "per month · save 17% yearly",
+              features: ["Real-time signals — zero delay", "CLVR AI Market Chat", "Custom watchlist (20 assets)", "Price alerts & push notifications", "Signal history & PnL tracking", "Morning Brief · 4 ideas/day"],
+              locked: [],
+              highlight: true, cta: "Start Pro", action: "signup", color: C.gold,
+            },
+            {
+              tier: "ELITE", price: "$129", sub: "per month · save 23% yearly",
+              features: ["Everything in Pro", "AI Quant Engine (12-factor)", "SEC Insider Flow & whale tracking", "Squawk Box live announcer", "Basket Analysis (3+ assets)", "Political Alpha correlation"],
+              locked: [],
+              highlight: false, cta: "Go Elite", action: "signup", color: "#00e5ff",
+            },
+          ].map(({ tier, price, sub, features, locked, highlight, cta, action, color }) => (
+            <div key={tier} style={{ border: `1px solid ${highlight ? "rgba(201,168,76,.45)" : tier === "ELITE" ? "rgba(0,229,255,.3)" : C.border}`, borderRadius: 8, padding: "12px 14px", background: highlight ? "rgba(201,168,76,.05)" : tier === "ELITE" ? "rgba(0,229,255,.03)" : "transparent", position: "relative" }}>
               {highlight && <div style={{ position: "absolute", top: -1, left: "50%", transform: "translateX(-50%)", fontFamily: MONO, fontSize: 7, background: C.gold, color: "#0a0a0a", padding: "2px 10px", borderRadius: "0 0 4px 4px", fontWeight: 700, letterSpacing: "0.1em" }}>MOST POPULAR</div>}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, color: highlight ? C.gold : C.text, letterSpacing: "0.1em" }}>{tier}</span>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted, fontWeight: 700 }}>{price}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, color, letterSpacing: "0.1em" }}>{tier}</span>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: MONO, fontSize: 13, color, fontWeight: 800 }}>{price}<span style={{ fontSize: 8, color: C.muted, fontWeight: 400 }}>/mo</span></div>
+                  <div style={{ fontFamily: MONO, fontSize: 7, color: C.muted }}>{sub}</div>
+                </div>
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
-                {features.map(f => <span key={f} style={{ fontFamily: MONO, fontSize: 8, color: C.muted, background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", borderRadius: 3, padding: "2px 6px" }}>✓ {f}</span>)}
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 10 }}>
+                {features.map(f => <span key={f} style={{ fontFamily: MONO, fontSize: 8, color: C.muted, display: "flex", alignItems: "center", gap: 5 }}><span style={{ color, flexShrink: 0 }}>✓</span>{f}</span>)}
+                {locked.map(f => <span key={f} style={{ fontFamily: MONO, fontSize: 8, color: C.muted, opacity: 0.45, display: "flex", alignItems: "center", gap: 5 }}><span style={{ flexShrink: 0 }}>✕</span>{f}</span>)}
               </div>
-              <button onClick={() => action === "free" ? onEnterFree() : onSignUp()} style={{ width: "100%", background: highlight ? "rgba(201,168,76,.15)" : "transparent", border: `1px solid ${highlight ? "rgba(201,168,76,.4)" : C.border}`, borderRadius: 4, padding: "8px", fontFamily: MONO, fontSize: 11, fontWeight: 700, color: highlight ? C.gold : C.muted2, cursor: "pointer", letterSpacing: "0.06em" }}>
+              <button onClick={() => action === "free" ? onEnterFree() : onSignUp()} style={{ width: "100%", background: highlight ? "rgba(201,168,76,.14)" : tier === "ELITE" ? "rgba(0,229,255,.08)" : "transparent", border: `1px solid ${highlight ? "rgba(201,168,76,.4)" : tier === "ELITE" ? "rgba(0,229,255,.3)" : C.border}`, borderRadius: 4, padding: "9px", fontFamily: MONO, fontSize: 11, fontWeight: 700, color, cursor: "pointer", letterSpacing: "0.06em" }}>
                 {cta} →
               </button>
             </div>
           ))}
+          <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, textAlign: "center", lineHeight: 1.6 }}>No credit card required for Free · Stripe-secured payments · Cancel anytime</div>
         </div>
       ),
     },
@@ -216,7 +236,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
   const s = STEPS[step];
   return (
     <div data-testid="walking-tour" style={{ position: "fixed", inset: 0, zIndex: 500, background: isDark ? "rgba(5,7,9,.97)" : "rgba(245,243,238,.97)", backdropFilter: "blur(20px)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
-      <div style={{ maxWidth: 480, width: "100%", margin: "0 auto", padding: "20px 20px 120px", flex: 1, display: "flex", flexDirection: "column" }}>
+      <div style={{ maxWidth: 480, width: "100%", margin: "0 auto", padding: "20px 20px calc(160px + env(safe-area-inset-bottom, 0px))", flex: 1, display: "flex", flexDirection: "column" }}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
           <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 900, color: C.gold }}>{s.icon} CLVRQuant</div>
