@@ -48,11 +48,11 @@ const DARK_C = {
   inputBg: "#080d18",
 };
 const LIGHT_C = {
-  bg: "#f0eee8", panel: "#ffffff", border: "#ccc8be", border2: "#b0a898",
-  gold: "#a07820", gold2: "#7d5c10", gold3: "#5a4008",
-  text: "#1a2035", muted: "#3d4a5c", muted2: "#596275", white: "#1a2035",
-  green: "#166534", red: "#9f1239", orange: "#92400e", cyan: "#0c6e8f",
-  inputBg: "#ebe8e2",
+  bg: "#f0f2f5", panel: "#ffffff", border: "#e2e6ea", border2: "#cdd2d8",
+  gold: "#d4af37", gold2: "#e8c96d", gold3: "#f7e0a0",
+  text: "#0d1321", muted: "#4a5568", muted2: "#718096", white: "#0d1321",
+  green: "#00ff88", red: "#ff2d55", orange: "#ff8c00", cyan: "#00d4ff",
+  inputBg: "#f0f2f5",
 };
 const SERIF = "'Playfair Display', Georgia, serif";
 const MONO = "'IBM Plex Mono', monospace";
