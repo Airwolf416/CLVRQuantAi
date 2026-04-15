@@ -269,7 +269,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSignalStats(): Promise<{ total: number; wins: number; losses: number; pending: number; avgPnl: number; weeklyData: any[]; byAsset: any[]; byDirection: any[] }> {
-    const all = await db.select().from(signalHistory).orderBy(desc(signalHistory.ts)).limit(500);
+    const all = await db.select().from(signalHistory).orderBy(desc(signalHistory.ts)).limit(10000);
     const wins = all.filter(s => s.outcome === "WIN").length;
     const losses = all.filter(s => s.outcome === "LOSS").length;
     const pending = all.filter(s => s.outcome === "PENDING").length;

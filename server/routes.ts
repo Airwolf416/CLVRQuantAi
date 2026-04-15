@@ -3117,11 +3117,13 @@ Every level must be technically defensible. Return JSON only.`;
 
     // Pro users always get the latest Claude model for best quality analysis
     const model = CLAUDE_MODEL;
+    // Callers can request more tokens (e.g. Morning Brief needs ~3000 for full JSON)
+    const maxTokens = Math.min(parseInt(req.body.maxTokens) || 1500, 4000);
 
     const callClaude = async (messages: any[], withTools = true) => {
       const body: any = {
         model,
-        max_tokens: 1500,
+        max_tokens: maxTokens,
         system: system || "",
         messages,
       };
@@ -3204,8 +3206,9 @@ Every level must be technically defensible. Return JSON only.`;
 
       const text = (data.content || []).map((b: any) => b.text || "").join("");
       if (!text) {
+        const errMsg = "CLVR AI did not return a response — please try again.";
         console.error("[ai/analyze] Claude returned empty content. stop_reason:", data.stop_reason, "content_types:", (data.content||[]).map((b:any)=>b.type));
-        return res.json({ text: "CLVR AI did not return a response — please try again.", response: "", cached: false, model });
+        return res.json({ text: errMsg, response: errMsg, cached: false, model });
       }
 
       // Only cache valid non-empty responses
