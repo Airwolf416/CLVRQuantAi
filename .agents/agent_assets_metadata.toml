@@ -6,3 +6,9 @@ id = "otoTEPN1KRYxDY_gdjOxO"
 uri = "file://clvrquant_full_code_export.txt"
 type = "text"
 title = "CLVRQuant — Full Source Code Export"
+
+[[outputs]]
+id = "jwa6m07oCoK-2OK_Y2ChB"
+uri = "file://CLVRQuantAI_AI_Tab_Architecture.md"
+type = "text"
+title = "CLVRQuantAI AI Tab Architecture — Full Context Export"
