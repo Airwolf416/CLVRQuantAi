@@ -3146,7 +3146,7 @@ Every level must be technically defensible. Return JSON only.`;
     // Pro users always get the latest Claude model for best quality analysis
     const model = CLAUDE_MODEL;
     // Callers can request more tokens (e.g. Morning Brief needs ~3000 for full JSON)
-    const maxTokens = Math.min(parseInt(req.body.maxTokens) || 1500, 4000);
+    const maxTokens = Math.min(parseInt(req.body.maxTokens) || 1500, 8192);
 
     const callClaude = async (messages: any[], withTools = true) => {
       const body: any = {
