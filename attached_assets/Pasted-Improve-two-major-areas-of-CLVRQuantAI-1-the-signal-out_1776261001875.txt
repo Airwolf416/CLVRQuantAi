@@ -1,0 +1,210 @@
+Improve two major areas of CLVRQuantAI: (1) the signal output UI to be 
+visually structured and professional, and (2) expand the asset selection 
+library so users can trade more markets. Preserve all existing functionality.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## PART 1 — SIGNAL OUTPUT UI REDESIGN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Replace the current text-dump output with a fully designed signal dashboard.
+
+### 1A — SCAN SUMMARY HEADER BANNER
+
+Displayed at the top of every scan result, before the signal cards:
+
+- Dark card with subtle gold border (matching CLVRQuantAI brand)
+- Layout (single row on desktop, stacked on mobile):
+
+  🧠 MASTERBRAIN SCAN          APR 15, 2026 · 09:41 ET
+  ─────────────────────────────────────────────────────
+  Assets Scanned: 31    Signals Found: 3    Regime: NEUTRAL 57/100
+  Crash Prob: 47% ⚠️    Funding Bias: 3 Extreme Negative
+  ─────────────────────────────────────────────────────
+  ⚠️  HIGH IMPACT EVENT ACTIVE: BOC Rate Decision — REDUCE POSITION SIZE
+
+- Background color rules for the macro warning row:
+  • RED background + ⛔ icon: HIGH impact event within 30 minutes
+  • AMBER background + ⚠️ icon: HIGH impact event within 2 hours
+  • GREEN background + ✅ icon: No macro events in next 4 hours
+- CrashProb badge: green <30%, yellow 30-50%, red >50%
+- Banner auto-refreshes with the scan — no manual reload needed
+
+---
+
+### 1B — SIGNAL CARD DESIGN (3 cards rendered side by side on desktop, 
+stacked on mobile)
+
+Each card must follow this exact layout and styling:
+
+CARD HEADER:
+┌──────────────────────────────────────────────────────┐
+│  🥇 #1  ·  FET / USDT          ↑ LONG   [PERP]      │
+│  ████████████░░  Conviction 84/100  ·  Tier B        │
+└──────────────────────────────────────────────────────┘
+
+- Card left border: 4px solid GREEN for LONG, RED for SHORT
+- Medal icons: 🥇 #1, 🥈 #2, 🥉 #3
+- Conviction bar: filled progress bar, color coded:
+    0-50 = red, 51-70 = amber, 71-85 = green, 86-100 = gold animated glow
+- Tier badge pill: S (90-100 gold), A (80-89 green), B (70-79 blue), 
+  C (60-69 grey) — minimum to display is 60
+
+PRICE ACTION GRID (2x3 grid below header):
+┌──────────┬──────────┬──────────┬──────────┐
+│  ENTRY   │   TP 1   │   TP 2   │    SL    │
+│ $0.2263  │ $0.2350  │ $0.2430  │ $0.2207  │
+│          │  +3.8%  🎯│  +7.4%  🎯│  -2.5% 🛑│
+└──────────┴──────────┴──────────┴──────────┘
+
+- TP1 and TP2 cells: dark green background
+- SL cell: dark red background  
+- Percentage change shown below each price in smaller muted text
+- TP1 label: "Conservative Exit", TP2 label: "Full Target"
+
+TRADE PARAMETERS ROW:
+┌─────────────┬─────────────┬─────────────┐
+│  LEVERAGE   │  RISK/REWARD│  DURATION   │
+│  5x MAX     │    2.96 : 1 │  4 – 12 hrs │
+└─────────────┴─────────────┴─────────────┘
+
+- R/R ratio colored: green if >= 2.5, amber if 2.0-2.49, never shown 
+  below 2.0 (hard filter — signal disqualified if R/R < 2:1)
+- Leverage auto-capped at 3x if OI < $5M, shown with ⚠️ THIN BOOK tag
+
+WHY THIS TRADE (collapsible section, expanded by default):
+┌──────────────────────────────────────────────────────┐
+│ 📊 EDGE FACTORS                                      │
+│  ✅ Funding: -0.0288% — extreme short crowding       │
+│  ✅ Perp trading at discount to spot ($0.2263 vs     │
+│     $0.2282) — squeeze pressure building             │
+│  ✅ Price holding $0.220 key support on falling vol  │
+│  ⚠️ Low OI — thin book, use limit orders at entry   │
+│  ⚠️ Broad market NEUTRAL — reduce size 25%           │
+└──────────────────────────────────────────────────────┘
+
+- Max 4 green ✅ edge factors, max 3 amber ⚠️ risk factors
+- Keep each bullet to one line — no walls of text
+- Each factor must be a specific data point, never generic text
+
+INVALIDATION ROW:
+┌──────────────────────────────────────────────────────┐
+│ ❌ INVALIDATION  Close below $0.2180 = thesis off    │
+└──────────────────────────────────────────────────────┘
+
+ACTION BUTTONS ROW (bottom of every card):
+┌────────────────┬────────────────┬────────────────┐
+│ 📋 COPY TRADE  │  ⏰ SET ALERT  │   ❌ DISMISS   │
+└────────────────┴────────────────┴────────────────┘
+
+- COPY TRADE: copies to clipboard in this exact format:
+  ASSET: FET LONG | ENTRY: $0.2263 | TP1: $0.2350 | TP2: $0.2430 | SL: $0.2207 | LEV: 5x MAX
+- SET ALERT: opens alert modal pre-filled with entry price
+- DISMISS: collapses the card with a fade animation
+
+---
+
+### 1C — NO SIGNALS STATE
+
+If the scan finds 0 qualifying signals (all fail filters):
+- Show a single centered card with ⛔ icon:
+  "No high-conviction setups found. Macro conditions or low regime score 
+   prevented signal generation. Check back after [next scheduled scan time]."
+- Never show a partial or empty signal card
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## PART 2 — ASSET SELECTION EXPANSION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Currently the asset selector shows ~23 assets. Expand to a full categorized 
+library with search and filtering.
+
+### 2A — FULL ASSET LIST BY CATEGORY
+
+Add ALL of the following assets to the selection system. Each asset needs 
+a live price feed, funding rate (for perps), and OI data source configured:
+
+**CRYPTO — LARGE CAP (already have some, confirm all present):**
+BTC, ETH, SOL, BNB, XRP, ADA, AVAX, DOGE, DOT, MATIC, LINK, LTC, UNI, ATOM
+
+**CRYPTO — MID CAP:**
+HYPE, HBAR, TIA, FET, NEAR, SUI, APT, ARB, OP, INJ, SEI, AAVE, ONDO, 
+RENDER, PENDLE, JUP, TAO, WIF, TRUMP, PEPE, BONK, FLOKI, WLD, EIGEN, 
+PYTH, STX, MANTA, ALT, DYM, STRK, ZK, BLAST
+
+**CRYPTO — SMALL/EMERGING (perp only, flag as HIGH RISK):**
+POPCAT, MEW, BOME, NEIRO, PNUT, ACT, VIRTUAL, AI16Z, GRIFFAIN
+
+**EQUITIES — US LARGE CAP:**
+AAPL, MSFT, NVDA, TSLA, META, GOOGL, AMZN, NFLX, AMD, COIN, MSTR, 
+PLTR, HOOD, SOFI, RKLB, IONQ, SMCI, ARM, CRWD, PANW
+
+**EQUITIES — LEVERAGED ETFs (flag as HIGH VOLATILITY):**
+SQQQ, TQQQ, SOXS, SOXL, UVXY, SPXU, SPXL
+
+**COMMODITIES:**
+XAU (Gold), XAG (Silver), CL (Crude Oil), NG (Natural Gas), 
+COPPER, WHEAT, CORN, NATGAS, HG (Copper Futures)
+
+**FX PAIRS:**
+EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, 
+EURJPY, GBPJPY, XAUUSD
+
+**INDICES:**
+SPX, NDX, DJI, VIX, DAX, FTSE, NIKKEI, HSI
+
+---
+
+### 2B — REDESIGN THE ASSET SELECTOR UI
+
+Replace the current flat scrolling pill list with a categorized, 
+searchable asset browser:
+
+LAYOUT:
+- Add a search bar at the top: "Search any asset... e.g. BTC, Gold, TSLA"
+  - Real-time filter as user types
+  - Shows asset name, category tag, and current price in dropdown results
+
+- Below search, show category filter tabs:
+  [ ALL ] [ CRYPTO ] [ EQUITIES ] [ COMMODITIES ] [ FX ] [ INDICES ]
+  - Clicking a tab filters the asset grid to that category
+
+- Asset grid: display as compact cards (not pills) showing:
+  • Asset ticker (bold)
+  • Full name below (smaller)
+  • Current price
+  • 24h change % (green/red)
+  • Category badge (CRYPTO / EQUITY / COMMODITY / FX / INDEX)
+  • Risk badge if applicable: ⚠️ HIGH RISK or ⚠️ HIGH VOL
+
+- Selected assets are highlighted with gold border
+- User can select up to 5 assets at once for basket/multi-scan
+- "CLEAR ALL" and "SELECT TOP 5 BY VOLUME" quick-action buttons
+
+---
+
+### 2C — ASSET RISK FLAGS
+
+Automatically apply these warning labels in the selector and on signal cards:
+
+- ⚠️ THIN BOOK: any crypto with OI < $5M
+- 🔥 HIGH VOLATILITY: leveraged ETFs, small cap crypto, VIX
+- 🌙 LOW LIQUIDITY: assets with 24h volume < $10M
+- ⭐ HIGH CONVICTION ZONE: assets currently showing extreme funding 
+  rates (>0.01% or <-0.01%) — highlight these in the selector 
+  so users can spot opportunities without scanning manually
+
+---
+
+## GENERAL REQUIREMENTS
+
+- Do not break MasterBrain, Kronos, Quant Engine or existing alert systems
+- All new UI must match dark theme with CLVRQuantAI brand (black/gold/green)
+- Fully mobile responsive — asset grid collapses to 2 columns on mobile
+- Signal cards stack vertically on mobile, side by side on desktop
+- All 3 signal cards must always render — no missing slots
+- Price data for new assets: use existing data providers 
+  (Binance for crypto, Finnhub/Polygon for equities, same as current)
+- Test a full scan after implementation and confirm 3 cards render cleanly
+- List all files changed in the final report
