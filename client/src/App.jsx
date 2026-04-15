@@ -463,11 +463,11 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai","watchlist"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",watchlist:"My Watchlist",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
-  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",watchlist:"Track up to 20 assets with live prices, 24h changes & funding rates",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
+  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
       {/* Icon + heading */}
@@ -513,8 +513,8 @@ function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
 function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const plans=[
     {name:"Free",price:"$0",period:"forever",color:C2.muted2,borderColor:"#1c2b4a",features:["Live crypto, equities & forex prices","Macro calendar & event tracker","Market regime dashboard","Signals with 30-min delay (prices hidden)","Track record — aggregate stats only"]},
-    {name:"Pro",price:"$29.99",period:"/mo",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📌 My Watchlist — track 20 assets live","📰 Daily AI Morning Brief · 4 trade ideas","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
-    {name:"Elite",price:"$129",period:"/mo",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","📌 Watchlist expanded to 50 assets","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","⚡ Hyperliquid perps integration","🔑 Direct founder access · all future features"]},
+    {name:"Pro",price:"$29.99",period:"/mo",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📰 Daily AI Morning Brief · 4 trade ideas","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
+    {name:"Elite",price:"$129",period:"/mo",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","⚡ Hyperliquid perps integration","🔑 Direct founder access · all future features"]},
   ];
   return(
     <div style={{padding:"20px 4px 40px"}}>
@@ -1110,95 +1110,6 @@ function HelpItem({q,a}){
   );
 }
 
-// ─── WATCHLIST TAB (Pro+) ─────────────────────────────────
-function WatchlistTab({isPro,isElite,cryptoPrices,storePerps,storeSpot,onUpgrade}){
-  const{C}=useContext(ThemeCtx);
-  const[items,setItems]=useState([]);
-  const[loading,setLoading]=useState(true);
-  const[adding,setAdding]=useState(false);
-  const[sym,setSym]=useState("");
-  const[cls,setCls]=useState("crypto");
-  const[removing,setRemoving]=useState(null);
-  const fetchWL=useCallback(async()=>{
-    try{const r=await fetch("/api/watchlist",{credentials:"include"});const d=await r.json();setItems(d.items||[]);}catch{}
-    setLoading(false);
-  },[]);
-  useEffect(()=>{fetchWL();},[fetchWL]);
-  const addItem=async()=>{
-    if(!sym.trim())return;
-    setAdding(true);
-    try{
-      const r=await fetch("/api/watchlist",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:sym.trim().toUpperCase(),assetClass:cls})});
-      if(r.ok){setSym("");fetchWL();}
-    }catch{}
-    setAdding(false);
-  };
-  const removeItem=async(symbol)=>{
-    setRemoving(symbol);
-    try{await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`,{method:"DELETE",credentials:"include"});fetchWL();}catch{}
-    setRemoving(null);
-  };
-  const getPrice=(symbol)=>{
-    const p=cryptoPrices[symbol]||storePerps?.[symbol]||storeSpot?.[symbol];
-    return p||null;
-  };
-  const maxItems=isElite?50:20;
-  const panel={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,marginBottom:10};
-  return(<>
-    <div style={{marginBottom:10}}><div style={{fontFamily:SERIF,fontSize:18,fontWeight:900,color:C.white}}>📌 My <span style={{color:C.gold}}>Watchlist</span></div><div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.2em",marginTop:4}}>TRACK UP TO {maxItems} ASSETS · LIVE PRICES</div></div>
-    <div style={{...panel,padding:"12px 14px"}}>
-      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-        <input data-testid="input-watchlist-symbol" value={sym} onChange={e=>setSym(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()} placeholder="Symbol (e.g. BTC, NVDA)" style={{flex:1,minWidth:120,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:3,padding:"8px 12px",fontFamily:MONO,fontSize:11,color:C.text,outline:"none"}}/>
-        <select data-testid="select-watchlist-class" value={cls} onChange={e=>setCls(e.target.value)} style={{background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:3,padding:"8px 10px",fontFamily:MONO,fontSize:10,color:C.text,outline:"none"}}>
-          <option value="crypto">Crypto</option>
-          <option value="equity">Equity</option>
-          <option value="commodity">Commodity</option>
-          <option value="forex">Forex</option>
-        </select>
-        <button data-testid="btn-add-watchlist" onClick={addItem} disabled={adding||!sym.trim()} style={{padding:"8px 16px",background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:3,fontFamily:MONO,fontSize:10,fontWeight:700,color:C.gold2,cursor:adding?"default":"pointer",letterSpacing:"0.1em",opacity:adding?.5:1}}>+ ADD</button>
-      </div>
-      <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:6}}>{items.length}/{maxItems} slots used</div>
-    </div>
-    {loading?(
-      <div style={{padding:32,textAlign:"center",fontFamily:MONO,fontSize:10,color:C.muted}}>Loading watchlist…</div>
-    ):items.length===0?(
-      <div style={{...panel,padding:"32px 16px",textAlign:"center"}}>
-        <div style={{fontSize:28,marginBottom:8}}>📌</div>
-        <div style={{fontFamily:MONO,fontSize:10,color:C.muted,marginBottom:6}}>Your watchlist is empty</div>
-        <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,lineHeight:1.7}}>Add symbols above to track live prices, changes, and funding rates in one view.</div>
-      </div>
-    ):(
-      <div style={panel}>
-        <div style={{padding:"8px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:8}}>
-          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",flex:1}}>SYMBOL</span>
-          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",width:70,textAlign:"right"}}>PRICE</span>
-          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",width:55,textAlign:"right"}}>24H</span>
-          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",width:55,textAlign:"right"}}>FUNDING</span>
-          <span style={{width:28}}/>
-        </div>
-        {items.map((item,i)=>{
-          const p=getPrice(item.symbol);
-          const price=p?.price;
-          const chg=p?.change24h||0;
-          const funding=p?.funding||0;
-          const chgCol=chg>0?C.green:chg<0?C.red:C.muted;
-          return(
-            <div key={item.id} data-testid={`watchlist-item-${item.symbol}`} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",borderBottom:i<items.length-1?`1px solid ${C.border}`:"none"}}>
-              <div style={{flex:1,display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:C.white}}>{item.symbol}</span>
-                <span style={{fontFamily:MONO,fontSize:7,color:C.muted,padding:"1px 5px",borderRadius:2,border:`1px solid ${C.border}`,background:C.bg}}>{item.assetClass}</span>
-              </div>
-              <span style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white,width:70,textAlign:"right"}}>{price?mfmtPrice(price):"—"}</span>
-              <span style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:chgCol,width:55,textAlign:"right"}}>{price?mfmtChange(chg):"—"}</span>
-              <span style={{fontFamily:MONO,fontSize:9,color:funding>0.01?C.green:funding<-0.01?C.red:C.muted,width:55,textAlign:"right"}}>{price&&funding?mfmtFunding(funding):"—"}</span>
-              <button data-testid={`btn-remove-watchlist-${item.symbol}`} onClick={()=>removeItem(item.symbol)} disabled={removing===item.symbol} style={{width:28,height:28,background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:3,fontFamily:MONO,fontSize:12,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",opacity:removing===item.symbol?.4:1}}>✕</button>
-            </div>
-          );
-        })}
-      </div>
-    )}
-  </>);
-}
 
 // ─── TRACK RECORD TAB ─────────────────────────────────────
 function TrackRecordTab({isPro,onUpgrade}){
@@ -3056,7 +2967,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
-    {k:"watchlist",icon:"📌",label:"WATCHLIST"},
     {k:"track",icon:"📈",label:"RECORD"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
@@ -4138,7 +4048,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <SignalHistoryPanel isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>
         </>}
 
-        {tab==="watchlist"&&isPro&&<WatchlistTab isPro={isPro} isElite={isElite} cryptoPrices={cryptoPrices} storePerps={storePerps} storeSpot={storeSpot} onUpgrade={onUpgrade}/>}
 
         {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 
