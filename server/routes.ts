@@ -767,27 +767,28 @@ function detectMoves() {
     const atr = taCalcATR(priceHistory[sym]);
     const entry = current.price;
 
-    // FIX 6a: Minimum TP distance — at least 0.5% for TP1, 1.0% for TP2
+    // Minimum distances: SL 1.5%, TP1 2.5%, TP2 4.0% — prevents instant stop-outs from tick noise
     const precision = entry < 0.01 ? 6 : entry < 1 ? 4 : entry < 100 ? 3 : 2;
-    const minTP1Dist = entry * 0.005;
-    const minTP2Dist = entry * 0.010;
-    const minStopDist = entry * 0.003;
+    const minTP1Dist = entry * 0.025;
+    const minTP2Dist = entry * 0.040;
+    const minStopDist = entry * 0.015;
 
-    const rawStop = atr > 0 ? atr * 1.5 : entry * 0.015;
-    const rawTP1 = atr > 0 ? atr * 2 : entry * 0.02;
-    const rawTP2 = atr > 0 ? atr * 4 : entry * 0.04;
+    const rawStop = atr > 0 ? atr * 3.0 : entry * 0.020;
+    const rawTP1 = atr > 0 ? atr * 5.0 : entry * 0.035;
+    const rawTP2 = atr > 0 ? atr * 9.0 : entry * 0.060;
 
+    // Use the LARGER of ATR-based and minimum distance — ensures stops are never too tight
     const stopLoss = dir === "LONG"
-      ? +Math.max((entry - rawStop), (entry - Math.max(rawStop, minStopDist))).toFixed(precision)
-      : +Math.min((entry + rawStop), (entry + Math.max(rawStop, minStopDist))).toFixed(precision);
+      ? +(entry - Math.max(rawStop, minStopDist)).toFixed(precision)
+      : +(entry + Math.max(rawStop, minStopDist)).toFixed(precision);
 
     const tp1 = dir === "LONG"
-      ? +Math.max(entry + rawTP1, entry + minTP1Dist).toFixed(precision)
-      : +Math.min(entry - rawTP1, entry - minTP1Dist).toFixed(precision);
+      ? +(entry + Math.max(rawTP1, minTP1Dist)).toFixed(precision)
+      : +(entry - Math.max(rawTP1, minTP1Dist)).toFixed(precision);
 
     const tp2 = dir === "LONG"
-      ? +Math.max(entry + rawTP2, entry + minTP2Dist).toFixed(precision)
-      : +Math.min(entry - rawTP2, entry - minTP2Dist).toFixed(precision);
+      ? +(entry + Math.max(rawTP2, minTP2Dist)).toFixed(precision)
+      : +(entry - Math.max(rawTP2, minTP2Dist)).toFixed(precision);
 
     const actualStop = Math.abs(entry - stopLoss);
     const actualTP1 = Math.abs(entry - tp1);
@@ -2564,7 +2565,7 @@ export async function registerRoutes(
     // ── RULE 1 — MACRO EVENT OVERRIDE ─────────────────────────────────────────
     if (!macroKillSwitch.safe && isRiskAsset) {
       const adjusted = bayesian.probability - 15;
-      if (adjusted < 80) {
+      if (adjusted < 55) {
         triggered.push({ id:1, name:"MACRO EVENT OVERRIDE", action:"SUPPRESS",
           message:`SIGNAL SUPPRESSED — MACRO EVENT OVERRIDE (${macroKillSwitch.nearest_event?.name || "HIGH IMPACT EVENT"})` });
       } else {

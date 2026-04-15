@@ -214,6 +214,7 @@ Tasks:
     try {
       const res = await fetch("/api/ai/analyze", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: userPrompt, systemPrompt }),
       });
