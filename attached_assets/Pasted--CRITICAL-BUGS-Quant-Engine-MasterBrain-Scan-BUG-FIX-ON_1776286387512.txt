@@ -1,0 +1,180 @@
+# CRITICAL BUGS — Quant Engine / MasterBrain Scan
+
+⚠️ BUG FIX ONLY. Do NOT create new features, components, endpoints, or database tables.
+
+There are 5 bugs. Fix them in order.
+
+-----
+
+## BUG 1: Wrong asset appearing in scan results
+
+I selected FET, CL, and NIKKEI for scanning but the scan returned NVDA — which I did NOT select. The asset selection is not being passed correctly to the AI API call.
+
+### Fix
+
+1. Find the code that collects the selected assets from the scan queue (the chips that show “FET x”, “NVDA x”, “CL x”, “NIKKEI x” at the top).
+1. Find where these selected assets are sent to the API call for the MasterBrain scan.
+1. There is a disconnect — either the queue is adding assets the user didn’t select, or the prompt is ignoring the user’s selection and scanning its own list. Show me both the queue logic and the API call before fixing.
+1. Ensure ONLY the assets the user explicitly selected are passed to the AI. The AI must NOT substitute, add, or replace assets on its own.
+
+-----
+
+## BUG 2: TP/SL direction is INVERTED on SHORT signals
+
+The NVDA signal says SHORT but:
+
+- Entry: $186.60
+- TP1: $200.99 (HIGHER than entry — this is WRONG for a short)
+- TP2: $215.37 (HIGHER than entry — this is WRONG for a short)
+- SL: $177.01 (LOWER than entry — this is WRONG for a short)
+
+For a SHORT trade: TPs must be BELOW entry, SL must be ABOVE entry.
+For a LONG trade: TPs must be ABOVE entry, SL must be BELOW entry.
+
+### Fix
+
+1. Find the code or prompt logic that calculates TP and SL levels.
+1. Add a direction validation. After computing TP/SL, validate:
+
+```
+IF direction === "SHORT":
+  assert TP1 < entry  // target is below for shorts
+  assert TP2 < entry
+  assert TP3 < entry
+  assert SL > entry   // stop is above for shorts
+
+IF direction === "LONG":
+  assert TP1 > entry  // target is above for longs
+  assert TP2 > entry
+  assert TP3 > entry
+  assert SL < entry   // stop is below for longs
+```
+
+1. If the validation fails, either:
+   a. Flip the direction to match the levels, OR
+   b. Recalculate the levels to match the direction
+1. Also check: the edge factors said “MACD Bull Cross”, “MTF Confluence Bull”, “Price Above EMA200” — these are ALL bullish. A SHORT signal should NOT have all bullish edge factors. If all factors are bullish, the direction should be LONG, not SHORT. Add this to the system prompt for the Quant Engine:
+
+Add this rule to the Quant Engine system prompt:
+
+```
+DIRECTION CONSISTENCY CHECK: If 3+ edge factors are bullish (bull cross, bullish divergence, price above key MA), the signal direction MUST be LONG. If 3+ edge factors are bearish, the direction MUST be SHORT. Never output a SHORT signal with majority bullish factors or vice versa. If factors conflict (mixed bull/bear), either skip the signal or flag as LOW CONVICTION with a clear explanation of the conflict.
+```
+
+-----
+
+## BUG 3: Output is way too verbose — walls of text
+
+The thesis section currently outputs 10+ lines of dense monospace text explaining every rule, every override, every supporting factor. This is unusable for a trader who needs to glance and act.
+
+### Fix
+
+Add these constraints to the Quant Engine / MasterBrain system prompt:
+
+```
+OUTPUT LENGTH RULES — STRICTLY ENFORCED:
+- Thesis: MAX 2 sentences. State the setup and the catalyst. Nothing else.
+- Invalidation: MAX 2 sentences. State the price level and condition that kills the trade.
+- Do NOT explain your scoring methodology in the output.
+- Do NOT reference "absolute rules", "pre-computed gates", "Kelly percentages", or internal logic.
+- Do NOT list numbered supporting factors.
+- The trader does not need to see your work. They need: direction, levels, and a 1-line reason.
+
+GOOD thesis example:
+"Bounce off 4H demand at $186 with RSI divergence. Sector momentum confirmed by MSFT/AAPL strength."
+
+BAD thesis example (DO NOT DO THIS):
+"The pre-computed gate yields EV +1.44% and Kelly 20% (MEDIUM), which are technically positive — however ABSOLUTE RULE 1 is triggered: win_probability 52% is below the mandatory 80% minimum threshold. The signal MUST be NEUTRAL. Supporting factors for this override: (1) Price at 96% of 24h range..."
+
+GOOD invalidation example:
+"Signal void if price breaks below $177 with volume, or if H&S neckline confirms."
+
+BAD invalidation example (DO NOT DO THIS):
+"INVALIDATION - Signal is VOID immediately if: (1) Price fails to retrace to $186.598 zone within 8-20 min of activation. (2) Price breaks below spike low $164.27 at any time. (3) Head & Shoulders pattern completes with confirmed neckline breakdown. (4) Macro kill switch triggers..."
+```
+
+Also find the component that renders the thesis and invalidation text. If it’s rendering in a monospace/code font, change it to the regular body font. Monospace is for prices and levels only, not for paragraphs of text.
+
+-----
+
+## BUG 4: Duration says “5-6 minutes post-entry (intraday scalp only)”
+
+This is nonsensical. No scalp has a 5-6 minute predefined duration.
+
+### Fix
+
+The kill clock / duration should use the standard trade type durations. Update the prompt:
+
+```
+DURATION/KILL CLOCK VALUES — use ONLY these:
+- SCALP: "2-4 hours"
+- DAY TRADE: "12-24 hours"  
+- SWING: "2-3 days"
+- POSITION: "1-2 weeks"
+
+Never output minute-level durations. Never say "5-6 minutes". The minimum kill clock is 2 hours.
+```
+
+-----
+
+## BUG 5: Mobile BTC scan still returns “AI returned malformed data”
+
+On mobile, scanning BTC returns “BTC: AI returned malformed data” with 0 signals found.
+
+### Fix
+
+1. Check if the mobile API call uses the same endpoint and prompt as desktop. If there’s a separate mobile handler, it may not have been updated with the new prompt.
+1. The most likely cause: the AI is returning markdown or prose instead of JSON, and the parser is failing. Ensure the system prompt includes:
+
+```
+You MUST respond with valid JSON only. No markdown. No prose. No preamble. No code fences. Start your response with { or [ and end with } or ]. Any non-JSON text will cause a parsing error.
+```
+
+1. Add a fallback in the response parser — if JSON parsing fails, try to extract JSON from the response by finding the first `{` and last `}`:
+
+```javascript
+function extractJSON(text) {
+  // Try direct parse first
+  try { return JSON.parse(text); } catch(e) {}
+  
+  // Strip markdown fences
+  const stripped = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  try { return JSON.parse(stripped); } catch(e) {}
+  
+  // Find JSON object boundaries
+  const firstBrace = stripped.indexOf('{');
+  const lastBrace = stripped.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    try { return JSON.parse(stripped.substring(firstBrace, lastBrace + 1)); } catch(e) {}
+  }
+  
+  // Find JSON array boundaries
+  const firstBracket = stripped.indexOf('[');
+  const lastBracket = stripped.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket !== -1) {
+    try { return JSON.parse(stripped.substring(firstBracket, lastBracket + 1)); } catch(e) {}
+  }
+  
+  return null; // truly malformed
+}
+```
+
+-----
+
+## VERIFICATION — Do all of these before marking complete
+
+1. Select ONLY BTC and ETH → run MasterBrain scan → confirm ONLY BTC and ETH results appear (no surprise NVDA or other assets)
+1. If a SHORT signal appears, confirm TP1 and TP2 are BELOW entry and SL is ABOVE entry
+1. If a LONG signal appears, confirm TP1 and TP2 are ABOVE entry and SL is BELOW entry
+1. Confirm thesis text is 2 sentences max, no internal rule references
+1. Confirm invalidation text is 2 sentences max
+1. Confirm kill clock shows hours/days, not minutes
+1. Test on mobile viewport — confirm no “malformed data” error for BTC
+
+## WHAT NOT TO DO
+
+❌ Do NOT create new components, tabs, pages, or features
+❌ Do NOT change the visual design or theme
+❌ Do NOT add new database tables or API endpoints
+❌ Do NOT modify the asset list or add new assets
+❌ Do NOT touch the watchlist, alerts, or any feature outside the Quant Engine scan

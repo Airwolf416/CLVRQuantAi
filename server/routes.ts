@@ -2939,14 +2939,10 @@ Entry window: ${entryWindowMin} min. If price does NOT retrace to entry zone wit
 Signal is immediately VOID if price breaks below the spike low ($${spikeLow.toFixed(4)}).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 3 — HOLD TIME & EXIT TIMING (include exact minutes)
+SECTION 3 — HOLD TIME & EXIT TIMING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Estimated spike formation: ~${formationMin} min (session: ${sHoldMult}× multiplier)
-  ⏱ Target exit: ${targetExitMin} min after entry
-  🔴 Hard exit:  ${hardExitMin} min after entry — close ENTIRE position regardless of P&L
-  ⚠️  If TP1 not hit within ${targetExitMin} min → cut position by 50% immediately
-
-These are MAXIMUMS. If TP1 is hit before target exit → move SL to breakeven immediately.
+Use the DURATION/KILL CLOCK categories above for hold.duration.
+If TP1 is hit → move SL to breakeven immediately.
 Once price is halfway to TP2 → trail SL to TP1 level.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2971,7 +2967,29 @@ ABSOLUTE RULES
 SIGNAL SUPPRESSION OVERRIDES (enforce before finalizing):
 ${suppression.flagsForAI.map((f, i) => `${i + 9}. ${f}`).join("\n")}` : ""}
 
-Respond ONLY with valid JSON. No markdown. No backticks.
+DIRECTION CONSISTENCY CHECK: If 3+ edge factors are bullish (bull cross, bullish divergence, price above key MA), the signal direction MUST be LONG. If 3+ edge factors are bearish, the direction MUST be SHORT. Never output a SHORT signal with majority bullish factors or vice versa. If factors conflict (mixed bull/bear), set signal to NEUTRAL.
+
+ASSET CONSTRAINT: You are analyzing ONLY the asset "${ticker}". Do NOT substitute, reference, or generate signals for any other asset. Every price level must correspond to ${ticker}.
+
+OUTPUT LENGTH RULES — STRICTLY ENFORCED:
+- quant_rationale: MAX 2 sentences. State the setup and the catalyst. Nothing else.
+- invalidation: MAX 2 sentences. State the price level and condition that kills the trade.
+- Do NOT explain your scoring methodology, internal logic, or numbered supporting factors.
+- Do NOT reference "absolute rules", "pre-computed gates", "Kelly percentages", or internal calculations.
+
+DURATION/KILL CLOCK — use ONLY these values for hold.duration:
+- SCALP: "2-4 hours"
+- DAY TRADE: "12-24 hours"
+- SWING: "2-3 days"
+- POSITION: "1-2 weeks"
+Never output minute-level durations. The minimum kill clock is 2 hours.
+
+DIRECTION VALIDATION — MANDATORY:
+- If signal contains "LONG": TP1 > entry, TP2 > entry, SL < entry
+- If signal contains "SHORT": TP1 < entry, TP2 < entry, SL > entry
+- Verify this before outputting. If levels don't match direction, fix them.
+
+Respond ONLY with valid JSON. No markdown. No backticks. No text before or after the JSON. Start with { and end with }.
 
 {
   "signal": "STRONG_LONG"|"LONG"|"NEUTRAL"|"SHORT"|"STRONG_SHORT",
@@ -3091,7 +3109,48 @@ Every level must be technically defensible. Return JSON only.`;
       if (!parsed.hold) parsed.hold = {};
       parsed.hold.target_exit_min = targetExitMin;
       parsed.hold.hard_exit_min   = hardExitMin;
-      if (!parsed.hold.duration) parsed.hold.duration = `Target: ${targetExitMin} min | Hard exit: ${hardExitMin} min`;
+      const validDurations = ["2-4 hours","12-24 hours","2-3 days","1-2 weeks"];
+      if (!parsed.hold.duration || !validDurations.includes(parsed.hold.duration.trim())) {
+        const tfId2 = timeframeId || "today";
+        parsed.hold.duration = tfId2 === "long" ? "1-2 weeks" : tfId2 === "mid" ? "2-3 days" : atrPctNum > 1.5 ? "2-4 hours" : "12-24 hours";
+      }
+      // ── Direction / TP / SL validation (fix inverted levels) ──
+      if (parsed.signal && parsed.entry?.price && parsed.tp1?.price && parsed.stopLoss?.price) {
+        const isLong = parsed.signal.includes("LONG");
+        const isShort = parsed.signal.includes("SHORT");
+        const ep = parsed.entry.price;
+        let slDist = Math.abs(ep - parsed.stopLoss.price);
+        let needsRecalc = false;
+        if (isLong) {
+          if (parsed.stopLoss.price >= ep) { parsed.stopLoss.price = ep - slDist; needsRecalc = true; }
+          slDist = Math.abs(ep - parsed.stopLoss.price);
+          if (parsed.tp1.price <= ep) { parsed.tp1.price = ep + slDist * risk.tpRatios[0]; needsRecalc = true; }
+          if (parsed.tp2?.price && parsed.tp2.price <= ep) { parsed.tp2.price = ep + slDist * risk.tpRatios[1]; needsRecalc = true; }
+          if (parsed.tp3?.price && parsed.tp3.price <= ep) { parsed.tp3.price = ep + slDist * 4.0; needsRecalc = true; }
+        } else if (isShort) {
+          if (parsed.stopLoss.price <= ep) { parsed.stopLoss.price = ep + slDist; needsRecalc = true; }
+          slDist = Math.abs(parsed.stopLoss.price - ep);
+          if (parsed.tp1.price >= ep) { parsed.tp1.price = ep - slDist * risk.tpRatios[0]; needsRecalc = true; }
+          if (parsed.tp2?.price && parsed.tp2.price >= ep) { parsed.tp2.price = ep - slDist * risk.tpRatios[1]; needsRecalc = true; }
+          if (parsed.tp3?.price && parsed.tp3.price >= ep) { parsed.tp3.price = ep - slDist * 4.0; needsRecalc = true; }
+        }
+        if (needsRecalc) {
+          slDist = Math.abs(ep - parsed.stopLoss.price);
+          if (slDist > 0.000001) {
+            parsed.tp1.gain_pct = parseFloat((Math.abs(parsed.tp1.price - ep) / ep * 100).toFixed(2));
+            parsed.tp1.rr_ratio = parseFloat((Math.abs(parsed.tp1.price - ep) / slDist).toFixed(2));
+            if (parsed.tp2?.price) {
+              parsed.tp2.gain_pct = parseFloat((Math.abs(parsed.tp2.price - ep) / ep * 100).toFixed(2));
+              parsed.tp2.rr_ratio = parseFloat((Math.abs(parsed.tp2.price - ep) / slDist).toFixed(2));
+            }
+            if (parsed.tp3?.price) {
+              parsed.tp3.gain_pct = parseFloat((Math.abs(parsed.tp3.price - ep) / ep * 100).toFixed(2));
+              parsed.tp3.rr_ratio = parseFloat((Math.abs(parsed.tp3.price - ep) / slDist).toFixed(2));
+            }
+            parsed.stopLoss.distance_pct = parseFloat((slDist / ep * 100).toFixed(2));
+          }
+        }
+      }
       // Remove tp3 if AI hallucinated it when conditions not met
       if (!(adjScore >= 85 && oiM > 100)) delete parsed.tp3;
       if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
