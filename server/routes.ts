@@ -1655,6 +1655,126 @@ export async function registerRoutes(
     res.json(getDataBusStatus());
   });
 
+  const macroPreflightCache: { ts: number; data: any } = { ts: 0, data: null };
+  const MACRO_PREFLIGHT_TTL = 5 * 60 * 1000;
+  const MACRO_HIGH_IMPACT_KW = [
+    "fomc","cpi","nfp","non-farm","rate decision","rate cut","rate hike","tariff","sanctions",
+    "fed","ecb","boj","boe","boc","gdp","inflation","employment","payrolls","powell",
+    "lagarde","trade war","default","emergency","pce","ppi",
+  ];
+
+  app.get("/api/macro/preflight", async (_req, res) => {
+    if (macroPreflightCache.data && Date.now() - macroPreflightCache.ts < MACRO_PREFLIGHT_TTL) {
+      return res.json(macroPreflightCache.data);
+    }
+    try {
+      const busStatus = getDataBusStatus();
+      const now = Date.now();
+      const TWO_H = 2 * 60 * 60 * 1000;
+      const FOUR_H = 4 * 60 * 60 * 1000;
+      const TWENTY_FOUR_H = 24 * 60 * 60 * 1000;
+
+      const parseEvtTime = (evt: any): number | null => {
+        const timeStr = (evt.timeET || evt.time || "").replace(/\s*ET\s*/i, "").trim();
+        const dateStr = evt.date || "";
+        if (!dateStr || !timeStr || timeStr === "All Day" || timeStr === "Tentative") return null;
+        const d = new Date(`${dateStr} ${timeStr} EST`);
+        return isNaN(d.getTime()) ? null : d.getTime();
+      };
+
+      const eventsNext2H: any[] = [];
+      const eventsNext4H: any[] = [];
+      const eventsNext24H: any[] = [];
+
+      for (const evt of busStatus.macroEvents || []) {
+        const evtMs = parseEvtTime(evt);
+        if (!evtMs) continue;
+        const diff = evtMs - now;
+        const passed = diff < 0;
+        const evtObj = {
+          event: `${evt.region || evt.country || ""} ${evt.name}`.trim(),
+          time: evt.timeET || evt.time || "",
+          date: evt.date || "",
+          impact: evt.impact || "MEDIUM",
+          status: passed ? "PASSED" : "UPCOMING",
+        };
+        if (diff > 0 && diff <= TWO_H) eventsNext2H.push(evtObj);
+        else if (diff > 0 && diff <= FOUR_H) eventsNext4H.push(evtObj);
+        else if (diff > 0 && diff <= TWENTY_FOUR_H) eventsNext24H.push(evtObj);
+        else if (passed && Math.abs(diff) <= TWO_H) {
+          evtObj.status = "PASSED";
+          eventsNext2H.push(evtObj);
+        }
+      }
+
+      let breakingNews: any[] = [];
+      if (FINNHUB_KEY) {
+        try {
+          const fhRes = await fetch(
+            `https://finnhub.io/api/v1/news?category=general&token=${FINNHUB_KEY}`,
+            { signal: AbortSignal.timeout(6000), headers: { "User-Agent": "CLVRQuant/2.0" } }
+          );
+          if (fhRes.ok) {
+            const fhData: any[] = await fhRes.json();
+            const twoHoursAgo = Math.floor((now - TWO_H) / 1000);
+            for (const item of (fhData || []).slice(0, 50)) {
+              if ((item.datetime || 0) < twoHoursAgo) continue;
+              const headline = (item.headline || "").toLowerCase();
+              const isHighImpact = MACRO_HIGH_IMPACT_KW.some(kw => headline.includes(kw));
+              if (!isHighImpact) continue;
+              const TRACKED = [...CRYPTO_SYMS, ...EQUITY_SYMS, "XAU", "XAG", "DXY", "USD", "EUR", "JPY", "GBP", "BTC", "OIL"];
+              const affectedAssets = TRACKED.filter(s => s.length > 2 && headline.includes(s.toLowerCase())).slice(0, 5);
+              breakingNews.push({
+                headline: item.headline,
+                source: item.source || "Finnhub",
+                time: `${Math.round((now - (item.datetime || 0) * 1000) / 60000)}min ago`,
+                impact: "HIGH",
+                affectedAssets,
+              });
+              if (breakingNews.length >= 5) break;
+            }
+          }
+        } catch {}
+      }
+
+      const killSwitch = busStatus.killSwitch || { active: false };
+      const hasHighImpact2H = eventsNext2H.some(e => e.impact === "HIGH" && e.status === "UPCOMING");
+      const hasHighBreaking = breakingNews.length > 0;
+      const hasHighImpact4H = eventsNext4H.some(e => e.impact === "HIGH" && e.status === "UPCOMING");
+
+      let status: "CLEAR" | "CAUTION" | "BLOCKED" = "CLEAR";
+      if (killSwitch.active || hasHighImpact2H) status = "BLOCKED";
+      else if (hasHighImpact4H || hasHighBreaking) status = "CAUTION";
+
+      const activeConflicts: string[] = [];
+
+      const nextUpcoming = [...eventsNext2H, ...eventsNext4H, ...eventsNext24H].find(e => e.status === "UPCOMING");
+      let summary = status === "CLEAR"
+        ? `Macro clear for next 2H.${nextUpcoming ? ` Next event: ${nextUpcoming.event} at ${nextUpcoming.time} ${nextUpcoming.date}.` : ""}`
+        : status === "CAUTION"
+        ? `Caution — ${hasHighBreaking ? "breaking macro news detected" : "HIGH-impact event within 4H"}.${nextUpcoming ? ` Next: ${nextUpcoming.event} at ${nextUpcoming.time}.` : ""}`
+        : `BLOCKED — ${killSwitch.active ? "Kill switch active" : "HIGH-impact event within 2H"}.${eventsNext2H[0] ? ` ${eventsNext2H[0].event} at ${eventsNext2H[0].time}.` : ""}`;
+
+      const result = {
+        timestamp: new Date().toISOString(),
+        status,
+        killSwitch: killSwitch.active || false,
+        eventsNext2H,
+        eventsNext4H,
+        eventsNext24H,
+        breakingNews,
+        activeConflicts,
+        summary,
+      };
+
+      macroPreflightCache.ts = now;
+      macroPreflightCache.data = result;
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: "Macro preflight failed", detail: e.message });
+    }
+  });
+
   // ── Political keyword sets for market impact classification ─────────────────
   const POLITICAL_KEYWORDS = [
     "trump","tariff","tariffs","trade war","trade deal","china","sanctions","executive order",
