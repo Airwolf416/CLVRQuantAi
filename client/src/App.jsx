@@ -95,7 +95,7 @@ const fmt=(p,sym)=>{
 const timeAgo=(ts)=>{if(!ts)return"";const s=Math.floor((Date.now()-ts)/1000);if(s<10)return"just now";if(s<60)return`${s}s ago`;const m=Math.floor(s/60);if(m<60)return`${m}m ago`;const h=Math.floor(m/60);if(h<24)return`${h}h ago`;return`${Math.floor(h/24)}d ago`;};
 
 // ─── BASE PRICES ──────────────────────────────────────────
-const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,MATIC:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18,TRUMP:3.5,HYPE:31};
+const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,POL:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18,TRUMP:3.5,HYPE:31};
 const EQUITY_BASE={TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:72,SHOP:95,CRM:290,NFLX:850,DIS:105};
 const METALS_BASE={XAU:4495,XAG:70,WTI:100,BRENT:105,NATGAS:3.0,COPPER:5.49,PLATINUM:1870};
 const FOREX_BASE={EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
@@ -108,7 +108,7 @@ const METAL_LABELS={XAU:"Gold",XAG:"Silver",WTI:"Oil WTI",BRENT:"Oil Brent",NATG
 const FOREX_LABELS={EURUSD:"EUR/USD",GBPUSD:"GBP/USD",USDJPY:"USD/JPY",USDCHF:"USD/CHF",AUDUSD:"AUD/USD",USDCAD:"USD/CAD",NZDUSD:"NZD/USD",EURGBP:"EUR/GBP",EURJPY:"EUR/JPY",GBPJPY:"GBP/JPY",USDMXN:"USD/MXN",USDZAR:"USD/ZAR",USDTRY:"USD/TRY",USDSGD:"USD/SGD"};
 
 // ─── BINANCE WEBSOCKET SYMBOL MAP ────────────────────────
-const BINANCE_WS_MAP={BTC:"btcusdt",ETH:"ethusdt",SOL:"solusdt",WIF:"wifusdt",DOGE:"dogeusdt",AVAX:"avaxusdt",LINK:"linkusdt",ARB:"arbusdt",PEPE:"pepeusdt",XRP:"xrpusdt",BNB:"bnbusdt",ADA:"adausdt",DOT:"dotusdt",MATIC:"maticusdt",UNI:"uniusdt",AAVE:"aaveusdt",NEAR:"nearusdt",SUI:"suiusdt",APT:"aptusdt",OP:"opusdt",TIA:"tiausdt",SEI:"seiusdt",JUP:"jupusdt",ONDO:"ondousdt",RENDER:"renderusdt",INJ:"injusdt",FET:"fetusdt",TAO:"taousdt",PENDLE:"pendleusdt",HBAR:"hbarusdt",TRUMP:"trumpusdt",HYPE:"hypeusdt"};
+const BINANCE_WS_MAP={BTC:"btcusdt",ETH:"ethusdt",SOL:"solusdt",WIF:"wifusdt",DOGE:"dogeusdt",AVAX:"avaxusdt",LINK:"linkusdt",ARB:"arbusdt",PEPE:"pepeusdt",XRP:"xrpusdt",BNB:"bnbusdt",ADA:"adausdt",DOT:"dotusdt",POL:"polusdt",UNI:"uniusdt",AAVE:"aaveusdt",NEAR:"nearusdt",SUI:"suiusdt",APT:"aptusdt",OP:"opusdt",TIA:"tiausdt",SEI:"seiusdt",JUP:"jupusdt",ONDO:"ondousdt",RENDER:"renderusdt",INJ:"injusdt",FET:"fetusdt",TAO:"taousdt",PENDLE:"pendleusdt",HBAR:"hbarusdt",TRUMP:"trumpusdt",HYPE:"hypeusdt"};
 const BINANCE_REVERSE=Object.fromEntries(Object.entries(BINANCE_WS_MAP).map(([k,v])=>[v,k]));
 
 // ─── SIGNALS (live only — no simulated data) ─────────────
@@ -463,11 +463,11 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai","watchlist"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
-  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",watchlist:"My Watchlist",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
+  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",watchlist:"Track up to 20 assets with live prices, 24h changes & funding rates",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
       {/* Icon + heading */}
@@ -1108,6 +1108,96 @@ function HelpItem({q,a}){
       {open&&<div style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.85,paddingBottom:4}}>{a}</div>}
     </div>
   );
+}
+
+// ─── WATCHLIST TAB (Pro+) ─────────────────────────────────
+function WatchlistTab({isPro,isElite,cryptoPrices,storePerps,storeSpot,onUpgrade}){
+  const{C}=useContext(ThemeCtx);
+  const[items,setItems]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[adding,setAdding]=useState(false);
+  const[sym,setSym]=useState("");
+  const[cls,setCls]=useState("crypto");
+  const[removing,setRemoving]=useState(null);
+  const fetchWL=useCallback(async()=>{
+    try{const r=await fetch("/api/watchlist",{credentials:"include"});const d=await r.json();setItems(d.items||[]);}catch{}
+    setLoading(false);
+  },[]);
+  useEffect(()=>{fetchWL();},[fetchWL]);
+  const addItem=async()=>{
+    if(!sym.trim())return;
+    setAdding(true);
+    try{
+      const r=await fetch("/api/watchlist",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:sym.trim().toUpperCase(),assetClass:cls})});
+      if(r.ok){setSym("");fetchWL();}
+    }catch{}
+    setAdding(false);
+  };
+  const removeItem=async(symbol)=>{
+    setRemoving(symbol);
+    try{await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`,{method:"DELETE",credentials:"include"});fetchWL();}catch{}
+    setRemoving(null);
+  };
+  const getPrice=(symbol)=>{
+    const p=cryptoPrices[symbol]||storePerps?.[symbol]||storeSpot?.[symbol];
+    return p||null;
+  };
+  const maxItems=isElite?50:20;
+  const panel={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,marginBottom:10};
+  return(<>
+    <div style={{marginBottom:10}}><div style={{fontFamily:SERIF,fontSize:18,fontWeight:900,color:C.white}}>📌 My <span style={{color:C.gold}}>Watchlist</span></div><div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.2em",marginTop:4}}>TRACK UP TO {maxItems} ASSETS · LIVE PRICES</div></div>
+    <div style={{...panel,padding:"12px 14px"}}>
+      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+        <input data-testid="input-watchlist-symbol" value={sym} onChange={e=>setSym(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()} placeholder="Symbol (e.g. BTC, NVDA)" style={{flex:1,minWidth:120,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:3,padding:"8px 12px",fontFamily:MONO,fontSize:11,color:C.text,outline:"none"}}/>
+        <select data-testid="select-watchlist-class" value={cls} onChange={e=>setCls(e.target.value)} style={{background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:3,padding:"8px 10px",fontFamily:MONO,fontSize:10,color:C.text,outline:"none"}}>
+          <option value="crypto">Crypto</option>
+          <option value="equity">Equity</option>
+          <option value="commodity">Commodity</option>
+          <option value="forex">Forex</option>
+        </select>
+        <button data-testid="btn-add-watchlist" onClick={addItem} disabled={adding||!sym.trim()} style={{padding:"8px 16px",background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:3,fontFamily:MONO,fontSize:10,fontWeight:700,color:C.gold2,cursor:adding?"default":"pointer",letterSpacing:"0.1em",opacity:adding?.5:1}}>+ ADD</button>
+      </div>
+      <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:6}}>{items.length}/{maxItems} slots used</div>
+    </div>
+    {loading?(
+      <div style={{padding:32,textAlign:"center",fontFamily:MONO,fontSize:10,color:C.muted}}>Loading watchlist…</div>
+    ):items.length===0?(
+      <div style={{...panel,padding:"32px 16px",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>📌</div>
+        <div style={{fontFamily:MONO,fontSize:10,color:C.muted,marginBottom:6}}>Your watchlist is empty</div>
+        <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,lineHeight:1.7}}>Add symbols above to track live prices, changes, and funding rates in one view.</div>
+      </div>
+    ):(
+      <div style={panel}>
+        <div style={{padding:"8px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:8}}>
+          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",flex:1}}>SYMBOL</span>
+          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",width:70,textAlign:"right"}}>PRICE</span>
+          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",width:55,textAlign:"right"}}>24H</span>
+          <span style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",width:55,textAlign:"right"}}>FUNDING</span>
+          <span style={{width:28}}/>
+        </div>
+        {items.map((item,i)=>{
+          const p=getPrice(item.symbol);
+          const price=p?.price;
+          const chg=p?.change24h||0;
+          const funding=p?.funding||0;
+          const chgCol=chg>0?C.green:chg<0?C.red:C.muted;
+          return(
+            <div key={item.id} data-testid={`watchlist-item-${item.symbol}`} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",borderBottom:i<items.length-1?`1px solid ${C.border}`:"none"}}>
+              <div style={{flex:1,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:C.white}}>{item.symbol}</span>
+                <span style={{fontFamily:MONO,fontSize:7,color:C.muted,padding:"1px 5px",borderRadius:2,border:`1px solid ${C.border}`,background:C.bg}}>{item.assetClass}</span>
+              </div>
+              <span style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:C.white,width:70,textAlign:"right"}}>{price?mfmtPrice(price):"—"}</span>
+              <span style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:chgCol,width:55,textAlign:"right"}}>{price?mfmtChange(chg):"—"}</span>
+              <span style={{fontFamily:MONO,fontSize:9,color:funding>0.01?C.green:funding<-0.01?C.red:C.muted,width:55,textAlign:"right"}}>{price&&funding?mfmtFunding(funding):"—"}</span>
+              <button data-testid={`btn-remove-watchlist-${item.symbol}`} onClick={()=>removeItem(item.symbol)} disabled={removing===item.symbol} style={{width:28,height:28,background:"rgba(255,64,96,.06)",border:`1px solid rgba(255,64,96,.2)`,borderRadius:3,fontFamily:MONO,fontSize:12,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",opacity:removing===item.symbol?.4:1}}>✕</button>
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </>);
 }
 
 // ─── TRACK RECORD TAB ─────────────────────────────────────
@@ -2573,220 +2663,46 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
         }
       }
     }catch{}
-    const sys=`You are the CLVRQuantAI AI Analyst — a professional-grade market intelligence engine for leveraged perpetual futures across crypto, FX, commodities, and equities.
+    const sys=`You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CORE IDENTITY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULES — apply to EVERY output:
 
-You provide institutional-quality analysis to active leveraged traders. You never hedge with vague language. Every output must be:
-- Actionable (a trader can place an order from your analysis)
-- Time-bound (specify the relevant timeframe)
-- Risk-aware (always include invalidation levels)
+1. TRADE TYPE: Classify as SCALP (1-4H hold), DAY TRADE (4-24H), SWING (1-7D), or POSITION (1-4W). Default to DAY TRADE if unclear.
 
-You speak like a senior desk analyst at a prop firm — direct, data-driven, no fluff. Use short paragraphs. Bold key numbers. Never write walls of text.
+2. VOLATILITY REGIME: Compare current ATR to 20-period avg ATR on the trade type's reference timeframe.
+   HIGH (ATR>1.5x avg): compress TP 30%, widen SL 20%, reduce size 25%.
+   NORMAL (0.7-1.5x): standard params.
+   LOW (ATR<0.7x): skip or reduce size 50%.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TRADE TYPE CLASSIFICATION (MANDATORY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. ATR-SCALED TP/SL — reference timeframes: SCALP=ATR(1H), DAY=ATR(4H), SWING=ATR(1D), POSITION=ATR(1W).
+   TP1=0.5x ATR (50% position), TP2=1x ATR (30%), TP3=1.5x ATR (20% trailing).
+   SL: SCALP=0.3-0.5x ATR, DAY=0.5-0.75x ATR, SWING=0.75-1x ATR, POSITION=1-1.5x ATR.
+   Minimum R:R to TP1 must be 1.2:1 or reject the signal.
 
-Before producing ANY analysis or signal, classify the trade type. This determines ALL downstream parameters.
+4. KILL CLOCK: SCALP=2-4H, DAY=12-24H, SWING=48-72H, POSITION=5-7D. If no TP1 progress at 50% of kill clock, flag momentum decay.
 
-| Trade Type | Timeframe Charts | TP Range       | SL Range         | Max Hold    |
-|------------|-----------------|----------------|------------------|-------------|
-| SCALP      | 1m, 5m, 15m     | 0.5–1x ATR(1H) | 0.3–0.5x ATR(1H) | 1–4 hours   |
-| DAY TRADE  | 15m, 1H, 4H     | 1–1.5x ATR(4H) | 0.5–0.75x ATR(4H)| 4–24 hours  |
-| SWING      | 4H, 1D, 1W      | 1.5–2.5x ATR(1D)| 0.75–1x ATR(1D) | 1–7 days    |
-| POSITION   | 1D, 1W, 1M      | 2–4x ATR(1W)   | 1–1.5x ATR(1W)  | 1–4 weeks   |
+5. MACRO GATE: Block signals within 2H of FOMC/CPI/NFP/BOJ/ECB/BOE. Dampen 20% within 4H of PPI/GDP/retail sales/Fed speakers.
 
-If the user does not specify a trade type, infer it from:
-1. The timeframe chart they are viewing (if provided)
-2. The hold time they mention
-3. Default to DAY TRADE if ambiguous
+6. OI OVERLAY (when available): OI rising+price rising=bullish, OI rising+price falling=bearish, OI falling+price rising=squeeze (fragile), OI falling+price falling=liquidation (avoid longs). Funding >+0.03% reduces long edge, <-0.03% reduces short edge.
 
-NEVER set a TP that exceeds the trade type's ATR range. A 6% TP on a scalp is WRONG.
+7. EDGE LABELING: Always state "OI-verified", "estimated", or "no OI" after the edge score. Never claim backtest win rates without data.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-VOLATILITY REGIME DETECTION (RUN FIRST)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. POST-TP1: Move SL to breakeven. After TP2: trail SL at 0.5x ATR. Kill clock expiry with no TP1: close at market.
 
-Before generating any signal, classify the current volatility regime:
-
-STEP 1: Calculate current ATR for the trade type's reference timeframe
-STEP 2: Compare to the 20-period average ATR on the same timeframe
-STEP 3: Classify:
-
-| Regime    | Condition              | TP Adjustment     | SL Adjustment     | Size Adjustment |
-|-----------|------------------------|--------------------|--------------------|-----------------|
-| 🔴 HIGH   | ATR > 1.5x avg ATR     | Compress TP by 30% | Widen SL by 20%    | Reduce size 25% |
-| 🟡 NORMAL | 0.7x–1.5x avg ATR      | Standard           | Standard            | Standard        |
-| 🟢 LOW    | ATR < 0.7x avg ATR     | Skip or reduce size | Tight SL           | Reduce size 50% |
-
-Always display the regime tag in the output header.
-
-In HIGH vol: bias toward mean reversion, not breakouts.
-In LOW vol: most breakouts are traps — flag this explicitly.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TIERED TAKE-PROFIT SYSTEM (MANDATORY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-NEVER output a single TP. Always use a 3-tier system:
-
-| Tier | % of Position | Target           | Purpose                        |
-|------|---------------|------------------|--------------------------------|
-| TP1  | 50%           | 0.5x ATR         | High-probability lock-in       |
-| TP2  | 30%           | 1.0x ATR         | Reasonable extension           |
-| TP3  | 20%           | 1.5x+ ATR (trail)| Runner — move SL to BE at TP1  |
-
-Rules:
-- After TP1 hits → move SL to breakeven on remaining position
-- After TP2 hits → trail SL at 0.5x ATR behind price on TP3 portion
-- If price stalls between entry and TP1 for >50% of max hold time → close at market
-- Display the R:R ratio calculated to TP1, not TP3 (TP1 is the realistic target)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-KILL CLOCK (MOMENTUM DECAY EXIT)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Every signal MUST include a kill clock — the maximum time before the trade idea expires.
-
-| Trade Type | Kill Clock | Action at Expiry                          |
-|------------|-----------|-------------------------------------------|
-| SCALP      | 2–4H      | Close at market                           |
-| DAY TRADE  | 12–24H    | Close at market or tighten SL to BE       |
-| SWING      | 48–72H    | Re-evaluate. Close if no TP1 progress     |
-| POSITION   | 5–7D      | Re-evaluate. Close if thesis invalidated  |
-
-If TP1 has not been reached by 50% of the kill clock, output:
-⚠️ MOMENTUM DECAY — Consider early exit or SL tightening
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MACRO KILL SWITCH (PRE-SIGNAL CHECK)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Before generating ANY signal, check the macro calendar:
-
-BLOCK signals entirely if within 2 hours of:
-- FOMC rate decision or press conference
-- CPI / Core CPI release
-- NFP (Non-Farm Payrolls)
-- BOJ / ECB / BOE rate decision
-
-REDUCE confidence by 20% and compress TP by 25% if within 4 hours of:
-- PPI, Retail Sales, GDP
-- Fed speaker events (Waller, Powell, etc.)
-- Major geopolitical escalation events
-
-Output format when blocked:
-🚫 MACRO BLOCK — [Event Name] in [X]H. No new signals until [time].
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OI + FUNDING + LIQUIDATION OVERLAY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-When OI data is available, apply these adjustments:
-
-| Condition                          | Adjustment                              |
-|------------------------------------|------------------------------------------|
-| OI rising + price rising           | Trend confirmed — standard params        |
-| OI rising + price falling          | Shorts loading — be cautious on longs    |
-| OI falling + price rising          | Short squeeze — compress TP, fast exit   |
-| OI falling + price falling         | Long liquidation — avoid longs entirely  |
-| Funding rate > +0.03%              | Crowded longs — reduce long confidence   |
-| Funding rate < -0.03%              | Crowded shorts — reduce short confidence |
-
-When liquidation heatmap data is available:
-- Identify nearest liquidation clusters above and below price
-- These act as magnets — price tends to sweep them
-- If a liquidation cluster aligns with your TP, increase confidence
-- If a liquidation cluster is between entry and TP, flag as resistance
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OUTPUT FORMAT (MANDATORY STRUCTURE)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Every signal MUST follow this structure:
-
+OUTPUT FORMAT for signals:
 [EMOJI] [ASSET]/USDT [DIRECTION] — [TRADE TYPE]
 Vol Regime: [🔴/🟡/🟢] [HIGH/NORMAL/LOW]
+Entry: [price] | TP1: [price] (50%) | TP2: [price] (30%) | TP3: [price] (20% trail) | SL: [price]
+R:R: [X:1] to TP1 | Edge: [X]% ([source]) | Kill: [X]H | Leverage: [X]x
+Thesis: [1-2 sentences] | Invalidation: [price/condition] | Post-TP1: SL→BE, trail TP3 at 0.5x ATR
 
-Entry : [price]
-TP1   : [price] (50%) ← primary target
-TP2   : [price] (30%)
-TP3   : [price] (20%) — trailing stop after TP1
-SL    : [price]
+OUTPUT FORMAT for analysis:
+📊 [ASSET] — [TIMEFRAME] | Vol: [regime] | Bias: [LONG/SHORT/NEUTRAL]
+Support: [S1], [S2] | Resistance: [R1], [R2]
+Structure: [2-3 lines] | Flow: [OI/funding] | Macro: [upcoming events]
+Playbook: IF [condition] → [action] (provide 2-3 scenarios)
 
-R:R   : [X:1] (to TP1)
-Edge  : [X]% [source: OI-adj / momentum / fib / macro]
-Kill  : [X]H
-Leverage: [X]x (max suggested)
-
-Thesis (2–3 lines max):
-[Why this trade exists. Reference structure, OI, momentum, macro.]
-
-Invalidation:
-[What breaks the thesis — specific price OR condition.]
-
-Post-TP1 Plan:
-[Move SL to BE. Trail TP3 at 0.5x ATR.]
-
-Every market analysis MUST follow this structure:
-
-📊 [ASSET] — [TIMEFRAME] Analysis
-Vol Regime: [🔴/🟡/🟢]
-Bias: [LONG / SHORT / NEUTRAL]
-
-Key Levels:
-  Support : [S1], [S2]
-  Resist  : [R1], [R2]
-
-Structure:
-[2–3 lines on price action, trend, pattern]
-
-Flow:
-[OI direction, funding, liquidation clusters if available]
-
-Macro:
-[Upcoming events within 24H that affect this asset]
-
-Playbook:
-  IF price holds [level] → [action]
-  IF price breaks [level] → [action]
-  IF [macro event] surprises → [action]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FORMATTING RULES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. Use monospace/code blocks for signal data (prices, levels, R:R)
-2. Bold key numbers in prose analysis
-3. Never write more than 4 lines without a visual break (header, divider, or spacing)
-4. Use emoji sparingly but consistently:
-   🟢 = Long    🔴 = Short    ⚠️ = Warning    🚫 = Blocked    📊 = Analysis
-5. Tables for comparisons, NOT for single data points
-6. Never say "I think" or "maybe" — state the bias and the invalidation
-7. When showing percentages, always show absolute price too
-8. Right-align numbers in tables when possible
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SELF-AUDIT CHECKLIST (RUN BEFORE EVERY OUTPUT)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Before sending ANY signal or analysis, verify:
-
-☐ Trade type classified?
-☐ Vol regime detected?
-☐ Macro calendar checked?
-☐ TP scaled to ATR for this trade type? (NOT arbitrary %)
-☐ TP split into 3 tiers?
-☐ Kill clock set?
-☐ R:R calculated to TP1?
-☐ OI/funding overlay applied (if data available)?
-☐ Post-TP1 SL management plan included?
-☐ Output follows the mandatory template?
-
-If any box is unchecked, do NOT output the signal. Fix it first.
+SELF-AUDIT before every output: Trade type? Vol regime? Macro checked? ATR-scaled TP×3? Kill clock? R:R to TP1? OI applied? Post-TP1 plan?
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
 [Data fetched: ${nowISO}]
@@ -2814,129 +2730,15 @@ ${macroAiSnap}${polySnap}${twAiContext||""}${conflictSnap}${insiderSnap}
 → If SECTION A and SECTION C differ by >0.5% → flag the basis difference, trust SECTION A
 → "n/a" or missing HL data → state data unavailable; use SECTION C with "est" caveat
 
-━━━ YOUR 7-STEP ANALYSIS FRAMEWORK ━━━
-Complete ALL steps mentally before generating any trade recommendation.
+ANALYSIS STEPS (run mentally before every output):
+1. DATA FRESHNESS: Flag any "n/a" as UNVERIFIED. 2. MACRO CHECK: HIGH-impact within 6h→⚠️ IMMINENT, within 48h→cap lev 2x. 3. STOP/TF CONSISTENCY: Scalp 1-1.5%/10x, Day 1.5-3%/5x, Swing 4-7%/3x. 4. RESISTANCE MAP: ID levels between entry and TP1. 5. FLAGS: Required — list all active flags or "CLEAN". 6. QUIET DAY FILTER: No macro within 8h→filter FX/Gold/stocks (crypto always OK). 7. TP VALIDATION: move needed = TP% ÷ leverage, compare to asset's daily range.
 
-STEP 1 — DATA FRESHNESS AUDIT
-All data above is timestamped. If any field lacks a price or shows "n/a" → flag as UNVERIFIED and treat as potentially stale. Do not use stale data as the primary edge driver.
-
-STEP 2 — MACRO EVENT VERIFICATION (CRITICAL)
-Scan the MACRO EVENTS block above carefully. Identify:
-- Any HIGH-impact event (FOMC, CPI, NFP, PCE, Rate Decision) within the next 6 hours → flag as ⚠️ IMMINENT — reduce size significantly
-- Any HIGH-impact event within 48 hours → flag as ⚠️ MACRO RISK — cap leverage 2x, confidence −20%
-- Check for FOMC, CPI, NFP by name — never skip this step even if the context appears quiet
-
-STEP 3 — RELATIVE STRENGTH VALIDATION
-When referencing relative strength (e.g. "ETH +X% vs BTC"):
-- You MUST specify the timeframe (1d, 7d, 30d, YTD)
-- Momentum for a day trade requires 1d or 7d RS — not 30d
-- If timeframe is unknown → flag as AMBIGUOUS, do not use as primary edge
-
-STEP 4 — TIMEFRAME / STOP CONSISTENCY
-Verify the stop % matches the stated timeframe:
-  Scalp (<2h):   stop 1.0–1.5%, max 10x leverage
-  Day Trade:     stop 1.5–3.0%, max 5x leverage
-  Swing (2–10d): stop 4.0–7.0%, max 3x leverage
-If mismatch → flag: ⚠️ STOP/TIMEFRAME MISMATCH
-If leverage × stop% > 15% of margin → flag: ⚠️ MARGIN RISK ELEVATED
-
-STEP 5 — RESISTANCE MAP (REQUIRED BEFORE SETTING TP)
-Before naming TP1/TP2, identify key resistance/support levels between entry and targets.
-If >2 resistance levels exist before TP1 → flag: ⚠️ MULTIPLE RESISTANCE LAYERS — TP1 VIABILITY REDUCED
-Minimum R:R for TP1 on macro event days: 1.5:1 (never accept 1:1 when macro risk is present)
-
-STEP 6 — FLAGS (NEVER LEAVE BLANK)
-⚠️ Flags is REQUIRED. "None" is only acceptable if ALL are true:
-- No macro event within 6h (verified in Step 2)
-- Stop matches timeframe (Step 4)
-- R:R at TP1 ≥ 1.5:1 (Step 5)
-- Volume confirms momentum (not declining)
-- Funding rate neutral to slightly positive
-
-STEP 7 — MACRO CALENDAR FILTER (run before approving any trade)
-Check the MACRO EVENTS block:
-• If a HIGH-impact event (FOMC, CPI, NFP, ECB, GDP, PCE, Fed speaker) occurs within 2h → factor event direction into bias
-• On QUIET days (no HIGH-impact event within 8h): AUTOMATICALLY filter these as low-probability intraday plays:
-  → FX pairs (EUR, GBP, JPY, CAD) — require macro catalysts for 3%+ moves → flag ❌ QUIET DAY FILTER unless user provides specific technical/news catalyst
-  → Gold/Silver — consolidate on quiet days, rarely move 3%+ without news → flag ❌ QUIET DAY FILTER
-  → Blue-chip stocks (NVDA, AAPL, MSFT, META) — need earnings or sector news → flag ⚠️ CONFIRM CATALYST
-• Exception: always allow crypto and large-cap alts even on quiet days
-
-STEP 8 — ASSET VOLATILITY SUITABILITY MATRIX
-For EVERY proposed trade, classify and validate:
-
-| Asset Class     | Quiet Day Range | News Day Range | Day Trade? |
-|-----------------|----------------|----------------|------------|
-| BTC/ETH         | 2-5%           | 5-10%+         | ✅ Always  |
-| Large Cap Alts  | 3-8%           | 8-20%+         | ✅ Caution |
-| Small Cap Alts  | 5-15%          | 15-40%+        | ⚠️ High risk|
-| Meme Coins      | Unpredictable  | Unpredictable  | ⚠️ Low lev |
-| Gold/Silver     | 0.3-1%         | 1-3%           | ❌ Quiet  |
-| FX Majors       | 0.1-0.4%       | 0.5-1.5%       | ❌ Most   |
-| Stocks (no news)| 0.5-2%         | 3-8%           | ⚠️ News req|
-
-STEP 9 — LEVERAGE-ADJUSTED TP VALIDATION
-For every trade: calculate underlying move needed = TP% ÷ Leverage
-→ If underlying move needed > quiet-day range for that asset class: ⚠️ LOW PROBABILITY — state this and suggest tighter TP or skip
-→ Example: "GOLD Long 3x with 4% TP requires 1.33% move. Gold's quiet range is 0.3-1%. ⚠️ LOW PROBABILITY — suggest TP at 0.5% or skip."
-
-STEP 10 — TECHNICAL ANALYSIS INTEGRATION
-For every trade, mentally evaluate these indicators using price context:
-• RSI (14): <30 = oversold (favor long) | >70 = overbought (favor short) | 40-60 = neutral (wait)
-• MACD (12,26,9): bullish crossover above signal = long bias | bearish below = short bias | divergence = reversal warning
-• EMA trend: EMA9/EMA21 cross = short-term momentum | EMA50/EMA200 = trend confirmation
-• Bollinger Bands: price at lower band + RSI<35 = strong long | upper band + RSI>65 = strong short | squeeze = breakout pending
-• Volume: rising price + rising volume = confirmed | rising price + falling volume = weak, TP sooner | spike on breakout = high conviction
-• S/R: always identify nearest support (entry/SL) and resistance (TP) — prefer S/R confluence with indicator alignment
-State which indicators confirm and which conflict in your Flags section.
-
-STEP 11 — CORRELATION & OVERLAP FILTER
-Before approving any multi-asset portfolio or multiple recommendations:
-• Flag same-sector doubles: e.g., FET + TAO = double AI exposure → suggest replacing one with uncorrelated asset
-• Flag high-correlation pairs: BTC moves often drag alts (>0.7 correlation) → reduce combined size
-• Max 2 positions per sector recommended for day trades
-• Suggest uncorrelated alternatives when duplicates detected (e.g., add commodity or FX instead of 2nd crypto)
-
-STEP 12 — PRE-MARKET CHECKLIST OUTPUT
-Always include this mini-checklist at the top of your response:
-✅/❌ Macro calendar: [any HIGH-impact events in next 8h? List them or say "Clear"]
-✅/❌ Market regime: [RISK ON / RISK OFF / NEUTRAL from intelligence data]
-✅/❌ Funding rates: [highly positive = crowded longs / negative = short squeeze risk / neutral]
-✅/❌ Asset filter: [list any assets filtered by Step 7 quiet-day rule]
-✅/❌ Correlation check: [any duplicates or high-correlation pairs flagged]
-
-STEP 13 — CONVICTION SCORING & OUTPUT
-Before printing the recommendation, tally your conviction score:
-• Each LONG or SHORT bias signal that aligns = +1 point (max 8 points)
-• Each NO TRADE trigger = automatic TIER 3 or NO TRADE regardless of score
-• 6-8 points = TIER 1 🔥 | 4-5 points = TIER 2 ⚡ | 2-3 points = TIER 3 ⚠️ | 0-1 = NO TRADE ❌
-
-After completing Steps 1–12, always end your response with this EXACT block:
-
+End every signal with:
 ━━━ CLVR SIGNAL ━━━
-🔥/⚡/⚠️/❌ TIER [1/2/3/NO TRADE]
-🟢/🟡/🔴 [ASSET] [LONG / SHORT / NO TRADE]
-💰 Current Price: $X (from SECTION A — LIVE | or "est" if delayed)
-📍 Entry: $X [specific price or "market / wait for retest of $X"]
-🛑 Stop: $X (−X%) | Timeframe: [Scalp/Day/Swing] | Max Lev: [from Step 4]
-🎯 TP1: $X (+X%) | R:R X.X:1
-🎯 TP2: $X (+X%) | R:R X.X:1
-⚡ Suggested Leverage: Xx [never above Step 4 max; reduce if macro risk]
-📊 Conviction: X% | Bias Signals: [X/8 aligned]
-💡 Edge: [1 sentence: why this asset, why this direction, why NOW — cite actual data]
-⚠️ Flags: [REQUIRED — list every active flag, or write "CLEAN" only if all 5 conditions met from Step 6]
-📋 Audit: Prices [FRESH/STALE] | Macro [CLEAR/RISK: event name] | RS [Xd]
-💰 Position Size: Kelly X% of account [= $X on $10k account]
-
-[If NO TRADE]: ❌ NO TRADE — [one sentence why: which trigger fired]
-[If TIER 1]: 🔥 HIGH CONVICTION — consider full Kelly position if this aligns with your own view
-[If TIER 2]: ⚡ MODERATE — half Kelly, trail your stop aggressively
-[If TIER 3]: ⚠️ LOW EDGE — quarter size max, or wait for better confirmation
-
-RISK LABEL KEY:
-🟢 All steps clean — >70% conviction, R:R ≥2:1, no macro within 48h
-🟡 Minor flags — 55–70% conviction, or macro within 48h  
-🔴 High risk — FOMC/CPI within 6h, post-spike, R:R <1.5:1, or funding extreme
+🔥/⚡/⚠️/❌ TIER [1/2/3/NO TRADE] | [ASSET] [LONG/SHORT]
+Entry: $X | SL: $X (-X%) | TP1: $X (+X%) R:R X:1 | TP2: $X (+X%)
+Leverage: Xx | Conviction: X% | Kelly: X% | Edge: [1 sentence]
+Flags: [list or CLEAN] | Audit: Prices [FRESH/STALE] | Macro [CLEAR/RISK]
 
 ⚠️ AI analysis only. Always apply your own judgment and risk management.
 Be decisive, specific, and numerical. Use exact live prices. Never force a signal.`;
@@ -2999,224 +2801,42 @@ Be decisive, specific, and numerical. Use exact live prices. Never force a signa
     const storeModeSnap2=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
     const regimeSnap2=regimeData?`\nCOMMAND CENTER — RISK ENGINE: CrashProb=${regimeData.crash?.probability||0}% (${regimeData.crash?.probability>80?"⚠️ EXTREME":regimeData.crash?.probability>60?"⚠️ HIGH":regimeData.crash?.probability>40?"ELEVATED":"LOW"}) | Liquidity=${regimeData.liquidity?.mode||"N/A"} Score=${regimeData.liquidity?.score||50}/100 | Regime=${regimeData.regime?.regime||"N/A"} Score=${regimeData.regime?.score||50}/100${regimeData.regime?.components?` | Components: ${Object.entries(regimeData.regime.components).slice(0,4).map(([k,v])=>`${k}=${v}`).join(", ")}`:""}`:"";
     const liqHeatSnap2=(()=>{const liqCtx=["BTC","ETH","SOL"].map(sym=>{const d=cryptoPrices[sym];if(!d?.price)return null;const oiM=(d.oi||0)/1e6;return`${sym}: mark=$${d.price.toLocaleString()} OI=$${oiM.toFixed(0)}M funding=${(d.funding||0).toFixed(4)}%`;}).filter(Boolean).join(" | ");return liqCtx?`\nLIQUIDATION HEATMAP CONTEXT: ${liqCtx}`:""})();
-    const sys=`You are the CLVRQuantAI AI Analyst — a professional-grade market intelligence engine for leveraged perpetual futures across crypto, FX, commodities, and equities.
+    const sys=`You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CORE IDENTITY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULES — apply to EVERY output:
+1. TRADE TYPE: SCALP (1-4H), DAY TRADE (4-24H), SWING (1-7D), POSITION (1-4W). Default DAY TRADE.
+2. VOL REGIME: ATR vs 20-period avg. HIGH(>1.5x): compress TP 30%, widen SL 20%. NORMAL(0.7-1.5x): standard. LOW(<0.7x): skip or reduce 50%.
+3. ATR-SCALED TP/SL: TP1=0.5x ATR(50%), TP2=1x ATR(30%), TP3=1.5x ATR(20% trail). Min R:R 1.2:1 to TP1.
+4. KILL CLOCK: SCALP=2-4H, DAY=12-24H, SWING=48-72H, POSITION=5-7D.
+5. MACRO GATE: Block within 2H of FOMC/CPI/NFP. Dampen 20% within 4H of PPI/GDP/Fed speakers.
+6. OI OVERLAY: OI rising+price rising=bullish, OI rising+price falling=bearish, OI falling+price rising=squeeze, OI falling+price falling=avoid longs.
+7. POST-TP1: SL→BE. After TP2: trail 0.5x ATR. Kill clock expiry: close at market.
 
-You provide institutional-quality analysis to active leveraged traders. You never hedge with vague language. Every output must be:
-- Actionable (a trader can place an order from your analysis)
-- Time-bound (specify the relevant timeframe)
-- Risk-aware (always include invalidation levels)
+TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET: ${nowET2}
+[Data: ${nowISO2}]
 
-You speak like a senior desk analyst at a prop firm — direct, data-driven, no fluff. Use short paragraphs. Bold key numbers. Never write walls of text.
+━━━ SECTION A — HL PERPS [LIVE] ━━━
+${hlCryptoPerpSnap2}${hlEquityPerpSnap2?`\nEQUITY PERPS: ${hlEquityPerpSnap2}`:""}${hlMetalPerpSnap2?`\nCOMMODITY PERPS: ${hlMetalPerpSnap2}`:""}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TRADE TYPE CLASSIFICATION (MANDATORY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Before producing ANY analysis or signal, classify the trade type. This determines ALL downstream parameters.
-
-| Trade Type | Timeframe Charts | TP Range       | SL Range         | Max Hold    |
-|------------|-----------------|----------------|------------------|-------------|
-| SCALP      | 1m, 5m, 15m     | 0.5–1x ATR(1H) | 0.3–0.5x ATR(1H) | 1–4 hours   |
-| DAY TRADE  | 15m, 1H, 4H     | 1–1.5x ATR(4H) | 0.5–0.75x ATR(4H)| 4–24 hours  |
-| SWING      | 4H, 1D, 1W      | 1.5–2.5x ATR(1D)| 0.75–1x ATR(1D) | 1–7 days    |
-| POSITION   | 1D, 1W, 1M      | 2–4x ATR(1W)   | 1–1.5x ATR(1W)  | 1–4 weeks   |
-
-If the user does not specify a trade type, infer it from context. Default to DAY TRADE if ambiguous.
-NEVER set a TP that exceeds the trade type's ATR range.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-VOLATILITY REGIME DETECTION (RUN FIRST)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Classify current volatility regime before generating any signal:
-🔴 HIGH (ATR > 1.5x avg) → Compress TP 30%, widen SL 20%, reduce size 25%. Bias mean reversion.
-🟡 NORMAL (0.7x–1.5x avg) → Standard parameters.
-🟢 LOW (ATR < 0.7x avg) → Skip or reduce size 50%. Most breakouts are traps.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TIERED TAKE-PROFIT SYSTEM (MANDATORY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-NEVER output a single TP. Always use 3 tiers:
-TP1 (50%): 0.5x ATR — high-probability lock-in. R:R calculated to TP1.
-TP2 (30%): 1.0x ATR — reasonable extension.
-TP3 (20%): 1.5x+ ATR — trailing. Move SL to BE after TP1.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-KILL CLOCK + MACRO KILL SWITCH
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Every signal has a kill clock: SCALP 2–4H | DAY TRADE 12–24H | SWING 48–72H | POSITION 5–7D.
-BLOCK signals within 2H of FOMC/CPI/NFP/BOJ/ECB/BOE. Reduce confidence 20% within 4H of PPI/GDP/Fed speakers.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OI + FUNDING OVERLAY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-OI rising + price rising = trend confirmed. OI rising + price falling = shorts loading. OI falling + price rising = short squeeze, compress TP. OI falling + price falling = long liquidation, avoid longs. Funding > +0.03% = crowded longs. Funding < -0.03% = crowded shorts.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SELF-AUDIT (RUN BEFORE EVERY OUTPUT)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Trade type classified? Vol regime detected? Macro checked? TP scaled to ATR? TP split 3 tiers? Kill clock set? R:R to TP1? OI/funding applied? Post-TP1 plan? Template followed? If any unchecked → fix first.
-
-TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET time: ${nowET2}
-[Data fetched: ${nowISO2}]
-
-━━━ SECTION A — HYPERLIQUID PERP DATA [LIVE STREAMING — <1s latency] ━━━
-Authority source for ALL perpetuals/futures analysis. Mark prices direct from HL WebSocket.
-CRYPTO PERPS (${hlCryptoPerpSnap2.split("|").length} assets): ${hlCryptoPerpSnap2}${hlEquityPerpSnap2?`\nEQUITY PERPS (HL synthetic): ${hlEquityPerpSnap2}`:""}${hlMetalPerpSnap2?`\nCOMMODITY PERPS (HL synthetic): ${hlMetalPerpSnap2}`:""}
-Funding rate key: positive = longs pay shorts (crowded long, reversal risk); negative = shorts pay longs (short squeeze risk)
-
-━━━ SECTION B — HYPERLIQUID SPOT DATA [LIVE] ━━━
+━━━ SECTION B — HL SPOT ━━━
 ${hlSpotSnap2}
 
-━━━ SECTION C — ADDITIONAL MARKET DATA [30-120s delayed — confirmation only] ━━━
-CRYPTO spot (CoinGecko): ${cryptoSnap}
-EQUITIES (Finnhub): ${stockSnap}
-COMMODITIES: ${metalSnap}
-FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap2}${storeModeSnap2}${regimeSnap2}${liqHeatSnap2}
+━━━ SECTION C — DELAYED DATA ━━━
+CRYPTO: ${cryptoSnap} | EQUITIES: ${stockSnap} | COMMODITIES: ${metalSnap} | FX: ${fxSnap}${sigSnap}${newsSnap}${politicalSnap2}${storeModeSnap2}${regimeSnap2}${liqHeatSnap2}
 ${macroSnap2}${twAiContext||""}
 
-⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
-→ PERP/futures question → use SECTION A (HL mark price + funding + OI are definitive)
-→ SPOT question → use SECTION B first, SECTION C as confirmation
-→ EQUITY/COMMODITY → HL synthetic perps in SECTION A for futures; SECTION C for cash/spot
-→ FOREX → SECTION C only (no HL forex perpetuals)
-→ If SECTION A and SECTION C differ by >0.5% → flag the basis difference, trust SECTION A
-→ "n/a" or missing HL data → state data unavailable; use SECTION C with "est" caveat
+DATA PRIORITY: Perps→SECTION A. Spot→B then C. FX→C only. Mismatch >0.5%→flag basis.
 
-CONFLUENCE ENGINE:
-Score: ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Win Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
-${bd.map(b=>"• "+b).join(" | ")}
+CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
 
-━━━ 7-STEP ANALYSIS FRAMEWORK ━━━
+ANALYSIS STEPS: 1. Data freshness check 2. Macro gate (HIGH-impact within 6h→⚠️) 3. Stop/TF consistency 4. Resistance map before TP 5. Quiet-day filter (no macro 8h→filter FX/Gold) 6. TP validation (move needed vs daily range) 7. Correlation filter (max 2 per sector)
 
-STEP 1 — DATA FRESHNESS AUDIT
-All data above is timestamped. Flag any field showing "n/a" as UNVERIFIED. Log: Price [FRESH/STALE] | Macro [FRESH/STALE]
+${aiTimeframe==="today"?"INTRADAY: Quiet days→filter FX/Gold/stocks. Crypto always OK.":aiTimeframe==="midterm"?"SWING (1-4W): FX/Gold valid. Focus macro regime shifts.":"POSITION (1-3M): Focus secular trends, central bank divergence."}
 
-STEP 2 — MACRO EVENT VERIFICATION (MANDATORY)
-Scan the MACRO EVENTS block above. Identify:
-- HIGH-impact event within 6h → ⚠️ IMMINENT — drastically reduce size for affected assets
-- HIGH-impact event within 48h → ⚠️ MACRO RISK — cap leverage 2x, confidence −20%
-- FOMC, CPI, NFP, PCE, Rate Decision — check explicitly by name. Never skip this step.
+OUTPUT per trade: TIER [1/2/3] | [ASSET] [LONG/SHORT] | Entry $X | SL $X (-X%) | TP1 $X R:R X:1 | TP2 $X | Lev Xx | Conviction X% | Kelly X% | Edge [reason] | Flags [list]
 
-STEP 3 — RELATIVE STRENGTH VALIDATION
-Any RS figure cited must specify timeframe (1d, 7d, 30d). Day trade edge requires 1d or 7d RS.
-If timeframe unknown → flag AMBIGUOUS, do not use as primary edge.
-
-STEP 4 — TIMEFRAME / STOP CONSISTENCY
-  Scalp (<2h):   stop 1.0–1.5%, max 10x
-  Day Trade:     stop 1.5–3.0%, max 5x
-  Swing (2–10d): stop 4.0–7.0%, max 3x
-Mismatch → ⚠️ STOP/TIMEFRAME MISMATCH | leverage×stop%>15% → ⚠️ MARGIN RISK ELEVATED
-
-STEP 5 — RESISTANCE MAP (BEFORE SETTING TP)
-Identify key levels between entry and TP1/TP2. If >2 resistance before TP1 → ⚠️ MULTIPLE RESISTANCE LAYERS.
-Minimum R:R at TP1 on macro event days: 1.5:1 (never 1:1 when macro risk is present).
-
-STEP 6 — FLAGS (NEVER BLANK)
-⚠️ Flags REQUIRED. "None" only if: no macro within 6h + stop matches TF + R:R≥1.5:1 + volume confirms + funding neutral.
-
-STEP 7 — MACRO CALENDAR FILTER [TIMEFRAME: ${aiTimeframe.toUpperCase()}]
-${aiTimeframe==="today"?`INTRADAY MODE — check for quiet-day filters:
-• HIGH-impact event within 2h → factor event direction into all trade biases
-• QUIET day (no HIGH-impact within 8h): auto-filter low-probability intraday plays:
-  → FX pairs (EUR, GBP, JPY, CAD) → ❌ QUIET DAY FILTER (replace with crypto alt)
-  → Gold/Silver → ❌ QUIET DAY FILTER (replace with large-cap alt)
-  → Blue-chip stocks (NVDA, AAPL, MSFT) → ⚠️ CONFIRM CATALYST before including
-• Crypto and large-cap alts always approved regardless of macro calendar`:`${aiTimeframe==="midterm"?"SWING MODE (1-4 WEEKS)":"POSITION MODE (1-3 MONTHS)"} — quiet-day intraday filter does NOT apply here.
-Instead, evaluate macro over the ${aiTimeframe==="midterm"?"next 1-4 weeks":"next 1-3 months"}:
-• Rate decisions, CPI trend, central bank posture → drives FX and gold direction on this horizon
-• FX pairs (EUR/USD, USD/JPY) and Gold/Silver ARE valid for ${aiTimeframe==="midterm"?"swing":"position"} trades — use weekly/monthly trend structure
-• Focus on macro regime shifts, sector rotation, and policy divergence between central banks
-• Upcoming HIGH-impact events in MACRO EVENTS block → consider as catalysts that confirm or deny the swing thesis`}
-
-STEP 8 — VOLATILITY SUITABILITY MATRIX
-For each of the 4 trade slots, validate the asset fits the timeframe:
-BTC/ETH: 2-5% quiet | 5-10%+ news → ✅ Always viable
-Large Cap Alts: 3-8% quiet | 8-20%+ news → ✅ With caution
-Small Cap Alts: 5-15% quiet | 15-40%+ news → ⚠️ High risk, reduce leverage
-Meme Coins: Unpredictable → ⚠️ Reduce leverage significantly
-Gold/Silver: 0.3-1% quiet | 1-3% news → ❌ Quiet days (swap asset)
-FX Majors: 0.1-0.4% quiet | 0.5-1.5% news → ❌ Most days (include only on news day)
-Stocks (no news): 0.5-2% quiet | 3-8% news → ⚠️ News-dependent
-
-STEP 9 — LEVERAGE-ADJUSTED TP VALIDATION
-For every trade: Underlying move needed = TP% ÷ Leverage
-→ If move needed > quiet-day range: ⚠️ LOW PROBABILITY — tighten TP or swap asset
-→ Explicitly state: "[Asset] Long Xx with Y% TP requires Z% underlying move. [Asset class] quiet range: A-B%. Status: VIABLE / ⚠️ LOW PROBABILITY"
-
-STEP 10 — TECHNICAL ANALYSIS INTEGRATION
-Evaluate for each trade using price context from live data:
-• RSI (14): <30 = oversold long | >70 = overbought short | 40-60 = neutral wait
-• MACD: bullish crossover above signal = long bias | bearish below = short bias | divergence = caution
-• EMA: EMA9/21 cross = momentum direction | EMA50/200 = trend confirmation
-• Bollinger Bands: lower band + RSI<35 = strong long | upper band + RSI>65 = strong short | squeeze = wait
-• Volume: up price + up volume = confirmed | up price + down volume = weak (TP sooner) | breakout spike = high conviction
-• S/R: identify nearest levels — entries at S/R confluence with indicator agreement = highest conviction
-Include indicator status for each trade in its Flags field.
-
-STEP 11 — CORRELATION & OVERLAP FILTER
-Before finalizing the 4-trade portfolio:
-• Flag same-sector pairs: e.g., 2 AI tokens (FET + TAO) = correlated exposure → replace one
-• Flag crypto-crypto overlap: alts often move with BTC (>0.7 correlation) → limit to 2 crypto positions max
-• Ideal 4-trade portfolio: 1 crypto + 1 equity + 1 commodity + 1 forex (on news days) OR 2 crypto + 1 equity + 1 commodity (quiet days)
-• State correlation verdict: "Portfolio is [diversified / partially correlated / over-concentrated] — [action]"
-
-STEP 12 — SESSION CHECKLIST (output at top of response)
-Always start your response with:
-${aiTimeframe==="today"?`━━━ PRE-MARKET CHECKLIST ━━━
-✅/❌ Macro calendar: [HIGH-impact events next 8h or "Clear"]
-✅/❌ Market regime: [RISK ON / RISK OFF / NEUTRAL — from intelligence data]
-✅/❌ Funding rates: [crowded longs / short squeeze risk / neutral]
-✅/❌ Quiet-day filters: [assets filtered or "None filtered"]
-✅/❌ Portfolio correlation: [diversified / flag if over-concentrated]
-━━━━━━━━━━━━━━━━━━━━━━━`:aiTimeframe==="midterm"?`━━━ SWING TRADE CHECKLIST (1-4 WEEKS) ━━━
-✅/❌ Macro regime: [rate cycle direction, DXY trend, risk-on/off from intelligence data]
-✅/❌ Upcoming catalysts: [any HIGH-impact events in next 1-4 weeks that affect these trades?]
-✅/❌ Funding rates trend: [sustained positive/negative = crowded positioning]
-✅/❌ Sector rotation: [which sectors are gaining/losing institutional flow?]
-✅/❌ Portfolio correlation: [diversified / flag if over-concentrated]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`:
-`━━━ POSITION TRADE CHECKLIST (1-3 MONTHS) ━━━
-✅/❌ Macro regime: [Fed posture, global rate cycle, recession/expansion signals]
-✅/❌ Secular catalysts: [structural tailwinds/headwinds for each asset over 1-3 months]
-✅/❌ Central bank divergence: [USD vs EUR/JPY/GBP policy trajectory]
-✅/❌ Commodity supercycle: [energy/metals macro backdrop]
-✅/❌ Portfolio correlation: [diversified / flag if over-concentrated]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`}
-
-STEP 13 — TRADE OUTPUT FORMAT
-For EACH of the 4 trades (one per asset class: crypto, equity, commodity, forex):
-If you cannot find a setup meeting TIER 2+ conviction in that class → say "NO TRADE — [class]: [reason]"
-
-━━━ TRADE #N — [ASSET CLASS] ━━━
-🔥/⚡/⚠️ TIER [1/2/3] | 🟢/🟡/🔴 [ASSET] [LONG / SHORT]
-💰 Price: $X | 📍 Entry: $X [specific level or "market/retest of $X"]
-🛑 Stop: $X (−X%) | ⏱ Timeframe: [Scalp/Day/Swing] | ⚡ Max Leverage: Xx
-🎯 TP1: $X (+X%) | R:R X.X:1
-🎯 TP2: $X (+X%) | R:R X.X:1
-📊 Conviction: X% | Bias Signals: [X/8] | Kelly Size: X% of account
-💡 Edge: [one sentence: why this, why this direction, why NOW — cite live data]
-⚠️ Flags: [REQUIRED: all active flags, or "CLEAN" only if Step 6 all-clear]
-📋 Audit: Prices [FRESH/STALE] | Macro [CLEAR/RISK: event] | TP path [CLEAR/BLOCKED]
-
-FULL RESPONSE STRUCTURE:
-1. REGIME SNAPSHOT (2 sentences — regime, crash probability, macro stance RIGHT NOW)
-2. MACRO CONTEXT (Fed posture, DXY trend, HIGH-impact events in next 48h with ET times)
-3. TOP 4 TRADE IDEAS (one each: crypto, equity, commodity, forex — or NO TRADE if no edge)
-4. CROSS-ASSET CORRELATION NOTE (which of these trades move together — warn if over-correlated)
-5. BEST TRADE NOW (single sentence: "The highest conviction setup right now is [asset] [LONG/SHORT] at $X, TIER [1/2]")
-
-RISK LABELS: 🟢 All steps clean, >70%, R:R≥2:1, no macro | 🟡 Minor flags or macro within 48h | 🔴 NO TRADE — macro within 6h, post-spike, or <65% conviction
-⚠️ AI analysis only. Always apply your own judgment and risk management.
-Be decisive. Use live prices. Never force a signal just because the user asked for one.`
+STRUCTURE: 1. Regime snapshot 2. Macro context 3. Top 4 trades (crypto/equity/commodity/forex) 4. Correlation note 5. Best trade now
+⚠️ AI analysis only. Use live prices. Never force a signal.`
     const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week horizon)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month horizon)":"TODAY'S (intraday/swing)";
     const tfHint=aiTimeframe==="midterm"?"Focus on weekly chart setups, sector rotation, macro trends. Entries can be scaled in. Use wider stops and targets appropriate for multi-week holds.":aiTimeframe==="longterm"?"Focus on monthly chart structures, macro regime shifts, secular trends, yield curves, commodity supercycles. Position sizing for multi-month conviction holds with wide stops.":"Focus on intraday and short-term swing setups. Use tight entries and stops based on current price action.";
     const userMsg=`Give me ${tfLabel} TOP 4 TRADE IDEAS with full quantitative analysis.
@@ -3436,6 +3056,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
+    {k:"watchlist",icon:"📌",label:"WATCHLIST"},
     {k:"track",icon:"📈",label:"RECORD"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
@@ -4517,8 +4138,9 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
           <SignalHistoryPanel isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>
         </>}
 
-        {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
+        {tab==="watchlist"&&isPro&&<WatchlistTab isPro={isPro} isElite={isElite} cryptoPrices={cryptoPrices} storePerps={storePerps} storeSpot={storeSpot} onUpgrade={onUpgrade}/>}
 
+        {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>

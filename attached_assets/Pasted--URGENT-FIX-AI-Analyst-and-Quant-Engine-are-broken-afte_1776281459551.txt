@@ -1,0 +1,253 @@
+# URGENT FIX — AI Analyst and Quant Engine are broken after prompt update
+
+⚠️ Do NOT build new features. Do NOT create new components or endpoints. This is a BUG FIX task only.
+
+There are TWO bugs to fix:
+
+-----
+
+## BUG 1: API Error 429 — Rate Limit (AI Analyst tab)
+
+The AI Analyst tab is throwing:
+
+```
+API Error 429: rate_limit_error — This request would exceed your organization's rate limit of 30,000 input tokens per minute (model: claude-sonnet-4-6)
+```
+
+### Root Cause
+
+The new system prompts are too large. Combined with the user message, market data context, and conversation history, the total input tokens exceed 30K per minute.
+
+### Fix Instructions
+
+1. Find every file where the AI Analyst and Quant Engine system prompts are defined (these are the files you just modified).
+1. **Compress the system prompts.** The full detailed prompts need to be shortened significantly. Replace the AI Analyst system prompt with this condensed version:
+
+```
+You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
+
+RULES — apply to EVERY output:
+
+1. TRADE TYPE: Classify as SCALP (1-4H hold), DAY TRADE (4-24H), SWING (1-7D), or POSITION (1-4W). Default to DAY TRADE if unclear.
+
+2. VOLATILITY REGIME: Compare current ATR to 20-period avg ATR on the trade type's reference timeframe.
+   HIGH (ATR>1.5x avg): compress TP 30%, widen SL 20%, reduce size 25%.
+   NORMAL (0.7-1.5x): standard params.
+   LOW (ATR<0.7x): skip or reduce size 50%.
+
+3. ATR-SCALED TP/SL — reference timeframes: SCALP=ATR(1H), DAY=ATR(4H), SWING=ATR(1D), POSITION=ATR(1W).
+   TP1=0.5x ATR (50% position), TP2=1x ATR (30%), TP3=1.5x ATR (20% trailing).
+   SL: SCALP=0.3-0.5x ATR, DAY=0.5-0.75x ATR, SWING=0.75-1x ATR, POSITION=1-1.5x ATR.
+   Minimum R:R to TP1 must be 1.2:1 or reject the signal.
+
+4. KILL CLOCK: SCALP=2-4H, DAY=12-24H, SWING=48-72H, POSITION=5-7D. If no TP1 progress at 50% of kill clock, flag momentum decay.
+
+5. MACRO GATE: Block signals within 2H of FOMC/CPI/NFP/BOJ/ECB/BOE. Dampen 20% within 4H of PPI/GDP/retail sales/Fed speakers.
+
+6. OI OVERLAY (when available): OI rising+price rising=bullish, OI rising+price falling=bearish, OI falling+price rising=squeeze (fragile), OI falling+price falling=liquidation (avoid longs). Funding >+0.03% reduces long edge, <-0.03% reduces short edge.
+
+7. EDGE LABELING: Always state "OI-verified", "estimated", or "no OI" after the edge score. Never claim backtest win rates without data.
+
+8. POST-TP1: Move SL to breakeven. After TP2: trail SL at 0.5x ATR. Kill clock expiry with no TP1: close at market.
+
+OUTPUT FORMAT — every signal must include and you must respond ONLY with valid JSON matching this schema, no markdown, no preamble:
+{
+  "type": "signal",
+  "direction": "LONG" or "SHORT",
+  "asset": "BTCUSDT",
+  "tradeType": "DAY TRADE",
+  "volRegime": "NORMAL",
+  "entry": 74500,
+  "tp1": {"price": 75200, "pct": 50},
+  "tp2": {"price": 75900, "pct": 30},
+  "tp3": {"price": 76600, "pct": 20},
+  "sl": 73800,
+  "rr": "1.5:1",
+  "edge": "64%",
+  "edgeSource": "estimated",
+  "killClock": "24H",
+  "leverage": "5x",
+  "thesis": "Bounce off 4H demand zone with RSI divergence. OI rising confirms new longs.",
+  "invalidation": "Break below 73500 with volume",
+  "postTp1": "SL to breakeven, trail TP3 at 0.5x ATR",
+  "macroStatus": "clear",
+  "scores": {"trend": 72, "momentum": 65, "structure": 70, "oi": 68, "volume": 55, "macro": 80}
+}
+
+For market analysis (non-signal), respond with:
+{
+  "type": "analysis",
+  "asset": "BTCUSDT",
+  "timeframe": "4H",
+  "volRegime": "NORMAL",
+  "bias": "LONG",
+  "support": [73800, 72500],
+  "resistance": [75500, 77000],
+  "structure": "Higher lows forming on 4H, testing resistance at 75500",
+  "flow": "OI rising with price, funding neutral at +0.01%",
+  "macro": "CPI tomorrow 8:30 ET — reduce size",
+  "playbook": [
+    {"condition": "Price holds 74200", "action": "Long to 75500"},
+    {"condition": "Price breaks 73800", "action": "Short to 72500"},
+    {"condition": "CPI hot", "action": "Expect dump to 72000, wait for settle"}
+  ]
+}
+
+If no signal qualifies, respond with:
+{
+  "type": "no_signal",
+  "asset": "BTCUSDT",
+  "reason": "Edge score 48% below 55% threshold. Vol regime LOW.",
+  "nextCheck": "Re-evaluate after 4H candle close"
+}
+```
+
+1. Replace the Quant Engine / Quant Brain / MasterBrain system prompt with this condensed version:
+
+```
+You are CLVRQuantAI's Quant Engine. You are a computation engine, not a chatbot. Output structured JSON only — no markdown, no prose, no preamble.
+
+PIPELINE — execute in order for every request:
+1. CLASSIFY trade type: SCALP|DAY TRADE|SWING|POSITION (default DAY TRADE)
+2. VOL REGIME: current ATR vs 20-period avg. HIGH(>1.5x)|NORMAL(0.7-1.5x)|LOW(<0.7x)
+3. MACRO GATE: block if high-impact event within 2H, dampen if within 4H
+4. SCORE: Trend(25%), Momentum(20%), Structure(20%), OI(15%), Volume(10%), Macro(10%). Each 0-100. Net edge = weighted sum. Below 55% = no signal.
+5. ENTRY: Use fib retracement of last impulse. 38.2-50% for trend, 50-61.8% for mean reversion.
+6. TP/SL: ATR-scaled. TP1=0.5x ATR(50%), TP2=1x ATR(30%), TP3=1.5x ATR(20% trail). SL per trade type. HIGH vol: compress TP 30%, widen SL 20%.
+7. SIZING: Half-Kelly adjusted for vol regime. Leverage caps: BTC/ETH 10x, large alt 7x, mid alt 5x, small alt 3x, FX major 20x, FX cross 10x, commodities 10x.
+8. KILL CLOCK: SCALP 2-4H, DAY 12-24H, SWING 48-72H, POSITION 5-7D.
+
+ASSET SUITABILITY: Mid/small cap alts cannot be scalped. Flag and suggest DAY TRADE instead.
+EDGE LABELS: "OI-verified" if live OI data, "estimated" if delayed/inferred, "no OI" if unavailable.
+R:R FLOOR: TP1 R:R must be >= 1.2:1 or reject signal.
+
+RESPOND ONLY WITH VALID JSON. Use the same JSON schema as specified in the AI Analyst prompt. The frontend parses your output as JSON — any non-JSON text will cause a "malformed data" error.
+
+For multi-asset scans, return a JSON array of signal or no_signal objects:
+[
+  {"type": "signal", "asset": "BTCUSDT", ...},
+  {"type": "no_signal", "asset": "SOLUSD", "reason": "...", "nextCheck": "..."},
+  {"type": "no_signal", "asset": "MATICUSDT", "reason": "...", "nextCheck": "..."}
+]
+```
+
+1. For the Kronos prompt — if it has a separate prompt, APPEND this short overlay (do not replace its base):
+
+```
+KRONOS OVERLAY: Only fire when ALL conditions met: edge>72%, vol NORMAL or HIGH, macro clear for full kill clock, OI confirms direction, 3+ factors score >70, R:R to TP1 >= 1.5:1. If any fail, return: {"type":"no_signal","source":"kronos","reason":"[which conditions failed]","nextCheck":"..."}. Tag qualifying signals with "source":"kronos" in the JSON.
+```
+
+-----
+
+## BUG 2: “AI returned malformed data” (Quant Engine / MasterBrain tab)
+
+### Root Cause
+
+The frontend is trying to parse the AI response but the output format doesn’t match what the parser expects. The new prompts changed the output structure but the parser wasn’t updated.
+
+### Fix Instructions
+
+1. Find the code that parses AI responses from the Quant Engine / MasterBrain scan. This will be in the frontend or a server-side handler — look for code that processes the `content` field from the Anthropic API response and tries to extract signal data (prices, directions, trade types, etc.).
+1. Show me the current parsing logic before changing anything.
+1. Update the parser to handle JSON responses. The AI will now return pure JSON (as specified in the prompts above). The parser should:
+
+```javascript
+// Example parsing logic — adapt to your actual code structure
+function parseAIResponse(responseText) {
+  try {
+    // Strip any markdown code fences if present
+    const cleaned = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    
+    // Handle both single object and array responses
+    const signals = Array.isArray(parsed) ? parsed : [parsed];
+    
+    return signals.map(signal => {
+      if (signal.type === 'signal') {
+        return {
+          status: 'signal',
+          direction: signal.direction,
+          asset: signal.asset,
+          tradeType: signal.tradeType,
+          volRegime: signal.volRegime,
+          entry: signal.entry,
+          tp1: signal.tp1,
+          tp2: signal.tp2,
+          tp3: signal.tp3,
+          sl: signal.sl,
+          rr: signal.rr,
+          edge: signal.edge,
+          edgeSource: signal.edgeSource,
+          killClock: signal.killClock,
+          leverage: signal.leverage,
+          thesis: signal.thesis,
+          invalidation: signal.invalidation,
+          postTp1: signal.postTp1,
+          macroStatus: signal.macroStatus,
+          scores: signal.scores,
+          source: signal.source || 'quant'
+        };
+      } else if (signal.type === 'no_signal') {
+        return {
+          status: 'no_signal',
+          asset: signal.asset,
+          reason: signal.reason,
+          nextCheck: signal.nextCheck,
+          source: signal.source || 'quant'
+        };
+      } else if (signal.type === 'analysis') {
+        return {
+          status: 'analysis',
+          asset: signal.asset,
+          timeframe: signal.timeframe,
+          bias: signal.bias,
+          support: signal.support,
+          resistance: signal.resistance,
+          structure: signal.structure,
+          flow: signal.flow,
+          macro: signal.macro,
+          playbook: signal.playbook
+        };
+      }
+      return { status: 'error', message: 'Unknown response type' };
+    });
+  } catch (e) {
+    console.error('Failed to parse AI response:', e);
+    console.error('Raw response:', responseText);
+    return [{ status: 'error', message: 'AI returned malformed data. Raw: ' + responseText.substring(0, 200) }];
+  }
+}
+```
+
+1. Make sure the frontend UI components that display signals can handle the new JSON fields. Specifically:
+- Display TP1/TP2/TP3 as three separate levels instead of one TP
+- Display the kill clock
+- Display the vol regime tag
+- Display the edge source label
+- Display individual factor scores if available
+- For “no_signal” results, show the reason and nextCheck instead of a generic error
+1. If there’s existing parsing logic that uses regex or string matching to extract data from the old free-text format, REMOVE it and replace with the JSON parser above.
+
+-----
+
+## BUG 3: “Failed to fetch market data” for MATIC
+
+This is likely a separate data feed issue — MATIC may have been rebranded to POL. Check if the market data API (Coinglass, Binance, or whatever you use) still supports “MATIC” as a symbol or if it needs to be updated to “POL”. If so, update the symbol mapping. This is a minor fix — focus on Bugs 1 and 2 first.
+
+-----
+
+## VERIFICATION — Do this before marking complete
+
+1. Trigger the AI Analyst on BTC — confirm no 429 error and response displays correctly
+1. Trigger the Quant Engine MasterBrain scan on BTC, ETH, SOL — confirm no “malformed data” errors
+1. Confirm signals display with TP1/TP2/TP3, kill clock, vol regime, and edge source
+1. Confirm “no signal” results show reason text instead of an error
+1. Show me screenshots or console output of all tests
+
+## WHAT NOT TO DO
+
+❌ Do NOT create new database tables
+❌ Do NOT add new API endpoints
+❌ Do NOT add new UI sections or tabs
+❌ Do NOT install new npm packages unless absolutely needed for JSON parsing (you shouldn’t need any)
+❌ Do NOT change the visual design/theme of the site

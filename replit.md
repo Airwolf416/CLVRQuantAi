@@ -16,13 +16,14 @@ The application exclusively uses a dark mode theme (`bg:#050709`, `panel:#0c1220
 
 ### Frontend
 
-The frontend is a React application optimized for a maximum width of 780px, featuring a bottom navigation bar with ten tabs: Radar, Markets, Macro, Brief, Signals, Alerts, Wallet, AI, About, and Account.
+The frontend is a React application optimized for a maximum width of 780px, featuring a bottom navigation bar with tabs: Radar, Markets, Macro, Brief, Signals, Watchlist, Track Record, Insider, Alerts, Wallet, AI, Journal, About, Help, and Account.
 
 -   **Radar**: Command center with Market Regime panel, CLVR Crash Detector, Global Liquidity Index, active alerts, live news, macro event countdowns, volume spike detection, funding rate flip alerts, and a liquidation heatmap.
 -   **Markets**: Full Market Intelligence dashboard with sub-views for PRICES, SPREADS, CORRELATIONS, and NEWS. Displays CLVR Market Mode Score and regime data.
 -   **Macro**: Enhanced macro calendar with live ForexFactory data, event cards with AI analysis, region/impact filters, and central bank schedules.
 -   **Brief**: AI-generated daily market commentary with asset analysis.
 -   **Signals**: QuantBrain-scored trading signals with multi-factor quality gates, confidence scores, and session-aware thresholds. Free users see a 30-minute delayed feed with a banner; Pro/Elite get real-time data. Locked signal details show an upgrade overlay.
+-   **Watchlist**: Pro+ feature — track up to 20 (Elite: 50) assets with live prices, 24h changes, and funding rates. Backed by `watchlist_items` DB table.
 -   **Track Record (RECORD tab)**: Live performance analytics — win rate, total signals, avg PnL, weekly win/loss bar chart, and signal history feed (history locked for free users). Pro/Elite see per-asset and per-direction breakdowns.
 -   **Alerts**: Custom price and funding alerts with browser notifications.
 -   **Wallet**: Integrates with Phantom wallet for Solana operations and Hyperliquid for account data, positions, orders, and AI-powered trade signals.

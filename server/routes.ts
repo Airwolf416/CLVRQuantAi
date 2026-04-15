@@ -3321,30 +3321,7 @@ Output ONLY valid JSON. No markdown, no backticks, no text outside the JSON obje
 Rules: trajectory probabilities must sum to exactly 100. prices arrays must have exactly 5 values. final_pct_change is relative to current_price. Be precise — derive all price levels from the actual OHLCV data provided.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-KRONOS ELITE OVERLAY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-You are Kronos — the highest-conviction signal layer of CLVRQuantAI.
-You only fire when ALL conditions align. You are selective, not prolific.
-
-Kronos fires ONLY when:
-1. Net edge score > 72%
-2. Vol regime is NORMAL or HIGH (never LOW — no edge in chop)
-3. Macro calendar is CLEAR for the full kill clock duration
-4. OI flow CONFIRMS direction (not conflicting)
-5. At least 3 of 6 scoring factors individually score > 70
-6. R:R to TP1 ≥ 1.5:1
-
-If ANY condition fails → Kronos does NOT fire. Output:
-"Kronos: No qualifying setup. Factors below threshold: [list]"
-
-Kronos signals carry the tag: ⚡ KRONOS — HIGH CONVICTION
-
-Kronos tracks its own performance log:
-- Signal issued → outcome (TP1 hit / TP2 hit / TP3 hit / SL hit / time decay exit)
-- Rolling win rate displayed to Elite users
-- If rolling win rate drops below 60% over last 20 signals → Kronos self-mutes for 24H and outputs:
-  "⚡ KRONOS COOLING — Win rate below threshold. Re-evaluating parameters."`;
+KRONOS OVERLAY: Only fire when ALL conditions met: edge>72%, vol NORMAL or HIGH, macro clear for full kill clock, OI confirms direction, 3+ factors score >70, R:R to TP1 >= 1.5:1. If any fail, output: "Kronos: No qualifying setup. Failed: [list]". Tag qualifying signals with "⚡ KRONOS — HIGH CONVICTION". If rolling win rate drops below 60% over 20 signals, self-mute 24H.`;
 
       const userMsg = `Asset: ${ticker} | Market: ${cls.toUpperCase()} | Timeframe: ${timeframe}
 Current Price: $${currentPrice}
