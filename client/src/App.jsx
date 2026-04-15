@@ -463,7 +463,7 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai","watchlist"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal",watchlist:"Watchlist"};
@@ -3336,6 +3336,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
+    {k:"watchlist",icon:"✦",label:"WATCHLIST"},
     {k:"track",icon:"📈",label:"RECORD"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
