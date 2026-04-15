@@ -27,7 +27,7 @@ The frontend is a React application optimized for a maximum width of 780px, feat
 -   **Track Record (RECORD tab)**: Live performance analytics — win rate, total signals, avg PnL, weekly win/loss bar chart, and signal history feed (history locked for free users). Pro/Elite see per-asset and per-direction breakdowns.
 -   **Alerts**: Custom price and funding alerts with browser notifications.
 -   **Wallet**: Integrates with Phantom wallet for Solana operations and Hyperliquid for account data, positions, orders, and AI-powered trade signals.
--   **AI**: Claude-powered market analysis and trade ideas leveraging QuantBrain for confluence scoring, Kelly Criterion, and regime detection.
+-   **AI**: Claude-powered market analysis and trade ideas leveraging QuantBrain for confluence scoring, Kelly Criterion, and regime detection. The Quant Engine includes server-side direction validation (TP/SL must match signal direction), strict duration enforcement (2-4 hours / 12-24 hours / 2-3 days / 1-2 weeks only), asset constraint enforcement, and concise output rules for rationale/invalidation fields.
 -   **About**: Project story and glossary of terms.
 -   **Account**: User account management for subscription, referrals, emails, billing, and legal information.
 

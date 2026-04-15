@@ -837,7 +837,7 @@ function SignalCard({ rank, ticker, result, onDismiss, onSetAlert }) {
               <div style={{ fontSize:8, color:"#3a4560" }}>Analysis complete — see quant rationale below</div>
             )}
             {result.quant_rationale && (
-              <div style={{ fontSize:8, color:"#6b7a99", marginTop:8, lineHeight:1.6, borderTop:"1px solid #1a2235", paddingTop:8 }}>
+              <div style={{ fontSize:10, color:"#a0aec0", marginTop:8, lineHeight:1.7, borderTop:"1px solid #1a2235", paddingTop:8, fontFamily:"'Barlow', sans-serif", fontStyle:"italic" }}>
                 {result.quant_rationale}
               </div>
             )}
@@ -847,11 +847,12 @@ function SignalCard({ rank, ticker, result, onDismiss, onSetAlert }) {
 
       {/* INVALIDATION ROW */}
       {result.invalidation && (
-        <div style={{ padding:"8px 14px", borderBottom:"1px solid #1a2235", display:"flex", alignItems:"center", gap:8 }}>
-          <span style={{ fontSize:12 }}>❌</span>
-          <span style={{ fontSize:8, color:"#f87171", fontFamily:mono }}>
-            <strong>INVALIDATION</strong> · {result.invalidation}
-          </span>
+        <div style={{ padding:"8px 14px", borderBottom:"1px solid #1a2235", display:"flex", alignItems:"flex-start", gap:8 }}>
+          <span style={{ fontSize:12, flexShrink:0 }}>❌</span>
+          <div>
+            <span style={{ fontSize:8, color:"#f87171", fontFamily:mono, fontWeight:700 }}>INVALIDATION</span>
+            <div style={{ fontSize:10, color:"#f87171", fontFamily:"'Barlow', sans-serif", lineHeight:1.6, marginTop:2 }}>{result.invalidation}</div>
+          </div>
         </div>
       )}
 
