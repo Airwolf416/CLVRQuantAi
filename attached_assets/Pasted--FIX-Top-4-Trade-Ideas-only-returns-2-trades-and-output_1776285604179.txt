@@ -1,0 +1,297 @@
+# FIX — “Top 4 Trade Ideas” only returns 2 trades and output is ugly raw markdown
+
+⚠️ BUG FIX ONLY. Do NOT create new features, components, or endpoints.
+
+-----
+
+## BUG 1: Only 2 trades returned instead of 4
+
+### Root Cause
+
+The AI is running out of `max_tokens` before finishing all 4 trades. The verbose markdown format (edge breakdown, flags, pattern descriptions) uses ~800-1000 tokens PER trade. At 4 trades that’s 4000+ tokens just for signals, plus the pre-flight analysis section.
+
+### Fix
+
+1. Find the API call that powers the “Get Top 4 Long-Term Trade Ideas” / “Top Trade Ideas” feature. Look for the route or function that sends the prompt to claude-sonnet-4-6.
+1. **Increase `max_tokens` to 4096** (or 8192 if currently lower). Show me the current value before changing.
+1. **Change the system prompt for this specific feature** to force JSON output and reduce verbosity. Replace the current prompt for the Top Trade Ideas feature with this:
+
+```
+You are CLVRQuantAI's Trade Idea Generator. You MUST return exactly 4 trade ideas as a JSON array. No markdown. No prose. Only valid JSON.
+
+RULES:
+- Return EXACTLY 4 trades, ranked by conviction score (highest first)
+- Cover diverse assets (mix of crypto, equity, FX, commodity — don't repeat asset classes unless one class dominates)
+- Apply ATR-scaled TP/SL: TP1=0.5x ATR(4H) at 50%, TP2=1x ATR at 30%, TP3=1.5x ATR at 20% trailing
+- Vol regime: compare ATR to 20-period avg. HIGH(>1.5x): compress TP 30%, widen SL 20%. LOW(<0.7x): skip asset.
+- Macro gate: block if high-impact event within 2H, note upcoming events
+- Minimum R:R to TP1: 1.2:1
+- Kill clock: SCALP 2-4H, DAY 12-24H, SWING 48-72H
+- If fewer than 4 qualify, relax threshold to 50% edge but flag as LOW CONVICTION
+- Label edge: "OI-verified" if live OI, "estimated" if inferred, "no OI" if unavailable
+
+RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
+{
+  "generated": "2026-04-15T16:31:00-04:00",
+  "regime": {"score": 63, "label": "RISK-ON", "bias": "Mean-Reversion"},
+  "macroStatus": {"clear": true, "nextEvent": "FOMC Williams 08:35 ET Apr 16", "notes": "BOC decision passed, no blocks active"},
+  "volRegime": "HIGH",
+  "trades": [
+    {
+      "rank": 1,
+      "asset": "INJ/USDT",
+      "direction": "LONG",
+      "tradeType": "DAY TRADE",
+      "entry": 3.29,
+      "sl": 3.07,
+      "tp1": {"price": 3.58, "pct": 50, "rr": "1.3:1"},
+      "tp2": {"price": 3.82, "pct": 30, "rr": "2.4:1"},
+      "tp3": {"price": 4.10, "pct": 20, "trailing": true},
+      "leverage": "3x",
+      "killClock": "24H",
+      "conviction": 72,
+      "edge": "72%",
+      "edgeSource": "estimated",
+      "thesis": "Breakout continuation above $3.00 psych level. OI rising with price, funding neutral. Highest % mover today at +10.98%.",
+      "invalidation": "Break below $3.07 with volume",
+      "flags": ["Small OI — limit orders only", "HIGH vol — strict sizing", "Iran risk-off possible"],
+      "scores": {"trend": 75, "momentum": 80, "structure": 68, "oi": 65, "volume": 55, "macro": 70},
+      "postTp1": "SL to breakeven at $3.29"
+    },
+    {
+      "rank": 2,
+      "asset": "TSLA",
+      "direction": "LONG",
+      "tradeType": "DAY TRADE",
+      "entry": 392.74,
+      "sl": 374.20,
+      "tp1": {"price": 408.50, "pct": 50, "rr": "1.3:1"},
+      "tp2": {"price": 422.00, "pct": 30, "rr": "2.2:1"},
+      "tp3": {"price": 438.00, "pct": 20, "trailing": true},
+      "leverage": "2x",
+      "killClock": "48H",
+      "conviction": 68,
+      "edge": "68%",
+      "edgeSource": "estimated",
+      "thesis": "Clean break above $380 resistance. Zero funding cost. Sector-wide risk-on with MSFT +4.8%, COIN +5.8%.",
+      "invalidation": "Rejection below $374 on high volume",
+      "flags": ["Late entry — wait for $388-390 pullback", "Fed Williams tomorrow AM"],
+      "scores": {"trend": 70, "momentum": 72, "structure": 65, "oi": 50, "volume": 60, "macro": 68},
+      "postTp1": "SL to breakeven at $392.74"
+    },
+    {
+      "rank": 3,
+      "asset": "...",
+      "...": "..."
+    },
+    {
+      "rank": 4,
+      "asset": "...",
+      "...": "..."
+    }
+  ]
+}
+```
+
+-----
+
+## BUG 2: Output looks like ugly raw markdown — needs to be parsed and styled
+
+### Root Cause
+
+The AI response (whether markdown or JSON) is being dumped directly into the UI as raw text. It needs to be parsed into structured UI components.
+
+### Fix
+
+Find the component that renders the Top Trade Ideas output. It’s currently just displaying the raw AI response text. Replace it with a component that parses the JSON and renders styled cards.
+
+Here is the rendering logic to implement. Adapt it to match your existing design system (dark theme, cyan/green/gold accents that I can see in the screenshots):
+
+```jsx
+// TradeIdeasDisplay component — renders parsed JSON trade ideas
+// Adapt class names and styles to match your existing CLVRQuant design system
+
+function TradeIdeasDisplay({ rawResponse }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    try {
+      const cleaned = rawResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      setData(JSON.parse(cleaned));
+    } catch (e) {
+      setError('Failed to parse trade ideas');
+    }
+  }, [rawResponse]);
+
+  if (error) return <div className="error-banner">{error}</div>;
+  if (!data) return <div className="loading">Analyzing markets...</div>;
+
+  return (
+    <div className="trade-ideas-container">
+      {/* Header Bar */}
+      <div className="ideas-header">
+        <h2>TOP 4 TRADE IDEAS</h2>
+        <div className="header-meta">
+          <span className="timestamp">{new Date(data.generated).toLocaleString()}</span>
+          <span className={`regime-badge ${data.regime.score > 60 ? 'risk-on' : 'risk-off'}`}>
+            {data.regime.label} {data.regime.score}/100
+          </span>
+          <span className={`vol-badge vol-${data.volRegime.toLowerCase()}`}>
+            VOL: {data.volRegime}
+          </span>
+        </div>
+      </div>
+
+      {/* Macro Status Bar */}
+      <div className="macro-bar">
+        <span className={data.macroStatus.clear ? 'macro-clear' : 'macro-warn'}>
+          {data.macroStatus.clear ? '✅' : '⚠️'} MACRO: {data.macroStatus.clear ? 'CLEAR' : 'CAUTION'}
+        </span>
+        {data.macroStatus.nextEvent && (
+          <span className="next-event">Next: {data.macroStatus.nextEvent}</span>
+        )}
+      </div>
+
+      {/* Trade Cards */}
+      <div className="trade-cards-grid">
+        {data.trades.map((trade, i) => (
+          <TradeCard key={i} trade={trade} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TradeCard({ trade }) {
+  const isLong = trade.direction === 'LONG';
+
+  return (
+    <div className={`trade-card ${isLong ? 'card-long' : 'card-short'}`}>
+      {/* Card Header */}
+      <div className="card-header">
+        <div className="card-rank">#{trade.rank}</div>
+        <div className="card-asset">{trade.asset}</div>
+        <div className={`card-direction ${isLong ? 'dir-long' : 'dir-short'}`}>
+          {isLong ? '🟢' : '🔴'} {trade.direction}
+        </div>
+        <div className="card-type">{trade.tradeType}</div>
+      </div>
+
+      {/* Conviction Bar */}
+      <div className="conviction-bar">
+        <div className="conviction-fill" style={{ width: `${trade.conviction}%` }}>
+          {trade.conviction}%
+        </div>
+      </div>
+
+      {/* Levels Grid */}
+      <div className="levels-grid">
+        <div className="level-row entry-row">
+          <span className="level-label">ENTRY</span>
+          <span className="level-price">${trade.entry}</span>
+        </div>
+        <div className="level-row tp1-row">
+          <span className="level-label">TP1 (50%)</span>
+          <span className="level-price">${trade.tp1.price}</span>
+          <span className="level-rr">{trade.tp1.rr}</span>
+        </div>
+        <div className="level-row tp2-row">
+          <span className="level-label">TP2 (30%)</span>
+          <span className="level-price">${trade.tp2.price}</span>
+          <span className="level-rr">{trade.tp2.rr}</span>
+        </div>
+        <div className="level-row tp3-row">
+          <span className="level-label">TP3 (20%)</span>
+          <span className="level-price">${trade.tp3.price}</span>
+          <span className="level-tag">TRAIL</span>
+        </div>
+        <div className="level-row sl-row">
+          <span className="level-label">STOP</span>
+          <span className="level-price sl-price">${trade.sl}</span>
+        </div>
+      </div>
+
+      {/* Meta Row */}
+      <div className="meta-row">
+        <span className="meta-item">⚡ {trade.leverage}</span>
+        <span className="meta-item">⏱ {trade.killClock}</span>
+        <span className="meta-item">📊 {trade.edge} ({trade.edgeSource})</span>
+      </div>
+
+      {/* Thesis */}
+      <div className="thesis-box">
+        <p className="thesis-text">{trade.thesis}</p>
+      </div>
+
+      {/* Invalidation */}
+      <div className="invalidation-box">
+        <span className="inv-label">INVALIDATION:</span> {trade.invalidation}
+      </div>
+
+      {/* Flags */}
+      {trade.flags && trade.flags.length > 0 && (
+        <div className="flags-box">
+          {trade.flags.map((flag, i) => (
+            <span key={i} className="flag-item">⚠️ {flag}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Factor Scores Mini Bar */}
+      {trade.scores && (
+        <div className="scores-row">
+          {Object.entries(trade.scores).map(([key, val]) => (
+            <div key={key} className="score-item">
+              <span className="score-label">{key.substring(0, 4).toUpperCase()}</span>
+              <div className="score-bar">
+                <div
+                  className={`score-fill ${val >= 70 ? 'score-high' : val >= 50 ? 'score-mid' : 'score-low'}`}
+                  style={{ width: `${val}%` }}
+                />
+              </div>
+              <span className="score-val">{val}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Styling Notes (match existing CLVRQuant dark theme):
+
+- Background: dark navy/charcoal (#0a0f1a or similar from your existing theme)
+- Card borders: subtle cyan/teal glow (like your existing green accents)
+- LONG cards: left border green (#00ff88 or your existing green)
+- SHORT cards: left border red (#ff4444)
+- TP prices: green text
+- SL price: red text
+- Entry price: white/bright text
+- Conviction bar: gradient from red (0-50) → yellow (50-70) → green (70-100)
+- Score bars: same gradient
+- Use your existing monospace font for prices/numbers
+- Cards should be 2 columns on desktop, 1 column stacked on mobile
+- Flag items: amber/yellow background with dark text
+
+-----
+
+## VERIFICATION
+
+Before marking complete:
+
+1. Trigger “Get Top 4 Trade Ideas” — confirm EXACTLY 4 trades appear
+1. Confirm each trade card shows: entry, TP1/TP2/TP3, SL, leverage, kill clock, conviction %, thesis, invalidation, flags, and factor score bars
+1. Confirm the macro status bar displays correctly at the top
+1. Confirm vol regime badge is visible
+1. Confirm the layout is responsive (test at mobile width)
+1. If the AI still returns fewer than 4, check the max_tokens value — it must be at least 4096
+
+## WHAT NOT TO DO
+
+❌ Do NOT create new database tables or API endpoints
+❌ Do NOT add new pages or tabs
+❌ Do NOT modify other features (watchlist, signals, alerts, etc.)
+❌ Do NOT change the existing navigation or layout structure
+❌ Only touch: the trade ideas prompt, the API call max_tokens, and the trade ideas display component

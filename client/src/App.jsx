@@ -1807,6 +1807,117 @@ export default function App(){
   );
 }
 
+function TradeIdeasDisplay({raw,C,MONO,SERIF}){
+  const [data,setData]=useState(null);
+  const [err,setErr]=useState(null);
+  useEffect(()=>{
+    try{
+      const cleaned=raw.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
+      let parsed;
+      const arrStart=cleaned.indexOf("[");const objStart=cleaned.indexOf("{");
+      if(objStart!==-1&&(arrStart===-1||objStart<arrStart)){
+        const end=cleaned.lastIndexOf("}");
+        if(end===-1)throw new Error("No JSON");
+        parsed=JSON.parse(cleaned.substring(objStart,end+1));
+      }else if(arrStart!==-1){
+        const end=cleaned.lastIndexOf("]");
+        if(end===-1)throw new Error("No JSON");
+        const arr=JSON.parse(cleaned.substring(arrStart,end+1));
+        parsed={trades:arr,generated:new Date().toISOString()};
+      }else throw new Error("No JSON found");
+      if(Array.isArray(parsed))parsed={trades:parsed,generated:new Date().toISOString()};
+      if(!parsed.trades||!Array.isArray(parsed.trades))throw new Error("Missing trades array");
+      setData(parsed);setErr(null);
+    }catch(e){setErr(raw);setData(null);}
+  },[raw]);
+  if(err)return<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{err}</div>;
+  if(!data)return null;
+  const convColor=(v)=>v>=70?"#00c787":v>=50?"#e8c96d":"#ff4060";
+  const scoreColor=(v)=>v>=70?"rgba(0,199,135,.7)":v>=50?"rgba(232,201,109,.7)":"rgba(255,64,96,.7)";
+  return(
+    <div data-testid="trade-ideas-container" style={{marginTop:12}}>
+      <div style={{background:"rgba(201,168,76,.04)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"12px 14px",marginBottom:8}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+          <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.gold,letterSpacing:"-0.02em"}}>TOP 4 TRADE IDEAS</div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {data.generated&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.08em"}}>{new Date(data.generated).toLocaleString()}</span>}
+            {data.regime&&<span data-testid="badge-regime" style={{fontFamily:MONO,fontSize:8,padding:"2px 8px",borderRadius:2,background:data.regime.score>60?"rgba(0,199,135,.1)":"rgba(255,64,96,.1)",border:`1px solid ${data.regime.score>60?"rgba(0,199,135,.3)":"rgba(255,64,96,.3)"}`,color:data.regime.score>60?C.green:C.red}}>{data.regime.label} {data.regime.score}/100</span>}
+            {data.volRegime&&<span data-testid="badge-vol" style={{fontFamily:MONO,fontSize:8,padding:"2px 8px",borderRadius:2,background:data.volRegime==="HIGH"?"rgba(255,64,96,.08)":data.volRegime==="LOW"?"rgba(100,120,160,.08)":"rgba(0,199,135,.08)",border:`1px solid ${data.volRegime==="HIGH"?"rgba(255,64,96,.25)":data.volRegime==="LOW"?"rgba(100,120,160,.25)":"rgba(0,199,135,.25)"}`,color:data.volRegime==="HIGH"?C.red:data.volRegime==="LOW"?C.muted:C.green}}>VOL: {data.volRegime}</span>}
+          </div>
+        </div>
+      </div>
+      {data.macroStatus&&<div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",background:data.macroStatus.clear?"rgba(0,199,135,.04)":"rgba(255,180,50,.06)",border:`1px solid ${data.macroStatus.clear?"rgba(0,199,135,.2)":"rgba(255,180,50,.25)"}`,borderRadius:2,marginBottom:8,flexWrap:"wrap"}}>
+        <span style={{fontFamily:MONO,fontSize:9,color:data.macroStatus.clear?C.green:"#ffb432",letterSpacing:"0.1em",fontWeight:700}}>{data.macroStatus.clear?"✅ MACRO: CLEAR":"⚠️ MACRO: CAUTION"}</span>
+        {data.macroStatus.nextEvent&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>Next: {data.macroStatus.nextEvent}</span>}
+        {data.macroStatus.notes&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>{data.macroStatus.notes}</span>}
+      </div>}
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {(data.trades||[]).map((trade,i)=>{
+          const isLong=trade.direction==="LONG";
+          const borderCol=isLong?"rgba(0,199,135,.4)":"rgba(255,64,96,.4)";
+          return(
+            <div key={i} data-testid={`trade-card-${i}`} style={{background:C.panel,border:`1px solid ${C.border}`,borderLeft:`3px solid ${borderCol}`,borderRadius:2,overflow:"hidden"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",borderBottom:`1px solid ${C.border}`,flexWrap:"wrap",gap:6}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontFamily:SERIF,fontWeight:900,fontSize:18,color:C.gold}}>#{trade.rank||i+1}</span>
+                  <span style={{fontFamily:MONO,fontSize:14,fontWeight:800,color:C.white,letterSpacing:"0.04em"}}>{trade.asset}</span>
+                  <span style={{fontFamily:MONO,fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:2,background:isLong?"rgba(0,199,135,.08)":"rgba(255,64,96,.08)",color:isLong?C.green:C.red,border:`1px solid ${isLong?"rgba(0,199,135,.3)":"rgba(255,64,96,.3)"}`}}>{isLong?"🟢":"🔴"} {trade.direction}</span>
+                </div>
+                <span style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em",background:"rgba(201,168,76,.06)",padding:"2px 8px",borderRadius:2,border:`1px solid rgba(201,168,76,.15)`}}>{trade.tradeType}</span>
+              </div>
+              <div style={{padding:"8px 14px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                  <span style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>CONVICTION</span>
+                  <div style={{flex:1,height:14,background:"rgba(255,255,255,.04)",borderRadius:2,overflow:"hidden",position:"relative"}}>
+                    <div style={{width:`${trade.conviction||0}%`,height:"100%",background:`linear-gradient(90deg, ${convColor(trade.conviction)}, ${convColor(trade.conviction)}aa)`,borderRadius:2,transition:"width .5s"}}/>
+                    <span style={{position:"absolute",right:6,top:1,fontFamily:MONO,fontSize:9,fontWeight:700,color:C.white}}>{trade.conviction}%</span>
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",fontFamily:MONO,fontSize:10,lineHeight:2}}>
+                  <div style={{color:C.muted}}>📍 ENTRY <span style={{color:C.white,fontWeight:700}}>${trade.entry}</span></div>
+                  <div style={{color:C.muted}}>🛑 STOP <span style={{color:C.red,fontWeight:700}}>${trade.sl}</span></div>
+                  <div style={{color:C.muted}}>🎯 TP1 ({trade.tp1?.pct||50}%) <span style={{color:C.green,fontWeight:700}}>${trade.tp1?.price}</span>{trade.tp1?.rr&&<span style={{color:C.muted2,fontSize:8}}> {trade.tp1.rr}</span>}</div>
+                  <div style={{color:C.muted}}>🎯 TP2 ({trade.tp2?.pct||30}%) <span style={{color:C.green,fontWeight:700}}>${trade.tp2?.price}</span>{trade.tp2?.rr&&<span style={{color:C.muted2,fontSize:8}}> {trade.tp2.rr}</span>}</div>
+                  <div style={{color:C.muted}}>🎯 TP3 ({trade.tp3?.pct||20}%) <span style={{color:C.green,fontWeight:700}}>${trade.tp3?.price}</span>{trade.tp3?.trailing&&<span style={{fontSize:7,padding:"1px 5px",borderRadius:2,background:"rgba(0,199,135,.1)",color:C.green,border:"1px solid rgba(0,199,135,.2)",marginLeft:4}}>TRAIL</span>}</div>
+                  <div/>
+                </div>
+                <div style={{display:"flex",gap:10,marginTop:6,padding:"6px 0",borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,flexWrap:"wrap"}}>
+                  {trade.leverage&&<span style={{fontFamily:MONO,fontSize:9,color:"#00d4ff"}}>⚡ {trade.leverage}</span>}
+                  {trade.killClock&&<span style={{fontFamily:MONO,fontSize:9,color:C.muted}}>⏱ {trade.killClock}</span>}
+                  {trade.edge&&<span style={{fontFamily:MONO,fontSize:9,color:C.gold}}>📊 {trade.edge} ({trade.edgeSource||"est"})</span>}
+                  {trade.postTp1&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>→ {trade.postTp1}</span>}
+                </div>
+                {trade.thesis&&<div style={{marginTop:8,padding:"8px 10px",background:"rgba(201,168,76,.03)",borderRadius:2,border:`1px solid rgba(201,168,76,.1)`}}>
+                  <div style={{fontFamily:SERIF,fontStyle:"italic",fontSize:11,color:C.text,lineHeight:1.7}}>{trade.thesis}</div>
+                </div>}
+                {trade.invalidation&&<div style={{marginTop:6,padding:"6px 10px",background:"rgba(255,64,96,.04)",borderRadius:2,border:`1px solid rgba(255,64,96,.12)`}}>
+                  <span style={{fontFamily:MONO,fontSize:8,color:C.red,letterSpacing:"0.1em",fontWeight:700}}>INVALIDATION: </span>
+                  <span style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>{trade.invalidation}</span>
+                </div>}
+                {trade.flags&&trade.flags.length>0&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>
+                  {trade.flags.map((f,fi)=><span key={fi} style={{fontFamily:MONO,fontSize:8,padding:"2px 8px",borderRadius:2,background:"rgba(255,180,50,.08)",border:"1px solid rgba(255,180,50,.2)",color:"#ffb432"}}>⚠️ {f}</span>)}
+                </div>}
+                {trade.scores&&<div style={{display:"flex",gap:4,marginTop:8,flexWrap:"wrap"}}>
+                  {Object.entries(trade.scores).map(([k,v])=>(
+                    <div key={k} style={{flex:"1 1 auto",minWidth:40,textAlign:"center"}}>
+                      <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.08em",marginBottom:2}}>{k.substring(0,4).toUpperCase()}</div>
+                      <div style={{height:4,background:"rgba(255,255,255,.04)",borderRadius:2,overflow:"hidden"}}>
+                        <div style={{width:`${v}%`,height:"100%",background:scoreColor(v),borderRadius:2}}/>
+                      </div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,marginTop:1}}>{v}</div>
+                    </div>
+                  ))}
+                </div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{textAlign:"center",padding:"10px 0",fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em",marginTop:6}}>⚠ AI ANALYSIS ONLY · NOT FINANCIAL ADVICE</div>
+    </div>
+  );
+}
+
 function Dashboard({user,setUser,onShowAuth}){
   const {C,isDark,toggle:toggleTheme}=useContext(ThemeCtx);
   const {regime:dbRegime,fearGreed:dbFearGreed,killSwitch:dbKillSwitch}=useDataBus();
@@ -1861,6 +1972,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [toast,setToast]=useState(null);
   const [aiInput,setAiInput]=useState("");
   const [aiOutput,setAiOutput]=useState("");
+  const [aiOutputMode,setAiOutputMode]=useState("text");
   const [aiLoading,setAiLoading]=useState(false);
   const [aiTimeframe,setAiTimeframe]=useState("today");
   const [aiMode,setAiMode]=useState("chat");
@@ -2534,7 +2646,7 @@ Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 r
   // ── AI ────────────────────────────────────────────────
   const runAI=async()=>{
     if(!aiInput.trim()||aiLoading)return;
-    setAiLoading(true);setAiOutput("");
+    setAiLoading(true);setAiOutput("");setAiOutputMode("text");
     const nowISO=new Date().toISOString();
     const nowET=new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",timeZone:"America/New_York",hour12:false});
     const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" LIVE":" est"}`:"n/a";};
@@ -2670,7 +2782,7 @@ Be decisive, specific, and numerical. Use exact live prices. Never force a signa
   // ── Trade Ideas (QuantBrain integrated) ─────────────────
   const runTradeIdeas=async()=>{
     if(aiLoading)return;
-    setAiLoading(true);setAiOutput("");
+    setAiLoading(true);setAiOutput("");setAiOutputMode("trades");
     const btc=cryptoPrices["BTC"]||{};
     const fundRate=btc.funding||0;
     const volH=btc.volHistory||[];const lastVol=volH[volH.length-1]||0;
@@ -2678,95 +2790,66 @@ Be decisive, specific, and numerical. Use exact live prices. Never force a signa
     const volSpike=avgVol>0?lastVol/avgVol:1;
     const oiH=btc.oiHistory||[];
     const oiTrend=oiH.length>=2?(oiH[oiH.length-1]>oiH[oiH.length-2]*1.02?"rising":oiH[oiH.length-1]<oiH[oiH.length-2]*0.98?"falling":"flat"):"flat";
-    let cScore=0;const bd=[];
-    if(fundRate>0.01){cScore-=1;bd.push("Funding +"+fundRate.toFixed(4)+"% (longs crowded, -1)");}
-    else if(fundRate<-0.01){cScore+=1;bd.push("Funding "+fundRate.toFixed(4)+"% (shorts crowded, +1)");}
-    else bd.push("Funding neutral (0)");
-    if(volSpike>=2){cScore+=1;bd.push("Volume "+volSpike.toFixed(1)+"x avg (momentum, +1)");}
-    else bd.push("Volume "+volSpike.toFixed(1)+"x (no spike, 0)");
-    if(oiTrend==="rising"){cScore+=1;bd.push("OI rising (new money, +1)");}
-    else if(oiTrend==="falling"){cScore-=1;bd.push("OI falling (closing, -1)");}
-    else bd.push("OI flat (0)");
+    let cScore=0;
+    if(fundRate>0.01)cScore-=1;
+    else if(fundRate<-0.01)cScore+=1;
+    if(volSpike>=2)cScore+=1;
+    if(oiTrend==="rising")cScore+=1;
+    else if(oiTrend==="falling")cScore-=1;
     const regime=volSpike>=2&&oiTrend==="rising"?"MOMENTUM":"MEAN REVERSION";
     const prob=Math.max(5,Math.min(95,50+(cScore/8)*40));
     const kellyPct=Math.max(0,Math.min(25,(prob/100)-(1-prob/100)/2))*100;
     const snap=(sym,p)=>{const d=p[sym];return d?`${fmt(d.price,sym)} (${pct(d.chg)})${d.live?" LIVE":" est"}`:"n/a";};
-    // ── HL PERP data (WebSocket streaming — <1s latency) ──
     const fmtHLPerp2=(sym)=>{const d=storePerps[sym];if(!d?.price)return null;const chg=d.change24h!=null?` (${d.change24h>=0?"+":""}${d.change24h.toFixed(2)}%)`:"";const fund=d.funding!=null?` Fund:${d.funding>=0?"+":""}${(d.funding*100).toFixed(4)}%/8h`:" Fund:n/a";const oi=d.openInterest&&d.price?` OI:$${((d.openInterest*d.price)/1e9).toFixed(2)}B`:"";return`${sym} $${mfmtPrice(d.price)}${chg}${fund}${oi}`;};
     const hlCryptoPerpSnap2=CRYPTO_SYMS.map(fmtHLPerp2).filter(Boolean).join(" | ")||"HL perp data loading";
     const hlEquityPerpSnap2=EQUITY_SYMS.map(fmtHLPerp2).filter(Boolean).join(" | ");
     const hlMetalPerpSnap2=METALS_SYMS.map(fmtHLPerp2).filter(Boolean).join(" | ");
     const hlSpotSnap2=CRYPTO_SYMS.map(s=>{const d=storeSpot[s];if(!d?.price)return null;const chg=d.change24h!=null?` (${d.change24h>=0?"+":""}${d.change24h.toFixed(2)}%)`:"";return`${s} $${mfmtPrice(d.price)}${chg}`;}).filter(Boolean).join(" | ")||"HL spot data loading";
-    // ── Legacy/additional market data ──
     const cryptoSnap=CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];const f=d?.funding?` F:${pct(d.funding,4)}/8h`:"";const oi=d?.oi?` OI:$${(d.oi/1e6).toFixed(0)}M`:"";return`${s}:${snap(s,cryptoPrices)}${f}${oi}`;}).join(" | ");
     const stockSnap=EQUITY_SYMS.map(s=>`${s}:${snap(s,equityPrices)}`).join(" | ");
     const metalSnap=METALS_SYMS.map(s=>`${METAL_LABELS[s]||s}:${snap(s,metalPrices)}`).join(" | ");
     const fxSnap=FOREX_SYMS.map(s=>`${FOREX_LABELS[s]||s}:${snap(s,forexPrices)}`).join(" | ");
     const nowISO2=new Date().toISOString();
     const nowET2=new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",timeZone:"America/New_York",hour12:false});
-    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS [fetched:${nowISO2}]: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""} — ${s.desc.substring(0,80)}`).join(" | ")}`:"";
-    const newsSnap=newsFeed.length>0?`\nLATEST NEWS [fetched:${nowISO2}]: ${newsFeed.filter(n=>!n.political).slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:"";
-    const politicalItems2=newsFeed.filter(n=>n.political);
-    const politicalSnap2=politicalItems2.length>0?`\nPOLITICAL ALPHA [fetched:${nowISO2}] — Factor into trade bias, risk sizing, and macro overlay:\n  ${politicalItems2.slice(0,6).map(n=>`[${n.marketImpact?.toUpperCase()||"NEUTRAL"}] [${n.source}] ${n.title.substring(0,100)} (assets:${n.assets?.join(",")||"macro"})`).join("\n  ")}`:"";
-    const macroSnap2=macroEvents.length>0?`\nMACRO EVENTS [fetched:${nowISO2}]:\n  ${macroEvents.slice(0,15).map(e=>`${e.date} ${e.timeET||e.time||""} ET | ${e.region||e.country}: ${e.name} | Impact:${e.impact} | Prev:${e.previous||e.current||"—"} | Fcast:${e.forecast||"—"}${(({actual:a,tag:t}=macroActualLabel(e))=>a?` | ACTUAL:${a} ${t}`:e.isPast?" | STATUS:PENDING DATA":"")()}`).join("\n  ")}`:"";
-    const storeModeSnap2=storeMode?`\nCLVR MARKET INTELLIGENCE [${storeTotalMarkets} live markets]: Regime=${storeMode.regime} Score=${storeMode.score}/100 | Crypto=${storeMode.crypto?.regime||"N/A"} ${storeMode.crypto?.score||"?"}% | Equities=${storeMode.equities?.regime||"N/A"} ${storeMode.equities?.score||"?"}% | Commodities=${storeMode.commodities?.regime||"N/A"} ${storeMode.commodities?.score||"?"}%${storeAlerts?.length>0?` | AUTO-ALERTS: ${storeAlerts.slice(0,3).map(a=>`${a.ticker} ${a.type} ${a.severity}`).join(", ")}`:""}${storeMode.correlations?.length>0?` | CROSS-ASSET: ${storeMode.correlations.slice(0,2).map(c=>`${c.signal}: ${c.msg.slice(0,60)}`).join(" | ")}`:""}`:"";
-    const regimeSnap2=regimeData?`\nCOMMAND CENTER — RISK ENGINE: CrashProb=${regimeData.crash?.probability||0}% (${regimeData.crash?.probability>80?"⚠️ EXTREME":regimeData.crash?.probability>60?"⚠️ HIGH":regimeData.crash?.probability>40?"ELEVATED":"LOW"}) | Liquidity=${regimeData.liquidity?.mode||"N/A"} Score=${regimeData.liquidity?.score||50}/100 | Regime=${regimeData.regime?.regime||"N/A"} Score=${regimeData.regime?.score||50}/100${regimeData.regime?.components?` | Components: ${Object.entries(regimeData.regime.components).slice(0,4).map(([k,v])=>`${k}=${v}`).join(", ")}`:""}`:"";
-    const liqHeatSnap2=(()=>{const liqCtx=["BTC","ETH","SOL"].map(sym=>{const d=cryptoPrices[sym];if(!d?.price)return null;const oiM=(d.oi||0)/1e6;return`${sym}: mark=$${d.price.toLocaleString()} OI=$${oiM.toFixed(0)}M funding=${(d.funding||0).toFixed(4)}%`;}).filter(Boolean).join(" | ");return liqCtx?`\nLIQUIDATION HEATMAP CONTEXT: ${liqCtx}`:""})();
-    const sys=`You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
+    const sigSnap=liveSignals.length>0?`\nLIVE SIGNALS: ${liveSignals.slice(0,5).map(s=>`${s.token} ${s.dir} ${s.pctMove?s.pctMove+"%":""}`).join(" | ")}`:"";
+    const newsSnap=newsFeed.length>0?`\nNEWS: ${newsFeed.filter(n=>!n.political).slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:"";
+    const macroSnap2=macroEvents.length>0?`\nMACRO: ${macroEvents.slice(0,10).map(e=>`${e.date} ${e.timeET||e.time||""} ET ${e.region||e.country}: ${e.name} Impact:${e.impact}`).join(" | ")}`:"";
+    const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month)":"INTRADAY/SWING";
+    const sys=`You are CLVRQuantAI's Trade Idea Generator. You MUST return exactly 4 trade ideas as a JSON object. No markdown. No prose. Only valid JSON.
 
-RULES — apply to EVERY output:
-1. TRADE TYPE: SCALP (1-4H), DAY TRADE (4-24H), SWING (1-7D), POSITION (1-4W). Default DAY TRADE.
-2. VOL REGIME: ATR vs 20-period avg. HIGH(>1.5x): compress TP 30%, widen SL 20%. NORMAL(0.7-1.5x): standard. LOW(<0.7x): skip or reduce 50%.
-3. ATR-SCALED TP/SL: TP1=0.5x ATR(50%), TP2=1x ATR(30%), TP3=1.5x ATR(20% trail). Min R:R 1.2:1 to TP1.
-4. KILL CLOCK: SCALP=2-4H, DAY=12-24H, SWING=48-72H, POSITION=5-7D.
-5. MACRO GATE: Block within 2H of FOMC/CPI/NFP. Dampen 20% within 4H of PPI/GDP/Fed speakers.
-6. OI OVERLAY: OI rising+price rising=bullish, OI rising+price falling=bearish, OI falling+price rising=squeeze, OI falling+price falling=avoid longs.
-7. POST-TP1: SL→BE. After TP2: trail 0.5x ATR. Kill clock expiry: close at market.
+RULES:
+- Return EXACTLY 4 trades, ranked by conviction score (highest first)
+- Cover diverse assets (mix of crypto, equity, FX, commodity — don't repeat asset classes unless one class dominates)
+- Apply ATR-scaled TP/SL: TP1=0.5x ATR(4H) at 50%, TP2=1x ATR at 30%, TP3=1.5x ATR at 20% trailing
+- Vol regime: compare ATR to 20-period avg. HIGH(>1.5x): compress TP 30%, widen SL 20%. LOW(<0.7x): skip asset.
+- Macro gate: block if high-impact event within 2H, note upcoming events
+- Minimum R:R to TP1: 1.2:1
+- Kill clock: SCALP 2-4H, DAY 12-24H, SWING 48-72H
+- If fewer than 4 qualify, relax threshold to 50% edge but flag as LOW CONVICTION
+- Label edge: "OI-verified" if live OI, "estimated" if inferred, "no OI" if unavailable
+- Timeframe focus: ${tfLabel}
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET: ${nowET2}
-[Data: ${nowISO2}]
 
-━━━ SECTION A — HL PERPS [LIVE] ━━━
-${hlCryptoPerpSnap2}${hlEquityPerpSnap2?`\nEQUITY PERPS: ${hlEquityPerpSnap2}`:""}${hlMetalPerpSnap2?`\nCOMMODITY PERPS: ${hlMetalPerpSnap2}`:""}
-
-━━━ SECTION B — HL SPOT ━━━
-${hlSpotSnap2}
-
-━━━ SECTION C — DELAYED DATA ━━━
-CRYPTO: ${cryptoSnap} | EQUITIES: ${stockSnap} | COMMODITIES: ${metalSnap} | FX: ${fxSnap}${sigSnap}${newsSnap}${politicalSnap2}${storeModeSnap2}${regimeSnap2}${liqHeatSnap2}
-${macroSnap2}${twAiContext||""}
-
-DATA PRIORITY: Perps→SECTION A. Spot→B then C. FX→C only. Mismatch >0.5%→flag basis.
-
+PERPS [LIVE]: ${hlCryptoPerpSnap2}${hlEquityPerpSnap2?` | EQ: ${hlEquityPerpSnap2}`:""}${hlMetalPerpSnap2?` | CMD: ${hlMetalPerpSnap2}`:""}
+SPOT: ${hlSpotSnap2}
+DELAYED: CRYPTO: ${cryptoSnap} | EQ: ${stockSnap} | CMD: ${metalSnap} | FX: ${fxSnap}${sigSnap}${newsSnap}${macroSnap2}
 CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
 
-ANALYSIS STEPS: 1. Data freshness check 2. Macro gate (HIGH-impact within 6h→⚠️) 3. Stop/TF consistency 4. Resistance map before TP 5. Quiet-day filter (no macro 8h→filter FX/Gold) 6. TP validation (move needed vs daily range) 7. Correlation filter (max 2 per sector)
-
-${aiTimeframe==="today"?"INTRADAY: Quiet days→filter FX/Gold/stocks. Crypto always OK.":aiTimeframe==="midterm"?"SWING (1-4W): FX/Gold valid. Focus macro regime shifts.":"POSITION (1-3M): Focus secular trends, central bank divergence."}
-
-OUTPUT per trade: TIER [1/2/3] | [ASSET] [LONG/SHORT] | Entry $X | SL $X (-X%) | TP1 $X R:R X:1 | TP2 $X | Lev Xx | Conviction X% | Kelly X% | Edge [reason] | Flags [list]
-
-STRUCTURE: 1. Regime snapshot 2. Macro context 3. Top 4 trades (crypto/equity/commodity/forex) 4. Correlation note 5. Best trade now
-⚠️ AI analysis only. Use live prices. Never force a signal.`
-    const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week horizon)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month horizon)":"TODAY'S (intraday/swing)";
-    const tfHint=aiTimeframe==="midterm"?"Focus on weekly chart setups, sector rotation, macro trends. Entries can be scaled in. Use wider stops and targets appropriate for multi-week holds.":aiTimeframe==="longterm"?"Focus on monthly chart structures, macro regime shifts, secular trends, yield curves, commodity supercycles. Position sizing for multi-month conviction holds with wide stops.":"Focus on intraday and short-term swing setups. Use tight entries and stops based on current price action.";
-    const userMsg=`Give me ${tfLabel} TOP 4 TRADE IDEAS with full quantitative analysis.
-
-${tfHint}
-
-For EACH of the 4 trades provide the EXACT format from your instructions: Entry, Stop Loss, TP1, TP2, Confidence %, Kelly Size, Rationale.
-Use live prices from the data provided. Scan all asset classes (crypto, equities, commodities, forex) to find the 4 highest-conviction setups right now.`;
+RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
+{"generated":"ISO-DATE","regime":{"score":63,"label":"RISK-ON","bias":"Mean-Reversion"},"macroStatus":{"clear":true,"nextEvent":"FOMC Williams 08:35 ET Apr 16","notes":"No blocks active"},"volRegime":"HIGH","trades":[{"rank":1,"asset":"INJ/USDT","direction":"LONG","tradeType":"DAY TRADE","entry":3.29,"sl":3.07,"tp1":{"price":3.58,"pct":50,"rr":"1.3:1"},"tp2":{"price":3.82,"pct":30,"rr":"2.4:1"},"tp3":{"price":4.10,"pct":20,"trailing":true},"leverage":"3x","killClock":"24H","conviction":72,"edge":"72%","edgeSource":"estimated","thesis":"Short thesis here.","invalidation":"Break below $3.07 with volume","flags":["Small OI","HIGH vol"],"scores":{"trend":75,"momentum":80,"structure":68,"oi":65,"volume":55,"macro":70},"postTp1":"SL to breakeven at $3.29"}]}`;
+    const userMsg=`Generate ${tfLabel} TOP 4 TRADE IDEAS. Return ONLY valid JSON matching the structure in your instructions. No markdown, no text before or after. Use live prices provided.`;
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg,maxTokens:4096})});
       const data=await res.json();
       if(!res.ok){
-        if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Trade Ideas are exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• Top 4 trade ideas across all asset classes\n• Entry / Stop Loss / TP1 / TP2 for each trade\n• Confidence levels & Kelly position sizing\n• Bayesian probability estimates\n\nTap UPGRADE in the top bar.");
-        else if(data.error==="__MAINTENANCE__"||res.status===503)setAiOutput("🔧 CLVR AI Maintenance\n\nOur AI intelligence engine is currently undergoing maintenance and will be back shortly.\n\nPlease try again in a few minutes — all other features remain fully operational.");
-        else setAiOutput(data.error||`Error ${res.status}`);
+        if(res.status===401||res.status===403){setAiOutput("✦ PRO FEATURE\n\nAI Trade Ideas are exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• Top 4 trade ideas across all asset classes\n• Entry / Stop Loss / TP1 / TP2 for each trade\n• Confidence levels & Kelly position sizing\n• Bayesian probability estimates\n\nTap UPGRADE in the top bar.");setAiOutputMode("text");}
+        else if(data.error==="__MAINTENANCE__"||res.status===503){setAiOutput("🔧 CLVR AI Maintenance\n\nOur AI intelligence engine is currently undergoing maintenance and will be back shortly.\n\nPlease try again in a few minutes — all other features remain fully operational.");setAiOutputMode("text");}
+        else{setAiOutput(data.error||`Error ${res.status}`);setAiOutputMode("text");}
         setAiLoading(false);return;
       }
       setAiOutput(data.text||"No response.");
-    }catch(e){setAiOutput(`Error: ${e.message}`);}
+    }catch(e){setAiOutput(`Error: ${e.message}`);setAiOutputMode("text");}
     setAiLoading(false);
   };
 
@@ -4226,7 +4309,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
               <button data-testid="button-trade-ideas" onClick={runTradeIdeas} disabled={aiLoading} style={{width:"100%",height:48,background:aiLoading?"rgba(0,199,135,.03)":"rgba(0,199,135,.08)",color:aiLoading?C.muted:C.green,border:`1px solid ${aiLoading?"rgba(0,199,135,.12)":"rgba(0,199,135,.3)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer",letterSpacing:"0.02em"}}>
                 {aiLoading?"QuantBrain Analyzing...":`Get Top 4 ${aiTimeframe==="today"?"Today's":aiTimeframe==="midterm"?"Mid-Term":"Long-Term"} Trade Ideas ✦`}
               </button>
-              {aiOutput&&<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>}
+              {aiOutput&&aiOutputMode==="trades"?<TradeIdeasDisplay raw={aiOutput} C={C} MONO={MONO} SERIF={SERIF}/>:aiOutput?<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>:null}
               <TwitterSignalPanel ticker={aiInput.match(/\b(BTC|ETH|SOL|NVDA|TSLA|AAPL|MSFT|MSTR|META|PLTR|AMD|COIN|DOGE|XAU|XAG|OIL|EURUSD|USDJPY|GBPUSD|HYPE|TRUMP|AVAX|LINK|ARB|OP|WIF|BONK|JUP|WTI|XAUUSD)/i)?.[1]?.toUpperCase()||"BTC"} />
               {liveSignals.length>0&&<div style={{marginTop:16}}>
                 <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.18em",marginBottom:10}}>AI TRADE REASONINGS · {i18n.masterScore}</div>
