@@ -1109,16 +1109,25 @@ function TrackRecordTab({isPro,onUpgrade}){
   const[history,setHistory]=useState([]);
   const[histLocked,setHistLocked]=useState(false);
   const[loading,setLoading]=useState(true);
-  useEffect(()=>{
+  const[refreshing,setRefreshing]=useState(false);
+  const[lastFetch,setLastFetch]=useState(null);
+  const fetchData=useCallback((isManual=false)=>{
+    if(isManual)setRefreshing(true);
     Promise.all([
-      fetch("/api/track-record").then(r=>r.json()).catch(()=>null),
-      fetch("/api/signal-history?limit=30").then(r=>r.json()).catch(()=>({signals:[],isPaidUser:false})),
+      fetch("/api/track-record",{credentials:"include"}).then(r=>r.json()).catch(()=>null),
+      fetch("/api/signal-history?limit=30",{credentials:"include"}).then(r=>r.json()).catch(()=>({signals:[],isPaidUser:false})),
     ]).then(([s,h])=>{
       if(s)setStats(s);
       setHistory(h.signals||[]);
       setHistLocked(!isPro);
-    }).finally(()=>setLoading(false));
-  },[]);
+      setLastFetch(new Date());
+    }).finally(()=>{setLoading(false);setRefreshing(false);});
+  },[isPro]);
+  useEffect(()=>{
+    fetchData();
+    const iv=setInterval(()=>fetchData(),60000);
+    return()=>clearInterval(iv);
+  },[fetchData]);
   const panel2={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,marginBottom:10};
   const winRate=stats?.winRate||0;
   const winColor=winRate>=60?C.green:winRate>=50?C.orange:C.red;
@@ -1126,17 +1135,22 @@ function TrackRecordTab({isPro,onUpgrade}){
   if(loading)return<div style={{padding:32,textAlign:"center",fontFamily:MONO,fontSize:10,color:C.muted}}>Loading track record…</div>;
   return(<>
     <div style={{...panel2,border:`1px solid rgba(201,168,76,.18)`}}>
-      <div style={{padding:"22px 18px 12px",textAlign:"center"}}>
-        <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.white}}>Signal <span style={{color:C.gold}}>Track Record</span></div>
-        <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.3em",marginTop:4}}>LIVE PERFORMANCE ANALYTICS</div>
-        {!stats?.total&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:10,lineHeight:1.7}}>Track record is building — signals are logged automatically and outcomes resolved every 30 minutes.</div>}
+      <div style={{padding:"22px 18px 12px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+          <div style={{textAlign:"center",flex:1}}>
+            <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.white}}>Signal <span style={{color:C.gold}}>Track Record</span></div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.3em",marginTop:4}}>LIVE PERFORMANCE ANALYTICS</div>
+          </div>
+          <button data-testid="btn-refresh-track-record" onClick={()=>fetchData(true)} disabled={refreshing} style={{flexShrink:0,fontFamily:MONO,fontSize:8,color:refreshing?C.muted:C.gold,background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,${refreshing?".1":".3"})`,borderRadius:3,padding:"5px 10px",cursor:refreshing?"default":"pointer",letterSpacing:"0.1em",transition:"all .2s"}}>{refreshing?"REFRESHING…":"↻ REFRESH"}</button>
+        </div>
+        {!stats?.total&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:10,lineHeight:1.7,textAlign:"center"}}>Track record is building — signals are logged automatically and outcomes resolved every 30 minutes.</div>}
       </div>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
       {[
         {l:"WIN RATE",v:`${winRate}%`,c:winColor,s:"resolved signals"},
         {l:"TOTAL SIGNALS",v:stats?.total||0,c:C.white,s:"all-time tracked"},
-        {l:"AVG PnL",v:stats?.avgPnl?`${stats.avgPnl>=0?"+":""}${stats.avgPnl}%`:"—",c:C.green,s:"per resolved signal"},
+        {l:"AVG PnL",v:stats?.avgPnl!=null&&stats.avgPnl!==0?`${stats.avgPnl>=0?"+":""}${stats.avgPnl}%`:"—",c:stats?.avgPnl!=null&&stats.avgPnl<0?C.red:C.green,s:"per resolved signal"},
         {l:"WINS / LOSSES",v:`${stats?.wins||0} / ${stats?.losses||0}`,c:C.muted2,s:"resolved outcomes"},
       ].map(({l,v,c,s})=>(
         <div key={l} style={{...panel2,marginBottom:0,padding:"14px",textAlign:"center"}}>
@@ -1256,7 +1270,7 @@ function TrackRecordTab({isPro,onUpgrade}){
       )}
     </div>
     <div style={{fontFamily:MONO,fontSize:7,color:C.muted,padding:"4px 0 12px",textAlign:"center"}}>
-      Last updated: {stats?.lastUpdated?new Date(stats.lastUpdated).toLocaleString():"—"} · Win/Loss based on TP1 price target hit
+      Last updated: {lastFetch?lastFetch.toLocaleTimeString():"—"} · Auto-refreshes every 60s · Win/Loss based on TP1 hit
     </div>
   </>);
 }
