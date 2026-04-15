@@ -707,8 +707,8 @@ function detectMoves() {
     // Compute volume multiplier from price history (use point count as proxy for volume activity)
     const recentPts = hist.filter(p => now - p.ts <= MOVE_WINDOW);
     const olderPts = hist.filter(p => now - p.ts > MOVE_WINDOW && now - p.ts <= MOVE_WINDOW * 4);
-    const avgRecentVol = olderPts.length > 0 ? olderPts.length / 3 : 1;
-    const volumeMult = avgRecentVol > 0 ? recentPts.length / avgRecentVol : 1;
+    const avgRecentVol = olderPts.length > 0 ? olderPts.length / 3 : 0;
+    const volumeMult = avgRecentVol > 1 ? recentPts.length / avgRecentVol : 1;
 
     // ── MULTI-FACTOR SIGNAL QUALITY CHECKS (FIX 6b) ─────────────────────────
     const prev1minPts = hist.filter(p => now - p.ts <= 60000 && now - p.ts > 5000);
@@ -723,8 +723,8 @@ function detectMoves() {
         detail: `≥${thresh.minMove}% required`,
       },
       volume: {
-        pass: volumeMult >= thresh.minVolMult || volumeMult === 1,
-        label: `Activity ${volumeMult.toFixed(1)}x avg`,
+        pass: volumeMult >= thresh.minVolMult || avgRecentVol <= 1,
+        label: avgRecentVol <= 1 ? "Volume baseline insufficient — passed" : `Activity ${volumeMult.toFixed(1)}x avg`,
         detail: `≥${thresh.minVolMult}x required`,
       },
       minOI: {
@@ -3027,14 +3027,32 @@ Every level must be technically defensible. Return JSON only.`;
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method:"POST",
         headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
-        body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:2000, system, messages:[{ role:"user", content:userMsg }] }),
+        body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:3000, system, messages:[{ role:"user", content:userMsg }] }),
       });
       if (!aiRes.ok) { const e = await aiRes.text(); console.error("[/api/quant]", e); return res.status(502).json({ error:"AI Engine failed." }); }
       const aiData: any = await aiRes.json();
-      const rawText = aiData.content?.[0]?.text || "";
-      const clean = rawText.replace(/```json|```/g, "").trim();
-      let parsed: any;
-      try { parsed = JSON.parse(clean); } catch { console.error("[/api/quant parse]", clean.slice(0,200)); return res.status(500).json({ error:"AI returned malformed data." }); }
+      if (aiData.error) { console.error("[/api/quant] API error:", aiData.error.message || aiData.error); return res.status(502).json({ error: "AI Engine failed." }); }
+      const rawText = (aiData.content || []).map((b: any) => b.text || "").join("");
+      if (!rawText.trim()) {
+        console.error("[/api/quant] Empty AI response, stop_reason:", aiData.stop_reason);
+        return res.status(502).json({ error: "AI Engine returned empty response — please retry." });
+      }
+      const repairJson = (s: string): any => {
+        let t = s.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+        if (t.includes("{")) t = t.slice(t.indexOf("{"));
+        if (t.lastIndexOf("}") > 0) t = t.slice(0, t.lastIndexOf("}") + 1);
+        t = t.replace(/,\s*([}\]])/g, "$1");
+        try { return JSON.parse(t); } catch { return null; }
+      };
+      let parsed: any = repairJson(rawText);
+      if (!parsed) {
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = repairJson(jsonMatch[0]);
+      }
+      if (!parsed) {
+        console.error("[/api/quant parse]", rawText.slice(0,500));
+        return res.status(500).json({ error: "AI returned malformed data — please retry." });
+      }
       parsed.indicators        = ind;
       parsed.multi_tf          = confluence;
       parsed.bayesian          = bayesian;
@@ -3350,13 +3368,27 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
       }
 
       const aiData: any = await aiRes.json();
-      const rawText = aiData.content?.[0]?.text || "";
-      const clean = rawText.replace(/```json|```/g, "").trim();
-
-      let parsed: any;
-      try { parsed = JSON.parse(clean); } catch {
-        console.error("[/api/kronos parse]", clean.slice(0, 200));
-        return res.status(500).json({ error: "Kronos returned malformed data." });
+      if (aiData.error) { console.error("[/api/kronos] API error:", aiData.error.message || aiData.error); return res.status(502).json({ error: "Kronos AI Engine failed." }); }
+      const rawTextK = (aiData.content || []).map((b: any) => b.text || "").join("");
+      if (!rawTextK.trim()) {
+        console.error("[/api/kronos] Empty AI response");
+        return res.status(502).json({ error: "Kronos returned empty response — please retry." });
+      }
+      const repairJsonK = (s: string): any => {
+        let t = s.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+        if (t.includes("{")) t = t.slice(t.indexOf("{"));
+        if (t.lastIndexOf("}") > 0) t = t.slice(0, t.lastIndexOf("}") + 1);
+        t = t.replace(/,\s*([}\]])/g, "$1");
+        try { return JSON.parse(t); } catch { return null; }
+      };
+      let parsed: any = repairJsonK(rawTextK);
+      if (!parsed) {
+        const jsonMatch = rawTextK.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = repairJsonK(jsonMatch[0]);
+      }
+      if (!parsed) {
+        console.error("[/api/kronos parse]", rawTextK.slice(0, 500));
+        return res.status(500).json({ error: "Kronos returned malformed data — please retry." });
       }
 
       if (!parsed.volatility_forecast?.annualized_pct) {
