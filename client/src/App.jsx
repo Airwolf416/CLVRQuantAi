@@ -463,11 +463,11 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai","watchlist"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal",watchlist:"My Watchlist"};
-  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)",watchlist:"Track up to 20 assets · live prices · signal alerts · funding rates · 1-tap to trade"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
+  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
       {/* Icon + heading */}
@@ -742,7 +742,7 @@ function Badge({label,color="gold",style={}}){
 }
 
 // ─── PRICE ROW (Bloomberg-style tick arrows + flash) ──
-function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched,marketClosed}){
+function PriceRow({sym,d,extra,label,flash,marketClosed}){
   if(!d)return null;
   const isUp=Number(d.chg)>=0;
   const tickUp=flash==="green";
@@ -758,7 +758,6 @@ function PriceRow({sym,d,extra,label,flash,onToggleWatch,watched,marketClosed}){
         <div style={{display:"flex",alignItems:"center",gap:7}}>
           <span style={{fontFamily:MONO,fontWeight:600,fontSize:13,color:C.text,letterSpacing:"0.05em"}}>{sym}</span>
           {label&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>{label}</span>}
-          <button onClick={()=>onToggleWatch(sym)} style={{background:"none",border:"none",cursor:"pointer",padding:"4px",fontSize:16,color:watched?C.gold:C.muted,opacity:watched?1:.3,transition:"all .2s",lineHeight:1}}>✦</button>
         </div>
         {extra&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>{extra}</div>}
       </div>
@@ -792,7 +791,7 @@ function holdWindowLabel(tf){
 }
 
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
-function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade,regimeName,regimeMult,watchedSymbols,onToggleWatch}){
+function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade,regimeName,regimeMult}){
   const{C}=useContext(ThemeCtx);
   const[expanded,setExpanded]=useState(false);
   const[secsLeft,setSecsLeft]=useState(()=>sig.locked?Math.max(0,30*60-Math.floor((Date.now()-sig.ts)/1000)):0);
@@ -801,7 +800,6 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
     const t=setInterval(()=>setSecsLeft(s=>{if(s<=1){clearInterval(t);return 0;}return s-1;}),1000);
     return()=>clearInterval(t);
   },[sig.locked,secsLeft]);
-  const isWatched=watchedSymbols&&watchedSymbols.has(sig.token);
   const isLong=sig.dir==="LONG";
   const dirColor=isLong?C.green:C.red;
   const dirBg=isLong?"rgba(0,199,135,.06)":"rgba(255,64,96,.06)";
@@ -839,7 +837,7 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
               {!sig.locked&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.06)",color:C.gold,border:"1px solid rgba(201,168,76,.25)",fontFamily:MONO,letterSpacing:"0.1em"}}>ALPHA-DETECT</span>}
               {sig.locked&&secsLeft>0&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(255,140,0,.08)",color:"#ff8c00",border:"1px solid rgba(255,140,0,.35)",fontFamily:MONO,letterSpacing:"0.1em"}}>⏱ UNLOCKS {Math.floor(secsLeft/60)}:{String(secsLeft%60).padStart(2,"0")}</span>}
               {sig.locked&&secsLeft===0&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(255,140,0,.08)",color:"#ff8c00",border:"1px solid rgba(255,140,0,.35)",fontFamily:MONO,letterSpacing:"0.1em"}}>⏱ 30M DELAYED</span>}
-              {isWatched&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(201,168,76,.08)",color:C.gold2,border:"1px solid rgba(201,168,76,.4)",fontFamily:MONO,letterSpacing:"0.1em"}}>★ WATCHED</span>}
+
               {whaleMatch&&<span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:"rgba(0,212,255,.08)",color:C.cyan,border:"1px solid rgba(0,212,255,.3)",fontFamily:MONO,letterSpacing:"0.08em",animation:"gold-pulse 2s infinite"}}>🐋 {i18n.whaleAligned}</span>}
               {regimeName&&regimeName!=="UNKNOWN"&&regimeMult!=null&&(()=>{
                 const multLabel=regimeMult>=1.1?"×1.1":regimeMult<=0.70?"×0.7":regimeMult<=0.80?"×0.8":"×1.0";
@@ -954,8 +952,7 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
             style={{flex:1,padding:"8px 0",background:"rgba(0,199,135,.08)",border:"1px solid rgba(0,199,135,.3)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.green,cursor:"pointer"}}>{i18n.tradeNow} →</button>
           <button data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();onAiAnalyze(sig);}}
             style={{flex:1,padding:"8px 0",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.25)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer"}}>Analyze with AI</button>
-          {isPro&&onToggleWatch&&<button data-testid={`watch-${sig.id}`} onClick={e=>{e.stopPropagation();onToggleWatch(sig.token);}}
-            style={{padding:"8px 12px",background:isWatched?"rgba(201,168,76,.12)":C.bg,border:`1px solid ${isWatched?"rgba(201,168,76,.5)":C.border}`,borderRadius:2,fontFamily:MONO,fontSize:10,color:isWatched?C.gold2:C.muted2,cursor:"pointer",letterSpacing:"0.06em",flexShrink:0}}>{isWatched?"★ Watching":"📌 Watch"}</button>}
+
           <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
             style={{padding:"8px 16px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:2,fontFamily:MONO,fontSize:10,color:C.muted2,cursor:"pointer",letterSpacing:"0.08em"}}>↗ Share</button>
         </div>
@@ -1282,117 +1279,6 @@ function TrackRecordTab({isPro,onUpgrade}){
     </div>
     <div style={{fontFamily:MONO,fontSize:7,color:C.muted,padding:"4px 0 12px",textAlign:"center"}}>
       Last updated: {lastFetch?lastFetch.toLocaleTimeString():"—"} · Auto-refreshes every 60s · Win/Loss based on TP1 hit
-    </div>
-  </>);
-}
-
-// ─── WATCHLIST TAB (Pro+) ──────────────────────────────────
-const WATCHLIST_PRESETS=["BTC","ETH","SOL","NVDA","TSLA","AAPL","GOLD","EURUSD","DOGE","AVAX","SUI","PEPE"];
-function WatchlistTab({isPro,isElite,onUpgrade,marketData,liveSignals}){
-  const{C,isDark}=useContext(ThemeCtx);
-  const[items,setItems]=useState([]);
-  const[loading,setLoading]=useState(true);
-  const[adding,setAdding]=useState(false);
-  const[input,setInput]=useState("");
-  const[error,setError]=useState("");
-  const panel={background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,marginBottom:10};
-  const limit=isElite?50:20;
-  const fetchWatchlist=useCallback(async()=>{
-    try{const r=await fetch("/api/watchlist",{credentials:"include"});const d=await r.json();setItems(d.items||[]);}
-    catch{}finally{setLoading(false);}
-  },[]);
-  useEffect(()=>{if(isPro)fetchWatchlist();},[isPro,fetchWatchlist]);
-  const addSymbol=async(sym)=>{
-    const s=(sym||input).trim().toUpperCase();
-    if(!s)return;
-    setAdding(true);setError("");
-    try{
-      const r=await fetch("/api/watchlist",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:s,assetClass:"crypto"})});
-      const d=await r.json();
-      if(d.error){setError(d.error);}else{setInput("");await fetchWatchlist();}
-    }catch{setError("Failed to add symbol.");}
-    setAdding(false);
-  };
-  const removeSymbol=async(sym)=>{
-    try{await fetch(`/api/watchlist/${sym}`,{method:"DELETE",credentials:"include"});setItems(p=>p.filter(i=>i.symbol!==sym));}
-    catch{}
-  };
-  const fmtChg=v=>{if(v==null)return"—";const n=parseFloat(v);return(n>=0?"+":"")+n.toFixed(2)+"%";};
-  const fmtPx=v=>{if(!v)return"—";const n=parseFloat(v);return n>=1000?n.toLocaleString("en-US",{maximumFractionDigits:0}):n>=1?n.toFixed(2):n>=0.01?n.toFixed(4):n.toFixed(6);};
-  if(!isPro)return(
-    <div style={{padding:"32px 16px",textAlign:"center"}}>
-      <div style={{fontSize:44,marginBottom:14}}>📌</div>
-      <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:900,color:C.gold2,marginBottom:8}}>My <span style={{fontStyle:"italic"}}>Watchlist</span></div>
-      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:C.muted,letterSpacing:"0.15em",marginBottom:20}}>PRO FEATURE</div>
-      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.muted2,lineHeight:1.8,maxWidth:300,margin:"0 auto 24px"}}>Track up to 20 assets with live prices, funding rates, and instant signal alerts when a watched asset fires a Quant signal.</div>
-      <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:280,margin:"0 auto 24px"}}>
-        {[["📊","Live price + 24h change per asset"],["⚡","Signal alert when watched asset moves"],["💰","Funding rate + OI per symbol"],["📈","1-tap to AI analyze any watched asset"]].map(([icon,txt])=>(
-          <div key={txt} style={{display:"flex",alignItems:"center",gap:10,fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:C.muted2,textAlign:"left"}}>
-            <span style={{fontSize:14,flexShrink:0}}>{icon}</span><span>{txt}</span>
-          </div>
-        ))}
-      </div>
-      <button data-testid="btn-watchlist-upgrade" onClick={onUpgrade} style={{padding:"12px 28px",background:"rgba(201,168,76,.14)",border:"1px solid rgba(201,168,76,.4)",borderRadius:4,fontFamily:"'Playfair Display',serif",fontStyle:"italic",fontWeight:700,fontSize:14,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro — from $29.99/mo →</button>
-    </div>
-  );
-  if(loading)return<div style={{padding:32,textAlign:"center",fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.muted}}>Loading watchlist…</div>;
-  const signalMap={};
-  (liveSignals||[]).forEach(s=>{if(Date.now()-s.ts<1800000)signalMap[s.token]={dir:s.dir,pctMove:s.pctMove,ts:s.ts};});
-  return(<>
-    <div style={{marginBottom:10}}><SLabel>My Watchlist</SLabel></div>
-    <div style={{...panel,padding:"12px 14px",marginBottom:12}}>
-      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:10}}>ADD SYMBOL — {items.length}/{limit} slots used</div>
-      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
-        {WATCHLIST_PRESETS.filter(p=>!items.some(i=>i.symbol===p)).slice(0,8).map(p=>(
-          <button key={p} data-testid={`watchlist-preset-${p}`} onClick={()=>addSymbol(p)} style={{padding:"4px 10px",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.2)",borderRadius:3,fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:C.gold,cursor:"pointer"}}>+ {p}</button>
-        ))}
-      </div>
-      <div style={{display:"flex",gap:6}}>
-        <input data-testid="input-watchlist-symbol" value={input} onChange={e=>setInput(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter")addSymbol();}} placeholder="Enter symbol (e.g. BTC, NVDA)" style={{flex:1,padding:"8px 12px",background:isDark?"rgba(255,255,255,.04)":"rgba(0,0,0,.04)",border:`1px solid ${C.border}`,borderRadius:3,fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.white,outline:"none"}}/>
-        <button data-testid="btn-watchlist-add" onClick={()=>addSymbol()} disabled={adding||!input.trim()} style={{padding:"8px 14px",background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.35)",borderRadius:3,fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:C.gold2,cursor:"pointer",opacity:adding||!input.trim()?0.5:1}}>{adding?"Adding…":"ADD"}</button>
-      </div>
-      {error&&<div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:C.red,marginTop:6}}>{error}</div>}
-    </div>
-    {items.length===0?(
-      <div style={{...panel,padding:"32px 16px",textAlign:"center"}}>
-        <div style={{fontSize:32,marginBottom:10}}>📭</div>
-        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.muted}}>Your watchlist is empty</div>
-        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:C.muted2,marginTop:4}}>Add symbols above to track live prices and signal alerts</div>
-      </div>
-    ):(
-      <div style={panel}>
-        <div style={{padding:"10px 14px 4px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:C.gold,letterSpacing:"0.2em"}}>WATCHED ASSETS · LIVE</div>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:7,color:C.muted}}>{items.length}/{limit} slots</div>
-        </div>
-        {items.map((item,idx)=>{
-          const md=marketData[item.symbol]||{};
-          const sig=signalMap[item.symbol];
-          const chg=md.change24h;
-          const chgColor=chg>0?C.green:chg<0?C.red:C.muted;
-          return(
-            <div key={item.id} data-testid={`watchlist-row-${item.symbol}`} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderTop:idx===0?`1px solid ${C.border}`:`1px solid ${C.border}`,flexWrap:"wrap"}}>
-              <div style={{width:36,height:36,background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'IBM Plex Mono',monospace",fontSize:9,fontWeight:800,color:C.gold,flexShrink:0}}>{item.symbol.slice(0,3)}</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13,fontWeight:800,color:C.white}}>{item.symbol}</span>
-                  {sig&&<span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,fontWeight:700,padding:"2px 6px",borderRadius:2,background:sig.dir==="LONG"?"rgba(0,199,135,.1)":"rgba(255,64,96,.1)",color:sig.dir==="LONG"?C.green:C.red,border:`1px solid ${sig.dir==="LONG"?C.green:C.red}44`,animation:"pulse 2s infinite"}}>⚡ {sig.dir} SIGNAL {sig.pctMove>0?"+":""}{sig.pctMove}%</span>}
-                </div>
-                <div style={{display:"flex",gap:12,marginTop:3,flexWrap:"wrap"}}>
-                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:C.white}}>{md.price?`$${fmtPx(md.price)}`:"—"}</span>
-                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:chgColor,fontWeight:700}}>{fmtChg(chg)}</span>
-                  {md.funding!=null&&<span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:md.funding>=0.03?C.red:md.funding<=-0.005?C.green:C.muted}}>F: {(md.funding*100).toFixed(4)}%</span>}
-                  {md.oi&&<span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:C.muted}}>OI: ${(md.oi/1e6).toFixed(0)}M</span>}
-                </div>
-              </div>
-              <button data-testid={`btn-remove-watchlist-${item.symbol}`} onClick={()=>removeSymbol(item.symbol)} style={{background:"rgba(255,64,96,.06)",border:"1px solid rgba(255,64,96,.2)",borderRadius:3,padding:"5px 10px",fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:C.red,cursor:"pointer",flexShrink:0}}>✕</button>
-            </div>
-          );
-        })}
-      </div>
-    )}
-    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:7,color:C.muted,textAlign:"center",padding:"4px 0 12px"}}>
-      Prices refresh every 30s · Signal alerts shown for last 30 min · {isElite?"Elite: 50 symbol limit":"Pro: 20 symbol limit"}
     </div>
   </>);
 }
@@ -1961,7 +1847,6 @@ function Dashboard({user,setUser,onShowAuth}){
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [liveSignals,setLiveSignals]=useState([]);
-  const [watchlistSymbols,setWatchlistSymbols]=useState(new Set());
   const [newsFeed,setNewsFeed]=useState([]);
   const [newsFilter,setNewsFilter]=useState("ALL");
   const [insiderData,setInsiderData]=useState([]);
@@ -2088,23 +1973,6 @@ function Dashboard({user,setUser,onShowAuth}){
   // Stable ref so useCallback closures (addAlert etc.) always see current tier
   const isProRef=useRef(isPro);
   useEffect(()=>{isProRef.current=isPro;},[isPro]);
-  const fetchWatchlistSymbols=useCallback(async()=>{
-    if(!isPro)return;
-    try{const r=await fetch("/api/watchlist",{credentials:"include"});const d=await r.json();setWatchlistSymbols(new Set((d.items||[]).map(i=>i.symbol)));}
-    catch{}
-  },[isPro]);
-  useEffect(()=>{fetchWatchlistSymbols();},[fetchWatchlistSymbols]);
-  const handleToggleWatch=useCallback(async(symbol)=>{
-    if(!isPro)return;
-    if(watchlistSymbols.has(symbol)){
-      try{await fetch(`/api/watchlist/${symbol}`,{method:"DELETE",credentials:"include"});setWatchlistSymbols(p=>{const n=new Set(p);n.delete(symbol);return n;});}
-      catch{}
-    }else{
-      try{const r=await fetch("/api/watchlist",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,assetClass:"crypto"})});const d=await r.json();if(!d.error){setWatchlistSymbols(p=>{const n=new Set(p);n.add(symbol);return n;});}}
-      catch{}
-    }
-  },[isPro,watchlistSymbols]);
-
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
   const [macroAiEvent,setMacroAiEvent]=useState(null);
@@ -3568,7 +3436,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
-    {k:"watchlist",icon:"📌",label:"WATCHLIST"},
     {k:"track",icon:"📈",label:"RECORD"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
@@ -4643,15 +4510,12 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
                 Signals appear when any tracked token moves &gt;0.8% within a 5-minute window.<br/>
                 Tracking {sigTracking} tokens in real-time. Detector is armed.
               </div>}
-            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult} watchedSymbols={watchlistSymbols} onToggleWatch={handleToggleWatch}/>);
+            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult}/>);
           })()}
 
           {/* ── Signal Performance Tracker (Elite) ── */}
           <SignalHistoryPanel isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>
         </>}
-
-        {/* ══ WATCHLIST ══ */}
-        {tab==="watchlist"&&isPro&&<WatchlistTab isPro={isPro} isElite={isElite} onUpgrade={onUpgrade} marketData={cryptoPrices} liveSignals={liveSignals}/>}
 
         {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 
