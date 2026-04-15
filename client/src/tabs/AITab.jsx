@@ -1059,7 +1059,7 @@ export default function AITab() {
     r.result.signal !== "SUPPRESSED" &&
     r.result.signal &&
     r.result.entry?.price &&
-    (r.result.rr == null || r.result.rr >= 2.0)
+    (r.result.rr == null || r.result.rr >= 1.3)
   ).sort((a,b) => (b.result.win_probability||0) - (a.result.win_probability||0));
 
   const suppressedResults = scanResults.filter(r =>

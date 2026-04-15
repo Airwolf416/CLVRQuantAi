@@ -273,7 +273,7 @@ export class DatabaseStorage implements IStorage {
     const wins = all.filter(s => s.outcome === "WIN").length;
     const losses = all.filter(s => s.outcome === "LOSS").length;
     const pending = all.filter(s => s.outcome === "PENDING").length;
-    const resolved = all.filter(s => s.pnlPct && s.outcome !== "PENDING");
+    const resolved = all.filter(s => s.pnlPct && (s.outcome === "WIN" || s.outcome === "LOSS"));
     const avgPnl = resolved.length > 0
       ? resolved.reduce((sum, s) => sum + parseFloat(s.pnlPct || "0"), 0) / resolved.length
       : 0;
@@ -311,7 +311,8 @@ export class DatabaseStorage implements IStorage {
     const byDirection = Object.entries(dirMap).map(([direction, v]) => ({
       direction, total: v.total, winRate: v.total > 0 ? Math.round(v.wins / v.total * 100) : 0,
     }));
-    return { total: all.length, wins, losses, pending, avgPnl: +avgPnl.toFixed(2), weeklyData, byAsset, byDirection };
+    const meaningful = wins + losses + pending;
+    return { total: meaningful, wins, losses, pending, avgPnl: +avgPnl.toFixed(2), weeklyData, byAsset, byDirection };
   }
 
   // ── Watchlist ───────────────────────────────────────────────────────────────
