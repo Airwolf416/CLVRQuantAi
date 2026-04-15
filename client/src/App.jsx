@@ -1143,7 +1143,7 @@ function TrackRecordTab({isPro,onUpgrade}){
           </div>
           <button data-testid="btn-refresh-track-record" onClick={()=>fetchData(true)} disabled={refreshing} style={{flexShrink:0,fontFamily:MONO,fontSize:8,color:refreshing?C.muted:C.gold,background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,${refreshing?".1":".3"})`,borderRadius:3,padding:"5px 10px",cursor:refreshing?"default":"pointer",letterSpacing:"0.1em",transition:"all .2s"}}>{refreshing?"REFRESHING…":"↻ REFRESH"}</button>
         </div>
-        {!stats?.total&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:10,lineHeight:1.7,textAlign:"center"}}>Track record is building — signals are logged automatically and outcomes resolved every 30 minutes.</div>}
+        {!stats?.total&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:10,lineHeight:1.9,textAlign:"center"}}>Track record builds in real-time — signals are logged when assets move 1.5%+ in a 5-min window, then outcomes auto-resolve every 30 min. In low-volatility markets, fewer signals fire.<br/><span style={{color:C.gold,fontSize:7}}>Data accumulates automatically as the market generates qualifying moves.</span></div>}
       </div>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>

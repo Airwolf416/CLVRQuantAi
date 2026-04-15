@@ -3182,6 +3182,13 @@ Every level must be technically defensible. Return JSON only.`;
           }
         }
 
+        // If no tool results were generated (shouldn't happen), add a placeholder
+        if (toolResults.length === 0) {
+          for (const tb of toolUseBlocks) {
+            toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: "Tool unavailable — proceed with analysis using available data." });
+          }
+        }
+
         // Append assistant message + tool results and continue
         messages.push({ role: "assistant", content: data.content });
         messages.push({ role: "user", content: toolResults });
@@ -3195,9 +3202,13 @@ Every level must be technically defensible. Return JSON only.`;
         if (data.error) return res.status(400).json({ error: data.error.message || "AI error" });
       }
 
-      const text = (data.content || []).map((b: any) => b.text || "").join("") || "No response.";
+      const text = (data.content || []).map((b: any) => b.text || "").join("");
+      if (!text) {
+        console.error("[ai/analyze] Claude returned empty content. stop_reason:", data.stop_reason, "content_types:", (data.content||[]).map((b:any)=>b.type));
+        return res.json({ text: "CLVR AI did not return a response — please try again.", response: "", cached: false, model });
+      }
 
-      // Cache the response for all users
+      // Only cache valid non-empty responses
       aiCache.set(cacheKey, { text, ts: Date.now() });
 
       res.json({ text, response: text, cached: false, model });
