@@ -1,0 +1,712 @@
+# FULL REBUILD — AI TAB (Ground-Up Restructure)
+
+⚠️ READ THIS ENTIRE DOCUMENT BEFORE WRITING ANY CODE. This is a COMPLETE rebuild of the AI tab. Follow every section precisely.
+
+-----
+
+## OVERVIEW
+
+Delete and rebuild the AI tab from scratch. The current implementation is spread across App.jsx (~4651 lines) and AITab.jsx (1342 lines) — it’s bloated, buggy, and confusing to users.
+
+The new AI tab must be:
+
+- **Clean** — not busy, not overwhelming, scannable at a glance
+- **Dual-mode** — simple for novice traders, detailed for professionals
+- **Accurate** — only use live data that actually exists on the platform
+- **Beautiful** — match the existing navy/gold luxury aesthetic
+
+### What stays:
+
+- All backend routes (`/api/quant`, `/api/ai/analyze`, `/api/kronos`, `/api/twitter`, `/api/databus/status`)
+- All data layers (DataBusContext, TwitterIntelligence, MarketDataStore)
+- All server-side validation, suppression logic, and post-AI processing
+- The design system (Navy #050709/#080d18, Gold #c9a84c/#e8c96d, Playfair Display, IBM Plex Mono, Barlow)
+- Model: `claude-sonnet-4-6`
+
+### What changes:
+
+- The entire frontend AI tab UI is rebuilt
+- System prompts are replaced (new versions provided below)
+- My Basket becomes a SEPARATE TAB (not inside the AI tab)
+- Kronos logic is embedded INTO the AI Analyst and Quant Engine prompts (no separate Kronos panel)
+- Trade Ideas: 4 for Pro, 6 for Elite
+
+-----
+
+## MANDATORY MACRO PRE-FLIGHT (NEW — Critical Addition)
+
+Before ANY AI call (Trade Ideas, Quant Scan, or Ask AI analysis), the system MUST fetch and display live macro events. This is a non-negotiable step.
+
+### Backend: New Macro Pre-Flight Endpoint
+
+Create a new route `GET /api/macro/preflight` that:
+
+1. **Pulls from INTERNAL sources (already available):**
+- `macroEvents` from DataBus (the existing macro calendar data)
+- `killSwitch` status from DataBus
+- News feed items already in the app (political alpha, conflict events, SEC insider buying)
+1. **Pulls from EXTERNAL sources (new — use existing Finnhub news or add a free macro API):**
+- Check Finnhub’s `/news` endpoint (you already have a Finnhub API key) for breaking market news in the last 2 hours
+- Filter for HIGH IMPACT keywords: “FOMC”, “CPI”, “NFP”, “rate decision”, “rate cut”, “rate hike”, “tariff”, “sanctions”, “Fed”, “ECB”, “BOJ”, “BOE”, “BOC”, “GDP”, “inflation”, “employment”, “payrolls”, “Powell”, “Lagarde”, “trade war”, “default”, “emergency”
+- If Finnhub news is not available, fall back to internal DataBus macroEvents only
+1. **Returns a structured macro context object:**
+
+```json
+{
+  "timestamp": "2026-04-15T16:30:00-04:00",
+  "status": "CLEAR|CAUTION|BLOCKED",
+  "killSwitch": false,
+  "eventsNext2H": [],
+  "eventsNext4H": [
+    {"event": "BOC Rate Decision", "time": "09:45 ET", "impact": "HIGH", "status": "PASSED"}
+  ],
+  "eventsNext24H": [
+    {"event": "FOMC Williams Speech", "time": "08:35 ET Apr 16", "impact": "MEDIUM"}
+  ],
+  "breakingNews": [
+    {"headline": "Trump threatens to fire Fed Chair Powell", "source": "Finnhub", "time": "2H ago", "impact": "HIGH", "affectedAssets": ["DXY", "XAU", "BTC"]}
+  ],
+  "activeConflicts": ["Iran tensions — energy impact"],
+  "summary": "Macro clear for next 2H. BOC decision passed. Williams speech tomorrow pre-market. Political risk elevated (Fed chair threat)."
+}
+```
+
+1. **Cache this for 5 minutes** — don’t re-fetch on every AI call
+
+### Frontend: Macro Pre-Flight Bar
+
+Display the macro status as a visible bar ABOVE the trade ideas and scan results. Users should see what was checked:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  📡 MACRO PRE-FLIGHT — Checked 4:30 PM ET                   │
+│  ✅ No high-impact events in next 2H                        │
+│  ⚠️ FOMC Williams speech tomorrow 08:35 ET                  │
+│  🔴 Breaking: Trump threatens to fire Fed Chair Powell      │
+│     → Affects: USD, Gold, BTC                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Status colors:**
+
+- ✅ `CLEAR` (green): No high-impact events within 2H, no breaking news
+- ⚠️ `CAUTION` (amber): Events within 4H or medium-impact breaking news. AI dampens confidence 20%.
+- 🚫 `BLOCKED` (red): High-impact event within 2H or kill switch active. AI will NOT generate new signals — shows message: “Macro blocked — [event] in [time]. Signals paused until [time].”
+
+### Integration Into AI Calls
+
+**BEFORE calling any AI endpoint**, the frontend must:
+
+1. Call `GET /api/macro/preflight`
+1. Display the macro bar to the user
+1. If status is `BLOCKED`, do NOT call the AI — show the block message instead
+1. If status is `CLEAR` or `CAUTION`, inject the full macro context into the AI prompt as a new section:
+
+```
+MACRO PRE-FLIGHT (LIVE — checked {timestamp}):
+Status: {CLEAR|CAUTION|BLOCKED}
+Events next 2H: {list or "None"}
+Events next 4H: {list or "None"}
+Events next 24H: {list}
+Breaking news: {list or "None"}
+Active geopolitical risks: {list or "None"}
+
+INSTRUCTIONS: Factor this macro context into EVERY signal. If CAUTION, reduce conviction by 20% and compress TP by 25%. Note the specific macro risk in the "flags" field of each trade. If breaking news affects a specific asset, either skip that asset or flag it prominently.
+```
+
+This section gets injected into the user message sent to Claude, right BEFORE the market data sections (Section A, B, C).
+
+### Why This Matters
+
+The current system has stale macro calendar data that refreshes every 30 seconds via DataBus, but it doesn’t catch:
+
+- Breaking news (tariff announcements, geopolitical escalations, emergency Fed actions)
+- Events that just happened in the last hour and are still being priced in
+- News that affects specific assets the user is about to trade
+
+The pre-flight check ensures the AI is NEVER generating signals blind to what just happened in the world.
+
+-----
+
+## ARCHITECTURE — NEW FILE STRUCTURE
+
+Create these new files (delete old AITab.jsx content and rebuild):
+
+```
+client/src/tabs/AITab.jsx          — Main AI tab container (mode toggle + routing)
+client/src/components/ai/
+  TopTradeIdeas.jsx                — Trade ideas display (the main feature users see first)
+  AIChat.jsx                       — Free-form AI analyst chat
+  QuantScanner.jsx                 — Quant Engine multi-asset scanner
+  SignalCard.jsx                   — Reusable signal card component
+  ScanSummary.jsx                  — Scan results header
+  TradeIdeaCard.jsx                — Trade idea card (simpler than SignalCard)
+  ModeToggle.jsx                   — Simple/Pro toggle for beginner vs advanced view
+```
+
+My Basket moves to its own tab:
+
+```
+client/src/tabs/BasketTab.jsx      — Separate tab (not inside AI tab)
+```
+
+-----
+
+## UI LAYOUT — NEW AI TAB
+
+The AI tab has 3 sections stacked vertically. No sub-tabs. No mode toggle between “AI Analyst” and “Quant Engine.” Instead, everything flows top to bottom:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  AI INTELLIGENCE                                    [Simple │ Pro]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  SECTION 1 — TOP TRADE IDEAS (always visible)               │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐                      │
+│  │ Scalp   │ │Day Trade│ │ Swing   │   ← user picks one    │
+│  └─────────┘ └─────────┘ └─────────┘                      │
+│                                                             │
+│  ┌──────────────┐ ┌──────────────┐                         │
+│  │  Trade #1    │ │  Trade #2    │    ← card grid          │
+│  │  BTC LONG    │ │  ETH SHORT   │                         │
+│  │  Entry/TP/SL │ │  Entry/TP/SL │    Pro: 4 cards         │
+│  └──────────────┘ └──────────────┘    Elite: 6 cards       │
+│  ┌──────────────┐ ┌──────────────┐                         │
+│  │  Trade #3    │ │  Trade #4    │                         │
+│  │  XAU LONG    │ │  TSLA SHORT  │                         │
+│  └──────────────┘ └──────────────┘                         │
+│                                                             │
+│  [🔄 Refresh Ideas]                    Updated: 3:25 PM ET  │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  SECTION 2 — QUANT SCANNER (Pro+)                           │
+│  Select assets → pick timeframe → scan                      │
+│  Results: signal cards or "no setup" with reasons            │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  SECTION 3 — ASK AI (Pro+)                                  │
+│  Free-form text input for custom analysis                    │
+│  "Analyze BTC 4H structure" → AI response                   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### The [Simple | Pro] Toggle (top right)
+
+This controls the DETAIL LEVEL of all outputs, not which features are visible:
+
+**Simple Mode (default for new users):**
+
+- Trade idea cards show: Asset, Direction (LONG/SHORT with emoji), Entry, TP1, SL, R:R, and a 1-line thesis
+- No factor scores, no Bayesian meter, no multi-TF confluence
+- Kill clock shown as plain English: “Exit by tonight” or “Hold 1-3 days”
+- Conviction shown as a simple color bar (green/yellow/red)
+
+**Pro Mode (for experienced traders):**
+
+- Everything in Simple, PLUS: TP2, TP3 (trailing), individual factor scores (trend/momentum/structure/OI/volume/macro), edge source label, Kelly sizing, leverage suggestion, post-TP1 management, invalidation details, vol regime tag, funding rate, OI data
+- Kill clock shown as exact hours
+- Advanced Quant Detail expandable section (Bayesian, patterns, multi-TF, indicators)
+
+The toggle is cosmetic — it doesn’t change what data the AI returns, only what the UI displays.
+
+-----
+
+## SECTION 1 — TOP TRADE IDEAS (Main Feature)
+
+This is the FIRST thing users see. It auto-runs on tab load (or shows cached results from the last run within 10 minutes).
+
+### UI Elements:
+
+1. **Timeframe Pills** (3 options, one selected at a time):
+- `Scalp` — “Quick trades, 1-4 hour holds”
+- `Day Trade` — “Intraday, 4-24 hour holds” (DEFAULT)
+- `Swing` — “Multi-day, 1-7 day holds”
+1. **Market Filter** (optional, default ALL):
+- `ALL` | `Crypto` | `Equities` | `Commodities` | `FX`
+- This filters what asset classes the AI considers
+1. **Trade Idea Cards** — grid layout:
+- Desktop: 2 columns
+- Mobile: 1 column, swipeable
+- Pro tier: 4 cards
+- Elite tier: 6 cards
+- Free tier: 2 cards (blurred/locked with upgrade prompt for remaining)
+1. **Refresh Button** — “🔄 Refresh Ideas” with cooldown timer (minimum 5 min between refreshes)
+1. **Macro Status Bar** — single line above the cards:
+- “✅ Macro Clear — next event: FOMC Williams 08:35 ET Apr 16”
+- or “⚠️ CPI Release in 1H — signals dampened”
+1. **Regime Badge** — small pill showing “RISK-ON 63/100” or “NEUTRAL 41/100”
+
+### Trade Idea Card Design:
+
+**Simple Mode Card:**
+
+```
+┌──────────────────────────────────┐
+│  #1                    🟢 LONG   │
+│  BTC/USDT                        │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  Entry    $74,500                │
+│  Target   $75,900    (+1.9%)     │
+│  Stop     $73,800    (-0.9%)     │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  R:R  2.1:1    ██████████ 72%    │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  Bounce off 4H demand zone       │
+│  with bullish RSI divergence.    │
+│                                  │
+│  ⏱ Exit by tonight if no move    │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  [Copy Trade]  [Set Alert]       │
+└──────────────────────────────────┘
+```
+
+**Pro Mode Card** (same card, expanded):
+
+```
+┌──────────────────────────────────┐
+│  #1             DAY TRADE 🟢 LONG│
+│  BTC/USDT          Vol: 🟡 NORMAL│
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  Entry    $74,500                │
+│  TP1      $75,200   (50%) 1.4:1  │
+│  TP2      $75,900   (30%) 2.1:1  │
+│  TP3      $76,600   (20%) trail  │
+│  SL       $73,800                │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  Edge  68% (OI-verified)         │
+│  Lev   5x  │  Kill  24H         │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  TREND  72 │ MOM 65 │ STRUCT 70  │
+│  OI    68 │ VOL 55 │ MACRO  80  │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  Bounce off 4H demand zone       │
+│  with RSI divergence. OI rising. │
+│                                  │
+│  ✖ Invalid: Break below $73.5K   │
+│  ✓ Post-TP1: SL → BE, trail TP3 │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  [Copy Trade]  [Set Alert]       │
+└──────────────────────────────────┘
+```
+
+### API Call for Trade Ideas:
+
+Call `POST /api/ai/analyze` with:
+
+- System prompt: NEW trade ideas prompt (see PROMPTS section below)
+- User message: includes the full market data snapshot (same 3-section format currently used), plus the selected timeframe and market filter
+- `maxTokens`: 4096 for Pro (4 trades), 6144 for Elite (6 trades)
+
+### Trade Count Logic:
+
+```javascript
+const tradeCount = isElite ? 6 : isPro ? 4 : 2;
+// Pass tradeCount into the system prompt so the AI knows how many to return
+```
+
+-----
+
+## SECTION 2 — QUANT SCANNER
+
+Replaces the current Quant Engine MasterBrain. Simplified flow — fewer steps.
+
+### UI Flow (2 steps, not 5):
+
+**Step 1 — Pick Assets** (inline, not a separate panel):
+
+- Compact chip selector (same asset library as current, 160+ assets)
+- Category filter pills: ALL | CRYPTO | EQUITY | COMMODITY | FX
+- Quick pick: “Top 5 by Volume” button
+- Max 5 assets
+- Shows live price + 24h change on each chip
+- Selected assets appear as removable chips below
+
+**Step 2 — Scan Settings** (single row, not separate steps):
+
+```
+[Scalp ▾]  [PERP ▾]  [Balanced ▾]  [Execute Scan →]
+```
+
+- Timeframe dropdown: Scalp / Day Trade / Swing (same 3 options as trade ideas)
+- Market type: PERP / SPOT (auto-set for non-crypto)
+- Risk profile: Conservative / Balanced / Aggressive
+- All on ONE LINE. No separate steps. No large panels.
+
+### Scan Results:
+
+- Same ScanSummaryBanner: assets scanned, signals found, regime, crash prob, macro status
+- Signal cards (reuse same SignalCard component as trade ideas, respects Simple/Pro toggle)
+- Suppressed signals shown as collapsed list: “2 signals suppressed” → expandable with reasons
+- No signals: clean message with reason, not a big red error screen
+
+### Important:
+
+- Keep the existing `/api/quant` route and ALL server-side logic (validation gate, suppression, post-AI correction)
+- Keep sequential asset scanning (not parallel — rate limits)
+- Keep the Bayesian scoring, multi-TF confluence, pattern detection on the server side
+- The Kronos overlay is now INSIDE the quant prompt (see PROMPTS section) — remove the separate KronosPanel component from the AI tab
+
+-----
+
+## SECTION 3 — ASK AI (Free-form Chat)
+
+Simple chat input at the bottom. This is for custom questions like “Compare BTC and ETH momentum right now” or “What’s the macro outlook for gold this week?”
+
+### UI:
+
+- Text input with placeholder: “Ask about any market, asset, or trade setup…”
+- Asset quick-chips above input: BTC, ETH, SOL, XAU, WTI, EURUSD, TSLA, NVDA (clicking inserts the ticker)
+- “Analyze →” button
+- Response area below (rendered as formatted text, NOT raw markdown)
+- Keep the existing “Analyze PERP Markets” and “Analyze SPOT Markets” as two small buttons above the input
+
+### Important:
+
+- Uses existing `POST /api/ai/analyze` route
+- System prompt: NEW AI Analyst prompt (see PROMPTS section)
+- This section is collapsible — collapsed by default on mobile to save space
+
+-----
+
+## MY BASKET — SEPARATE TAB
+
+Move MyBasket.jsx OUT of the AI tab entirely. It becomes its own tab in the main navigation.
+
+In App.jsx, add a new tab value (e.g., `tab === "basket"`) and render `<MyBasket />` there. Add a nav icon for it (use the existing basket/portfolio icon).
+
+Remove all MyBasket rendering from the AI tab. The AI tab should NOT render MyBasket at all.
+
+Keep MyBasket as Elite-only gated.
+
+-----
+
+## KRONOS — EMBEDDED IN PROMPTS (No Separate Panel)
+
+Remove the KronosPanel.jsx from the AI tab UI. The Kronos logic is now embedded directly into the system prompts for both Trade Ideas and Quant Scanner.
+
+The `/api/kronos` route can stay for now (it’s used elsewhere), but the AI tab no longer renders a separate Kronos panel or “Run Kronos Forecast” button.
+
+Instead, the Kronos overlay logic is part of the system prompt — when conditions are met (edge >72%, vol NORMAL/HIGH, macro clear, OI confirms, R:R ≥ 1.5:1), the AI tags the signal as “⚡ KRONOS — HIGH CONVICTION” in the output. This is a label on qualifying signals, not a separate feature.
+
+-----
+
+## NEW SYSTEM PROMPTS
+
+### Trade Ideas Prompt (replaces current 15d):
+
+```
+You are CLVRQuantAI's Trade Idea Generator. You scan all available live market data and return the top {TRADE_COUNT} trade ideas as a JSON array.
+
+MANDATORY FIRST STEP — MACRO PRE-FLIGHT:
+Before analyzing ANY asset, read the MACRO PRE-FLIGHT section in the data below. This contains LIVE macro events, breaking news, and geopolitical risks checked moments ago.
+- If status is BLOCKED: return zero trades with macroStatus.blocked = true and the reason.
+- If status is CAUTION: reduce all conviction scores by 20%, compress all TPs by 25%, and add the macro risk to every trade's flags array.
+- If status is CLEAR: proceed normally.
+- If breaking news affects a specific asset, either SKIP that asset or prominently flag the risk.
+- Always reference the macro context in your macroStatus output — the user needs to see what you factored in.
+
+TIMEFRAME: {TIMEFRAME} — this determines ALL parameters:
+  SCALP: 1-4H hold, ATR(1H) reference, kill clock 2-4H
+  DAY_TRADE: 4-24H hold, ATR(4H) reference, kill clock 12-24H
+  SWING: 1-7D hold, ATR(1D) reference, kill clock 48-72H
+
+MARKET FILTER: {MARKET_FILTER} — only consider assets from this class. If "ALL", diversify across crypto, equities, commodities, and FX.
+
+RULES:
+1. Return EXACTLY {TRADE_COUNT} trades ranked by conviction (highest first)
+2. Diversify — don't repeat the same asset class unless it dominates the opportunity set
+3. ONLY recommend assets that have live price data in the market data provided below. Never hallucinate tickers.
+4. ATR-scaled levels: TP1=0.5x ATR (50%), TP2=1x ATR (30%), TP3=1.5x ATR (20% trail). SL per timeframe.
+5. Vol regime: HIGH(ATR>1.5x 20-period avg) → compress TP 30%, widen SL 20%. LOW(<0.7x) → skip asset.
+6. Macro gate: block if high-impact event within 2H. Dampen 20% within 4H.
+7. Min R:R to TP1: 1.2:1 or reject.
+8. Direction consistency: if majority of factors are bullish, direction MUST be LONG (and vice versa). Never output a SHORT with all bullish factors.
+9. For SHORT signals: TP1/TP2/TP3 must be BELOW entry, SL must be ABOVE entry. For LONG: opposite.
+10. Edge label: "OI-verified" if live OI data confirms, "estimated" if inferred, "no OI" if unavailable.
+11. Thesis: MAX 2 sentences. No internal logic, no rule references.
+12. Invalidation: MAX 1 sentence. Price level + condition.
+
+KRONOS OVERLAY: If a trade meets ALL of these: edge>72%, vol NORMAL or HIGH, macro clear for full kill clock, OI confirms direction, R:R to TP1 ≥ 1.5:1 — tag it with "kronos": true in the JSON. These are highest-conviction setups.
+
+DATA PRIORITY:
+- PERP/futures: Use Hyperliquid data (Section A) — mark price, funding, OI are definitive
+- SPOT crypto: Use Section B, Section C as confirmation
+- Equities/Commodities: HL synthetic perps (Section A) for futures; Section C for cash/spot
+- Forex: Section C only
+- If Section A and C differ by >0.5%, note basis in thesis
+
+RESPOND WITH ONLY THIS JSON — no markdown, no prose, no code fences:
+{
+  "generated": "ISO-8601",
+  "regime": {"score": 0-100, "label": "RISK-ON|NEUTRAL|RISK-OFF"},
+  "macroStatus": {"clear": true/false, "nextEvent": "description", "blocked": false, "breakingNews": ["headline if any"], "riskLevel": "CLEAR|CAUTION|BLOCKED", "factored": "What macro risks were considered in this scan"},
+  "trades": [
+    {
+      "rank": 1,
+      "asset": "BTC/USDT",
+      "direction": "LONG",
+      "tradeType": "DAY TRADE",
+      "marketType": "PERP",
+      "entry": 74500,
+      "tp1": {"price": 75200, "pct": 50, "rr": "1.4:1"},
+      "tp2": {"price": 75900, "pct": 30, "rr": "2.1:1"},
+      "tp3": {"price": 76600, "pct": 20, "trailing": true},
+      "sl": 73800,
+      "leverage": "5x",
+      "conviction": 72,
+      "edge": "68%",
+      "edgeSource": "OI-verified",
+      "killClock": "24H",
+      "thesis": "Two sentences max. Clear and direct.",
+      "invalidation": "Break below $73,500 with volume.",
+      "flags": ["HIGH vol — TP compressed"],
+      "kronos": false,
+      "scores": {"trend": 72, "momentum": 65, "structure": 70, "oi": 68, "volume": 55, "macro": 80},
+      "postTp1": "SL to breakeven, trail TP3 at 0.5x ATR"
+    }
+  ]
+}
+```
+
+### Quant Engine Prompt (replaces current 15b — keep all server-side pre-computation, this is ONLY what goes to Claude):
+
+```
+You are CLVRQuantAI Signal Engine — a precision trade signal generator for leveraged perpetual futures. Capital preservation first. Never force a trade.
+
+MANDATORY FIRST STEP — MACRO PRE-FLIGHT:
+Read the MACRO PRE-FLIGHT section in the data below BEFORE analyzing any asset. If macro status is BLOCKED, return signal: "SUPPRESSED" with reason. If CAUTION, reduce win_probability by 20% and add the macro risk to the risks array. Always reference what macro events you factored into your decision.
+
+PROFILE: {RISK_PROFILE}
+TIMEFRAME: {TIMEFRAME}
+
+You receive pre-computed data below: indicators (EMA, RSI, MACD, ATR), multi-TF confluence, Bayesian score, patterns, validation gate results, macro status, OI/funding data, and social sentiment.
+
+YOUR JOB: Using the pre-computed data, decide the signal direction and provide entry/TP/SL levels. The server has already computed adjusted_score, EV, and Kelly — you cannot override those.
+
+RULES:
+1. If win_probability < {MIN_WIN_PROB} → output signal: "NEUTRAL" with a reason. Do not force a trade.
+2. Entry must use Fibonacci retracement of the last impulse move: 38.2% for trend trades, 50% for mean reversion. NEVER enter at the current price if it's at a spike high/low.
+3. TP/SL are ATR-scaled per timeframe. TP1=0.5x ATR (60%), TP2=1x ATR (30%), TP3=1.5x ATR (10% — only if adjusted_score ≥ 85 AND OI > $100M).
+4. For LONG: all TPs must be ABOVE entry, SL must be BELOW entry. For SHORT: opposite. This is non-negotiable.
+5. Direction must be consistent with the majority of edge factors. If most factors are bullish → LONG. If most are bearish → SHORT. Never contradict.
+6. Duration: ONLY use these exact values: "2-4 hours", "12-24 hours", "2-3 days", "1-2 weeks".
+7. quant_rationale: MAX 2 sentences. State the setup and catalyst. No internal logic references.
+8. invalidation: MAX 2 sentences. State the price and condition.
+9. ONLY analyze the ticker specified. Do not substitute another asset.
+
+KRONOS TAG: If ALL conditions met (edge>72%, vol NORMAL/HIGH, macro clear, OI confirms, 3+ factors >70, R:R ≥ 1.5:1), add "kronos": true to the output.
+
+OUTPUT — respond with ONLY this JSON, no markdown, no code fences:
+{
+  "signal": "LONG|SHORT|NEUTRAL|SUPPRESSED",
+  "kronos": false,
+  "win_probability": 72,
+  "entry": {"price": 74500, "zone": "74200-74500", "fib_level": "0.382"},
+  "stopLoss": {"price": 73800, "pct": 0.94},
+  "tp1": {"price": 75200, "pct": 0.94, "ratio": 1.4},
+  "tp2": {"price": 75900, "pct": 1.88, "ratio": 2.8},
+  "tp3": {"price": 76600, "pct": 2.82, "ratio": 4.2},
+  "leverage": {"min": 3, "max": 5},
+  "hold": "12-24 hours",
+  "position_size": "2% of capital",
+  "technical_summary": "EMA20 > EMA50, RSI 58, MACD bullish cross",
+  "quant_rationale": "Two sentences max. Setup and catalyst only.",
+  "invalidation": "Break below $73,500 on volume invalidates the demand zone.",
+  "risks": ["Fed speaker tomorrow", "H&S pattern forming on daily"],
+  "risk_flags": []
+}
+```
+
+### AI Analyst Chat Prompt (replaces current 15a — shorter, cleaner):
+
+```
+You are CLVRQuantAI's AI Analyst — an elite market intelligence engine. You analyze crypto, equities, commodities, and forex using live data.
+
+STYLE: Direct and data-driven. Short paragraphs. Bold key numbers. No hedging language.
+
+When the user asks about a specific asset, provide:
+1. Current price action and trend (reference the live data below)
+2. Key levels (support/resistance)
+3. Bias (LONG/SHORT/NEUTRAL) with 1-line reason
+4. Relevant macro context
+5. If a trade setup exists, provide entry/TP1/SL in the standard format
+
+When the user asks for a market overview, provide:
+1. Regime (risk-on/off/neutral)
+2. Top 3 movers with quick take on each
+3. Macro events to watch in next 24H
+4. Overall bias
+
+Keep responses under 300 words unless the user asks for detail.
+
+DATA USAGE:
+- PERP data (Section A): Hyperliquid mark prices, funding, OI — use as primary for crypto/equity/commodity futures
+- SPOT data (Section B): Hyperliquid spot prices
+- Additional data (Section C): CoinGecko, Finnhub — use for cash equities, forex, and as confirmation
+- If Section A and C differ >0.5%, note the basis spread
+```
+
+-----
+
+## DESIGN SPECIFICATIONS
+
+Match the existing CLVRQuant luxury aesthetic exactly:
+
+### Colors:
+
+- Background: `#050709` (darkest), `#080d18` (panels)
+- Card background: `#0c1220` with `1px solid rgba(201, 168, 76, 0.15)` border
+- Gold accent: `#c9a84c` (primary), `#e8c96d` (light), `#8b7635` (dark)
+- Green (LONG/profit): `#00ff88` or `#22c55e`
+- Red (SHORT/loss/SL): `#ff4444` or `#ef4444`
+- Cyan (info): `#00d4ff`
+- Text primary: `#e0e0e0`
+- Text secondary: `rgba(255,255,255,0.5)`
+
+### Fonts:
+
+- Headers/titles: `Playfair Display` (serif)
+- Data/numbers/prices: `IBM Plex Mono` (monospace)
+- Body/labels: `Barlow` (sans-serif)
+
+### Cards:
+
+- Rounded corners: `12px`
+- Subtle gold border glow on hover
+- LONG cards: thin left border `#22c55e`
+- SHORT cards: thin left border `#ef4444`
+- KRONOS cards: gold left border `#c9a84c` + small ⚡ badge
+
+### Conviction Bar:
+
+- 0-40: red gradient
+- 40-65: yellow/amber gradient
+- 65-100: green gradient
+- Animated fill on load
+
+### Layout:
+
+- Desktop: 2-column card grid, max-width 1400px centered
+- Tablet: 2-column
+- Mobile: 1-column, full-width cards
+- Consistent 16px padding, 12px gaps between cards
+- Section dividers: thin gold line `rgba(201, 168, 76, 0.2)`
+
+### Inline Styles:
+
+- Continue using inline styles (no CSS framework) — this is the existing pattern
+- Define style objects at the top of each component for reuse
+
+-----
+
+## TIER GATING
+
+|Feature                 |Free            |Pro ($19/mo)|Elite ($49/mo)|
+|------------------------|----------------|------------|--------------|
+|Top Trade Ideas         |2 (blurred rest)|4           |6             |
+|Quant Scanner           |❌ locked        |✅           |✅             |
+|Ask AI                  |❌ locked        |✅ (30/day)  |✅ (unlimited) |
+|Kronos tags on signals  |❌               |❌           |✅             |
+|Simple/Pro detail toggle|Simple only     |Both        |Both          |
+
+For locked features, show a tasteful upgrade prompt:
+
+```
+┌──────────────────────────────────────┐
+│  🔒 Quant Scanner — Pro Feature      │
+│                                      │
+│  Scan 160+ assets with AI-powered    │
+│  multi-factor analysis.              │
+│                                      │
+│  [Upgrade to Pro — $19/mo]           │
+└──────────────────────────────────────┘
+```
+
+-----
+
+## LIVE DATA SOURCES — WHAT TO USE
+
+Only reference data that ACTUALLY exists on the platform:
+
+|Data                |Source               |Availability            |Latency    |
+|--------------------|---------------------|------------------------|-----------|
+|Crypto perp prices  |Hyperliquid WebSocket|32 assets               |<1s        |
+|Crypto spot prices  |Hyperliquid WebSocket|Variable                |<1s        |
+|Crypto funding rates|Hyperliquid WebSocket|32 assets               |<1s        |
+|Crypto open interest|Hyperliquid WebSocket|32 assets               |<1s        |
+|Equity prices       |Finnhub              |20 assets               |30-120s    |
+|Commodity prices    |Finnhub              |Metals + Energy         |30-120s    |
+|Forex prices        |Finnhub              |10+ pairs               |30-120s    |
+|Social sentiment    |Stocktwits           |Per-ticker              |4 min      |
+|Regime/Fear-Greed   |DataBus              |Global                  |30s        |
+|Macro events        |DataBus              |Calendar                |30s        |
+|Breaking macro news |Finnhub /news        |Filtered for high-impact|5 min cache|
+
+Do NOT reference data that doesn’t exist:
+
+- ❌ No equity OI or funding (only crypto has these via HL)
+- ❌ No real-time forex OI
+- ❌ No index perps on Hyperliquid (SPX, NDX, etc. are informational only)
+- ❌ No backtest results unless they come from the server-side config
+
+-----
+
+## IMPLEMENTATION ORDER
+
+Do these in order. Test each before moving to the next.
+
+1. **Move My Basket** to its own tab. Verify it renders correctly in the new tab. Verify it’s removed from the AI tab.
+1. **Build the Macro Pre-Flight endpoint** (`GET /api/macro/preflight`). Pull from DataBus macroEvents + killSwitch + Finnhub `/news` (filter for high-impact keywords). Return the structured JSON with status, events, breaking news, and summary. Cache for 5 minutes. Test the endpoint directly.
+1. **Build the new AITab.jsx** container with the 3-section layout (Trade Ideas / Quant Scanner / Ask AI). Wire up the Simple/Pro toggle. Include the Macro Pre-Flight bar component at the top. No AI functionality yet — just the layout skeleton with placeholder text.
+1. **Build TopTradeIdeas.jsx** — timeframe pills, market filter, card grid, refresh button. BEFORE calling the AI, call `/api/macro/preflight` and display the macro bar. If BLOCKED, show the block message and do NOT call the AI. Wire to `/api/ai/analyze` with the new trade ideas prompt (inject macro context into the user message). Test with Pro (4 cards) and Elite (6 cards).
+1. **Build TradeIdeaCard.jsx** — both Simple and Pro mode renders. Test that LONG cards have green left border, SHORT cards have red. Test that TP/SL directions are correct.
+1. **Build QuantScanner.jsx** — asset selector, scan settings row, execute button. Call macro pre-flight BEFORE scanning. Wire to existing `/api/quant` with macro context injected. Test with 3 assets.
+1. **Build SignalCard.jsx** — reuse for quant scan results. Respects Simple/Pro toggle. Test suppressed signals display.
+1. **Build AIChat.jsx** — text input, asset chips, response display. Call macro pre-flight before analysis. Wire to `/api/ai/analyze` with new analyst prompt.
+1. **Update system prompts** in the actual prompt strings (App.jsx for trade ideas/chat, routes.ts for quant engine). Use the exact prompts from this document. Ensure all prompts include the MACRO PRE-FLIGHT mandatory first step.
+1. **Remove KronosPanel** from the AI tab render tree. Keep the `/api/kronos` route and KronosPanel.jsx file (it may be used elsewhere), but don’t render it in the AI tab.
+1. **Test everything end-to-end** on both desktop and mobile.
+
+-----
+
+## VERIFICATION CHECKLIST
+
+Before marking this complete:
+
+- [ ] My Basket renders in its own separate tab, NOT inside the AI tab
+- [ ] AI tab shows 3 sections: Trade Ideas → Quant Scanner → Ask AI
+- [ ] **Macro Pre-Flight bar is visible** above Trade Ideas and Scan results
+- [ ] **Macro Pre-Flight endpoint** (`/api/macro/preflight`) returns valid JSON with status, events, breaking news
+- [ ] **Macro BLOCKED state works**: when a high-impact event is within 2H, the AI does NOT generate signals — shows block message instead
+- [ ] **Macro CAUTION state works**: signals are generated but with reduced conviction and flags noting the macro risk
+- [ ] **Macro context is injected** into every AI prompt (Trade Ideas, Quant Scan, Ask AI)
+- [ ] Simple/Pro toggle works and changes card detail level
+- [ ] Trade Ideas: Pro user sees exactly 4 cards, Elite sees 6
+- [ ] Trade Ideas: Scalp/Day Trade/Swing timeframe pills work and change the results
+- [ ] Trade Ideas: Market filter (Crypto/Equities/etc.) works
+- [ ] Trade Ideas: No 429 rate limit errors (prompt is compact enough)
+- [ ] Trade Ideas: ALL trade cards have correct TP/SL direction (LONG TPs above entry, SHORT TPs below)
+- [ ] Trade Ideas: Thesis is max 2 sentences on every card
+- [ ] Quant Scanner: Asset selection works, only selected assets are scanned
+- [ ] Quant Scanner: Signals display correctly in cards
+- [ ] Quant Scanner: Suppressed signals show reason, not an error
+- [ ] Ask AI: Chat input works, response displays as formatted text
+- [ ] No KronosPanel visible in the AI tab
+- [ ] Kronos badge (⚡) appears on qualifying high-conviction signals
+- [ ] Design matches navy/gold luxury theme
+- [ ] Mobile responsive — cards stack to 1 column
+- [ ] No new database tables created
+- [ ] All existing server routes still functional
+
+## WHAT NOT TO DO
+
+❌ Do NOT modify server-side validation logic (routes.ts signal processing)
+❌ Do NOT modify DataBusContext, TwitterIntelligence, or MarketDataStore
+❌ Do NOT change the database schema
+❌ Do NOT change the pricing/tier structure (just enforce it in the UI)
+❌ Do NOT add new npm packages unless absolutely essential
+❌ Do NOT modify server/vite.ts or vite.config.ts
+❌ Do NOT add a watchlist (it has been permanently removed)

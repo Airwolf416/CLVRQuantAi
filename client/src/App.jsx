@@ -463,10 +463,10 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai","basket"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
   const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
@@ -3055,6 +3055,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
+    {k:"basket",icon:"🧺",label:"BASKET"},
     {k:"journal",icon:"📓",label:"JOURNAL"},
     {k:"about",icon:"📖",label:i18n.about},
     {k:"help",icon:"❓",label:"HELP"},
@@ -4253,93 +4254,32 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </>}
 
         {/* ══ AI ══ */}
-        {tab==="ai"&&isPro&&<>
-          <div style={{marginBottom:14}}><SLabel>AI Market Analyst</SLabel></div>
-          {/* AI Mode toggle */}
-          <div style={{display:"flex",gap:6,marginBottom:14}}>
-            <button data-testid="btn-ai-mode-chat" onClick={()=>setAiMode("chat")} style={{flex:1,padding:"9px 4px",borderRadius:3,border:`1px solid ${aiMode==="chat"?"rgba(201,168,76,.45)":C.border}`,background:aiMode==="chat"?"rgba(201,168,76,.08)":C.panel,color:aiMode==="chat"?C.gold2:C.muted2,fontFamily:MONO,fontSize:10,fontWeight:aiMode==="chat"?800:400,letterSpacing:"0.08em",cursor:"pointer",transition:"all .2s"}}>
-              ◆ AI ANALYST
-            </button>
-            <button data-testid="btn-ai-mode-quant" onClick={()=>setAiMode("quant")} style={{flex:1,padding:"9px 4px",borderRadius:3,border:`1px solid ${aiMode==="quant"?"rgba(0,255,136,.45)":C.border}`,background:aiMode==="quant"?"rgba(0,255,136,.08)":C.panel,color:aiMode==="quant"?"#00ff88":C.muted2,fontFamily:MONO,fontSize:10,fontWeight:aiMode==="quant"?800:400,letterSpacing:"0.08em",cursor:"pointer",transition:"all .2s"}}>
-              ⚡ QUANT ENGINE
-            </button>
-          </div>
-          {aiMode==="quant"&&<ProGate feature="quant-engine" tier="elite" isPro={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}><AIQuantTab/></ProGate>}
-          {aiMode==="chat"&&<ProGate feature="ai-analyst" isPro={isPro} onUpgrade={onUpgrade}>
-          <div style={{...panel,overflow:"visible"}}>
-            <div style={ph}><PTitle>CLVRQuant AI</PTitle><Badge label="CLVR AI · Live" color="gold"/></div>
-            <div style={{padding:16}}>
-              <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
-                {["BTC","ETH","SOL","TRUMP","HYPE","XAU","WTI","EURUSD","TSLA","NVDA"].map(sym=>{
-                const store=storePerps[sym]||storeSpot[sym];
-                const legacy=allPrices[sym];
-                const d=store?.price ? {price:store.price,chg:store.change24h||0,live:true} : legacy;
-                const livePx=store?.price>0?mfmtPrice(store.price):fmt(d?.price,sym);
-                return<button key={sym} data-testid={`ai-chip-${sym}`} onClick={()=>setAiInput(`${sym} — long or short? Price:${livePx} 24h:${pct(d?.chg||0)}`)}
-                  style={{padding:"5px 11px",borderRadius:2,border:`1px solid ${store?.price?"rgba(201,168,76,.28)":d?.live?"rgba(201,168,76,.20)":C.border}`,background:C.panel,color:store?.price?C.gold2:d?.live?C.gold:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.08em",cursor:"pointer"}}>
-                  {sym}{store?.price?" ✦":""}
-                </button>;})}
-              </div>
-              {/* Quick-analyze buttons — PERP & SPOT */}
-              <div style={{display:"flex",gap:6,marginBottom:10}}>
-                <button data-testid="button-analyze-perp" disabled={aiLoading} onClick={()=>{
-                  const perpLines=CRYPTO_SYMS.map(s=>{const d=storePerps[s];if(!d?.price)return null;const f=d.funding!=null?` Fund:${(d.funding*100).toFixed(4)}%/8h`:"";const oi=d.openInterest&&d.price?` OI:$${((d.openInterest*d.price)/1e9).toFixed(2)}B`:"";return`${s} ${mfmtPrice(d.price)} (${pct(d.change24h||0)})${f}${oi}`;}).filter(Boolean).join(" | ");
-                  setAiInput(`Analyze the current PERP futures market across all assets. Identify the top 3 PERP opportunities with clear entry, stop, and targets. Focus on funding rate extremes, open interest imbalances, and momentum.\n\nLIVE PERP DATA: ${perpLines}`);
-                }} style={{flex:1,padding:"8px 6px",borderRadius:2,border:"1px solid rgba(0,212,255,.3)",background:"rgba(0,212,255,.06)",color:aiLoading?C.muted:C.cyan,fontFamily:MONO,fontSize:9,letterSpacing:"0.08em",cursor:aiLoading?"not-allowed":"pointer",fontWeight:700}}>
-                  📊 Analyze PERP Markets
-                </button>
-                <button data-testid="button-analyze-spot" disabled={aiLoading} onClick={()=>{
-                  const spotLines=[...CRYPTO_SYMS.map(s=>{const d=cryptoPrices[s];return d?.price?`${s} ${fmt(d.price,s)} (${pct(d.chg)})`:null;}), ...EQUITY_SYMS.map(s=>{const d=equityPrices[s];return d?.price?`${s} ${fmt(d.price,s)} (${pct(d.chg)})`:null;}), ...METALS_SYMS.map(s=>{const d=metalPrices[s];return d?.price?`${METAL_LABELS[s]||s} ${fmt(d.price,s)} (${pct(d.chg)})`:null;})].filter(Boolean).join(" | ");
-                  setAiInput(`Analyze the current SPOT market across crypto, equities, and commodities. Identify the top 3 SPOT opportunities — no leverage needed. Focus on momentum, relative strength, and macro alignment.\n\nLIVE SPOT DATA: ${spotLines}`);
-                }} style={{flex:1,padding:"8px 6px",borderRadius:2,border:"1px solid rgba(201,168,76,.3)",background:"rgba(201,168,76,.06)",color:aiLoading?C.muted:C.gold,fontFamily:MONO,fontSize:9,letterSpacing:"0.08em",cursor:aiLoading?"not-allowed":"pointer",fontWeight:700}}>
-                  📈 Analyze SPOT Markets
-                </button>
-              </div>
-              <AIInput value={aiInput} onChange={onAiChange} placeholder={`"Long BTC now?" · "Is XAU overextended?" · "Best forex trade?"`}/>
-              <div style={{display:"flex",gap:6,marginTop:8}}>
-                <button data-testid="button-ai-analyze" onClick={runAI} disabled={aiLoading} style={{flex:1,height:44,background:"rgba(201,168,76,.1)",color:aiLoading?C.muted:C.gold2,border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer"}}>
-                  {aiLoading?"Analyzing...":"Analyze →"}
-                </button>
-              </div>
-              <div style={{display:"flex",gap:4,marginTop:10,marginBottom:6}}>
-                {[{k:"today",l:"Today"},{k:"midterm",l:"Mid-Term (1-4 wks)"},{k:"longterm",l:"Long-Term (1-3 mo)"}].map(t=>(
-                  <button key={t.k} data-testid={`ai-tf-${t.k}`} onClick={()=>setAiTimeframe(t.k)} style={{flex:1,padding:"6px 4px",borderRadius:2,border:`1px solid ${aiTimeframe===t.k?"rgba(0,199,135,.4)":C.border}`,background:aiTimeframe===t.k?"rgba(0,199,135,.08)":C.panel,color:aiTimeframe===t.k?C.green:C.muted,fontFamily:MONO,fontSize:8,letterSpacing:"0.06em",cursor:"pointer",transition:"all .2s"}}>{t.l}</button>
-                ))}
-              </div>
-              <button data-testid="button-trade-ideas" onClick={runTradeIdeas} disabled={aiLoading} style={{width:"100%",height:48,background:aiLoading?"rgba(0,199,135,.03)":"rgba(0,199,135,.08)",color:aiLoading?C.muted:C.green,border:`1px solid ${aiLoading?"rgba(0,199,135,.12)":"rgba(0,199,135,.3)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,cursor:aiLoading?"not-allowed":"pointer",letterSpacing:"0.02em"}}>
-                {aiLoading?"QuantBrain Analyzing...":`Get Top 4 ${aiTimeframe==="today"?"Today's":aiTimeframe==="midterm"?"Mid-Term":"Long-Term"} Trade Ideas ✦`}
-              </button>
-              {aiOutput&&aiOutputMode==="trades"?<TradeIdeasDisplay raw={aiOutput} C={C} MONO={MONO} SERIF={SERIF}/>:aiOutput?<div data-testid="text-ai-output" style={{marginTop:12,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:14,fontSize:13,lineHeight:1.9,color:C.text,whiteSpace:"pre-wrap",overflowY:"auto",WebkitOverflowScrolling:"touch",paddingBottom:24}}>{aiOutput}</div>:null}
-              <TwitterSignalPanel ticker={aiInput.match(/\b(BTC|ETH|SOL|NVDA|TSLA|AAPL|MSFT|MSTR|META|PLTR|AMD|COIN|DOGE|XAU|XAG|OIL|EURUSD|USDJPY|GBPUSD|HYPE|TRUMP|AVAX|LINK|ARB|OP|WIF|BONK|JUP|WTI|XAUUSD)/i)?.[1]?.toUpperCase()||"BTC"} />
-              {liveSignals.length>0&&<div style={{marginTop:16}}>
-                <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.18em",marginBottom:10}}>AI TRADE REASONINGS · {i18n.masterScore}</div>
-                {liveSignals.filter(s=>s.reasoning&&s.reasoning.length>0).slice(0,5).map(sig=>(
-                  <div key={sig.id} data-testid={`ai-reasoning-${sig.id}`} style={{background:"rgba(201,168,76,.03)",border:`1px solid ${C.gold}18`,borderRadius:2,padding:"10px 12px",marginBottom:8}}>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <span style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:C.white}}>{sig.token}</span>
-                        <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:2,background:sig.dir==="LONG"?"rgba(0,199,135,.06)":"rgba(255,64,96,.06)",color:sig.dir==="LONG"?C.green:C.red,border:`1px solid ${sig.dir==="LONG"?"rgba(0,199,135,.25)":"rgba(255,64,96,.25)"}`,fontFamily:MONO}}>{sig.dir}</span>
-                        {sig.masterScore&&<span style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:sig.masterScore>=60?C.green:sig.masterScore>=40?C.orange:C.red}}>{i18n.masterScore}: {sig.masterScore}</span>}
-                        {sig.whaleAligned&&<span style={{fontSize:8,padding:"2px 6px",borderRadius:2,background:"rgba(0,212,255,.08)",color:C.cyan,border:"1px solid rgba(0,212,255,.2)",fontFamily:MONO}}>🐋</span>}
-                      </div>
-                      <button data-testid={`ai-trade-${sig.id}`} onClick={()=>openTradeModal(sig)} style={{padding:"5px 12px",borderRadius:2,background:"rgba(0,199,135,.08)",border:"1px solid rgba(0,199,135,.3)",fontFamily:MONO,fontSize:9,color:C.green,cursor:"pointer",letterSpacing:"0.06em"}}>{i18n.tradeNow}</button>
-                    </div>
-                    {sig.reasoning.map((r,i)=><div key={i} style={{fontFamily:MONO,fontSize:9,color:C.muted2,lineHeight:1.7,display:"flex",gap:5}}><span style={{color:C.gold,flexShrink:0}}>▸</span><span>{r}</span></div>)}
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginTop:8}}>
-                      <div style={{textAlign:"center",padding:"4px 0"}}><div style={{fontFamily:MONO,fontSize:7,color:C.muted}}>{i18n.entry}</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.white}}>{sig.entry?fmt(sig.entry,sig.token):"—"}</div></div>
-                      <div style={{textAlign:"center",padding:"4px 0"}}><div style={{fontFamily:MONO,fontSize:7,color:C.green+"88"}}>{i18n.target}</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.green}}>{sig.target?fmt(sig.target,sig.token):"—"}</div></div>
-                      <div style={{textAlign:"center",padding:"4px 0"}}><div style={{fontFamily:MONO,fontSize:7,color:C.red+"88"}}>{i18n.stopLoss}</div><div style={{fontFamily:MONO,fontSize:10,fontWeight:700,color:C.red}}>{sig.stopLoss?fmt(sig.stopLoss,sig.token):"—"}</div></div>
-                    </div>
-                  </div>
-                ))}
-                {liveSignals.filter(s=>s.reasoning&&s.reasoning.length>0).length===0&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,padding:12,textAlign:"center"}}>Waiting for signals with AI reasoning data...</div>}
-              </div>}
+        {tab==="ai"&&<>
+          <AIQuantTab
+            isPro={isPro} isElite={isElite} isPreview={isPreview}
+            storePerps={storePerps} storeSpot={storeSpot}
+            cryptoPrices={cryptoPrices} equityPrices={equityPrices}
+            metalPrices={metalPrices} forexPrices={forexPrices}
+            liveSignals={liveSignals} newsFeed={newsFeed}
+            macroEvents={macroEvents} insiderData={insiderData}
+            regimeData={regimeData} storeMode={storeMode}
+            storeTotalMarkets={storeTotalMarkets} storeAlerts={storeAlerts}
+            allPrices={allPrices} fmt={fmt}
+            onUpgrade={onUpgrade}
+          />
+
+          <div style={{...panel,border:`1px solid rgba(255,140,0,.12)`}}>
+            <div style={{padding:"11px 14px",background:"rgba(255,140,0,.03)"}}>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.orange,letterSpacing:"0.22em",marginBottom:5}}>LEGAL DISCLAIMER</div>
+              <div style={{fontSize:11,color:C.muted,lineHeight:1.9}}>CLVRQuant is an AI-powered research and analytics platform for <strong style={{color:C.muted2}}>informational and educational purposes only</strong>. Nothing constitutes financial advice, investment advice, or trading advice. AI signals are not recommendations. All trading involves significant risk of loss. Past performance does not predict future results. © 2026 CLVRQuant. All rights reserved.</div>
             </div>
           </div>
-          </ProGate>}
+        </>}
 
-          {/* ── MY BASKET — Personalised Scalper/Swing Tool ── */}
+        {/* ══ BASKET ══ */}
+        {tab==="basket"&&<>
           <div style={{marginBottom:6}}><SLabel>My Basket</SLabel></div>
+          <ProGate feature="basket" tier="elite" isPro={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}>
           <MyBasket
             isPro={isElite}
             onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
@@ -4352,13 +4292,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             equityPrices={equityPrices}
             metalPrices={metalPrices}
           />
-
-          <div style={{...panel,border:`1px solid rgba(255,140,0,.12)`}}>
-            <div style={{padding:"11px 14px",background:"rgba(255,140,0,.03)"}}>
-              <div style={{fontFamily:MONO,fontSize:9,color:C.orange,letterSpacing:"0.22em",marginBottom:5}}>LEGAL DISCLAIMER</div>
-              <div style={{fontSize:11,color:C.muted,lineHeight:1.9}}>CLVRQuant is an AI-powered research and analytics platform for <strong style={{color:C.muted2}}>informational and educational purposes only</strong>. Nothing constitutes financial advice, investment advice, or trading advice. AI signals are not recommendations. All trading involves significant risk of loss. Past performance does not predict future results. © 2026 CLVRQuant. All rights reserved.</div>
-            </div>
-          </div>
+          </ProGate>
         </>}
 
         {/* ══ GUIDE ══ */}

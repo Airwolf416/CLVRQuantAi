@@ -27,7 +27,8 @@ The frontend is a React application optimized for a maximum width of 780px, feat
 -   **Track Record (RECORD tab)**: Live performance analytics — win rate, total signals, avg PnL, weekly win/loss bar chart, and signal history feed (history locked for free users). Pro/Elite see per-asset and per-direction breakdowns.
 -   **Alerts**: Custom price and funding alerts with browser notifications.
 -   **Wallet**: Integrates with Phantom wallet for Solana operations and Hyperliquid for account data, positions, orders, and AI-powered trade signals.
--   **AI**: Claude-powered market analysis and trade ideas leveraging QuantBrain for confluence scoring, Kelly Criterion, and regime detection. The Quant Engine includes server-side direction validation (TP/SL must match signal direction), strict duration enforcement (2-4 hours / 12-24 hours / 2-3 days / 1-2 weeks only), asset constraint enforcement, and concise output rules for rationale/invalidation fields.
+-   **AI**: Rebuilt 3-section vertical layout: Trade Ideas (top), Quant Scanner (middle), Ask AI chat (bottom). Simple/Pro detail toggle controls card verbosity. Macro Pre-Flight bar shows live macro status (CLEAR/CAUTION/BLOCKED) before every trade generation. Kronos tags on elite-tier high-conviction signals. Trade idea cards show entry/TP/SL, conviction bar, R:R, and copy-to-clipboard. Free=2 trades (rest blurred), Pro=4 trades + scanner + chat (30/day), Elite=6 trades + Kronos + unlimited chat. Components in `client/src/components/ai/`. Shared market snapshot utility in `client/src/utils/marketDataSnapshot.js`. Backend endpoint `GET /api/macro/preflight` provides 5-min cached macro status.
+-   **Basket**: MyBasket moved to its own tab (🧺 BASKET in nav), gated behind Elite tier.
 -   **About**: Project story and glossary of terms.
 -   **Account**: User account management for subscription, referrals, emails, billing, and legal information.
 
