@@ -593,7 +593,7 @@ export default function AITab() {
               { icon:"😱", label:"Fear & Greed Index",       desc:"Crypto sentiment · Contrarian signal detection" },
               { icon:"🛡", label:"Macro Kill Switch",        desc:"Halts near HIGH impact events within 4h" },
               { icon:"🚫", label:"Signal Suppression Rules", desc:"6-rule engine: macro · trend · drawdown · support · NY open · kill switch" },
-              { icon:"🤖", label:"CLVR AI (Claude)",         desc:"HL · Binance · Finnhub · claude-sonnet-4" },
+              { icon:"🤖", label:"CLVR AI (Claude)",         desc:"HL · Binance · Finnhub · claude-sonnet-4-6" },
             ].map(({ icon, label, desc }) => (
               <div key={label} style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
                 <span style={{ fontSize:14, flexShrink:0 }}>{icon}</span>

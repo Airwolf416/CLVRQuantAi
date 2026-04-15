@@ -7,6 +7,7 @@ import { signalHistory, watchlistItems } from "@shared/schema";
 import { eq, and, lte, gt, desc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
+import { CLAUDE_MODEL } from "./config";
 import WebSocket from "ws";
 import webpush from "web-push";
 import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./insider";
@@ -3016,7 +3017,7 @@ Every level must be technically defensible. Return JSON only.`;
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method:"POST",
         headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
-        body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:2000, system, messages:[{ role:"user", content:userMsg }] }),
+        body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:2000, system, messages:[{ role:"user", content:userMsg }] }),
       });
       if (!aiRes.ok) { const e = await aiRes.text(); console.error("[/api/quant]", e); return res.status(502).json({ error:"AI Engine failed." }); }
       const aiData: any = await aiRes.json();
@@ -3114,8 +3115,8 @@ Every level must be technically defensible. Return JSON only.`;
       return res.json({ text: cached.text, response: cached.text, cached: true });
     }
 
-    // Pro users always get Claude Sonnet 4 for best quality analysis
-    const model = "claude-sonnet-4-20250514";
+    // Pro users always get the latest Claude model for best quality analysis
+    const model = CLAUDE_MODEL;
 
     const callClaude = async (messages: any[], withTools = true) => {
       const body: any = {
@@ -3308,7 +3309,7 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
+          model: CLAUDE_MODEL,
           max_tokens: 1200,
           system,
           messages: [{ role: "user", content: userMsg }],
