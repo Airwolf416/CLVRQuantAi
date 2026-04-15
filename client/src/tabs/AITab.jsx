@@ -51,7 +51,7 @@ const FULL_ASSET_LIBRARY = [
   { ticker:"AVAX",   name:"Avalanche",        cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },
   { ticker:"DOGE",   name:"Dogecoin",         cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },
   { ticker:"DOT",    name:"Polkadot",         cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },
-  { ticker:"MATIC",  name:"Polygon",          cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },
+  { ticker:"POL",    name:"Polygon",          cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },
   { ticker:"LINK",   name:"Chainlink",        cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },
   { ticker:"LTC",    name:"Litecoin",         cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },
   { ticker:"UNI",    name:"Uniswap",          cat:"CRYPTO",    sub:"LARGE_CAP",    flags:[] },

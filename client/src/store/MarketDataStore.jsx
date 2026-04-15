@@ -49,7 +49,7 @@ const ASSET_META_LIB = {
   LINK:     { name:"Chainlink",           icon:"🔗", spotSymbol:null,              yahoo:null,           dex:"crypto" },
   ATOM:     { name:"Cosmos",              icon:"⚛",  spotSymbol:null,              yahoo:null,           dex:"crypto" },
   DOT:      { name:"Polkadot",            icon:"⚫", spotSymbol:null,              yahoo:null,           dex:"crypto" },
-  MATIC:    { name:"Polygon",             icon:"🔷", spotSymbol:null,              yahoo:null,           dex:"crypto" },
+  POL:      { name:"Polygon",             icon:"🔷", spotSymbol:null,              yahoo:null,           dex:"crypto" },
   UNI:      { name:"Uniswap",             icon:"🦄", spotSymbol:null,              yahoo:null,           dex:"crypto" },
   AAVE:     { name:"Aave",               icon:"👻", spotSymbol:null,              yahoo:null,           dex:"crypto" },
   LTC:      { name:"Litecoin",            icon:"Ł",  spotSymbol:null,              yahoo:null,           dex:"crypto" },
