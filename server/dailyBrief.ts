@@ -3,6 +3,7 @@ import { getUncachableResendClient } from "./resendClient";
 import { renderDailyBriefEmail, renderServiceApologyEmail, renderPromoEmail } from "./services/emailTemplates";
 import { chunkArray } from "./services/ta";
 import { enqueueDailyBrief } from "./workers/notifications";
+import { CLAUDE_MODEL } from "./config";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -327,7 +328,7 @@ RULES:
         "x-api-key": apiKey,
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: CLAUDE_MODEL,
         max_tokens: 3000,
         system: "You are CLVR AI — powered by Claude — an elite quantitative trading analyst applying a 5-layer decision framework (Macro Regime → Market Structure → Session Awareness → Signal Generation → Risk Rules). Generate precise, data-driven morning briefs with exact prices, 🔴/🟡/🟢 risk labels, macro risk flags when FOMC/CPI is within 48h, and one actionable top trade idea per brief. Always reference the actual prices provided. Return valid JSON only.",
         messages: [{ role: "user", content: prompt }],
