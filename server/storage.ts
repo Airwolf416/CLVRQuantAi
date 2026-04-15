@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type TradeJournalEntry, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, tradeJournal } from "@shared/schema";
+import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type TradeJournalEntry, type WatchlistItem, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, tradeJournal, watchlistItems } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, and, gt, lt, desc, ne } from "drizzle-orm";
 
@@ -56,6 +56,10 @@ export interface IStorage {
   addTradeJournalEntry(data: Omit<TradeJournalEntry, "id" | "createdAt" | "closedAt">): Promise<TradeJournalEntry>;
   updateTradeJournalEntry(id: number, userId: string, updates: Partial<TradeJournalEntry>): Promise<void>;
   deleteTradeJournalEntry(id: number, userId: string): Promise<void>;
+  // Watchlist
+  getUserWatchlist(userId: string): Promise<WatchlistItem[]>;
+  addToWatchlist(userId: string, symbol: string, assetClass: string, note?: string): Promise<WatchlistItem>;
+  removeFromWatchlist(userId: string, symbol: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -329,6 +333,22 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTradeJournalEntry(id: number, userId: string): Promise<void> {
     await db.delete(tradeJournal).where(and(eq(tradeJournal.id, id), eq(tradeJournal.userId, userId)));
+  }
+
+  // ── Watchlist ──────────────────────────────────────────────────────────────
+  async getUserWatchlist(userId: string): Promise<WatchlistItem[]> {
+    return db.select().from(watchlistItems).where(eq(watchlistItems.userId, userId)).orderBy(desc(watchlistItems.createdAt));
+  }
+
+  async addToWatchlist(userId: string, symbol: string, assetClass: string, note?: string): Promise<WatchlistItem> {
+    const existing = await db.select().from(watchlistItems).where(and(eq(watchlistItems.userId, userId), eq(watchlistItems.symbol, symbol)));
+    if (existing.length > 0) return existing[0];
+    const [item] = await db.insert(watchlistItems).values({ userId, symbol, assetClass, note }).returning();
+    return item;
+  }
+
+  async removeFromWatchlist(userId: string, symbol: string): Promise<void> {
+    await db.delete(watchlistItems).where(and(eq(watchlistItems.userId, userId), eq(watchlistItems.symbol, symbol)));
   }
 }
 

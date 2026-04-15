@@ -1545,6 +1545,47 @@ export async function registerRoutes(
     return res.json(publicData);
   });
 
+  // ── WATCHLIST (Pro+) ──────────────────────────────────────────────────────
+  app.get("/api/watchlist", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.json({ items: [], locked: true });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.json({ items: [], locked: true });
+      const tier = await getEffectiveTier(user);
+      if (tier === "free") return res.json({ items: [], locked: true });
+      const items = await storage.getUserWatchlist(userId);
+      return res.json({ items, locked: false });
+    } catch { return res.json({ items: [], locked: true }); }
+  });
+
+  app.post("/api/watchlist", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const tier = await getEffectiveTier(user);
+      if (tier === "free") return res.status(403).json({ error: "Watchlist requires Pro or Elite" });
+      const { symbol, assetClass = "crypto", note } = req.body;
+      if (!symbol || typeof symbol !== "string") return res.status(400).json({ error: "Symbol required" });
+      const MAX_WATCHLIST = tier === "elite" ? 50 : 20;
+      const existing = await storage.getUserWatchlist(userId);
+      if (existing.length >= MAX_WATCHLIST) return res.status(400).json({ error: `Watchlist limit reached (${MAX_WATCHLIST} symbols)` });
+      const item = await storage.addToWatchlist(userId, symbol.toUpperCase().trim(), assetClass, note);
+      return res.json({ item });
+    } catch (e: any) { return res.status(500).json({ error: "Failed to add to watchlist" }); }
+  });
+
+  app.delete("/api/watchlist/:symbol", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      await storage.removeFromWatchlist(userId, req.params.symbol.toUpperCase());
+      return res.json({ ok: true });
+    } catch { return res.status(500).json({ error: "Failed to remove from watchlist" }); }
+  });
+
   // ── TRADE JOURNAL (Elite) ─────────────────────────────────────────────────
   async function requireElite(req: any, res: any): Promise<string | null> {
     const userId = (req.session as any)?.userId;
