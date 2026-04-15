@@ -1962,22 +1962,6 @@ function Dashboard({user,setUser,onShowAuth}){
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [liveSignals,setLiveSignals]=useState([]);
   const [watchlistSymbols,setWatchlistSymbols]=useState(new Set());
-  const fetchWatchlistSymbols=useCallback(async()=>{
-    if(!isPro)return;
-    try{const r=await fetch("/api/watchlist",{credentials:"include"});const d=await r.json();setWatchlistSymbols(new Set((d.items||[]).map(i=>i.symbol)));}
-    catch{}
-  },[isPro]);
-  useEffect(()=>{fetchWatchlistSymbols();},[fetchWatchlistSymbols]);
-  const handleToggleWatch=useCallback(async(symbol)=>{
-    if(!isPro)return;
-    if(watchlistSymbols.has(symbol)){
-      try{await fetch(`/api/watchlist/${symbol}`,{method:"DELETE",credentials:"include"});setWatchlistSymbols(p=>{const n=new Set(p);n.delete(symbol);return n;});}
-      catch{}
-    }else{
-      try{const r=await fetch("/api/watchlist",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,assetClass:"crypto"})});const d=await r.json();if(!d.error){setWatchlistSymbols(p=>{const n=new Set(p);n.add(symbol);return n;});}}
-      catch{}
-    }
-  },[isPro,watchlistSymbols]);
   const [newsFeed,setNewsFeed]=useState([]);
   const [newsFilter,setNewsFilter]=useState("ALL");
   const [insiderData,setInsiderData]=useState([]);
@@ -2104,6 +2088,22 @@ function Dashboard({user,setUser,onShowAuth}){
   // Stable ref so useCallback closures (addAlert etc.) always see current tier
   const isProRef=useRef(isPro);
   useEffect(()=>{isProRef.current=isPro;},[isPro]);
+  const fetchWatchlistSymbols=useCallback(async()=>{
+    if(!isPro)return;
+    try{const r=await fetch("/api/watchlist",{credentials:"include"});const d=await r.json();setWatchlistSymbols(new Set((d.items||[]).map(i=>i.symbol)));}
+    catch{}
+  },[isPro]);
+  useEffect(()=>{fetchWatchlistSymbols();},[fetchWatchlistSymbols]);
+  const handleToggleWatch=useCallback(async(symbol)=>{
+    if(!isPro)return;
+    if(watchlistSymbols.has(symbol)){
+      try{await fetch(`/api/watchlist/${symbol}`,{method:"DELETE",credentials:"include"});setWatchlistSymbols(p=>{const n=new Set(p);n.delete(symbol);return n;});}
+      catch{}
+    }else{
+      try{const r=await fetch("/api/watchlist",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol,assetClass:"crypto"})});const d=await r.json();if(!d.error){setWatchlistSymbols(p=>{const n=new Set(p);n.add(symbol);return n;});}}
+      catch{}
+    }
+  },[isPro,watchlistSymbols]);
 
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
