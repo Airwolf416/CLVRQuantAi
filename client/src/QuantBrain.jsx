@@ -218,7 +218,7 @@ Tasks:
         body: JSON.stringify({ prompt: userPrompt, systemPrompt }),
       });
       const data = await res.json();
-      setAiResponse(data.response || data.error || "No response.");
+      setAiResponse(data.text || data.response || data.error || "No response.");
     } catch (e) {
       setAiResponse("Error calling AI: " + e.message);
     }

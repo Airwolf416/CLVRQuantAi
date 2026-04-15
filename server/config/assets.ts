@@ -162,11 +162,11 @@ export const BACKTEST_WIN_RATES: Record<string, number> = {
 };
 
 export const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: number; minOI: number }> = {
-  ASIAN:   { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
-  LONDON:  { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
-  NY:      { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
-  POST_NY: { minMove: 2.0, minVolMult: 4.0, minOI: 15_000_000 },
-  DEFAULT: { minMove: 1.5, minVolMult: 3.0, minOI: 10_000_000 },
+  ASIAN:   { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
+  LONDON:  { minMove: 0.8, minVolMult: 1.5, minOI: 3_000_000 },
+  NY:      { minMove: 0.8, minVolMult: 1.5, minOI: 3_000_000 },
+  POST_NY: { minMove: 1.0, minVolMult: 2.0, minOI: 5_000_000 },
+  DEFAULT: { minMove: 0.8, minVolMult: 1.5, minOI: 3_000_000 },
 };
 
 export const HIGH_IMPACT_KEYWORDS = [
