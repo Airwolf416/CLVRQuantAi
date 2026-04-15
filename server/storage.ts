@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type WatchlistItem, type InsertWatchlistItem, type TradeJournalEntry, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, watchlistItems, tradeJournal } from "@shared/schema";
+import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type TradeJournalEntry, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, tradeJournal } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, and, gt, lt, desc, ne } from "drizzle-orm";
 
@@ -56,12 +56,6 @@ export interface IStorage {
   addTradeJournalEntry(data: Omit<TradeJournalEntry, "id" | "createdAt" | "closedAt">): Promise<TradeJournalEntry>;
   updateTradeJournalEntry(id: number, userId: string, updates: Partial<TradeJournalEntry>): Promise<void>;
   deleteTradeJournalEntry(id: number, userId: string): Promise<void>;
-  // Watchlist
-  getWatchlistByUser(userId: string): Promise<WatchlistItem[]>;
-  addWatchlistItem(data: InsertWatchlistItem): Promise<WatchlistItem>;
-  removeWatchlistItem(id: number, userId: string): Promise<void>;
-  updateWatchlistMinConf(id: number, userId: string, minConf: number): Promise<void>;
-  getAllWatchlists(): Promise<WatchlistItem[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -313,28 +307,6 @@ export class DatabaseStorage implements IStorage {
     }));
     const meaningful = wins + losses + pending;
     return { total: meaningful, wins, losses, pending, avgPnl: +avgPnl.toFixed(2), weeklyData, byAsset, byDirection };
-  }
-
-  // ── Watchlist ───────────────────────────────────────────────────────────────
-  async getWatchlistByUser(userId: string): Promise<WatchlistItem[]> {
-    return db.select().from(watchlistItems).where(eq(watchlistItems.userId, userId));
-  }
-
-  async addWatchlistItem(data: InsertWatchlistItem): Promise<WatchlistItem> {
-    const [item] = await db.insert(watchlistItems).values(data).returning();
-    return item;
-  }
-
-  async removeWatchlistItem(id: number, userId: string): Promise<void> {
-    await db.delete(watchlistItems).where(and(eq(watchlistItems.id, id), eq(watchlistItems.userId, userId)));
-  }
-
-  async updateWatchlistMinConf(id: number, userId: string, minConf: number): Promise<void> {
-    await db.update(watchlistItems).set({ minConf }).where(and(eq(watchlistItems.id, id), eq(watchlistItems.userId, userId)));
-  }
-
-  async getAllWatchlists(): Promise<WatchlistItem[]> {
-    return db.select().from(watchlistItems).where(eq(watchlistItems.alertEnabled, true));
   }
 
   // ── Trade Journal ─────────────────────────────────────────────────────────

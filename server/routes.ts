@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { pool, db } from "./db";
-import { signalHistory, watchlistItems } from "@shared/schema";
+import { signalHistory } from "@shared/schema";
 import { eq, and, lte, gt, desc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
@@ -1046,8 +1046,15 @@ let fhWsConnected = false;
 function startFinnhubWebSocket() {
   if (!FINNHUB_KEY) return;
   let retries = 0;
+  let last429At = 0;
   const connect = () => {
-    // 429 guard: don't reconnect more than once every 10s in back-off states
+    // If we got 429 recently, don't hammer the API — wait at least 60s from last 429
+    const msSince429 = Date.now() - last429At;
+    if (msSince429 < 60000 && last429At > 0) {
+      const wait = 60000 - msSince429;
+      setTimeout(connect, wait);
+      return;
+    }
     const ws = new WebSocket(`wss://ws.finnhub.io?token=${FINNHUB_KEY}`);
     ws.on("open", () => {
       fhWsConnected = true;
@@ -1121,12 +1128,19 @@ function startFinnhubWebSocket() {
         }
       } catch {}
     });
-    ws.on("error", (err: any) => { fhWsConnected = false; console.warn("[finnhub-ws] error:", err?.message || err); });
+    ws.on("error", (err: any) => {
+      fhWsConnected = false;
+      const msg = err?.message || String(err);
+      if (msg.includes("429")) { last429At = Date.now(); console.warn("[finnhub-ws] rate limited (429) — will pause 60s before retry"); }
+      else console.warn("[finnhub-ws] error:", msg);
+    });
     ws.on("close", (code: number, reason: Buffer) => {
       fhWsConnected = false;
       retries++;
-      // Start at 10s min backoff, cap at 5min — prevents 429 on rapid reconnects
-      const backoff = Math.min(10000 + (retries - 1) * 5000, 300000);
+      // If we recently hit 429, use a longer backoff (60s minimum)
+      const min429Backoff = last429At > 0 && (Date.now() - last429At) < 120000 ? 60000 : 0;
+      const normalBackoff = Math.min(10000 + (retries - 1) * 5000, 300000);
+      const backoff = Math.max(normalBackoff, min429Backoff);
       const msg = reason?.toString?.() || "";
       console.log(`[finnhub-ws] disconnected (code=${code}${msg ? " reason=" + msg : ""}), retrying in ${(backoff / 1000).toFixed(0)}s`);
       setTimeout(connect, backoff);
@@ -1529,52 +1543,6 @@ export async function registerRoutes(
       return res.json({ ...publicData, byAsset: stats.byAsset, byDirection: stats.byDirection });
     }
     return res.json(publicData);
-  });
-
-  // ── WATCHLIST CRUD (paid users only) ─────────────────────────────────────
-  app.get("/api/watchlist", async (req, res) => {
-    const userId = (req.session as any)?.userId;
-    if (!userId) return res.status(401).json({ error: "Login required" });
-    const dbUser = await storage.getUser(userId);
-    if (!dbUser) return res.status(401).json({ error: "User not found" });
-    const tier = await getEffectiveTier(dbUser);
-    if (tier === "free") return res.status(403).json({ error: "upgrade_required" });
-    const items = await storage.getWatchlistByUser(userId);
-    res.json({ items });
-  });
-
-  app.post("/api/watchlist", async (req, res) => {
-    const userId = (req.session as any)?.userId;
-    if (!userId) return res.status(401).json({ error: "Login required" });
-    const dbUser = await storage.getUser(userId);
-    if (!dbUser) return res.status(401).json({ error: "User not found" });
-    const tier = await getEffectiveTier(dbUser);
-    if (tier === "free") return res.status(403).json({ error: "upgrade_required" });
-    const { token, minConf = 70 } = req.body;
-    if (!token || typeof token !== "string") return res.status(400).json({ error: "token required" });
-    const existing = await storage.getWatchlistByUser(userId);
-    if (existing.some(i => i.token.toUpperCase() === token.toUpperCase())) {
-      return res.status(409).json({ error: "already_in_watchlist" });
-    }
-    if (existing.length >= 20) return res.status(400).json({ error: "max_watchlist_size_20" });
-    const item = await storage.addWatchlistItem({ userId, token: token.toUpperCase(), minConf: Math.max(0, Math.min(100, Number(minConf))) });
-    res.json({ item });
-  });
-
-  app.delete("/api/watchlist/:id", async (req, res) => {
-    const userId = (req.session as any)?.userId;
-    if (!userId) return res.status(401).json({ error: "Login required" });
-    await storage.removeWatchlistItem(Number(req.params.id), userId);
-    res.json({ ok: true });
-  });
-
-  app.patch("/api/watchlist/:id", async (req, res) => {
-    const userId = (req.session as any)?.userId;
-    if (!userId) return res.status(401).json({ error: "Login required" });
-    const { minConf } = req.body;
-    if (minConf === undefined) return res.status(400).json({ error: "minConf required" });
-    await storage.updateWatchlistMinConf(Number(req.params.id), userId, Number(minConf));
-    res.json({ ok: true });
   });
 
   // ── TRADE JOURNAL (Elite) ─────────────────────────────────────────────────

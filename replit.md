@@ -24,7 +24,6 @@ The frontend is a React application optimized for a maximum width of 780px, feat
 -   **Brief**: AI-generated daily market commentary with asset analysis.
 -   **Signals**: QuantBrain-scored trading signals with multi-factor quality gates, confidence scores, and session-aware thresholds. Free users see a 30-minute delayed feed with a banner; Pro/Elite get real-time data. Locked signal details show an upgrade overlay.
 -   **Track Record (RECORD tab)**: Live performance analytics — win rate, total signals, avg PnL, weekly win/loss bar chart, and signal history feed (history locked for free users). Pro/Elite see per-asset and per-direction breakdowns.
--   **Watchlist (WATCH tab)**: Pro/Elite feature to track favourite assets with a minimum confidence threshold. Shows live matching signals in real time. Free users see an upgrade prompt.
 -   **Alerts**: Custom price and funding alerts with browser notifications.
 -   **Wallet**: Integrates with Phantom wallet for Solana operations and Hyperliquid for account data, positions, orders, and AI-powered trade signals.
 -   **AI**: Claude-powered market analysis and trade ideas leveraging QuantBrain for confluence scoring, Kelly Criterion, and regime detection.

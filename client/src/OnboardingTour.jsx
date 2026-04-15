@@ -41,7 +41,7 @@ const STEPS = [
     label: "MARKETS",
     title: "All Asset Classes",
     subtitle: "32 crypto · 16 equities · 7 commodities · 14 forex",
-    body: "Full coverage across every market. Tap any asset to see the live price, 24h change, open interest, and funding rates. Toggle between Spot and Perpetuals for crypto. Star assets to your watchlist.",
+    body: "Full coverage across every market. Tap any asset to see the live price, 24h change, open interest, and funding rates. Toggle between Spot and Perpetuals for crypto.",
     cta: "Open Markets →",
     tab: "prices",
   },

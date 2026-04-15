@@ -463,10 +463,10 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai","watchlist"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal",watchlist:"Watchlist"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
   const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
@@ -1275,129 +1275,6 @@ function TrackRecordTab({isPro,onUpgrade}){
   </>);
 }
 
-// ─── WATCHLIST TAB ─────────────────────────────────────────
-function WatchlistTab({isPro,onUpgrade,liveSignals}){
-  const{C}=useContext(ThemeCtx);
-  const[items,setItems]=useState([]);
-  const[loading,setLoading]=useState(true);
-  const[newToken,setNewToken]=useState("");
-  const[newMinConf,setNewMinConf]=useState(70);
-  const[adding,setAdding]=useState(false);
-  const[err,setErr]=useState(null);
-  const panel2={background:C.panel,border:`1px solid ${C.border}`,borderRadius:2,marginBottom:10};
-
-  useEffect(()=>{
-    if(!isPro){setLoading(false);return;}
-    fetch("/api/watchlist").then(r=>r.json()).then(d=>setItems(d.items||[])).catch(()=>{}).finally(()=>setLoading(false));
-  },[isPro]);
-
-  const addItem=async()=>{
-    if(!newToken.trim())return;
-    setAdding(true);setErr(null);
-    try{
-      const r=await fetch("/api/watchlist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:newToken.toUpperCase(),minConf:newMinConf})});
-      const d=await r.json();
-      if(d.error==="already_in_watchlist"){setErr("Already in watchlist");return;}
-      if(d.error==="max_watchlist_size_20"){setErr("Max 20 assets reached");return;}
-      if(d.item)setItems(prev=>[...prev,d.item]);
-      setNewToken("");
-    }catch(e){setErr("Failed to add");}finally{setAdding(false);}
-  };
-
-  const removeItem=async(id)=>{
-    await fetch(`/api/watchlist/${id}`,{method:"DELETE"});
-    setItems(prev=>prev.filter(i=>i.id!==id));
-  };
-
-  const watchedTokens=new Set(items.map(i=>i.token));
-  const matchingSigs=(liveSignals||[]).filter(s=>watchedTokens.has(s.token)&&!s.locked);
-
-  if(!isPro)return(
-    <div style={{...panel2,padding:"32px 20px"}}>
-      <div style={{textAlign:"center",marginBottom:20}}>
-        <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.white,marginBottom:4}}>My <span style={{color:C.gold}}>Watchlist</span></div>
-        <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.25em"}}>PRO & ELITE FEATURE</div>
-      </div>
-      <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24,maxWidth:320,margin:"0 auto 24px"}}>
-        {[
-          ["📋","Build a watchlist of up to 20 assets"],
-          ["⚡","Instant alert when a high-confidence signal fires on your assets"],
-          ["🎯","Filter the signal feed to only your watched assets"],
-          ["🔔","Set per-asset minimum confidence threshold"],
-        ].map(([icon,txt])=>(
-          <div key={txt} style={{display:"flex",alignItems:"flex-start",gap:10,fontFamily:MONO,fontSize:10,color:C.muted2,lineHeight:1.5}}>
-            <span style={{flexShrink:0,fontSize:14}}>{icon}</span><span>{txt}</span>
-          </div>
-        ))}
-      </div>
-      <div style={{textAlign:"center"}}>
-        <button data-testid="btn-upgrade-watchlist" onClick={onUpgrade} style={{background:"rgba(201,168,76,.14)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:6,padding:"12px 32px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:15,color:C.gold2,cursor:"pointer"}}>Upgrade to Pro →</button>
-        <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:8,letterSpacing:"0.1em"}}>FROM $29.99/MO · CANCEL ANYTIME</div>
-      </div>
-    </div>
-  );
-
-  return(<>
-    <div style={{...panel2,border:`1px solid rgba(201,168,76,.18)`}}>
-      <div style={{padding:"16px 18px 12px"}}>
-        <div style={{fontFamily:SERIF,fontSize:20,fontWeight:900,color:C.white}}>My <span style={{color:C.gold}}>Watchlist</span></div>
-        <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.25em",marginTop:3}}>CUSTOM SIGNAL ALERTS · {items.length}/20</div>
-      </div>
-    </div>
-
-    {matchingSigs.length>0&&(
-      <div style={{...panel2,border:`1px solid rgba(0,199,135,.3)`}}>
-        <div style={{padding:"10px 14px 6px"}}>
-          <div style={{fontFamily:MONO,fontSize:8,color:C.green,letterSpacing:"0.18em",marginBottom:8,animation:"pulse 2s infinite"}}>⚡ LIVE SIGNALS ON WATCHED ASSETS</div>
-          {matchingSigs.map(sig=>(
-            <div key={sig.id} data-testid={`watchlist-signal-${sig.id}`} style={{padding:"7px 0",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <span style={{fontFamily:MONO,fontSize:9,padding:"2px 6px",borderRadius:2,background:sig.dir==="LONG"?"rgba(0,199,135,.08)":"rgba(255,64,96,.08)",color:sig.dir==="LONG"?C.green:C.red,border:`1px solid ${sig.dir==="LONG"?C.green:C.red}44`,fontWeight:700}}>{sig.dir}</span>
-              <span style={{fontFamily:MONO,fontSize:12,fontWeight:800,color:C.white}}>{sig.token}</span>
-              <span style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>Score: {sig.advancedScore||sig.conf||"—"}</span>
-              <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>{Math.floor((Date.now()-(sig.ts||0))/60000)}m ago</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    )}
-
-    <div style={panel2}>
-      <div style={{padding:"14px 16px"}}>
-        <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.12em",marginBottom:10}}>ADD ASSET TO WATCHLIST</div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <input data-testid="input-watchlist-token" value={newToken} onChange={e=>setNewToken(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&addItem()} placeholder="BTC, ETH, SOL…" style={{flex:"1 1 100px",background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:4,padding:"8px 12px",fontFamily:MONO,fontSize:12,color:C.white,outline:"none"}}/>
-          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-            <span style={{fontFamily:MONO,fontSize:8,color:C.muted}}>Min conf:</span>
-            <input data-testid="input-watchlist-conf" type="number" min="0" max="100" value={newMinConf} onChange={e=>setNewMinConf(Number(e.target.value))} style={{width:50,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:4,padding:"8px 8px",fontFamily:MONO,fontSize:12,color:C.white,outline:"none",textAlign:"center"}}/>
-          </div>
-          <button data-testid="btn-add-watchlist" onClick={addItem} disabled={adding||!newToken.trim()} style={{padding:"8px 18px",background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,fontFamily:MONO,fontSize:11,color:C.gold2,cursor:adding||!newToken.trim()?"not-allowed":"pointer",opacity:adding||!newToken.trim()?0.5:1}}>
-            {adding?"Adding…":"+ Add"}
-          </button>
-        </div>
-        {err&&<div style={{fontFamily:MONO,fontSize:9,color:C.red,marginTop:6}}>{err}</div>}
-        <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:6}}>Alert fires when a signal fires on a watched token with confidence ≥ your threshold. Max 20 assets.</div>
-      </div>
-    </div>
-
-    {loading?<div style={{padding:24,textAlign:"center",fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>
-    :items.length===0?(
-      <div style={{...panel2,padding:"24px 16px",textAlign:"center"}}>
-        <div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>No assets in your watchlist yet.</div>
-        <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,marginTop:6}}>Add BTC, ETH, SOL or any tracked token above.</div>
-      </div>
-    ):items.map(item=>(
-      <div key={item.id} data-testid={`watchlist-item-${item.id}`} style={{...panel2,padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontFamily:MONO,fontSize:14,fontWeight:800,color:C.white}}>{item.token}</span>
-          <span style={{fontFamily:MONO,fontSize:8,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"2px 6px"}}>conf ≥ {item.minConf}</span>
-          {matchingSigs.some(s=>s.token===item.token)&&<span style={{fontFamily:MONO,fontSize:8,color:C.green,animation:"pulse 2s infinite"}}>● SIGNAL</span>}
-        </div>
-        <button data-testid={`btn-remove-watchlist-${item.id}`} onClick={()=>removeItem(item.id)} style={{background:"rgba(255,64,96,.07)",border:`1px solid rgba(255,64,96,.22)`,borderRadius:2,padding:"4px 10px",fontFamily:MONO,fontSize:9,color:C.red,cursor:"pointer"}}>Remove</button>
-      </div>
-    ))}
-  </>);
-}
-
 // ─── MACRO INTEL FEED (Elite only) ─────────────────────────
 const MACRO_IMPACT_COLORS={red:{bg:"rgba(255,45,85,.1)",border:"rgba(255,45,85,.4)",text:"#ff2d55",label:"HIGH IMPACT"},orange:{bg:"rgba(255,140,0,.08)",border:"rgba(255,140,0,.35)",text:"#ff8c00",label:"MARKET MOVING"},yellow:{bg:"rgba(201,168,76,.06)",border:"rgba(201,168,76,.3)",text:"#c9a84c",label:"MACRO NOTE"}};
 function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
@@ -1957,7 +1834,6 @@ function Dashboard({user,setUser,onShowAuth}){
 
   const [flashes,setFlashes]=useState({});
   const prevRef=useRef({});
-  const [watchlist,setWatchlist]=useState(["BTC","ETH","SOL","XAU","TSLA"]);
   const [alerts,setAlerts]=useState([]);
   const alertsLoaded=useRef(false);
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
@@ -2567,9 +2443,6 @@ function Dashboard({user,setUser,onShowAuth}){
     return()=>clearInterval(iv);
   },[checkMacroCountdowns]);
 
-  // ── Watchlist ────────────────────────────────────────
-  const toggleWatch=sym=>{const has=watchlist.includes(sym);setWatchlist(prev=>has?prev.filter(s=>s!==sym):[...prev,sym]);setToast(has?`Removed ${sym}`:`${sym} added to watchlist ✦`);};
-  const isWatched=sym=>watchlist.includes(sym);
 
   // ── Copy helper (clipboard fallback) ─────────────────
   const copyText=useCallback((text)=>{
@@ -3155,7 +3028,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
   const allSignals=[...liveSignals].sort((a,b)=>(b.ts||0)-(a.ts||0));
   const filtSigs=allSignals.filter(s=>{
     if(sigSubTab==="all")return true;
-    if(sigSubTab==="watch")return watchlist.includes(s.token);
     if(sigSubTab==="crypto")return s.src==="hyperliquid"||s.src==="alpha-detect";
     if(sigSubTab==="equity")return s.src==="trade.xyz";
     if(sigSubTab==="metals")return["XAU","XAG","WTI","BRENT","NATGAS","COPPER","PLATINUM"].includes(s.token);
@@ -3336,7 +3208,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
-    {k:"watchlist",icon:"✦",label:"WATCHLIST"},
     {k:"track",icon:"📈",label:"RECORD"},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
@@ -4322,7 +4193,7 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
 
           {/* Filters */}
           <div style={{display:"flex",gap:4,marginBottom:10,overflowX:"auto"}}>
-            {[{k:"all",l:"All"},{k:"watch",l:"✦ Watch"},{k:"crypto",l:"Crypto",col:"green"},{k:"equity",l:"Equities",col:"blue"},{k:"metals",l:"Metals"},{k:"forex",l:"Forex",col:"teal"}].map(t=>(
+            {[{k:"all",l:"All"},{k:"crypto",l:"Crypto",col:"green"},{k:"equity",l:"Equities",col:"blue"},{k:"metals",l:"Metals"},{k:"forex",l:"Forex",col:"teal"}].map(t=>(
               <SubBtn key={t.k} k={t.k} label={t.l} col={t.col||"gold"} state={sigSubTab} setter={setSigSubTab}/>
             ))}
           </div>
@@ -4421,8 +4292,6 @@ Use live prices from the data provided. Scan all asset classes (crypto, equities
         {/* ══ TRACK RECORD ══ */}
         {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 
-        {/* ══ WATCHLIST ══ */}
-        {tab==="watchlist"&&isPro&&<WatchlistTab isPro={isPro} onUpgrade={onUpgrade} liveSignals={liveSignals}/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>
