@@ -1,0 +1,148 @@
+# AUDIT REQUEST — Full Architecture Map of the AI Tab
+
+⚠️ DO NOT CHANGE ANY CODE. DO NOT FIX ANYTHING. DO NOT CREATE ANYTHING.
+This is a READ-ONLY audit. I need you to document everything before I rebuild.
+
+-----
+
+## What I Need
+
+Give me a COMPLETE inventory of everything inside the “AI MARKET ANALYST” tab — both the “AI ANALYST” sub-tab and the “QUANT ENGINE” sub-tab, plus anything else rendered on that page (Kronos, My Basket, social intelligence, etc.)
+
+For EACH item below, provide the EXACT file path, the relevant function/component name, and a 1-2 line description of what it does.
+
+-----
+
+## SECTION 1 — FILE MAP
+
+List every file that is involved in rendering or powering the AI tab. Group them by:
+
+### A. Frontend Components
+
+List every React component that renders inside the AI tab. For each one:
+
+- File path
+- Component name
+- What it renders (UI description)
+- Which sub-tab it belongs to (AI Analyst / Quant Engine / both / neither)
+- Does it have child components? If so, list them.
+
+### B. API Routes / Server Handlers
+
+List every backend route or server function that the AI tab calls. For each one:
+
+- File path
+- Route path (e.g., POST /api/analyze)
+- What it does
+- Which frontend component calls it
+- Does it call the Anthropic API? If yes, what model and what max_tokens?
+
+### C. System Prompts
+
+List every system prompt string used by the AI tab. For each one:
+
+- File path and exact line number where the prompt starts
+- Which feature it powers (AI Analyst, Quant Engine, MasterBrain, Kronos, Top Trade Ideas, etc.)
+- Show me the FIRST 5 LINES and LAST 5 LINES of each prompt (do not show the full prompt)
+- Approximate character count of the prompt
+
+### D. Config Files
+
+List any configuration files that affect the AI tab:
+
+- Asset lists (what assets are available for scanning)
+- Tier gates (what’s free vs Pro vs Elite)
+- API keys or environment variables used
+- Pricing config that references AI features
+
+### E. Shared/Utility Files
+
+List any shared utilities, helpers, or hooks used by the AI tab:
+
+- Data fetching functions (market data, OI, funding, social sentiment)
+- Parsing/formatting utilities
+- Type definitions or schemas related to signals, analysis, scores
+
+-----
+
+## SECTION 2 — FEATURE INVENTORY
+
+For each feature below, tell me: Does it exist? Which file(s) power it? What sub-tab is it in?
+
+1. AI Analyst — free text analysis (user clicks “Analyze” on an asset)
+1. AI Analyst — PERP Markets button
+1. AI Analyst — SPOT Markets button
+1. AI Analyst — “Today / Mid-Term / Long-Term” time horizon selector
+1. AI Analyst — “Get Top 4 Long-Term Trade Ideas” button
+1. AI Analyst — asset selector chips (BTC, ETH, SOL, TRUMP, HYPE, XAU, WTI, EURUSD, TSLA, NVDA)
+1. AI Analyst — optional user instruction text field
+1. Quant Engine — Risk Profile selector (Conservative / Balanced / Aggressive)
+1. Quant Engine — Asset search and selection (with category filters: ALL, CRYPTO, EQUITY, COMMODITY, FX, INDEX)
+1. Quant Engine — “Top 5 by Volume” button
+1. Quant Engine — PERP Markets / SPOT Markets toggle
+1. Quant Engine — Time Horizon selector (Today / Mid-Term / Long-Term)
+1. Quant Engine — Optional instruction text field
+1. Quant Engine — Twitter intelligence feed / sentiment bar
+1. Quant Engine — Kronos Forecast Engine (collapsible section)
+1. Quant Engine — “Execute MasterBrain Scan” button
+1. Quant Engine — MasterBrain Scan results display (assets scanned, signals found, regime, crash prob)
+1. Quant Engine — Signal cards (entry, TP, SL, leverage, R:R, edge factors, thesis, invalidation)
+1. Quant Engine — Suppressed signals section
+1. Quant Engine — “Copy Trade” / “Set Alert” / “Dismiss” buttons on signal cards
+1. Quant Engine — “Advanced Quant Detail” expandable section
+1. My Basket — basket/portfolio view
+1. Social Intelligence bar (bottom bar showing sentiment %)
+1. Live ticker bar (top bar with BTC, ETH, SOL, XAU, WTI, EURUSD, TSLA, NVDA prices)
+
+-----
+
+## SECTION 3 — DATA FLOW
+
+Describe the data flow for these two critical paths:
+
+### Path A: User clicks “Analyze” on AI Analyst tab
+
+1. What user inputs are collected? (asset, timeframe, market type, custom instructions)
+1. Which API route is called?
+1. What is included in the API request body? (system prompt, user message, market data context, max_tokens, model)
+1. Where does market data come from? (which API/service, which endpoint)
+1. How is the AI response parsed and rendered?
+
+### Path B: User clicks “Execute MasterBrain Scan” on Quant Engine tab
+
+1. What user inputs are collected? (selected assets, risk profile, market type, time horizon, custom instructions)
+1. Which API route is called?
+1. Are assets scanned in parallel or sequentially?
+1. What market data is fetched per asset? (price, OI, funding, volume, social sentiment)
+1. What is the system prompt? Where is it defined?
+1. How are results parsed?
+1. How does the suppressed signals logic work?
+1. How does the signal card rendering work?
+
+-----
+
+## SECTION 4 — KRONOS
+
+1. Where is the Kronos Forecast Engine defined?
+1. Does it have its own system prompt or does it share with MasterBrain?
+1. What does it actually do vs the regular MasterBrain scan?
+1. Is it a separate API call or part of the same scan?
+1. Is it gated to Elite tier? Where is that gate enforced?
+
+-----
+
+## SECTION 5 — MY BASKET
+
+1. Where is “My Basket” rendered?
+1. Is it inside the AI tab or is it a separate section on the same page?
+1. What data does it show?
+1. Does it have its own API routes?
+1. What components power it?
+
+-----
+
+## OUTPUT FORMAT
+
+Organize your response exactly following Sections 1-5 above. Use code blocks for file paths. Use tables where appropriate. Do not skip any item — if something doesn’t exist, say “DOES NOT EXIST”.
+
+Do NOT suggest fixes, improvements, or changes. Just document what exists right now.
