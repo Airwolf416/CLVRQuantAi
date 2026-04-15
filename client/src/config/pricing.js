@@ -14,7 +14,6 @@ export const TIERS = {
       { label: "Signals delayed 30 min — direction only",  locked: false },
       { label: "Track record — aggregate stats only",       locked: false },
       { label: "Real-time signals — entry, SL & TP",       locked: true,  note: "Pro" },
-      { label: "My Watchlist — track 20+ assets live",     locked: true,  note: "Pro" },
       { label: "AI confidence breakdown per signal",        locked: true,  note: "Pro" },
       { label: "Signal history, PnL & full AI reasoning",  locked: true,  note: "Pro" },
       { label: "AI Chat · Morning Brief · Price Alerts",   locked: true,  note: "Pro" },
@@ -36,7 +35,6 @@ export const TIERS = {
     features: [
       { label: "Real-time signals — zero delay",                      locked: false },
       { label: "Full entry, stop-loss & take-profit targets",         locked: false },
-      { label: "My Watchlist — track 20 assets with live prices",    locked: false },
       { label: "AI confidence breakdown & full reasoning",            locked: false },
       { label: "Full signal history + PnL records",                   locked: false },
       { label: "CLVR AI Market Chat · 30 req/day",                    locked: false },
