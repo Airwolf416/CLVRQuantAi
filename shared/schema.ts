@@ -141,24 +141,6 @@ export const signalHistory = pgTable("signal_history", {
 
 export type SignalHistoryRecord = typeof signalHistory.$inferSelect;
 
-// ── Watchlist Items (per-user list of tracked tokens) ─────────────────────────
-export const watchlistItems = pgTable("watchlist_items", {
-  id: serial("id").primaryKey(),
-  userId: text("user_id").notNull(),
-  token: text("token").notNull(),
-  minConf: integer("min_conf").notNull().default(70),
-  alertEnabled: boolean("alert_enabled").notNull().default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export type WatchlistItem = typeof watchlistItems.$inferSelect;
-export const insertWatchlistItemSchema = createInsertSchema(watchlistItems).pick({
-  userId: true,
-  token: true,
-  minConf: true,
-});
-export type InsertWatchlistItem = z.infer<typeof insertWatchlistItemSchema>;
-
 // ── Trade Journal (Elite) ──────────────────────────────────────────────────────
 export const tradeJournal = pgTable("trade_journal", {
   id: serial("id").primaryKey(),

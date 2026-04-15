@@ -194,12 +194,12 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
             {
               tier: "FREE", price: "$0", sub: "Always free",
               features: ["Signals with 30-min delay", "Macro Calendar", "Live Market Prices"],
-              locked: ["Real-time signals", "AI Chat & Morning Brief", "Watchlist & Alerts"],
+              locked: ["Real-time signals", "AI Chat & Morning Brief", "Price Alerts"],
               highlight: false, cta: "Start Free", action: "free", color: C.muted,
             },
             {
               tier: "PRO", price: "$29.99", sub: "per month · save 17% yearly",
-              features: ["Real-time signals — zero delay", "CLVR AI Market Chat", "Custom watchlist (20 assets)", "Price alerts & push notifications", "Signal history & PnL tracking", "Morning Brief · 4 ideas/day"],
+              features: ["Real-time signals — zero delay", "CLVR AI Market Chat", "Price alerts & push notifications", "Signal history & PnL tracking", "Morning Brief · 4 ideas/day"],
               locked: [],
               highlight: true, cta: "Start Pro", action: "signup", color: C.gold,
             },

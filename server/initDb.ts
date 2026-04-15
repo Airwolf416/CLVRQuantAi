@@ -151,17 +151,6 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
-    // ── watchlist_items ──────────────────────────────────────────────────────
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS watchlist_items (
-        id          SERIAL PRIMARY KEY,
-        user_id     TEXT NOT NULL,
-        asset       TEXT NOT NULL,
-        min_conf    INTEGER NOT NULL DEFAULT 70,
-        created_at  TIMESTAMP NOT NULL DEFAULT NOW()
-      )
-    `);
-
     // ── trade_journal ─────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS trade_journal (

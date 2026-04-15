@@ -1,0 +1,37 @@
+# AI Analyst & Quant Engine Troubleshooting
+# TODO: Diagnose root cause of recent failures after feature expansion 
+# Check data pipelines, API integrations, prompt/system instruction consistency
+# Validate OI data ingestion and macro signal conditioning
+# Implement unit tests and end-to-end integration tests to pinpoint failures
+
+# Watchlist Removal
+# TODO: Permanently purge watchlist from the platform 
+# Remove all frontend component references, route handlers, API paths
+# Grep codebase for orphaned watchlist configs, constants, settings
+# Audit dynamic tab layout/navigation composition logic 
+# Verify watchlist code fully removed from version control history
+
+# Track Record Dashboard Fix 
+# TODO: Investigate track record gap in production
+# Hard refresh dashboard and repro on multiple devices to rule out cache/CDN 
+# Inspect network logs for dashboard renderer or API client failures
+# Check database state and schema consistency for track record aggregation pipeline
+# Replay historical track record generation in test environment 
+# Restore from point-in-time backup if data loss occurred
+
+# Long/Short Signal Accuracy Validation
+# TODO: Implement safeguards to ensure prediction quality after prompt updates
+# Re-validate training data and annotations used for long/short classifier
+# Verify system prompts handle edge cases across expanded asset universe
+# Pressure test long/short accuracy with historical data vs human labels
+# Monitor real-time long/short predictions and compare win rates to baseline
+# Plan phased rollout with prediction quality gates before fully enabling  
+# Set up proactive alerts for anomalous long/short ratios or accuracy degradation
+
+# Request Replit team assistance for:
+# - Debugging AI Analyst & Quant Engine failures
+# - Auditing and fully purging watchlist code 
+# - Investigating track record data loss or aggregation failures
+# - Implementing long/short accuracy safeguards and alerts
+# Provide access to relevant code repos, dashboards and test data
+# Schedule troubleshooting call to discuss specifics and reproduce issues
