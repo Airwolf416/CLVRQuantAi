@@ -392,6 +392,258 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN 2 — Diagnostics: Track Record, Signal Logs, Resolver, Daily Brief
+// ═══════════════════════════════════════════════════════════════════════════════
+function AdminTab2({ C, MONO, SANS, SERIF }) {
+  const [trackRecord, setTrackRecord] = useState(null);
+  const [signalHistory, setSignalHistory] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [actionStatus, setActionStatus] = useState({});
+  const [actionMsg, setActionMsg] = useState({});
+
+  const loadData = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const [trRes, shRes] = await Promise.all([
+        fetch("/api/track-record", { credentials: "include" }),
+        fetch("/api/signal-history?limit=100", { credentials: "include" }),
+      ]);
+      const tr = trRes.ok ? await trRes.json() : null;
+      const sh = shRes.ok ? await shRes.json() : null;
+      setTrackRecord(tr);
+      setSignalHistory(sh);
+    } catch (e) {
+      setErr(e.message || "Failed to load diagnostics");
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  const runAction = async (key, url, opts = {}) => {
+    setActionStatus(s => ({ ...s, [key]: "running" }));
+    setActionMsg(m => ({ ...m, [key]: "" }));
+    try {
+      const r = await fetch(url, { method: opts.method || "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: opts.body });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setActionStatus(s => ({ ...s, [key]: "ok" }));
+        setActionMsg(m => ({ ...m, [key]: d.message || "Done." }));
+      } else {
+        setActionStatus(s => ({ ...s, [key]: "err" }));
+        setActionMsg(m => ({ ...m, [key]: d.error || `HTTP ${r.status}` }));
+      }
+    } catch (e) {
+      setActionStatus(s => ({ ...s, [key]: "err" }));
+      setActionMsg(m => ({ ...m, [key]: e.message || "Network error" }));
+    }
+    setTimeout(() => { setActionStatus(s => ({ ...s, [key]: null })); setActionMsg(m => ({ ...m, [key]: "" })); }, 12000);
+  };
+
+  // ── Derived stats from signal history ──────────────────────────────────────
+  const signals = signalHistory?.signals || [];
+  const byOutcome = signals.reduce((acc, s) => { acc[s.outcome || "PENDING"] = (acc[s.outcome || "PENDING"] || 0) + 1; return acc; }, {});
+  const byDirection = signals.reduce((acc, s) => {
+    const d = s.direction || "?";
+    if (!acc[d]) acc[d] = { total: 0, wins: 0, losses: 0, pending: 0 };
+    acc[d].total++;
+    if (s.outcome === "WIN") acc[d].wins++;
+    else if (s.outcome === "LOSS") acc[d].losses++;
+    else acc[d].pending++;
+    return acc;
+  }, {});
+  const lastSignal = signals[0];
+  const lastSignalAge = lastSignal ? Math.floor((Date.now() - new Date(lastSignal.ts).getTime()) / 60000) : null;
+
+  // Health status badges
+  const dbHealthy = trackRecord && typeof trackRecord.total === "number";
+  const signalsHealthy = signalHistory && Array.isArray(signalHistory.signals);
+  const workerHealthy = lastSignalAge !== null && lastSignalAge < 240; // signal in last 4h = healthy
+
+  const Section = ({ title, color, children }) => (
+    <div style={{ background:"#0c1220", border:`1px solid ${color}33`, borderRadius:6, padding:18, marginBottom:16 }}>
+      <div style={{ fontFamily:MONO, fontSize:9, color, letterSpacing:"0.2em", marginBottom:14 }}>{title}</div>
+      {children}
+    </div>
+  );
+
+  const Stat = ({ label, value, color = "#c8d4ee", sub }) => (
+    <div style={{ flex:"1 1 120px", minWidth:110, background:"#080d18", border:"1px solid #1c2b4a", borderRadius:4, padding:"10px 12px" }}>
+      <div style={{ fontFamily:MONO, fontSize:8, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:4 }}>{label}</div>
+      <div style={{ fontFamily:SERIF, fontSize:20, fontWeight:700, color }}>{value}</div>
+      {sub && <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:2 }}>{sub}</div>}
+    </div>
+  );
+
+  const Pill = ({ ok, label }) => (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontFamily:MONO, fontSize:9, padding:"3px 9px", borderRadius:3, background: ok ? "rgba(0,195,100,.12)" : "rgba(255,64,96,.12)", color: ok ? "#00e57a" : "#ff6680", border:`1px solid ${ok ? "rgba(0,195,100,.35)" : "rgba(255,64,96,.3)"}`, letterSpacing:"0.06em" }}>
+      <span style={{ width:6, height:6, borderRadius:"50%", background: ok ? "#00e57a" : "#ff4060" }}/>
+      {label}
+    </span>
+  );
+
+  const ActionBtn = ({ actionKey, label, url, body, color = "#c9a84c" }) => {
+    const status = actionStatus[actionKey];
+    const msg = actionMsg[actionKey];
+    return (
+      <div style={{ marginBottom:10 }}>
+        <button
+          data-testid={`btn-${actionKey}`}
+          onClick={() => runAction(actionKey, url, { body })}
+          disabled={status === "running"}
+          style={{ background:`${color}15`, border:`1px solid ${color}55`, color, borderRadius:4, padding:"8px 14px", fontFamily:MONO, fontSize:10, fontWeight:700, cursor: status === "running" ? "not-allowed" : "pointer", letterSpacing:"0.08em", opacity: status === "running" ? 0.6 : 1, marginRight:8 }}>
+          {status === "running" ? "Running…" : status === "ok" ? "✓ Done" : label}
+        </button>
+        {msg && <span style={{ fontFamily:MONO, fontSize:9, color: status === "ok" ? "#00e57a" : "#ff6680" }}>{msg}</span>}
+      </div>
+    );
+  };
+
+  if (loading) {
+    return <div style={{ textAlign:"center", padding:40, fontFamily:MONO, fontSize:10, color:"#4a5d80", letterSpacing:"0.2em" }}>LOADING DIAGNOSTICS…</div>;
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
+        <div>
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#9b59b6", letterSpacing:"0.2em", marginBottom:3 }}>📊 SYSTEM DIAGNOSTICS</div>
+          <div style={{ fontSize:10, color:"#4a5d80", fontFamily:MONO }}>Track record, signal logs, resolver status & daily brief controls</div>
+        </div>
+        <button data-testid="btn-refresh-admin2" onClick={loadData}
+          style={{ background:"rgba(155,89,182,.1)", border:"1px solid rgba(155,89,182,.35)", color:"#c39bd3", borderRadius:4, padding:"6px 14px", fontFamily:MONO, fontSize:10, fontWeight:700, cursor:"pointer", letterSpacing:"0.08em" }}>
+          ↻ REFRESH
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background:"rgba(255,64,96,.06)", border:"1px solid rgba(255,64,96,.3)", borderRadius:4, padding:"10px 12px", marginBottom:16, fontFamily:MONO, fontSize:10, color:"#ff6680" }}>
+          ⚠ {err}
+        </div>
+      )}
+
+      {/* System Health */}
+      <Section title="🩺 SYSTEM HEALTH" color="#00d4ff">
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+          <Pill ok={dbHealthy} label={dbHealthy ? "TRACK-RECORD API OK" : "TRACK-RECORD API DOWN"} />
+          <Pill ok={signalsHealthy} label={signalsHealthy ? "SIGNAL-HISTORY API OK" : "SIGNAL-HISTORY API DOWN"} />
+          <Pill ok={workerHealthy} label={workerHealthy ? `SIGNAL WORKER ACTIVE (${lastSignalAge}m ago)` : lastSignalAge === null ? "NO SIGNALS YET" : `WORKER STALE (${lastSignalAge}m)`} />
+        </div>
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", lineHeight:1.6 }}>
+          Indicators derived from live API responses. A stale worker in production usually means the signal generator interval isn't running or the DB connection dropped.
+        </div>
+      </Section>
+
+      {/* Track Record Aggregate */}
+      <Section title="🏆 TRACK RECORD (AGGREGATE)" color="#c9a84c">
+        {trackRecord ? (
+          <>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 }}>
+              <Stat label="WIN RATE" value={`${trackRecord.winRate ?? 0}%`} color="#00e57a" />
+              <Stat label="TOTAL" value={trackRecord.total ?? 0} />
+              <Stat label="WINS" value={trackRecord.wins ?? 0} color="#00e57a" />
+              <Stat label="LOSSES" value={trackRecord.losses ?? 0} color="#ff6680" />
+              <Stat label="PENDING" value={trackRecord.pending ?? 0} color="#c9a84c" />
+              <Stat label="AVG PnL" value={`${(trackRecord.avgPnl ?? 0).toFixed?.(2) ?? trackRecord.avgPnl}%`} color={trackRecord.avgPnl >= 0 ? "#00e57a" : "#ff6680"} />
+            </div>
+            <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80" }}>
+              Last updated: {trackRecord.lastUpdated ? new Date(trackRecord.lastUpdated).toLocaleString() : "—"}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontFamily:MONO, fontSize:10, color:"#ff6680" }}>Track record unavailable. Check DB connection & signal_history table.</div>
+        )}
+      </Section>
+
+      {/* Outcome Breakdown */}
+      <Section title="⚖️ OUTCOME BREAKDOWN (LAST 100)" color="#9b59b6">
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
+          {Object.entries(byOutcome).map(([k, v]) => (
+            <Stat key={k} label={k} value={v} color={k === "WIN" ? "#00e57a" : k === "LOSS" ? "#ff6680" : "#c9a84c"} />
+          ))}
+          {Object.keys(byOutcome).length === 0 && (
+            <div style={{ fontFamily:MONO, fontSize:10, color:"#4a5d80" }}>No signals in database.</div>
+          )}
+        </div>
+        {Object.keys(byDirection).length > 0 && (
+          <>
+            <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:8 }}>BY DIRECTION</div>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              {Object.entries(byDirection).map(([dir, s]) => {
+                const resolved = s.wins + s.losses;
+                const wr = resolved > 0 ? Math.round(s.wins / resolved * 100) : 0;
+                return (
+                  <Stat key={dir} label={dir} value={`${wr}%`} color={dir === "LONG" ? "#00e57a" : "#ff6680"} sub={`${s.wins}W / ${s.losses}L / ${s.pending}P`} />
+                );
+              })}
+            </div>
+          </>
+        )}
+      </Section>
+
+      {/* Recent Signals */}
+      <Section title="📝 RECENT SIGNALS (LATEST 20)" color="#00d4ff">
+        {signals.length === 0 ? (
+          <div style={{ fontFamily:MONO, fontSize:10, color:"#4a5d80" }}>No signals logged yet.</div>
+        ) : (
+          <div style={{ overflowX:"auto", maxHeight:380, overflowY:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontFamily:MONO, fontSize:10, minWidth:560 }}>
+              <thead>
+                <tr style={{ color:"#4a5d80", letterSpacing:"0.1em", textAlign:"left" }}>
+                  <th style={{ padding:"6px 8px", borderBottom:"1px solid #1c2b4a" }}>TIME</th>
+                  <th style={{ padding:"6px 8px", borderBottom:"1px solid #1c2b4a" }}>TOKEN</th>
+                  <th style={{ padding:"6px 8px", borderBottom:"1px solid #1c2b4a" }}>DIR</th>
+                  <th style={{ padding:"6px 8px", borderBottom:"1px solid #1c2b4a" }}>CONF</th>
+                  <th style={{ padding:"6px 8px", borderBottom:"1px solid #1c2b4a" }}>OUTCOME</th>
+                  <th style={{ padding:"6px 8px", borderBottom:"1px solid #1c2b4a" }}>PnL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {signals.slice(0, 20).map(s => (
+                  <tr key={s.id} data-testid={`row-signal-${s.id}`} style={{ color:"#c8d4ee" }}>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #0e1a30", color:"#6b7fa8", fontSize:9 }}>{new Date(s.ts).toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #0e1a30", fontWeight:700 }}>{s.token}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #0e1a30", color: s.direction === "LONG" ? "#00e57a" : "#ff6680" }}>{s.direction}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #0e1a30", color:"#c9a84c" }}>{s.conf ?? "—"}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #0e1a30", color: s.outcome === "WIN" ? "#00e57a" : s.outcome === "LOSS" ? "#ff6680" : "#c9a84c" }}>{s.outcome || "PENDING"}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #0e1a30" }}>{s.pnlPct != null ? `${parseFloat(s.pnlPct).toFixed(2)}%` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      {/* Daily Brief Controls */}
+      <Section title="📧 DAILY BRIEF CONTROLS" color="#e8c96d">
+        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:12, lineHeight:1.6 }}>
+          Scheduler runs every 30s and triggers at 6:00 AM ET. Catch-up runs 10s after server startup if today's brief hasn't been sent yet.
+        </div>
+        <ActionBtn actionKey="test-brief" label="🧪 ENQUEUE TEST BRIEF" url="/api/admin/test-brief" color="#00d4ff" />
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
+          Enqueues a daily brief send. Check server logs for delivery confirmation.
+        </div>
+      </Section>
+
+      {/* Raw diagnostic JSON */}
+      <Section title="🔬 RAW API RESPONSES" color="#4a5d80">
+        <details>
+          <summary style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", cursor:"pointer", marginBottom:8 }}>/api/track-record</summary>
+          <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#8fc4e0", overflowX:"auto", maxHeight:240 }}>{JSON.stringify(trackRecord, null, 2)}</pre>
+        </details>
+        <details style={{ marginTop:8 }}>
+          <summary style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", cursor:"pointer", marginBottom:8 }}>/api/signal-history (summary)</summary>
+          <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#8fc4e0", overflowX:"auto", maxHeight:240 }}>{JSON.stringify({ count: signals.length, isPaidUser: signalHistory?.isPaidUser, isDelayed: signalHistory?.isDelayed, firstTs: signals[0]?.ts, lastTs: signals[signals.length - 1]?.ts }, null, 2)}</pre>
+        </details>
+      </Section>
+    </div>
+  );
+}
+
 export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, onTestBell }) {
   const [tab, setTab] = useState("subscription");
   const [acct, setAcct] = useState(null);
@@ -597,7 +849,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   };
 
   const baseTabs = ["subscription", "referral", "emails", "billing", "legal"];
-  const tabs = acct?.isOwner ? [...baseTabs, "owner", "admin"] : baseTabs;
+  const tabs = acct?.isOwner ? [...baseTabs, "owner", "admin", "admin2"] : baseTabs;
 
   if (loading) {
     return (
@@ -672,12 +924,16 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       </div>
 
       <div style={{ display:"flex", gap:4, marginBottom:18, flexWrap:"wrap" }}>
-        {tabs.map(t => (
+        {tabs.map(t => {
+          const isOwnerTab = t === "owner" || t === "admin" || t === "admin2";
+          const label = t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : t === "owner" ? "⚡ Owner" : t === "admin" ? "🛠 Admin" : "📊 Admin 2";
+          return (
           <button key={t} data-testid={`tab-${t}`} onClick={() => setTab(t)}
-            style={{ background:tab === t ? (t === "owner" || t === "admin" ? C.purple : C.gold) : "transparent", border:`1px solid ${tab === t ? (t === "owner" || t === "admin" ? C.purple : C.gold) : C.border}`, color:tab === t ? C.bg : (t === "owner" || t === "admin" ? C.purple : C.muted2), borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
-            {t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : t === "owner" ? "⚡ Owner" : "🛠 Admin"}
+            style={{ background:tab === t ? (isOwnerTab ? C.purple : C.gold) : "transparent", border:`1px solid ${tab === t ? (isOwnerTab ? C.purple : C.gold) : C.border}`, color:tab === t ? C.bg : (isOwnerTab ? C.purple : C.muted2), borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
+            {label}
           </button>
-        ))}
+          );
+        })}
       </div>
 
       {tab === "subscription" && (
@@ -1166,6 +1422,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       )}
 
       {tab === "admin" && acct.isOwner && <AdminTab C={C} MONO={MONO} SANS={SANS} SERIF={SERIF} />}
+
+      {tab === "admin2" && acct.isOwner && <AdminTab2 C={C} MONO={MONO} SANS={SANS} SERIF={SERIF} />}
 
       {modal === "unsub_daily" && (
         <ConfirmModal
