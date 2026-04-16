@@ -4336,11 +4336,26 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
         credentialError = e?.message || String(e);
       }
 
-      // Subscriber count
-      const subRes = await pool.query(
-        "SELECT COUNT(*) AS n FROM users WHERE daily_email_subscribed = true AND email IS NOT NULL AND email <> ''"
-      );
-      const subscriberCount = parseInt(subRes.rows[0]?.n || "0", 10);
+      // Subscriber count — use the exact same query the real send uses
+      let subscriberCount = 0;
+      let subscriberError: string | null = null;
+      try {
+        const subRes = await pool.query(
+          `SELECT COUNT(*) AS n FROM subscribers WHERE active = true AND email IS NOT NULL AND email <> ''`
+        );
+        subscriberCount = parseInt(subRes.rows[0]?.n || "0", 10);
+      } catch (e: any) {
+        subscriberError = e?.message || String(e);
+      }
+
+      // Also report users-tier opt-in (secondary info)
+      let usersOptInCount = 0;
+      try {
+        const r = await pool.query(
+          `SELECT COUNT(*) AS n FROM users WHERE subscribe_to_brief = true AND email IS NOT NULL AND email <> ''`
+        );
+        usersOptInCount = parseInt(r.rows[0]?.n || "0", 10);
+      } catch {}
 
       res.json({
         env,
@@ -4348,11 +4363,13 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
         credentialError,
         fromEmail,
         subscriberCount,
-        verdict: credentialOk && subscriberCount > 0
-          ? "✅ Ready to send"
+        subscriberError,
+        usersOptInCount,
+        verdict: credentialOk && (subscriberCount > 0 || usersOptInCount > 0)
+          ? `✅ Ready to send (${subscriberCount} in subscribers table, ${usersOptInCount} opted-in users)`
           : !credentialOk
-            ? "❌ Resend credential NOT resolvable — emails CANNOT send"
-            : "⚠ No subscribers — nothing to send to",
+            ? "❌ Resend credential NOT resolvable — emails CANNOT send (set RESEND_API_KEY on Railway)"
+            : "⚠ No active subscribers — nothing to send to",
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
