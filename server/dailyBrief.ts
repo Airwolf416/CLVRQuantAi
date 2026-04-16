@@ -467,21 +467,21 @@ async function sendDailyBriefEmails() {
 }
 
 async function sendApologyBriefEmails() {
-  // ── Double-send guard (6-hour window) ─────────────────────────────────────
+  // ── Double-send guard (15 min — enough to prevent double-click duplicates,
+  //     short enough to allow retry after a failure) ─────────────────────────
   const nowMs = Date.now();
-  if (lastApologySentAt > 0 && (nowMs - lastApologySentAt) < 6 * 60 * 60 * 1000) {
+  if (lastApologySentAt > 0 && (nowMs - lastApologySentAt) < 15 * 60 * 1000) {
     const minutesAgo = Math.round((nowMs - lastApologySentAt) / 60_000);
-    console.log(`[daily-brief] Apology brief already sent ${minutesAgo}m ago — skipping to prevent duplicate.`);
+    console.log(`[daily-brief] Apology brief sent ${minutesAgo}m ago — skipping duplicate (15m window).`);
     return;
   }
-  lastApologySentAt = nowMs;
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
   console.log(`[daily-brief] Generating apology brief for ${today}...`);
 
   const marketData = await fetchMarketData();
   const briefText = await generateBriefContent(marketData);
-  if (!briefText) { console.log("[daily-brief] Failed to generate brief content"); return; }
+  if (!briefText) { console.log("[daily-brief] Failed to generate brief content — NOT marking sent, retry allowed"); return; }
 
   let briefJson: any;
   try {
@@ -544,6 +544,7 @@ async function sendApologyBriefEmails() {
     }
 
     console.log(`[daily-brief] Apology brief complete — ${sentCount}/${subs.length} sent`);
+    if (sentCount > 0) lastApologySentAt = Date.now();
   } catch (e: any) {
     console.log("[daily-brief] Resend client error:", e.message);
   }

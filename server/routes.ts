@@ -4315,9 +4315,14 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
       if (userEmail !== "mikeclaver@gmail.com") {
         return res.status(403).json({ error: "Owner only" });
       }
-      await enqueueApologyBrief();
-      res.json({ ok: true, message: "Apology brief enqueued — check server logs" });
+      console.log(`[apology-brief] Owner ${userEmail} triggered manual resend at ${new Date().toISOString()}`);
+      // Fire-and-forget so slow generation/sends don't time out the mobile request.
+      enqueueApologyBrief()
+        .then(() => console.log("[apology-brief] enqueue completed"))
+        .catch((err: any) => console.log("[apology-brief] enqueue error:", err?.message || err));
+      res.json({ ok: true, message: "Apology brief send started — watch logs for delivery status" });
     } catch (e: any) {
+      console.log("[apology-brief] route error:", e?.message || e);
       res.status(500).json({ error: e.message });
     }
   });
