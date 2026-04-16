@@ -113,6 +113,47 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
           setTrades(parsed);
+
+          // ── Log trades to ai_signal_log for adaptive learning ──
+          if (Array.isArray(parsed?.trades) && parsed.trades.length) {
+            const payload = parsed.trades.map(t => {
+              const killClockHours = (() => {
+                const k = String(t.killClock || "").toUpperCase();
+                const m = k.match(/(\d+)\s*H/);
+                if (m) return parseInt(m[1], 10);
+                if (k.includes("DAY")) return 24;
+                if (k.includes("SWING")) return 72;
+                if (k.includes("SCALP")) return 4;
+                return 24;
+              })();
+              const symbol = String(t.asset || "").split("/")[0].toUpperCase();
+              return {
+                token: symbol,
+                direction: t.direction,
+                tradeType: t.tradeType,
+                entry: t.entry,
+                tp1: t.tp1?.price ?? t.tp1,
+                tp2: t.tp2?.price ?? t.tp2,
+                tp3: t.tp3?.price ?? t.tp3,
+                sl: t.sl,
+                leverage: t.leverage,
+                conviction: typeof t.conviction === "number" ? t.conviction : null,
+                edge: t.edge,
+                edgeSource: t.edgeSource,
+                kronos: !!t.kronos,
+                killClockHours,
+                thesis: t.thesis,
+                invalidation: t.invalidation,
+                scores: t.scores,
+              };
+            });
+            fetch("/api/ai/log-trades", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ trades: payload }),
+            }).catch(() => {});
+          }
         } else {
           setError("Failed to parse trade ideas. Please try again.");
         }
