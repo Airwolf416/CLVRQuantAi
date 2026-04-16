@@ -4599,7 +4599,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           const proGatedTab=!isPreview&&PRO_TABS_GATE.includes(item.k)&&!isPro;
           const isTabLocked=(isPreview&&!previewFreeTab)||eliteGatedTab||proGatedTab;
           return(
-            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s"}}>
+            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,minHeight:48,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"9px 4px 11px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s",cursor:"pointer"}}>
               <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:isTabLocked?C.muted:C.muted2}}>{item.icon}</span>
               {macroAlert&&!active&&!isPreview&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
               {isTabLocked&&!active&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>{isPreview?"🔐":"🔒"}</div>}
@@ -4608,7 +4608,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             </button>
           );
         })}
-        <button data-testid="btn-theme-toggle" onClick={toggleTheme} title={isDark?"Switch to light mode":"Switch to dark mode"} style={{flex:"0 0 auto",minWidth:44,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 4px 9px",background:"none",border:"none",borderTop:"2px solid transparent",cursor:"pointer"}}>
+        <button data-testid="btn-theme-toggle" onClick={toggleTheme} title={isDark?"Switch to light mode":"Switch to dark mode"} style={{flex:"0 0 auto",minWidth:44,minHeight:48,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"9px 4px 11px",background:"none",border:"none",borderTop:"2px solid transparent",cursor:"pointer"}}>
           <span style={{fontSize:13,lineHeight:1}}>{isDark?"☀️":"🌙"}</span>
           <span style={{fontFamily:MONO,fontSize:7,marginTop:3,color:C.muted,letterSpacing:"0.06em"}}>{isDark?"LIGHT":"DARK"}</span>
         </button>
