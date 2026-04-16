@@ -2420,8 +2420,9 @@ export async function registerRoutes(
         "1d": { yi:"1d",  range:"6mo" },
       };
       const cfg = cfgMap[interval] || { yi:"60m", range:"5d" };
+      const yahooSym = BASKET_YAHOO_MAP[ticker] || ticker;
       const r = await fetch(
-        `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${cfg.yi}&range=${cfg.range}`,
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=${cfg.yi}&range=${cfg.range}`,
         { headers:{ "User-Agent":"Mozilla/5.0 (compatible; CLVRQuant/1.0)" } }
       );
       const data: any = await r.json();
@@ -2447,6 +2448,18 @@ export async function registerRoutes(
     } catch { return null; }
   }
 
+  const QUANT_FH_FOREX_MAP: Record<string,string> = {
+    EURUSD:"OANDA:EUR_USD",GBPUSD:"OANDA:GBP_USD",USDJPY:"OANDA:USD_JPY",
+    USDCHF:"OANDA:USD_CHF",AUDUSD:"OANDA:AUD_USD",USDCAD:"OANDA:USD_CAD",
+    NZDUSD:"OANDA:NZD_USD",EURGBP:"OANDA:EUR_GBP",EURJPY:"OANDA:EUR_JPY",
+    GBPJPY:"OANDA:GBP_JPY",USDMXN:"OANDA:USD_MXN",USDZAR:"OANDA:USD_ZAR",
+    USDTRY:"OANDA:USD_TRY",USDSGD:"OANDA:USD_SGD",
+  };
+  const QUANT_FH_COMMODITY_MAP: Record<string,string> = {
+    XAU:"OANDA:XAU_USD",XAG:"OANDA:XAG_USD",WTI:"OANDA:WTICO_USD",
+    BRENT:"OANDA:XBR_USD",NATGAS:"OANDA:NATGAS_USD",COPPER:"OANDA:XCU_USD",
+    PLATINUM:"OANDA:XPT_USD",
+  };
   async function fetchFinnhubCandlesQuant(ticker: string, interval: string, count: number) {
     const apiKey = process.env.FINNHUB_KEY || process.env.FINNHUB_API_KEY;
     if (!apiKey) return null;
@@ -2455,7 +2468,8 @@ export async function registerRoutes(
       const res = resMap[interval] || "60";
       const to = Math.floor(Date.now() / 1000);
       const from = to - (count * quantIntervalToMs(interval) / 1000);
-      const r = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=${res}&from=${from}&to=${to}&token=${apiKey}`);
+      const fhSym = QUANT_FH_FOREX_MAP[ticker] || QUANT_FH_COMMODITY_MAP[ticker] || ticker;
+      const r = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(fhSym)}&resolution=${res}&from=${from}&to=${to}&token=${apiKey}`);
       const data: any = await r.json();
       if (data.s !== "ok" || !data.c?.length) return null;
       return data.t.map((t: number, i: number) => ({ t:t*1000, o:parseFloat(data.o[i]), h:parseFloat(data.h[i]), l:parseFloat(data.l[i]), c:parseFloat(data.c[i]), v:parseFloat(data.v?.[i]||0) }));
@@ -2821,7 +2835,10 @@ export async function registerRoutes(
       const risk = QUANT_RISK_PROFILES[riskId];
       const tf   = QUANT_TIMEFRAMES[timeframeId];
       if (!risk || !tf) return res.status(400).json({ error: "Invalid risk or timeframe." });
-      const cls: string = assetClass || (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(ticker) ? "equity" : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(ticker) ? "commodity" : "crypto");
+      const QUANT_EQUITIES = ["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD","HOOD","NFLX","ORCL","TSM","GME","RIVN","BABA","HIMS","CRCL"];
+      const QUANT_COMMODITIES = ["XAU","XAG","WTI","BRENT","NATGAS","COPPER","PLATINUM"];
+      const QUANT_FOREX = ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD","EURGBP","EURJPY","GBPJPY","USDMXN","USDZAR","USDTRY","USDSGD"];
+      const cls: string = assetClass || (QUANT_EQUITIES.includes(ticker) ? "equity" : QUANT_COMMODITIES.includes(ticker) ? "commodity" : QUANT_FOREX.includes(ticker) ? "fx" : "crypto");
 
       const [candles, candles15m, candles4h, candles1d, candles1h, fng] = await Promise.all([
         fetchQuantCandles(ticker, cls, tf.interval, tf.count),
