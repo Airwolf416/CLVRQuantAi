@@ -136,7 +136,8 @@ function EmailSystemHealth({ C, MONO }) {
           <div>credential resolvable: {String(data.credentialOk)}</div>
           {data.credentialError && <div style={{ color:C.red }}>error: {data.credentialError}</div>}
           <div>fromEmail: {data.fromEmail || "(unresolved)"}</div>
-          <div>active subscribers: {data.subscriberCount}</div>
+          <div>active subscribers (send list): {data.subscriberCount}{data.subscriberError ? ` — ERROR: ${data.subscriberError}` : ""}</div>
+          <div>users opted-in (users.subscribe_to_brief): {data.usersOptInCount}</div>
         </div>
       )}
       {err && <div style={{ fontFamily:MONO, fontSize:10, color:C.red, marginBottom:10 }}>{err}</div>}
