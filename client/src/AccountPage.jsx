@@ -398,6 +398,8 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
 function AdminTab2({ C, MONO, SANS, SERIF }) {
   const [trackRecord, setTrackRecord] = useState(null);
   const [signalHistory, setSignalHistory] = useState(null);
+  const [thresholds, setThresholds] = useState([]);
+  const [perfCtx, setPerfCtx] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [actionStatus, setActionStatus] = useState({});
@@ -406,18 +408,42 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
   const loadData = async () => {
     setLoading(true); setErr(null);
     try {
-      const [trRes, shRes] = await Promise.all([
+      const [trRes, shRes, thRes, pcRes] = await Promise.all([
         fetch("/api/track-record", { credentials: "include" }),
         fetch("/api/signal-history?limit=100", { credentials: "include" }),
+        fetch("/api/admin/thresholds", { credentials: "include" }),
+        fetch("/api/performance-context", { credentials: "include" }),
       ]);
       const tr = trRes.ok ? await trRes.json() : null;
       const sh = shRes.ok ? await shRes.json() : null;
+      const th = thRes.ok ? await thRes.json() : { thresholds: [] };
+      const pc = pcRes.ok ? await pcRes.text() : "";
       setTrackRecord(tr);
       setSignalHistory(sh);
+      setThresholds(th?.thresholds || []);
+      setPerfCtx(pc);
     } catch (e) {
       setErr(e.message || "Failed to load diagnostics");
     }
     setLoading(false);
+  };
+
+  const updateThreshold = async (id, patch) => {
+    try {
+      const r = await fetch(`/api/admin/thresholds/${id}`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (r.ok) loadData();
+    } catch {}
+  };
+  const resetToken = async (token) => {
+    if (!window.confirm(`Reset adaptive learning for ${token}?`)) return;
+    try {
+      const r = await fetch(`/api/admin/thresholds/reset/${token}`, { method: "POST", credentials: "include" });
+      if (r.ok) loadData();
+    } catch {}
   };
 
   useEffect(() => { loadData(); }, []);
@@ -627,6 +653,77 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
         <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
           Enqueues a daily brief send. Check server logs for delivery confirmation.
         </div>
+      </Section>
+
+      {/* Adaptive Thresholds */}
+      <Section title="🧠 ADAPTIVE THRESHOLDS (AUTO-TUNING)" color="#00d4ff">
+        <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+          <ActionBtn actionKey="recalc-thresholds" label="↻ RECALCULATE NOW" url="/api/admin/thresholds/recalc" color="#00d4ff" />
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", alignSelf:"center" }}>
+            Auto-recalculates hourly. Requires ≥5 resolved signals per (token, direction) combo.
+          </div>
+        </div>
+        {thresholds.length === 0 ? (
+          <div style={{ fontFamily:MONO, fontSize:10, color:"#4a5d80" }}>No thresholds calibrated yet. Needs ≥5 resolved signals per combo in last 30 days.</div>
+        ) : (
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontFamily:MONO, fontSize:10 }}>
+              <thead>
+                <tr style={{ color:"#6b7fa8", borderBottom:"1px solid #1c2b4a" }}>
+                  <th style={{ textAlign:"left", padding:"6px 8px" }}>TOKEN</th>
+                  <th style={{ textAlign:"left", padding:"6px 8px" }}>DIR</th>
+                  <th style={{ textAlign:"right", padding:"6px 8px" }}>WIN RATE 30d</th>
+                  <th style={{ textAlign:"right", padding:"6px 8px" }}>N</th>
+                  <th style={{ textAlign:"right", padding:"6px 8px" }}>THRESHOLD</th>
+                  <th style={{ textAlign:"right", padding:"6px 8px" }}>ADJ</th>
+                  <th style={{ textAlign:"center", padding:"6px 8px" }}>SUPPR</th>
+                  <th style={{ textAlign:"center", padding:"6px 8px" }}>OVERRIDE</th>
+                  <th style={{ textAlign:"right", padding:"6px 8px" }}>ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {thresholds.map(t => {
+                  const wr = parseFloat(t.winRate30d || "0");
+                  const wrColor = wr >= 65 ? "#00e57a" : wr >= 50 ? "#c9a84c" : "#ff6680";
+                  return (
+                    <tr key={t.id} style={{ borderBottom:"1px solid #0f1a33", color:"#c8d4ee" }}>
+                      <td style={{ padding:"7px 8px", fontWeight:700 }}>{t.token}</td>
+                      <td style={{ padding:"7px 8px", color: t.direction === "LONG" ? "#00e57a" : "#ff6680" }}>{t.direction}</td>
+                      <td style={{ padding:"7px 8px", textAlign:"right", color: wrColor, fontWeight:700 }}>{wr.toFixed(1)}%</td>
+                      <td style={{ padding:"7px 8px", textAlign:"right", color:"#6b7fa8" }}>{t.sampleSize}</td>
+                      <td style={{ padding:"7px 8px", textAlign:"right" }}>{t.currentThreshold}%</td>
+                      <td style={{ padding:"7px 8px", textAlign:"right", color: t.adjustment > 0 ? "#ff6680" : t.adjustment < 0 ? "#00e57a" : "#4a5d80" }}>
+                        {t.adjustment > 0 ? `+${t.adjustment}` : t.adjustment}
+                      </td>
+                      <td style={{ padding:"7px 8px", textAlign:"center" }}>
+                        <input type="checkbox" checked={!!t.suppressed}
+                          onChange={(e) => updateThreshold(t.id, { suppressed: e.target.checked })} />
+                      </td>
+                      <td style={{ padding:"7px 8px", textAlign:"center" }}>
+                        <input type="checkbox" checked={!!t.manualOverride}
+                          onChange={(e) => updateThreshold(t.id, { manualOverride: e.target.checked })} />
+                      </td>
+                      <td style={{ padding:"7px 8px", textAlign:"right" }}>
+                        <button data-testid={`btn-reset-${t.token}-${t.direction}`}
+                          onClick={() => resetToken(t.token)}
+                          style={{ background:"rgba(255,64,96,.1)", border:"1px solid rgba(255,64,96,.35)", color:"#ff6680", borderRadius:3, padding:"3px 8px", fontFamily:MONO, fontSize:9, cursor:"pointer", fontWeight:700 }}>
+                          RESET
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      {/* Performance Context (AI prompt injection preview) */}
+      <Section title="🤖 AI PERFORMANCE CONTEXT (INJECTED INTO EVERY PROMPT)" color="#c9a84c">
+        <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#c8d4ee", overflowX:"auto", maxHeight:320, whiteSpace:"pre-wrap", margin:0 }}>
+          {perfCtx || "(empty)"}
+        </pre>
       </Section>
 
       {/* Raw diagnostic JSON */}

@@ -207,6 +207,26 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_created ON ai_signal_log (created_at DESC)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_pending_expires ON ai_signal_log (outcome, kill_clock_expires) WHERE outcome = 'PENDING'`);
 
+    // ── adaptive_thresholds (auto-tuning per token + direction) ───────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS adaptive_thresholds (
+        id                 SERIAL PRIMARY KEY,
+        token              VARCHAR(20) NOT NULL,
+        direction          VARCHAR(10) NOT NULL,
+        trade_type         VARCHAR(20) DEFAULT 'ALL',
+        baseline_threshold INTEGER DEFAULT 75,
+        current_threshold  INTEGER DEFAULT 75,
+        adjustment         INTEGER DEFAULT 0,
+        win_rate_30d       DECIMAL(5,2),
+        sample_size        INTEGER DEFAULT 0,
+        suppressed         BOOLEAN DEFAULT FALSE,
+        manual_override    BOOLEAN DEFAULT FALSE,
+        last_recalc        TIMESTAMP DEFAULT NOW(),
+        updated_at         TIMESTAMP DEFAULT NOW(),
+        UNIQUE(token, direction, trade_type)
+      )
+    `);
+
     // ── trade_journal ─────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS trade_journal (

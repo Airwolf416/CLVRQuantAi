@@ -11,6 +11,7 @@ import { getStripeSync } from "./stripeClient";
 import { startDailyBriefScheduler } from "./dailyBrief";
 import { initializeDatabase } from "./initDb";
 import { startOutcomeResolver } from "./lib/outcomeResolver";
+import { startAdaptiveThresholds } from "./lib/adaptiveThresholds";
 import { initSocketIO } from "./socketServer";
 
 let shuttingDown = false;
@@ -552,6 +553,7 @@ async function initStripe() {
   initSocketIO(httpServer);
   startDailyBriefScheduler();
   startOutcomeResolver();
+  startAdaptiveThresholds();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
