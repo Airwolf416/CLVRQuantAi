@@ -37,6 +37,19 @@ const PERP_LOOKUP = {
   PLATINUM: ["PLATINUM"],
 };
 
+// HL single-currency perps track the currency vs USD. For USDxxx pairs we invert.
+// Format: [perpTickers[], invert]
+const FX_PERP_LOOKUP = {
+  EURUSD: { tickers: ["EUR"],  invert: false },
+  GBPUSD: { tickers: ["GBP"],  invert: false },
+  AUDUSD: { tickers: ["AUD"],  invert: false },
+  NZDUSD: { tickers: ["NZD"],  invert: false },
+  USDJPY: { tickers: ["JPY"],  invert: true  },
+  USDCHF: { tickers: ["CHF"],  invert: true  },
+  USDCAD: { tickers: ["CAD"],  invert: true  },
+  USDMXN: { tickers: ["MXN"],  invert: true  },
+};
+
 function hlPerpFor(sym, storePerps) {
   const tries = PERP_LOOKUP[sym] || [sym];
   for (const t of tries) if (storePerps[t]?.price) return storePerps[t];
@@ -694,7 +707,104 @@ function CommoditiesTab({ metalPrices, flashes }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // FOREX TAB
 // ─────────────────────────────────────────────────────────────────────────────
-function ForexTab({ forexPrices, flashes }) {
+// Build an FX perp asset from an HL single-currency perp (e.g. EUR/USD from HL "EUR").
+// Inverts price for USDxxx pairs (e.g. USD/JPY from HL "JPY" → 1/price).
+function resolveFxPerp(sym, storePerps) {
+  const cfg = FX_PERP_LOOKUP[sym];
+  if (!cfg) return null;
+  let hl = null;
+  for (const t of cfg.tickers) {
+    if (storePerps[t]?.price) { hl = storePerps[t]; break; }
+  }
+  if (!hl) return null;
+  if (!cfg.invert) return hl;
+  // Invert: USDxxx = 1 / (xxx/USD)
+  const invPrice = 1 / hl.price;
+  const invChg = -1 * (Number(hl.change24h) || 0); // % reverses sign on inversion (approx)
+  return {
+    ...hl,
+    price: invPrice,
+    change24h: invChg,
+    // Funding and OI are still meaningful but flip sign conceptually for direction
+  };
+}
+
+function FxPerpRow({ sym, label, asset }) {
+  const prevPriceRef = useRef(null);
+  const [flash, setFlash] = useState(null);
+  useEffect(() => {
+    injectBlink();
+    const price = asset?.price;
+    if (!price) return;
+    const prev = prevPriceRef.current;
+    if (prev !== null && price !== prev) {
+      setFlash(price > prev ? "green" : "red");
+      const t = setTimeout(() => setFlash(null), 600);
+      prevPriceRef.current = price;
+      return () => clearTimeout(t);
+    }
+    prevPriceRef.current = price;
+  }, [asset?.price]);
+
+  if (!asset || !asset.price) {
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 10px", borderBottom: `1px solid ${C.border}` }}>
+        <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text }}>{label || sym}</span>
+        <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>— No HL perp available</span>
+      </div>
+    );
+  }
+
+  const chgN = Number(asset.change24h) || 0;
+  const isUp = chgN >= 0;
+  const fund = fmtFund(asset.funding ?? asset.fundingRate);
+  const oi   = fmtOI(asset.openInterest, asset.price);
+  const arrowUp = flash === "green" ? true : flash === "red" ? false : isUp;
+  const arrowAnim = flash === "green" ? "clvrBlinkUp 0.28s 2 ease-in-out"
+                  : flash === "red"   ? "clvrBlinkDown 0.28s 2 ease-in-out" : "none";
+  const arrowColor = flash ? (flash === "green" ? C.green : C.red) : (isUp ? C.green : C.red);
+  const bgFlash = flash === "green" ? "rgba(0,199,135,0.22)" : flash === "red" ? "rgba(255,64,96,0.18)" : "transparent";
+  const priceColor = flash ? (flash === "green" ? C.green : C.red) : (isUp ? C.green : C.red);
+
+  return (
+    <div data-testid={`perp-row-${sym}`} style={{
+      borderBottom: `1px solid ${C.border}`, background: bgFlash,
+      transition: flash ? "none" : "background 0.5s", borderRadius: 4,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 10px 4px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text }}>{label || sym}</span>
+          <span style={{ fontSize: 14, fontWeight: 900, color: arrowColor, animation: arrowAnim }}>{arrowUp ? "↑" : "↓"}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: priceColor, transition: flash ? "none" : "color 0.5s" }}>
+            {fmtFx(asset.price)}
+          </span>
+          <span style={{
+            fontFamily: MONO, fontSize: 10, fontWeight: 700,
+            color: isUp ? C.green : C.red,
+            background: isUp ? "rgba(0,199,135,0.1)" : "rgba(255,64,96,0.1)",
+            borderRadius: 3, padding: "2px 6px",
+          }}>{fmtChg(chgN)}</span>
+          <Badge label="HL" color={C.cyan} />
+        </div>
+      </div>
+      {(fund || oi) && (
+        <div style={{ padding: "0 10px 8px", display: "flex", gap: 12 }}>
+          {fund && (
+            <span style={{ fontFamily: MONO, fontSize: 8, color: Number(asset.funding ?? asset.fundingRate) >= 0 ? C.green : C.red }}>
+              FUND {fund}
+            </span>
+          )}
+          {oi && <span style={{ fontFamily: MONO, fontSize: 8, color: C.muted }}>OI {oi}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ForexTab({ forexPrices, flashes, storePerps }) {
+  const [mode, setMode] = useState("spot");
   const isOpen = () => {
     const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
     const d = et.getDay(), h = et.getHours();
@@ -707,21 +817,36 @@ function ForexTab({ forexPrices, flashes }) {
   return (
     <div>
       <PanelHeader
-        title="Forex · Finnhub"
-        subtitle="finnhub websocket · forex spot  |  sun 5pm – fri 5pm ET"
-        live={isOpen()}
+        title={mode === "spot" ? "Forex · Finnhub" : "Forex · Hyperliquid"}
+        subtitle={mode === "spot"
+          ? "finnhub websocket · forex spot  |  sun 5pm – fri 5pm ET"
+          : "hyperliquid · fx perps (24/7)  |  usdxxx pairs inverted from xxx/usd"}
+        live={mode === "perp" ? true : isOpen()}
       />
-      <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginBottom: 6, letterSpacing: "0.06em" }}>
-        SPOT RATES ONLY — No perpetual market exists for forex pairs
-      </div>
-      {FOREX_SYMS.map(sym => {
-        const d = forexPrices[sym] || {};
-        return (
-          <FlashRow key={sym} sym={sym} label={FOREX_LABEL[sym] || sym} price={d.price} chg={d.chg} flash={flashes[sym]} isForex>
-            <Badge label="FX" color={C.cyan} />
-          </FlashRow>
-        );
-      })}
+      <SubTabs
+        value={mode}
+        onChange={setMode}
+        tabs={[{ val: "spot", label: "SPOT · FINNHUB" }, { val: "perp", label: "PERP · HYPERLIQUID" }]}
+      />
+      {mode === "spot" ? (
+        FOREX_SYMS.map(sym => {
+          const d = forexPrices[sym] || {};
+          return (
+            <FlashRow key={sym} sym={sym} label={FOREX_LABEL[sym] || sym} price={d.price} chg={d.chg} flash={flashes[sym]} isForex>
+              <Badge label="FX" color={C.cyan} />
+            </FlashRow>
+          );
+        })
+      ) : (
+        <>
+          <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, margin: "4px 0 8px", letterSpacing: "0.06em" }}>
+            HL lists single-currency perps (EUR, GBP, JPY, CHF, AUD, CAD, NZD, MXN) vs USD. Cross pairs not supported.
+          </div>
+          {Object.keys(FX_PERP_LOOKUP).map(sym => (
+            <FxPerpRow key={sym} sym={sym} label={FOREX_LABEL[sym] || sym} asset={resolveFxPerp(sym, storePerps || {})} />
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -765,7 +890,7 @@ export default function MarketTab({ cryptoPrices = {}, equityPrices = {}, metalP
       {cls === "crypto"      && <CryptoTab      cryptoPrices={cryptoPrices} flashes={flashes} storePerps={storePerps} storeByClass={storeByClass} />}
       {cls === "equities"    && <EquitiesTab    equityPrices={equityPrices} flashes={flashes} storePerps={storePerps} />}
       {cls === "commodities" && <CommoditiesTab metalPrices={metalPrices}   flashes={flashes} />}
-      {cls === "forex"       && <ForexTab       forexPrices={forexPrices}   flashes={flashes} />}
+      {cls === "forex"       && <ForexTab       forexPrices={forexPrices}   flashes={flashes} storePerps={storePerps} />}
     </div>
   );
 }
