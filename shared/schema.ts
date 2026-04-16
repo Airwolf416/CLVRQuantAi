@@ -172,6 +172,25 @@ export const aiSignalLog = pgTable("ai_signal_log", {
 export type AiSignalLogRecord = typeof aiSignalLog.$inferSelect;
 export type InsertAiSignalLog = typeof aiSignalLog.$inferInsert;
 
+// ── Adaptive Thresholds (auto-tuning min conviction per token + direction) ──
+export const adaptiveThresholds = pgTable("adaptive_thresholds", {
+  id: serial("id").primaryKey(),
+  token: varchar("token", { length: 20 }).notNull(),
+  direction: varchar("direction", { length: 10 }).notNull(),      // 'LONG' | 'SHORT' | 'ALL'
+  tradeType: varchar("trade_type", { length: 20 }).default("ALL"),
+  baselineThreshold: integer("baseline_threshold").default(75),
+  currentThreshold: integer("current_threshold").default(75),
+  adjustment: integer("adjustment").default(0),
+  winRate30d: decimal("win_rate_30d", { precision: 5, scale: 2 }),
+  sampleSize: integer("sample_size").default(0),
+  suppressed: boolean("suppressed").default(false),
+  manualOverride: boolean("manual_override").default(false),
+  lastRecalc: timestamp("last_recalc").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type AdaptiveThreshold = typeof adaptiveThresholds.$inferSelect;
+
 // ── Watchlist Items (Pro+) ────────────────────────────────────────────────────
 export const watchlistItems = pgTable("watchlist_items", {
   id: serial("id").primaryKey(),

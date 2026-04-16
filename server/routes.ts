@@ -3,8 +3,10 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { pool, db } from "./db";
-import { signalHistory, aiSignalLog } from "@shared/schema";
+import { signalHistory, aiSignalLog, adaptiveThresholds } from "@shared/schema";
 import { logSignal } from "./lib/signalLogger";
+import { buildPerformanceContext, invalidatePerformanceContextCache } from "./lib/performanceContext";
+import { getThresholdFor, recalculateThresholds } from "./lib/adaptiveThresholds";
 import { eq, and, lte, gt, desc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
@@ -2936,6 +2938,21 @@ export async function registerRoutes(
         ticker, cls, ind, candles1h, candles1d, candles15m, bayesian, macroKillSwitch, fundingRate,
       });
 
+      // ── Adaptive learning gate: check if BOTH directions are suppressed ─────
+      const [adaptLong, adaptShort] = await Promise.all([
+        getThresholdFor(ticker, "LONG"),
+        getThresholdFor(ticker, "SHORT"),
+      ]);
+      if (adaptLong?.suppressed && adaptShort?.suppressed) {
+        return res.json({
+          signal: "SUPPRESSED",
+          suppressed: true,
+          suppression_message: `Adaptive learning: ${ticker} suppressed (LONG ${adaptLong.winRate}%, SHORT ${adaptShort.winRate}% — both below 40% over last 30d).`,
+          suppression_rules: ["ADAPTIVE_LEARNING"],
+          adaptive: { long: adaptLong, short: adaptShort },
+        });
+      }
+
       // If hard suppressed → return immediately without AI call
       if (suppression.hardSuppressed) {
         return res.json({
@@ -3107,7 +3124,17 @@ Volume: ${ind.volumeSignal} (${ind.volumeRatio}× average)
 Momentum Score: ${ind.momentumScore}/100
 ${mtfStr}`;
 
-      const system = `You are CLVRQuantAI Signal Engine — a precision trade signal generator for leveraged perpetual futures. Think like Paul Tudor Jones + Stan Druckenmiller. Capital preservation first. Never force a trade.
+      const perfCtx = await buildPerformanceContext();
+      const adaptiveNotes: string[] = [];
+      if (adaptLong?.suppressed) adaptiveNotes.push(`⛔ ${ticker} LONG is SUPPRESSED (30d win rate ${adaptLong.winRate}% / ${adaptLong.sampleSize} signals). DO NOT issue a LONG.`);
+      else if (adaptLong && adaptLong.threshold !== 75) adaptiveNotes.push(`${ticker} LONG threshold is ${adaptLong.threshold}% (win rate ${adaptLong.winRate}% / ${adaptLong.sampleSize}). ${adaptLong.threshold > 75 ? "Require HIGHER conviction." : "Slightly lower bar OK."}`);
+      if (adaptShort?.suppressed) adaptiveNotes.push(`⛔ ${ticker} SHORT is SUPPRESSED (30d win rate ${adaptShort.winRate}% / ${adaptShort.sampleSize} signals). DO NOT issue a SHORT.`);
+      else if (adaptShort && adaptShort.threshold !== 75) adaptiveNotes.push(`${ticker} SHORT threshold is ${adaptShort.threshold}% (win rate ${adaptShort.winRate}% / ${adaptShort.sampleSize}). ${adaptShort.threshold > 75 ? "Require HIGHER conviction." : "Slightly lower bar OK."}`);
+      const adaptiveBlock = adaptiveNotes.length ? `\n\nADAPTIVE LEARNING NOTES FOR ${ticker}:\n${adaptiveNotes.join("\n")}\n` : "";
+
+      const system = `${perfCtx}
+${adaptiveBlock}
+You are CLVRQuantAI Signal Engine — a precision trade signal generator for leveraged perpetual futures. Think like Paul Tudor Jones + Stan Druckenmiller. Capital preservation first. Never force a trade.
 
 PROFILE: ${risk.label}
 Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x | Risk/trade: ${risk.riskPct}% | Min win prob: ${risk.minWinProb}%
@@ -3397,6 +3424,80 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
+  // ── /api/performance-context — AI learning context (plain text) ──────────
+  app.get("/api/performance-context", async (_req, res) => {
+    try {
+      const ctx = await buildPerformanceContext();
+      res.type("text/plain").send(ctx);
+    } catch (e: any) {
+      res.status(500).type("text/plain").send("HISTORICAL PERFORMANCE: Error loading.");
+    }
+  });
+
+  // ── Admin: adaptive thresholds (owner only) ───────────────────────────────
+  app.get("/api/admin/thresholds", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const rows = await db.select().from(adaptiveThresholds).orderBy(desc(adaptiveThresholds.updatedAt));
+      res.json({ thresholds: rows });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to load thresholds" });
+    }
+  });
+
+  app.put("/api/admin/thresholds/:id", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id" });
+      const { currentThreshold, manualOverride, suppressed } = req.body || {};
+      const patch: any = { updatedAt: new Date() };
+      if (typeof currentThreshold === "number") patch.currentThreshold = currentThreshold;
+      if (typeof manualOverride === "boolean") patch.manualOverride = manualOverride;
+      if (typeof suppressed === "boolean") patch.suppressed = suppressed;
+      await db.update(adaptiveThresholds).set(patch).where(eq(adaptiveThresholds.id, id));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to update threshold" });
+    }
+  });
+
+  app.post("/api/admin/thresholds/reset/:token", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const token = (req.params.token || "").toUpperCase();
+      await db.update(adaptiveThresholds).set({
+        currentThreshold: 75, adjustment: 0, suppressed: false, manualOverride: false, updatedAt: new Date(),
+      }).where(eq(adaptiveThresholds.token, token));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to reset" });
+    }
+  });
+
+  app.post("/api/admin/thresholds/recalc", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const updated = await recalculateThresholds();
+      invalidatePerformanceContextCache();
+      res.json({ success: true, updated });
+    } catch (e: any) {
+      res.status(500).json({ error: "Recalc failed" });
+    }
+  });
+
   // ── /api/ai/log-trades — called by client after Trade Ideas are parsed ──
   app.post("/api/ai/log-trades", async (req, res) => {
     const userId = (req.session as any)?.userId;
@@ -3444,9 +3545,14 @@ Every level must be technically defensible. Return JSON only.`;
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
 
-    const system = req.body.system || req.body.systemPrompt || "";
-    const userMessage = req.body.userMessage || req.body.prompt || "";
-    if (!userMessage) return res.status(400).json({ error: "userMessage is required" });
+    const systemRaw = req.body.system || req.body.systemPrompt || "";
+    const userMessageRaw = req.body.userMessage || req.body.prompt || "";
+    if (!userMessageRaw) return res.status(400).json({ error: "userMessage is required" });
+
+    // Inject performance context into the system prompt (adaptive learning)
+    const perfCtx = await buildPerformanceContext().catch(() => "");
+    const system = perfCtx ? `${perfCtx}\n\n${systemRaw}` : systemRaw;
+    const userMessage = userMessageRaw;
 
     // Auth check — AI is Pro-only
     const userId = (req.session as any)?.userId;
