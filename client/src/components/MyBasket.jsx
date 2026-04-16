@@ -149,9 +149,11 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   const [search, setSearch]         = useState("");
   const [priceView, setPriceView]   = useState("spot"); // "spot" | "perp"
   const [basketResult, setBasketResult] = useState("");
+  const [basketData, setBasketData] = useState(null);
   const [basketLoading, setBasketLoading] = useState(false);
   const [openPanel, setOpenPanel]   = useState(true);
   const [showHalalOnly, setShowHalalOnly] = useState(false);
+  const [marketType, setMarketType] = useState("BOTH"); // PERP | SPOT | BOTH
 
   // ── Live prices for ALL 140+ basket assets ──────────────────────────────────
   const [bPrices, setBPrices]       = useState({});  // { sym: { price, chg, currency, live } }
@@ -249,50 +251,100 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
     if (selected.size === 0 || basketLoading) return;
     setBasketLoading(true);
     setBasketResult("");
+    setBasketData(null);
     const syms = [...selected];
     const priceData = syms.map(sym => `${sym}: ${getPriceSnap(sym)}`).join(" | ");
     const styleObj = STYLES.find(s => s.key === style);
     const styleDesc = styleObj ? `${styleObj.label} (${styleObj.desc})` : style;
+    const styleKey = (styleObj?.label || style).toUpperCase();
 
-    const userMessage = `Analyze my custom trading basket and generate ${styleObj?.label || style} trade recommendations for each asset.
+    const mtRule = marketType === "PERP"
+      ? `MARKET TYPE: PERP ONLY (leveraged perpetual futures). Every crypto signal must set "marketType":"PERP" and include a leverage suggestion. Tight SL. Thesis should reference funding/OI when relevant. Non-crypto assets (equities, commodities, FX) always use "marketType":"SPOT", "leverage":"1x".`
+      : marketType === "SPOT"
+      ? `MARKET TYPE: SPOT ONLY (cash / no leverage). Every signal must set "marketType":"SPOT" and "leverage":"1x". SL can be wider, kill clock longer, thesis should reference accumulation zones / DCA / portfolio allocation.`
+      : `MARKET TYPE: BOTH. Mix PERP and SPOT. Label each crypto signal "marketType":"PERP" (with leverage) or "SPOT" ("leverage":"1x"). Non-crypto assets always SPOT, "leverage":"1x".`;
+
+    const system = `You are CLVR AI's Basket Analyst — multi-asset portfolio specialist (crypto, US/EU/Asia/MidEast equities, commodities, FX). You MUST respond with ONLY valid JSON — no conversational text, no preamble, no "let me analyze", no markdown fences. Start with { and end with }.
+
+${mtRule}
+
+STYLE RULES:
+- SCALP: stops 1–1.5%, TP1 1.5–2.5%, leverage up to 10x (perp), kill clock 2–4H
+- DAY: stops 1.5–3%, TP1 2.5–5%, leverage up to 5x (perp), kill clock 12–24H
+- SWING: stops 4–7%, TP1 6–12%, leverage up to 3x (perp), kill clock 48–72H
+
+Return this EXACT JSON structure — one object per asset the user selected. NEVER skip an asset. If an asset has no valid setup, include it with "direction":"NEUTRAL" and explain why in thesis.
+
+{
+  "generated": "ISO-8601 timestamp",
+  "style": "${styleKey}",
+  "overallStance": "Risk-on | Risk-off | Mixed",
+  "correlationNote": "One sentence on correlation risk across the basket.",
+  "highestConviction": "TICKER",
+  "basket": [
+    {
+      "asset": "BTC",
+      "direction": "LONG",
+      "tradeType": "${styleKey}",
+      "marketType": "PERP",
+      "entry": 75138,
+      "tp1": {"price": 76500, "pct": 50, "rr": "1.4:1"},
+      "tp2": {"price": 78000, "pct": 30, "rr": "2.1:1"},
+      "sl": 73500,
+      "leverage": "5x",
+      "weight": 25,
+      "conviction": 72,
+      "thesis": "Two sentences max.",
+      "invalidation": "One sentence.",
+      "killClock": "72H"
+    }
+  ]
+}`;
+
+    const userMessage = `Analyze my basket and return ${styleKey} signals as valid JSON only.
 
 MY BASKET (${syms.length} assets): ${syms.join(", ")}
 TRADING STYLE: ${styleDesc}
+MARKET TYPE: ${marketType}
 LIVE PRICES: ${priceData}
 
-For EACH asset in my basket, provide:
-1. Directional bias (LONG / SHORT / NEUTRAL)
-2. Entry price with trigger condition
-3. Stop Loss (tight for scalp, wider for swing)
-4. Take Profit 1 (TP1) and Take Profit 2 (TP2)
-5. Suggested size weight in the basket (% allocation)
-6. Confidence score (0–100)
-7. Key reasoning (2–3 bullet points max)
-
-Then at the end, provide:
-- Portfolio-level correlation risk (any assets moving together?)
-- Overall basket stance (Risk-on / Risk-off / Mixed)
-- Which asset has the highest conviction trade right now?
-
-Format clearly with each asset as a header. Be direct and numerical.`;
-
-    const system = `You are CLVR AI's Basket Analyst — specialist in multi-asset portfolio construction and ${styleDesc} trading across global markets including US equities, European stocks, Asian markets, Middle East equities, commodities, and crypto. You receive a user's custom basket and generate personalized, style-specific trade recommendations. Use live price data provided. For scalp trades: stops 1–1.5%, leverage up to 10x. For day trades: stops 1.5–3%, leverage up to 5x. For swing trades: stops 4–7%, leverage up to 3x. Account for correlation risk across the basket and any geographic/sector concentration. Be specific, numerical, and direct.`;
+Return one signal object per asset. Do NOT skip any. If no setup, use direction:"NEUTRAL" and explain in thesis. JSON ONLY — no prose.`;
 
     try {
       const r = await fetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system, userMessage }),
+        body: JSON.stringify({ system, userMessage, maxTokens: 6144 }),
       });
       const data = await r.json();
-      setBasketResult(r.ok ? (data.text || "No response.") : (data.error || `Error ${r.status}`));
+      if (!r.ok) {
+        setBasketResult(data.error || `Error ${r.status}`);
+        return;
+      }
+      const text = data.text || "";
+      // Try to parse JSON
+      try {
+        const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        const parsed = JSON.parse(match ? match[0] : cleaned);
+        if (parsed && Array.isArray(parsed.basket) && parsed.basket.length > 0) {
+          setBasketData(parsed);
+        } else {
+          console.error("[Basket] JSON parsed but no basket array:", parsed);
+          setBasketResult(text || "No response.");
+        }
+      } catch (e) {
+        console.error("[Basket] Failed to parse JSON response:", e?.message);
+        console.error("[Basket] Raw response (first 500):", text.substring(0, 500));
+        setBasketResult(text || "Failed to parse response.");
+      }
     } catch (e) {
       setBasketResult(`Error: ${e.message}`);
     } finally {
       setBasketLoading(false);
     }
-  }, [selected, style, basketLoading, getPriceSnap]);
+  }, [selected, style, marketType, basketLoading, getPriceSnap]);
 
   if (!isPro) {
     return (
@@ -488,7 +540,7 @@ Format clearly with each asset as a header. Be direct and numerical.`;
           )}
 
           {/* ── Style selector ── */}
-          <div style={{ marginBottom:12 }}>
+          <div style={{ marginBottom:10 }}>
             <div style={{ fontFamily:MONO, fontSize:8, color:C.muted, letterSpacing:"0.12em", marginBottom:6 }}>TRADING STYLE</div>
             <div style={{ display:"flex", gap:5 }}>
               {STYLES.map(s => (
@@ -500,14 +552,116 @@ Format clearly with each asset as a header. Be direct and numerical.`;
             </div>
           </div>
 
+          {/* ── Market type selector ── */}
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontFamily:MONO, fontSize:8, color:C.muted, letterSpacing:"0.12em", marginBottom:6 }}>MARKET TYPE</div>
+            <div style={{ display:"flex", gap:5 }}>
+              {[
+                { k:"PERP", col:C.cyan, desc:"Leveraged" },
+                { k:"SPOT", col:C.purple, desc:"Cash · 1x" },
+                { k:"BOTH", col:C.gold, desc:"Mix" },
+              ].map(m => (
+                <button key={m.k} data-testid={`basket-market-${m.k}`} onClick={() => setMarketType(m.k)} style={{ flex:1, padding:"7px 6px", borderRadius:3, border:`1px solid ${marketType===m.k ? m.col : C.border}`, background:marketType===m.k ? `${m.col}12` : "transparent", cursor:"pointer", textAlign:"center" }}>
+                  <div style={{ fontFamily:MONO, fontSize:9, fontWeight:700, color:marketType===m.k ? m.col : C.muted, letterSpacing:"0.06em" }}>{m.k}</div>
+                  <div style={{ fontFamily:SANS, fontSize:7, color:C.muted, marginTop:2, lineHeight:1.3 }}>{m.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* ── Run button ── */}
           <button data-testid="btn-run-basket" onClick={runBasket} disabled={basketLoading || selected.size === 0}
             style={{ width:"100%", padding:"13px 14px", borderRadius:3, border:`1px solid ${selected.size===0 ? C.border : "rgba(168,85,247,.4)"}`, background:selected.size===0 ? "transparent" : "rgba(168,85,247,.08)", color:basketLoading || selected.size===0 ? C.muted : C.purple, fontFamily:SERIF, fontStyle:"italic", fontWeight:700, fontSize:14, cursor:basketLoading || selected.size===0 ? "not-allowed" : "pointer", letterSpacing:"0.02em" }}>
             {basketLoading ? "Analyzing Global Basket…" : selected.size===0 ? "Select up to 5 assets above" : `Analyze My ${STYLES.find(s=>s.key===style)?.label} Basket (${selList.length} asset${selList.length!==1?"s":""}) ✦`}
           </button>
 
-          {/* ── Result ── */}
-          {basketResult && (
+          {/* ── Structured result (JSON) ── */}
+          {basketData && Array.isArray(basketData.basket) && basketData.basket.length > 0 && (
+            <div data-testid="basket-result-cards" style={{ marginTop:12, display:"flex", flexDirection:"column", gap:8 }}>
+              {/* Portfolio header */}
+              {(basketData.overallStance || basketData.correlationNote || basketData.highestConviction) && (
+                <div style={{ background:"rgba(168,85,247,.06)", border:`1px solid rgba(168,85,247,.2)`, borderRadius:3, padding:"10px 12px" }}>
+                  <div style={{ fontFamily:MONO, fontSize:8, color:C.purple, letterSpacing:"0.14em", marginBottom:6 }}>PORTFOLIO SUMMARY</div>
+                  {basketData.overallStance && (
+                    <div style={{ fontFamily:MONO, fontSize:10, color:C.text, marginBottom:4 }}>
+                      <span style={{ color:C.muted }}>Stance:</span> <span style={{ color:C.gold, fontWeight:700 }}>{basketData.overallStance}</span>
+                    </div>
+                  )}
+                  {basketData.highestConviction && (
+                    <div style={{ fontFamily:MONO, fontSize:10, color:C.text, marginBottom:4 }}>
+                      <span style={{ color:C.muted }}>Highest conviction:</span> <span style={{ color:C.green, fontWeight:700 }}>{basketData.highestConviction}</span>
+                    </div>
+                  )}
+                  {basketData.correlationNote && (
+                    <div style={{ fontFamily:SANS, fontSize:11, color:C.text, lineHeight:1.5, marginTop:6 }}>{basketData.correlationNote}</div>
+                  )}
+                </div>
+              )}
+              {/* Per-asset signal cards */}
+              {basketData.basket.map((t, i) => {
+                const dirColor = t.direction === "LONG" ? C.green : t.direction === "SHORT" ? C.red : C.muted2;
+                const mtColor = t.marketType === "PERP" ? C.cyan : t.marketType === "SPOT" ? C.purple : C.gold;
+                const fmt = (v) => {
+                  if (v == null || v === "") return "—";
+                  const n = typeof v === "number" ? v : parseFloat(v);
+                  if (!isFinite(n)) return String(v);
+                  if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits:0 });
+                  if (n >= 1)    return n.toFixed(2);
+                  if (n >= 0.01) return n.toFixed(4);
+                  return n.toFixed(6);
+                };
+                return (
+                  <div key={`${t.asset}-${i}`} data-testid={`basket-card-${t.asset}`} style={{ background:"#080d18", border:`1px solid ${C.border}`, borderRadius:3, padding:"11px 12px" }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", marginBottom:8 }}>
+                      <span style={{ fontFamily:SERIF, fontSize:14, fontWeight:700, color:C.white }}>{t.asset}</span>
+                      <span style={{ fontFamily:MONO, fontSize:9, fontWeight:700, color:dirColor, background:`${dirColor}18`, border:`1px solid ${dirColor}55`, borderRadius:2, padding:"2px 7px", letterSpacing:"0.08em" }}>{t.direction || "—"}</span>
+                      {t.marketType && (
+                        <span style={{ fontFamily:MONO, fontSize:8, fontWeight:700, color:mtColor, background:`${mtColor}18`, border:`1px solid ${mtColor}55`, borderRadius:2, padding:"2px 6px", letterSpacing:"0.08em" }}>{t.marketType}</span>
+                      )}
+                      {t.tradeType && (
+                        <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, background:C.border, borderRadius:2, padding:"2px 6px", letterSpacing:"0.08em" }}>{t.tradeType}</span>
+                      )}
+                      {typeof t.conviction === "number" && (
+                        <span style={{ marginLeft:"auto", fontFamily:MONO, fontSize:9, color:t.conviction>=70?C.green:t.conviction>=50?C.gold:C.muted2, fontWeight:700 }}>{t.conviction}%</span>
+                      )}
+                    </div>
+                    {t.direction !== "NEUTRAL" && (
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:6, marginBottom:8 }}>
+                        {[
+                          { label:"ENTRY", val:fmt(t.entry), col:C.text },
+                          { label:"SL",    val:fmt(t.sl),    col:C.red },
+                          { label:"TP1",   val:fmt(t.tp1?.price ?? t.tp1), col:C.green, sub:t.tp1?.rr },
+                          { label:"TP2",   val:fmt(t.tp2?.price ?? t.tp2), col:C.green, sub:t.tp2?.rr },
+                        ].map(x => (
+                          <div key={x.label} style={{ background:"rgba(12,18,32,.7)", border:`1px solid ${C.border}`, borderRadius:2, padding:"5px 7px" }}>
+                            <div style={{ fontFamily:MONO, fontSize:6.5, color:C.muted, letterSpacing:"0.1em", marginBottom:2 }}>{x.label}</div>
+                            <div style={{ fontFamily:MONO, fontSize:10, color:x.col, fontWeight:700 }}>{x.val}</div>
+                            {x.sub && <div style={{ fontFamily:MONO, fontSize:7, color:C.muted2, marginTop:1 }}>{x.sub}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:6, fontFamily:MONO, fontSize:8, color:C.muted2 }}>
+                      {t.leverage && <span>LEV <span style={{ color:C.text, fontWeight:700 }}>{t.leverage}</span></span>}
+                      {t.killClock && <span>KILL <span style={{ color:C.text, fontWeight:700 }}>{t.killClock}</span></span>}
+                      {typeof t.weight === "number" && <span>WEIGHT <span style={{ color:C.text, fontWeight:700 }}>{t.weight}%</span></span>}
+                    </div>
+                    {t.thesis && (
+                      <div style={{ fontFamily:SANS, fontSize:11, color:C.text, lineHeight:1.5, marginTop:4 }}>{t.thesis}</div>
+                    )}
+                    {t.invalidation && (
+                      <div style={{ fontFamily:MONO, fontSize:8, color:C.muted2, marginTop:6 }}>
+                        <span style={{ color:C.red }}>✕ INVALIDATION:</span> <span style={{ color:C.text }}>{t.invalidation}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── Fallback: raw text (JSON parse failed) ── */}
+          {!basketData && basketResult && (
             <div data-testid="text-basket-result" style={{ marginTop:12, background:"#080d18", border:`1px solid ${C.border}`, borderRadius:3, padding:14, fontSize:12, lineHeight:1.9, color:C.text, whiteSpace:"pre-wrap", overflowY:"auto", WebkitOverflowScrolling:"touch", maxHeight:520 }}>
               {basketResult}
             </div>
