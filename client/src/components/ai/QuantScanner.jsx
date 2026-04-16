@@ -90,7 +90,9 @@ export default function QuantScanner({ mode, isPro, isElite }) {
     for (let i = 0; i < selected.length; i++) {
       const ticker = selected[i];
       const ac = ASSET_CLASS(ticker);
-      const assetMarket = ac !== "crypto" ? "SPOT" : market;
+      // Crypto + FX both support PERP (Hyperliquid lists both). Equities/commodities are SPOT-only.
+      const supportsPerp = ac === "crypto" || ac === "fx";
+      const assetMarket = supportsPerp ? market : "SPOT";
       try {
         const res = await fetch("/api/quant", {
           method: "POST",
