@@ -1994,6 +1994,14 @@ function Dashboard({user,setUser,onShowAuth}){
     };
     setTimeout(loadAlerts,500);
   },[user]);
+  const refreshAlerts=useCallback(()=>{
+    fetch("/api/alerts",{credentials:"include"}).then(r=>r.ok?r.json():null).then(data=>{
+      if(!data)return;
+      const mapped=data.map(a=>({...a,threshold:Number(a.threshold)}));
+      setAlerts(mapped);
+      if(mapped.length>0)idRef.current=Math.max(...mapped.map(a=>a.id))+1;
+    }).catch(()=>{});
+  },[]);
   const volRef=useRef({});
   const fundRef=useRef({});
   const firedAlerts=useRef(new Set());
@@ -4266,6 +4274,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             storeTotalMarkets={storeTotalMarkets} storeAlerts={storeAlerts}
             allPrices={allPrices} fmt={fmt}
             onUpgrade={onUpgrade}
+            onAlertCreated={refreshAlerts}
           />
 
           <div style={{...panel,border:`1px solid rgba(255,140,0,.12)`}}>
