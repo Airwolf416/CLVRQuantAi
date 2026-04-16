@@ -17,9 +17,12 @@ let lastApologySentAt = 0; // Unix ms — prevents double-send within 6 hours
 
 async function getTodayBriefKey(): Promise<string | null> {
   try {
-    const now = new Date();
-    const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-    const dateKey = etTime.toISOString().split("T")[0];
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date());
+    const p = (type: string) => parts.find(p => p.type === type)?.value || "0";
+    const dateKey = `${p("year")}-${p("month")}-${p("day")}`;
     const res = await pool.query(`SELECT date_key FROM daily_briefs_log WHERE date_key = $1`, [dateKey]);
     return res.rows.length > 0 ? dateKey : null;
   } catch { return null; }
@@ -659,42 +662,53 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
   return { sent, skipped: recipients.length - sent };
 }
 
+function getETComponents(): { hour: number; minute: number; dateKey: string } {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(now);
+  const p = (type: string) => parts.find(p => p.type === type)?.value || "0";
+  return {
+    hour: parseInt(p("hour")),
+    minute: parseInt(p("minute")),
+    dateKey: `${p("year")}-${p("month")}-${p("day")}`,
+  };
+}
+
 export function startDailyBriefScheduler() {
   console.log("[daily-brief] Scheduler started — briefs will be sent at 6:00 AM ET daily");
 
   // On startup: check if today's brief was missed (server was down at 6 AM)
   setTimeout(async () => {
     try {
-      const now = new Date();
-      const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-      const hour = etTime.getHours();
-      const dateKey = etTime.toISOString().split("T")[0];
-      // If it's between 6 AM and 11 AM ET and today's brief wasn't sent, send now
-      if (hour >= BRIEF_HOUR_ET && hour < 11) {
+      const { hour, dateKey } = getETComponents();
+      // If it's after 6 AM ET and today's brief wasn't sent, send now (no upper bound)
+      if (hour >= BRIEF_HOUR_ET) {
         const alreadySent = await getTodayBriefKey();
         if (!alreadySent) {
-          console.log("[daily-brief] Missed 6 AM brief detected on startup — sending catch-up brief now");
+          console.log(`[daily-brief] Missed 6 AM brief detected on startup (now ${hour}:xx ET) — sending catch-up brief now`);
           lastBriefDate = dateKey;
           await enqueueDailyBrief();
         } else {
           lastBriefDate = dateKey;
           console.log("[daily-brief] Today's brief already sent — skipping catch-up");
         }
+      } else {
+        console.log(`[daily-brief] It's ${hour}:xx ET — brief scheduled for ${BRIEF_HOUR_ET}:00 ET`);
       }
     } catch (e: any) {
       console.log("[daily-brief] Startup catch-up check error:", e.message);
     }
-  }, 10_000); // Wait 10s after startup for server to warm up
+  }, 10_000);
 
   setInterval(async () => {
-    const now = new Date();
-    const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-    const hour = etTime.getHours();
-    const minute = etTime.getMinutes();
-    const dateKey = etTime.toISOString().split("T")[0];
+    const { hour, minute, dateKey } = getETComponents();
 
-    if (hour === BRIEF_HOUR_ET && minute === BRIEF_MINUTE_ET && dateKey !== lastBriefDate) {
+    if (hour === BRIEF_HOUR_ET && minute <= 1 && dateKey !== lastBriefDate) {
       lastBriefDate = dateKey;
+      console.log(`[daily-brief] Triggering scheduled brief for ${dateKey}`);
       enqueueDailyBrief().catch(e => console.log("[daily-brief] Enqueue error:", e.message));
     }
   }, 30_000);
