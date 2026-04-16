@@ -91,6 +91,11 @@ export const BASKET_YAHOO_MAP: Record<string, string> = {
   WHEAT:"ZW=F",CORN:"ZC=F",SOYBEANS:"ZS=F",
   COFFEE:"KC=F",SUGAR:"SB=F",
   URANIUM:"URA",DUBAI:"BZ=F",LNG:"UNG",
+  // Forex
+  EURUSD:"EURUSD=X",GBPUSD:"GBPUSD=X",USDJPY:"JPY=X",USDCHF:"CHF=X",
+  AUDUSD:"AUDUSD=X",USDCAD:"CAD=X",NZDUSD:"NZDUSD=X",EURGBP:"EURGBP=X",
+  EURJPY:"EURJPY=X",GBPJPY:"GBPJPY=X",USDMXN:"MXN=X",USDZAR:"ZAR=X",
+  USDTRY:"TRY=X",USDSGD:"SGD=X",
 };
 
 // ENERGY_ETF_MAP is intentionally empty — energy spot prices come from Finnhub
