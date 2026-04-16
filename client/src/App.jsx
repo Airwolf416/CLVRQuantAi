@@ -3404,7 +3404,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               <div style={{fontFamily:MONO,fontSize:9,fontWeight:800,color:C.red,letterSpacing:"0.18em",marginBottom:3}}>CLVR MARKET HALT — SIGNAL ENGINE PAUSED</div>
               <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,lineHeight:1.6}}>
                 {dbKillSwitch.reason||"High-impact macro event detected — trading signals suspended until volatility normalises."}
-                {dbKillSwitch.nearest_event&&<span style={{color:C.orange}}> Next: {dbKillSwitch.nearest_event}</span>}
+                {dbKillSwitch.nearest_event&&<span style={{color:C.orange}}> Next: {typeof dbKillSwitch.nearest_event==="object"?`${dbKillSwitch.nearest_event.name} at ${dbKillSwitch.nearest_event.time} (${dbKillSwitch.nearest_event.hours_away}h away)`:dbKillSwitch.nearest_event}</span>}
               </div>
             </div>
             <div style={{fontFamily:SERIF,fontSize:11,fontStyle:"italic",color:C.red,fontWeight:700,flexShrink:0}}>Exercise caution</div>
