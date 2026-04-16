@@ -532,7 +532,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
   }
 
   return (
-    <div>
+    <div style={{ maxWidth:"100%", overflowX:"hidden", boxSizing:"border-box" }}>
       {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
         <div>
@@ -721,7 +721,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
 
       {/* Performance Context (AI prompt injection preview) */}
       <Section title="🤖 AI PERFORMANCE CONTEXT (INJECTED INTO EVERY PROMPT)" color="#c9a84c">
-        <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#c8d4ee", overflowX:"auto", maxHeight:320, whiteSpace:"pre-wrap", margin:0 }}>
+        <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#c8d4ee", overflowY:"auto", maxHeight:320, whiteSpace:"pre-wrap", wordBreak:"break-word", margin:0, maxWidth:"100%", boxSizing:"border-box" }}>
           {perfCtx || "(empty)"}
         </pre>
       </Section>
@@ -730,11 +730,11 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
       <Section title="🔬 RAW API RESPONSES" color="#4a5d80">
         <details>
           <summary style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", cursor:"pointer", marginBottom:8 }}>/api/track-record</summary>
-          <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#8fc4e0", overflowX:"auto", maxHeight:240 }}>{JSON.stringify(trackRecord, null, 2)}</pre>
+          <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#8fc4e0", overflowY:"auto", maxHeight:240, whiteSpace:"pre-wrap", wordBreak:"break-word", maxWidth:"100%", boxSizing:"border-box" }}>{JSON.stringify(trackRecord, null, 2)}</pre>
         </details>
         <details style={{ marginTop:8 }}>
           <summary style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", cursor:"pointer", marginBottom:8 }}>/api/signal-history (summary)</summary>
-          <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#8fc4e0", overflowX:"auto", maxHeight:240 }}>{JSON.stringify({ count: signals.length, isPaidUser: signalHistory?.isPaidUser, isDelayed: signalHistory?.isDelayed, firstTs: signals[0]?.ts, lastTs: signals[signals.length - 1]?.ts }, null, 2)}</pre>
+          <pre style={{ background:"#06080d", border:"1px solid #1c2b4a", borderRadius:3, padding:10, fontFamily:MONO, fontSize:9, color:"#8fc4e0", overflowY:"auto", maxHeight:240, whiteSpace:"pre-wrap", wordBreak:"break-word", maxWidth:"100%", boxSizing:"border-box" }}>{JSON.stringify({ count: signals.length, isPaidUser: signalHistory?.isPaidUser, isDelayed: signalHistory?.isDelayed, firstTs: signals[0]?.ts, lastTs: signals[signals.length - 1]?.ts }, null, 2)}</pre>
         </details>
       </Section>
     </div>
