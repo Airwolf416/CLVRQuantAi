@@ -14,8 +14,9 @@ function copyToClipboard(text) {
   try { navigator.clipboard.writeText(text); } catch { }
 }
 
-export default function TradeIdeaCard({ trade, rank, mode, isElite, locked }) {
+export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAlertCreated }) {
   const [copied, setCopied] = useState(false);
+  const [alertStatus, setAlertStatus] = useState(null);
   const isLong = trade.direction === "LONG";
   const borderColor = trade.kronos ? "#c9a84c" : isLong ? "#22c55e" : "#ef4444";
   const dirColor = isLong ? "#22c55e" : "#ef4444";
@@ -44,6 +45,37 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked }) {
     copyToClipboard(txt);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleSetAlert = async () => {
+    if (alertStatus === "saving" || alertStatus === "done") return;
+    if (!entry) return;
+    setAlertStatus("saving");
+    try {
+      const sym = (trade.asset || "").replace(/\/USDT?$/i, "").replace(/\/USD$/i, "").trim();
+      const res = await fetch("/api/alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          sym,
+          field: "price",
+          condition: isLong ? "<=": ">=",
+          threshold: entry,
+          label: `${trade.direction} ${sym} entry @ ${fmtP(entry)}`,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Failed");
+      }
+      setAlertStatus("done");
+      if (onAlertCreated) onAlertCreated();
+      setTimeout(() => setAlertStatus(null), 3000);
+    } catch {
+      setAlertStatus("error");
+      setTimeout(() => setAlertStatus(null), 2500);
+    }
   };
 
   const killClockSimple = (kc) => {
@@ -231,10 +263,16 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked }) {
         </button>
         <button
           data-testid={`btn-alert-trade-${rank}`}
-          onClick={() => {}}
-          style={{ padding: "10px 8px", background: "transparent", border: "none", color: "#c9a84c", cursor: "pointer", fontFamily: MONO, fontSize: 9, fontWeight: 600 }}
+          onClick={handleSetAlert}
+          disabled={alertStatus === "saving" || alertStatus === "done"}
+          style={{
+            padding: "10px 8px", background: "transparent", border: "none",
+            color: alertStatus === "done" ? "#22c55e" : alertStatus === "error" ? "#ef4444" : alertStatus === "saving" ? "rgba(255,255,255,0.3)" : "#c9a84c",
+            cursor: alertStatus === "saving" || alertStatus === "done" ? "default" : "pointer",
+            fontFamily: MONO, fontSize: 9, fontWeight: 600,
+          }}
         >
-          ⏰ Set Alert
+          {alertStatus === "saving" ? "⏳ Saving..." : alertStatus === "done" ? "✓ Alert Set!" : alertStatus === "error" ? "✖ Failed" : "⏰ Set Alert"}
         </button>
       </div>
     </div>

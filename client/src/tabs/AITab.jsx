@@ -12,7 +12,7 @@ export default function AITab({
   storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
   liveSignals, newsFeed, macroEvents, insiderData, regimeData,
   storeMode, storeTotalMarkets, storeAlerts,
-  allPrices, fmt, onUpgrade,
+  allPrices, fmt, onUpgrade, onAlertCreated,
 }) {
   const [mode, setMode] = useState("simple");
 
@@ -47,6 +47,7 @@ export default function AITab({
         macroEvents={macroEvents} insiderData={insiderData}
         regimeData={regimeData} storeMode={storeMode}
         storeTotalMarkets={storeTotalMarkets} storeAlerts={storeAlerts}
+        onAlertCreated={onAlertCreated}
       />
 
       {isPro && (

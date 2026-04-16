@@ -12,6 +12,7 @@ export default function TopTradeIdeas({
   storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
   liveSignals, newsFeed, macroEvents, insiderData, regimeData,
   storeMode, storeTotalMarkets, storeAlerts,
+  onAlertCreated,
 }) {
   const [loading, setLoading] = useState(false);
   const [trades, setTrades] = useState(null);
@@ -208,7 +209,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             const locked = !isPro && i >= freeLimit;
             return (
               <div key={i} style={{ position: "relative" }}>
-                <TradeIdeaCard trade={trade} rank={trade.rank || i + 1} mode={mode} isElite={isElite} locked={locked} />
+                <TradeIdeaCard trade={trade} rank={trade.rank || i + 1} mode={mode} isElite={isElite} locked={locked} onAlertCreated={onAlertCreated} />
                 {locked && (
                   <div style={{
                     position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
