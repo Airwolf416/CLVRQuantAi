@@ -104,6 +104,53 @@ function OwnerResendBrief({ C, MONO }) {
   );
 }
 
+function EmailSystemHealth({ C, MONO }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const check = async () => {
+    setLoading(true); setErr(null); setData(null);
+    try {
+      const r = await fetch("/api/admin/email-health", { credentials: "include" });
+      const d = await r.json();
+      if (r.ok) setData(d); else setErr(d.error || `HTTP ${r.status}`);
+    } catch (e) { setErr(e.message || "Network error"); }
+    setLoading(false);
+  };
+  const ok = data?.credentialOk && data?.subscriberCount > 0;
+  const col = err || (data && !data.credentialOk) ? C.red : ok ? C.green : C.gold;
+  const bg = err || (data && !data.credentialOk) ? "rgba(255,64,96,.06)" : ok ? "rgba(0,199,135,.06)" : "rgba(201,168,76,.05)";
+  const bd = err || (data && !data.credentialOk) ? "rgba(255,64,96,.25)" : ok ? "rgba(0,199,135,.25)" : "rgba(201,168,76,.2)";
+  return (
+    <div style={{ background:bg, border:`1px solid ${bd}`, borderRadius:8, padding:"14px 16px", marginBottom:10 }}>
+      <div style={{ fontSize:13, fontWeight:600, color:C.white, marginBottom:4 }}>Email System Health Check</div>
+      <div style={{ fontFamily:MONO, fontSize:10, color:C.muted2, marginBottom:10, lineHeight:1.6 }}>
+        Verifies the Resend credential resolves and reports active subscriber count. Run this FIRST if sends aren't arriving — it tells you exactly why.
+      </div>
+      {data && (
+        <div style={{ fontFamily:MONO, fontSize:10, color:col, marginBottom:10, lineHeight:1.7, whiteSpace:"pre-wrap", wordBreak:"break-word" }}>
+          <div style={{ fontWeight:700, marginBottom:6 }}>{data.verdict}</div>
+          <div>host: {data.env.host}</div>
+          <div>RESEND_API_KEY set: {String(data.env.RESEND_API_KEY)}</div>
+          <div>REPLIT_CONNECTORS_HOSTNAME set: {String(data.env.REPLIT_CONNECTORS_HOSTNAME)}</div>
+          <div>credential resolvable: {String(data.credentialOk)}</div>
+          {data.credentialError && <div style={{ color:C.red }}>error: {data.credentialError}</div>}
+          <div>fromEmail: {data.fromEmail || "(unresolved)"}</div>
+          <div>active subscribers: {data.subscriberCount}</div>
+        </div>
+      )}
+      {err && <div style={{ fontFamily:MONO, fontSize:10, color:C.red, marginBottom:10 }}>{err}</div>}
+      <button data-testid="btn-owner-email-health" onClick={check} disabled={loading} style={{
+        background:bg, border:`1px solid ${bd}`, borderRadius:5, padding:"9px 16px",
+        fontFamily:MONO, fontSize:10, color:col, cursor:loading ? "not-allowed" : "pointer",
+        letterSpacing:"0.1em", fontWeight:700, opacity:loading ? 0.6 : 1,
+      }}>
+        {loading ? "Checking…" : "🩺 Check Email System"}
+      </button>
+    </div>
+  );
+}
+
 const SYSTEM_EMAILS = [
   {
     name: "Welcome Email",
@@ -1253,6 +1300,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
                 </div>
               </div>
 
+              <EmailSystemHealth C={C} MONO={MONO} />
               <OwnerResendBrief C={C} MONO={MONO} />
               <OwnerEmailTool C={C} MONO={MONO}
                 title="Service Disruption Apology"

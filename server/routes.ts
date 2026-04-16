@@ -4305,6 +4305,60 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
     }
   });
 
+  // Diagnostic: verify email system health (Resend credential + subscriber count)
+  app.get("/api/admin/email-health", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+      const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+      if (userEmail !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Owner only" });
+
+      const env = {
+        RESEND_API_KEY: !!process.env.RESEND_API_KEY,
+        REPLIT_CONNECTORS_HOSTNAME: !!process.env.REPLIT_CONNECTORS_HOSTNAME,
+        REPL_IDENTITY: !!process.env.REPL_IDENTITY,
+        WEB_REPL_RENEWAL: !!process.env.WEB_REPL_RENEWAL,
+        RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL || "(not set — will use default)",
+        host: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.REPL_ID || "unknown",
+      };
+
+      // Test credential resolution
+      let credentialOk = false;
+      let credentialError: string | null = null;
+      let fromEmail = "";
+      try {
+        const { getUncachableResendClient } = await import("./resendClient");
+        const { client, fromEmail: fe } = await getUncachableResendClient();
+        credentialOk = !!client;
+        fromEmail = fe;
+      } catch (e: any) {
+        credentialError = e?.message || String(e);
+      }
+
+      // Subscriber count
+      const subRes = await pool.query(
+        "SELECT COUNT(*) AS n FROM users WHERE daily_email_subscribed = true AND email IS NOT NULL AND email <> ''"
+      );
+      const subscriberCount = parseInt(subRes.rows[0]?.n || "0", 10);
+
+      res.json({
+        env,
+        credentialOk,
+        credentialError,
+        fromEmail,
+        subscriberCount,
+        verdict: credentialOk && subscriberCount > 0
+          ? "✅ Ready to send"
+          : !credentialOk
+            ? "❌ Resend credential NOT resolvable — emails CANNOT send"
+            : "⚠ No subscribers — nothing to send to",
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/admin/send-apology-brief", async (req, res) => {
     // Owner-only: must be logged in as the owner account
     const userId = (req.session as any)?.userId;
