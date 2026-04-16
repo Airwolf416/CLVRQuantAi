@@ -1,0 +1,1042 @@
+# COMPREHENSIVE FIX & UPGRADE — Track Record, Adaptive Learning, Responsive Design, Quant Scanner
+
+⚠️ READ THIS ENTIRE DOCUMENT BEFORE WRITING ANY CODE. Execute in the order listed. Do NOT create unrelated features.
+
+-----
+
+## PART 1 — FIX TRACK RECORD IN PRODUCTION (Railway)
+
+The Signal Track Record tab works on Replit dev but is broken in production (Railway). Diagnose and fix ALL of these common causes:
+
+### 1A. Database Connection (Railway PostgreSQL)
+
+Check `server/config.ts` or wherever DATABASE_URL is used. Railway requires SSL:
+
+```typescript
+// In your database connection config (drizzle or pg pool), ensure SSL is enabled for production:
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
+```
+
+**Verify:**
+
+- Run `echo $DATABASE_URL` in Railway shell — confirm it’s set and points to Railway’s PostgreSQL, not Replit’s
+- Check if the `signal_outcomes` (or whatever table stores track record data) exists in the Railway database
+- If tables are missing, run migrations on Railway: check your migration script and run it against the Railway DB
+
+### 1B. Missing Database Tables
+
+If the track record tables don’t exist in Railway’s database, create them. Find and run any existing migration or manually create:
+
+```sql
+-- Check if tables exist first. If not, create them.
+-- Adapt this to match your existing schema names.
+
+CREATE TABLE IF NOT EXISTS signal_outcomes (
+  id SERIAL PRIMARY KEY,
+  token VARCHAR(20) NOT NULL,
+  direction VARCHAR(10) NOT NULL,
+  signal_type VARCHAR(20) DEFAULT 'auto',
+  entry_price DECIMAL(20,8),
+  tp1_price DECIMAL(20,8),
+  tp2_price DECIMAL(20,8),
+  tp3_price DECIMAL(20,8),
+  stop_loss DECIMAL(20,8),
+  outcome VARCHAR(20) DEFAULT 'PENDING',
+  pnl_pct DECIMAL(10,4),
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  source VARCHAR(30) DEFAULT 'signals_tab',
+  trade_type VARCHAR(20),
+  conviction INTEGER,
+  kill_clock_expires TIMESTAMPTZ,
+  leverage VARCHAR(10)
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_token ON signal_outcomes(token);
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_outcome ON signal_outcomes(outcome);
+CREATE INDEX IF NOT EXISTS idx_signal_outcomes_created ON signal_outcomes(created_at);
+```
+
+### 1C. Background Signal Worker Not Running
+
+The signal generator and outcome resolver likely run as `setInterval` inside the Express server. On Railway, verify:
+
+1. Find where the signal generation worker is started (look for `setInterval` calls related to signals, track record, or outcome resolution in `server/routes.ts` or a separate worker file)
+1. Make sure it runs on server startup, not only in dev mode
+1. Check for any `if (process.env.NODE_ENV !== 'production')` guards that might skip the worker
+
+```typescript
+// The worker MUST start in production. If there's a guard, remove it:
+// BAD:
+if (process.env.NODE_ENV === 'development') {
+  startSignalWorker();
+}
+
+// GOOD:
+startSignalWorker(); // Always start
+```
+
+### 1D. Session/Cookie Auth for Production HTTPS
+
+The track record endpoints use `credentials: "include"` which requires proper cookie config:
+
+Find your Express session configuration and update for production:
+
+```typescript
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'fallback-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // HTTPS only in prod
+    httpOnly: true,
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' if frontend/backend are different domains
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  },
+  // If behind Railway proxy:
+  proxy: process.env.NODE_ENV === 'production',
+}));
+
+// Also ensure trust proxy is set:
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+```
+
+### 1E. CORS for Production
+
+If the frontend and API are on different origins in prod:
+
+```typescript
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production'
+    ? ['https://clvrquantai.com', 'https://www.clvrquantai.com']
+    : true,
+  credentials: true,
+}));
+```
+
+### 1F. Make Track Record Accessible to ALL Users
+
+Currently the track record data should be visible to everyone (stats are public, detailed history is Pro-gated). Update the API routes:
+
+Find `GET /api/track-record` and `GET /api/signal-history` in `server/routes.ts`. Ensure:
+
+- `/api/track-record` does NOT require auth — it returns aggregate stats (win rate, totals) for all users
+- `/api/signal-history` returns basic signal data (direction, token, outcome) to all users, but entry/TP/SL prices are only included for Pro+ users (check `isPaidUser` flag)
+
+```typescript
+// /api/track-record — PUBLIC (no auth required)
+app.get("/api/track-record", async (req, res) => {
+  // Return aggregate stats to ALL users — no auth check
+  // ... existing query logic
+});
+
+// /api/signal-history — PUBLIC but with tier-based detail
+app.get("/api/signal-history", async (req, res) => {
+  const user = req.session?.userId ? await getUser(req.session.userId) : null;
+  const tier = user ? getEffectiveTier(user) : "free";
+  const isPaidUser = tier === "pro" || tier === "elite";
+
+  // Return signals to everyone, but redact prices for free users
+  const signals = await getSignalHistory(limit);
+  const sanitized = signals.map(sig => ({
+    id: sig.id,
+    token: sig.token,
+    direction: sig.direction,
+    outcome: sig.outcome,
+    ts: sig.created_at,
+    // Only include prices for paid users:
+    ...(isPaidUser ? {
+      entry: sig.entry_price,
+      tp1: sig.tp1_price,
+      tp2: sig.tp2_price,
+      stopLoss: sig.stop_loss,
+      pnlPct: sig.pnl_pct,
+    } : {}),
+  }));
+
+  res.json({ signals: sanitized, isPaidUser });
+});
+```
+
+### VERIFY PART 1:
+
+- [ ] Open clvrquantai.com (production) → Track Record tab → stats load without errors
+- [ ] Console shows no 401/403/500 errors on `/api/track-record` or `/api/signal-history`
+- [ ] Free users see aggregate stats (win rate, totals, weekly chart) but prices are blurred
+- [ ] Pro users see full signal history with prices and PnL
+- [ ] Signal worker is generating and resolving signals in production (check Railway logs)
+
+-----
+
+## PART 2 — OUTCOME TRACKING ACROSS ALL AI FEATURES
+
+Extend outcome tracking to: Trade Ideas, Quant Scanner, Signals Tab, and Basket recommendations.
+
+### 2A. Unified Signal Log Table
+
+Add a new table (or extend existing) to track ALL signals from every source:
+
+```sql
+CREATE TABLE IF NOT EXISTS ai_signal_log (
+  id SERIAL PRIMARY KEY,
+  source VARCHAR(30) NOT NULL,           -- 'trade_ideas' | 'quant_scanner' | 'signals_tab' | 'basket'
+  token VARCHAR(20) NOT NULL,
+  direction VARCHAR(10) NOT NULL,        -- 'LONG' | 'SHORT'
+  trade_type VARCHAR(20),                -- 'SCALP' | 'DAY_TRADE' | 'SWING' | 'POSITION'
+  entry_price DECIMAL(20,8) NOT NULL,
+  tp1_price DECIMAL(20,8),
+  tp2_price DECIMAL(20,8),
+  tp3_price DECIMAL(20,8),
+  stop_loss DECIMAL(20,8),
+  leverage VARCHAR(10),
+  conviction INTEGER,                    -- 0-100
+  edge_score VARCHAR(10),                -- '68%'
+  edge_source VARCHAR(20),               -- 'OI-verified' | 'estimated' | 'no OI'
+  kronos BOOLEAN DEFAULT FALSE,
+  kill_clock_hours INTEGER,              -- hours until expiry
+  kill_clock_expires TIMESTAMPTZ,
+  outcome VARCHAR(20) DEFAULT 'PENDING', -- 'PENDING' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED_WIN' | 'EXPIRED_LOSS'
+  pnl_pct DECIMAL(10,4),
+  resolved_at TIMESTAMPTZ,
+  thesis TEXT,
+  invalidation TEXT,
+  scores JSONB,                          -- {"trend":72,"momentum":65,...}
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_ai_signal_log_token ON ai_signal_log(token);
+CREATE INDEX idx_ai_signal_log_source ON ai_signal_log(source);
+CREATE INDEX idx_ai_signal_log_outcome ON ai_signal_log(outcome);
+CREATE INDEX idx_ai_signal_log_created ON ai_signal_log(created_at);
+CREATE INDEX idx_ai_signal_log_direction ON ai_signal_log(direction);
+```
+
+### 2B. Signal Logging Hooks
+
+Add a logging function and call it from each feature. Do NOT modify existing API response flow — just add a log call after the response is generated.
+
+```typescript
+// server/lib/signalLogger.ts (NEW FILE)
+import { db } from '../db';
+import { ai_signal_log } from '../schema';
+
+export async function logSignal(signal: {
+  source: string;
+  token: string;
+  direction: string;
+  trade_type?: string;
+  entry_price: number;
+  tp1_price?: number;
+  tp2_price?: number;
+  tp3_price?: number;
+  stop_loss?: number;
+  leverage?: string;
+  conviction?: number;
+  edge_score?: string;
+  edge_source?: string;
+  kronos?: boolean;
+  kill_clock_hours?: number;
+  thesis?: string;
+  invalidation?: string;
+  scores?: object;
+}) {
+  try {
+    const killClockExpires = signal.kill_clock_hours
+      ? new Date(Date.now() + signal.kill_clock_hours * 3600000)
+      : null;
+
+    await db.insert(ai_signal_log).values({
+      ...signal,
+      kill_clock_expires: killClockExpires,
+      outcome: 'PENDING',
+    });
+  } catch (err) {
+    console.error('[SignalLogger] Failed to log signal:', err);
+    // Never let logging failures break the main flow
+  }
+}
+```
+
+**Hook into each feature:**
+
+1. **Trade Ideas** (`/api/ai/analyze` when called for trade ideas):
+   After parsing the AI response, log each trade:
+
+```typescript
+// After successfully parsing trades from AI response:
+for (const trade of parsedTrades) {
+  await logSignal({
+    source: 'trade_ideas',
+    token: trade.asset.replace('/USDT', '').replace('/USD', ''),
+    direction: trade.direction,
+    trade_type: trade.tradeType,
+    entry_price: trade.entry,
+    tp1_price: trade.tp1?.price,
+    tp2_price: trade.tp2?.price,
+    tp3_price: trade.tp3?.price,
+    stop_loss: trade.sl,
+    leverage: trade.leverage,
+    conviction: trade.conviction,
+    edge_score: trade.edge,
+    edge_source: trade.edgeSource,
+    kronos: trade.kronos || false,
+    kill_clock_hours: parseInt(trade.killClock) || 24,
+    thesis: trade.thesis,
+    invalidation: trade.invalidation,
+    scores: trade.scores,
+  });
+}
+```
+
+1. **Quant Scanner** (`/api/quant`):
+   After post-processing the AI response, if signal is not SUPPRESSED/NEUTRAL:
+
+```typescript
+// After the existing post-AI processing in /api/quant:
+if (result.signal && result.signal !== 'SUPPRESSED' && result.signal !== 'NEUTRAL') {
+  await logSignal({
+    source: 'quant_scanner',
+    token: ticker,
+    direction: result.signal,
+    trade_type: timeframeId === 'today' ? 'SCALP' : timeframeId === 'mid' ? 'SWING' : 'POSITION',
+    entry_price: result.entry?.price,
+    tp1_price: result.tp1?.price,
+    tp2_price: result.tp2?.price,
+    tp3_price: result.tp3?.price,
+    stop_loss: result.stopLoss?.price,
+    leverage: `${result.leverage?.min || 3}x`,
+    conviction: result.win_probability || result.adjusted_score,
+    kronos: result.kronos || false,
+    kill_clock_hours: result.hold === '2-4 hours' ? 4 : result.hold === '12-24 hours' ? 24 : result.hold === '2-3 days' ? 72 : 336,
+    thesis: result.quant_rationale,
+    invalidation: result.invalidation,
+  });
+}
+```
+
+1. **Signals Tab** (existing signal generation):
+   Find where auto-generated signals are created and add `logSignal({ source: 'signals_tab', ... })`.
+1. **Basket** (`MyBasket.jsx` / basket API):
+   When basket recommendations are generated, add `logSignal({ source: 'basket', ... })`.
+
+### 2C. Outcome Resolver Worker
+
+Create a background worker that resolves PENDING signals every 60 seconds:
+
+```typescript
+// server/lib/outcomeResolver.ts (NEW FILE)
+import { db } from '../db';
+import { ai_signal_log } from '../schema';
+import { eq, and, lte } from 'drizzle-orm';
+
+// You'll need access to current prices — import from your existing market data source
+// e.g., from DataBus prices, or Hyperliquid WebSocket store, or Finnhub
+
+async function getCurrentPrice(token: string): Promise<number | null> {
+  // Use your existing price fetching mechanism
+  // Check DataBus prices first (fastest), then Finnhub/CoinGecko as fallback
+  try {
+    const response = await fetch(`http://localhost:${process.env.PORT || 3000}/api/databus/status`);
+    const data = await response.json();
+    return data.prices?.[token] || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveSignals() {
+  try {
+    // Get all PENDING signals
+    const pending = await db.select().from(ai_signal_log)
+      .where(eq(ai_signal_log.outcome, 'PENDING'));
+
+    const now = new Date();
+
+    for (const signal of pending) {
+      const price = await getCurrentPrice(signal.token);
+      if (!price || !signal.entry_price) continue;
+
+      const entry = parseFloat(signal.entry_price.toString());
+      const isLong = signal.direction === 'LONG';
+
+      // Check SL hit first (highest priority)
+      if (signal.stop_loss) {
+        const sl = parseFloat(signal.stop_loss.toString());
+        const slHit = isLong ? price <= sl : price >= sl;
+        if (slHit) {
+          const pnl = isLong ? ((sl - entry) / entry) * 100 : ((entry - sl) / entry) * 100;
+          await updateOutcome(signal.id, 'SL_HIT', pnl);
+          continue;
+        }
+      }
+
+      // Check TP3 (best outcome)
+      if (signal.tp3_price) {
+        const tp3 = parseFloat(signal.tp3_price.toString());
+        const tp3Hit = isLong ? price >= tp3 : price <= tp3;
+        if (tp3Hit) {
+          const pnl = isLong ? ((tp3 - entry) / entry) * 100 : ((entry - tp3) / entry) * 100;
+          await updateOutcome(signal.id, 'TP3_HIT', pnl);
+          continue;
+        }
+      }
+
+      // Check TP2
+      if (signal.tp2_price) {
+        const tp2 = parseFloat(signal.tp2_price.toString());
+        const tp2Hit = isLong ? price >= tp2 : price <= tp2;
+        if (tp2Hit) {
+          const pnl = isLong ? ((tp2 - entry) / entry) * 100 : ((entry - tp2) / entry) * 100;
+          await updateOutcome(signal.id, 'TP2_HIT', pnl);
+          continue;
+        }
+      }
+
+      // Check TP1
+      if (signal.tp1_price) {
+        const tp1 = parseFloat(signal.tp1_price.toString());
+        const tp1Hit = isLong ? price >= tp1 : price <= tp1;
+        if (tp1Hit) {
+          const pnl = isLong ? ((tp1 - entry) / entry) * 100 : ((entry - tp1) / entry) * 100;
+          await updateOutcome(signal.id, 'TP1_HIT', pnl);
+          continue;
+        }
+      }
+
+      // Check kill clock expiry
+      if (signal.kill_clock_expires && now >= new Date(signal.kill_clock_expires)) {
+        const pnl = isLong ? ((price - entry) / entry) * 100 : ((entry - price) / entry) * 100;
+        const outcome = pnl >= 0 ? 'EXPIRED_WIN' : 'EXPIRED_LOSS';
+        await updateOutcome(signal.id, outcome, pnl);
+        continue;
+      }
+    }
+  } catch (err) {
+    console.error('[OutcomeResolver] Error:', err);
+  }
+}
+
+async function updateOutcome(id: number, outcome: string, pnl: number) {
+  await db.update(ai_signal_log)
+    .set({
+      outcome,
+      pnl_pct: Math.round(pnl * 100) / 100,
+      resolved_at: new Date(),
+    })
+    .where(eq(ai_signal_log.id, id));
+
+  console.log(`[OutcomeResolver] Signal #${id} resolved: ${outcome} (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%)`);
+}
+
+// Start the resolver — call this from server startup
+export function startOutcomeResolver() {
+  console.log('[OutcomeResolver] Started — checking every 60s');
+  resolveSignals(); // Run immediately on startup
+  setInterval(resolveSignals, 60000); // Then every 60 seconds
+}
+```
+
+**Wire it into server startup** (in `server/routes.ts` or `server/index.ts`):
+
+```typescript
+import { startOutcomeResolver } from './lib/outcomeResolver';
+
+// After Express app is set up and listening:
+startOutcomeResolver();
+```
+
+### 2D. Update Track Record API to Include AI Signal Log
+
+Update `GET /api/track-record` to pull stats from BOTH the existing signal_outcomes table AND the new ai_signal_log table. Merge the stats so the track record shows ALL signal performance:
+
+```typescript
+// Combine stats from both tables for the track record
+// Wins = TP1_HIT + TP2_HIT + TP3_HIT + EXPIRED_WIN
+// Losses = SL_HIT + EXPIRED_LOSS
+```
+
+### VERIFY PART 2:
+
+- [ ] `ai_signal_log` table exists in both Replit and Railway databases
+- [ ] Running “Get Top 4 Trade Ideas” creates entries in ai_signal_log with source=‘trade_ideas’
+- [ ] Running a Quant Scan creates entries with source=‘quant_scanner’
+- [ ] Outcome resolver runs every 60s (check server logs for `[OutcomeResolver]` messages)
+- [ ] Signals resolve correctly: TP1_HIT when price reaches TP1, SL_HIT when price hits SL
+- [ ] Track Record stats include data from ai_signal_log
+
+-----
+
+## PART 3 — CLOSED-LOOP ADAPTIVE LEARNING
+
+### 3A. Performance Context for AI Prompts
+
+Create a function that builds a performance context string from historical outcomes:
+
+```typescript
+// server/lib/performanceContext.ts (NEW FILE)
+
+export async function buildPerformanceContext(): Promise<string> {
+  try {
+    // Query last 30 days of resolved signals from ai_signal_log
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const resolved = await db.select().from(ai_signal_log)
+      .where(and(
+        sql`${ai_signal_log.outcome} != 'PENDING'`,
+        sql`${ai_signal_log.created_at} >= ${thirtyDaysAgo}`
+      ));
+
+    if (resolved.length < 5) {
+      return 'HISTORICAL PERFORMANCE: Insufficient data (<5 resolved signals in last 30 days). Use standard parameters.';
+    }
+
+    const wins = resolved.filter(s => ['TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN'].includes(s.outcome));
+    const losses = resolved.filter(s => ['SL_HIT','EXPIRED_LOSS'].includes(s.outcome));
+    const overallWinRate = Math.round((wins.length / resolved.length) * 100);
+
+    // By asset
+    const byAsset = {};
+    resolved.forEach(s => {
+      if (!byAsset[s.token]) byAsset[s.token] = { wins: 0, total: 0, pnls: [] };
+      byAsset[s.token].total++;
+      if (['TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN'].includes(s.outcome)) byAsset[s.token].wins++;
+      if (s.pnl_pct) byAsset[s.token].pnls.push(parseFloat(s.pnl_pct));
+    });
+
+    // By direction
+    const byDirection = {};
+    resolved.forEach(s => {
+      if (!byDirection[s.direction]) byDirection[s.direction] = { wins: 0, total: 0 };
+      byDirection[s.direction].total++;
+      if (['TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN'].includes(s.outcome)) byDirection[s.direction].wins++;
+    });
+
+    // By trade type
+    const byTradeType = {};
+    resolved.forEach(s => {
+      const tt = s.trade_type || 'UNKNOWN';
+      if (!byTradeType[tt]) byTradeType[tt] = { wins: 0, total: 0 };
+      byTradeType[tt].total++;
+      if (['TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN'].includes(s.outcome)) byTradeType[tt].wins++;
+    });
+
+    // Recent losing trades (last 5)
+    const recentLosses = losses.slice(-5).map(s =>
+      `${s.token} ${s.direction} (${s.trade_type || '?'}) — ${s.outcome}, ${s.pnl_pct}%`
+    );
+
+    // Recent winning trades (last 5)
+    const recentWins = wins.slice(-5).map(s =>
+      `${s.token} ${s.direction} (${s.trade_type || '?'}) — ${s.outcome}, +${s.pnl_pct}%`
+    );
+
+    // Build the context string
+    let ctx = `HISTORICAL PERFORMANCE CONTEXT (last 30 days, ${resolved.length} resolved signals):\n`;
+    ctx += `Overall win rate: ${overallWinRate}% (${wins.length}W / ${losses.length}L)\n\n`;
+
+    ctx += `By asset:\n`;
+    Object.entries(byAsset).forEach(([token, data]) => {
+      const wr = Math.round((data.wins / data.total) * 100);
+      const avgPnl = data.pnls.length ? (data.pnls.reduce((a,b) => a+b, 0) / data.pnls.length).toFixed(2) : '?';
+      ctx += `  ${token}: ${wr}% win rate (${data.total} signals, avg PnL ${avgPnl}%)\n`;
+    });
+
+    ctx += `\nBy direction:\n`;
+    Object.entries(byDirection).forEach(([dir, data]) => {
+      ctx += `  ${dir}: ${Math.round((data.wins / data.total) * 100)}% win rate (${data.total} signals)\n`;
+    });
+
+    ctx += `\nBy trade type:\n`;
+    Object.entries(byTradeType).forEach(([tt, data]) => {
+      ctx += `  ${tt}: ${Math.round((data.wins / data.total) * 100)}% win rate (${data.total} signals)\n`;
+    });
+
+    if (recentLosses.length > 0) {
+      ctx += `\nRecent losses (AVOID similar setups):\n`;
+      recentLosses.forEach(l => { ctx += `  ❌ ${l}\n`; });
+    }
+
+    if (recentWins.length > 0) {
+      ctx += `\nRecent wins (FAVOR similar setups):\n`;
+      recentWins.forEach(w => { ctx += `  ✅ ${w}\n`; });
+    }
+
+    ctx += `\nINSTRUCTIONS: Use this performance data to improve signal quality. Favor asset/direction/trade-type combos with >65% win rate. Be MORE cautious with combos below 50%. If a specific asset has been consistently losing, either skip it or require higher conviction (75%+).`;
+
+    return ctx;
+  } catch (err) {
+    console.error('[PerformanceContext] Error building context:', err);
+    return 'HISTORICAL PERFORMANCE: Error loading performance data. Use standard parameters.';
+  }
+}
+```
+
+**Inject into EVERY AI call.** Find where the user message is assembled for `/api/ai/analyze` and `/api/quant`. Add the performance context as a new section:
+
+```typescript
+// In the AI Analyst / Trade Ideas flow (App.jsx or wherever the prompt is built):
+const perfContext = await fetch('/api/performance-context').then(r => r.text()).catch(() => '');
+
+// Inject into the user message, BEFORE the market data sections:
+const userMessage = `
+${perfContext}
+
+MACRO PRE-FLIGHT:
+${macroContext}
+
+SECTION A — HYPERLIQUID PERP DATA:
+${perpData}
+...
+`;
+```
+
+**Create the endpoint:**
+
+```typescript
+// In server/routes.ts:
+app.get("/api/performance-context", async (req, res) => {
+  const ctx = await buildPerformanceContext();
+  res.type('text/plain').send(ctx);
+});
+```
+
+### 3B. Adaptive Thresholds — Auto-Tuning
+
+Create a table and background job that auto-adjusts minimum confidence thresholds:
+
+```sql
+CREATE TABLE IF NOT EXISTS adaptive_thresholds (
+  id SERIAL PRIMARY KEY,
+  token VARCHAR(20) NOT NULL,
+  direction VARCHAR(10) NOT NULL,           -- 'LONG' | 'SHORT' | 'ALL'
+  trade_type VARCHAR(20) DEFAULT 'ALL',     -- 'SCALP' | 'DAY_TRADE' | 'SWING' | 'ALL'
+  baseline_threshold INTEGER DEFAULT 75,     -- original threshold
+  current_threshold INTEGER DEFAULT 75,      -- auto-adjusted threshold
+  adjustment INTEGER DEFAULT 0,              -- current offset from baseline (-20 to +20)
+  win_rate_30d DECIMAL(5,2),
+  sample_size INTEGER DEFAULT 0,
+  suppressed BOOLEAN DEFAULT FALSE,          -- if true, no new signals for this combo
+  manual_override BOOLEAN DEFAULT FALSE,     -- if true, auto-tuning is frozen
+  last_recalc TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(token, direction, trade_type)
+);
+```
+
+**Threshold recalculation job (runs every hour):**
+
+```typescript
+// server/lib/adaptiveThresholds.ts (NEW FILE)
+
+export async function recalculateThresholds() {
+  console.log('[AdaptiveThresholds] Recalculating...');
+
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  // Get all resolved signals in last 30 days, grouped by token + direction
+  const resolved = await db.select().from(ai_signal_log)
+    .where(and(
+      sql`${ai_signal_log.outcome} != 'PENDING'`,
+      sql`${ai_signal_log.created_at} >= ${thirtyDaysAgo}`
+    ));
+
+  // Group by token + direction
+  const groups = {};
+  resolved.forEach(s => {
+    const key = `${s.token}__${s.direction}`;
+    if (!groups[key]) groups[key] = { token: s.token, direction: s.direction, wins: 0, total: 0 };
+    groups[key].total++;
+    if (['TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN'].includes(s.outcome)) groups[key].wins++;
+  });
+
+  for (const [key, data] of Object.entries(groups)) {
+    if (data.total < 5) continue; // Not enough data to adjust
+
+    const winRate = (data.wins / data.total) * 100;
+    let adjustment = 0;
+
+    if (winRate < 40) {
+      adjustment = 15;        // Very bad — significantly raise threshold
+    } else if (winRate < 50) {
+      adjustment = 10;        // Bad — raise threshold
+    } else if (winRate < 55) {
+      adjustment = 5;         // Below average — slight raise
+    } else if (winRate >= 55 && winRate <= 65) {
+      adjustment = 0;         // Acceptable — no change
+    } else if (winRate > 65 && winRate <= 75) {
+      adjustment = -5;        // Good — lower threshold slightly
+    } else if (winRate > 75) {
+      adjustment = -10;       // Excellent — lower threshold more
+    }
+
+    // Clamp to ±20
+    adjustment = Math.max(-20, Math.min(20, adjustment));
+
+    const suppressed = winRate < 40 && data.total >= 10;
+
+    // Upsert threshold
+    await db.insert(adaptive_thresholds).values({
+      token: data.token,
+      direction: data.direction,
+      trade_type: 'ALL',
+      baseline_threshold: 75,
+      current_threshold: 75 + adjustment,
+      adjustment,
+      win_rate_30d: Math.round(winRate * 100) / 100,
+      sample_size: data.total,
+      suppressed,
+      last_recalc: new Date(),
+      updated_at: new Date(),
+    }).onConflictDoUpdate({
+      target: [adaptive_thresholds.token, adaptive_thresholds.direction, adaptive_thresholds.trade_type],
+      set: {
+        current_threshold: 75 + adjustment,
+        adjustment,
+        win_rate_30d: Math.round(winRate * 100) / 100,
+        sample_size: data.total,
+        suppressed,
+        last_recalc: new Date(),
+        updated_at: new Date(),
+      },
+      // Don't override manual overrides:
+      where: sql`${adaptive_thresholds.manual_override} = false`,
+    });
+
+    console.log(`[AdaptiveThresholds] ${data.token} ${data.direction}: ${winRate.toFixed(0)}% win rate → threshold ${75 + adjustment}% (adj ${adjustment >= 0 ? '+' : ''}${adjustment})`);
+  }
+}
+
+// Start hourly recalculation
+export function startAdaptiveThresholds() {
+  console.log('[AdaptiveThresholds] Started — recalculating every hour');
+  recalculateThresholds();
+  setInterval(recalculateThresholds, 3600000); // Every hour
+}
+```
+
+**Wire thresholds into Quant Engine validation gate:**
+
+In `server/routes.ts`, in the `/api/quant` handler, AFTER calculating the Bayesian score / adjusted_score but BEFORE calling the AI:
+
+```typescript
+// Check adaptive threshold for this token + direction
+const threshold = await db.select().from(adaptive_thresholds)
+  .where(and(
+    eq(adaptive_thresholds.token, ticker),
+    // Check both specific direction and 'ALL'
+  ))
+  .limit(1);
+
+if (threshold.length > 0 && threshold[0].suppressed) {
+  // This combo is suppressed due to very low win rate
+  return res.json({
+    signal: 'SUPPRESSED',
+    suppression_reason: `Adaptive learning: ${ticker} ${direction} win rate is ${threshold[0].win_rate_30d}% (below 40%). Suppressed until performance improves.`,
+  });
+}
+
+// Adjust the minimum win probability threshold
+const minWinProb = threshold.length > 0
+  ? threshold[0].current_threshold
+  : riskProfile.minWinProb; // fallback to risk profile default
+```
+
+### 3C. Admin Panel (Owner Only)
+
+Create a simple admin page at `/admin/thresholds` accessible only to the owner:
+
+```typescript
+// In server/routes.ts — add these admin routes:
+
+// GET /api/admin/thresholds — view all thresholds
+app.get("/api/admin/thresholds", async (req, res) => {
+  const user = await getUser(req.session?.userId);
+  if (!user || user.email !== OWNER_EMAIL) return res.status(403).json({ error: "Forbidden" });
+
+  const thresholds = await db.select().from(adaptive_thresholds).orderBy(adaptive_thresholds.token);
+  res.json(thresholds);
+});
+
+// PUT /api/admin/thresholds/:id — manual override
+app.put("/api/admin/thresholds/:id", async (req, res) => {
+  const user = await getUser(req.session?.userId);
+  if (!user || user.email !== OWNER_EMAIL) return res.status(403).json({ error: "Forbidden" });
+
+  const { current_threshold, manual_override, suppressed } = req.body;
+  await db.update(adaptive_thresholds)
+    .set({
+      current_threshold: current_threshold ?? undefined,
+      manual_override: manual_override ?? undefined,
+      suppressed: suppressed ?? undefined,
+      updated_at: new Date(),
+    })
+    .where(eq(adaptive_thresholds.id, parseInt(req.params.id)));
+
+  res.json({ success: true });
+});
+
+// POST /api/admin/thresholds/reset/:token — reset learning for an asset
+app.post("/api/admin/thresholds/reset/:token", async (req, res) => {
+  const user = await getUser(req.session?.userId);
+  if (!user || user.email !== OWNER_EMAIL) return res.status(403).json({ error: "Forbidden" });
+
+  await db.update(adaptive_thresholds)
+    .set({
+      current_threshold: 75,
+      adjustment: 0,
+      suppressed: false,
+      manual_override: false,
+      updated_at: new Date(),
+    })
+    .where(eq(adaptive_thresholds.token, req.params.token));
+
+  res.json({ success: true });
+});
+```
+
+**Frontend admin panel** — create a simple component accessible from the settings page (only visible to the owner). Show a table of all thresholds with:
+
+- Token, Direction, Win Rate (30d), Sample Size, Current Threshold, Adjustment, Suppressed (toggle), Manual Override (toggle), Reset button
+- Color code: green (>65% win rate), yellow (50-65%), red (<50%)
+
+### VERIFY PART 3:
+
+- [ ] `/api/performance-context` returns a formatted text block with win rates by asset/direction/trade type
+- [ ] Performance context appears in AI prompts (check server logs for the injected text)
+- [ ] `adaptive_thresholds` table exists and is populated after 1 hour
+- [ ] A token with <40% win rate gets suppressed in the Quant Scanner
+- [ ] A token with >75% win rate gets a lower threshold (more signals allowed)
+- [ ] Admin panel at `/admin/thresholds` shows all thresholds (owner only)
+- [ ] Manual override freezes auto-tuning for that token
+- [ ] Reset button restores baseline threshold
+
+-----
+
+## PART 4 — RESPONSIVE DESIGN FIX (Mobile / Tablet / Desktop)
+
+### 4A. Desktop Icons Missing
+
+The navigation icons disappear on PC/Mac. This is likely a media query or viewport issue.
+
+1. Find the sidebar/navigation component in `App.jsx` (the left sidebar with icons for each tab)
+1. Check for any CSS/style that hides the sidebar on large screens. Look for:
+- `display: none` conditions based on width
+- Media queries or `window.innerWidth` checks that incorrectly hide nav on desktop
+- Icon font imports that might fail on certain browsers
+1. The sidebar should be visible on ALL screen sizes:
+- **Mobile** (<768px): Bottom tab bar (horizontal, icons only)
+- **Tablet** (768-1024px): Left sidebar, collapsed (icons only, no labels)
+- **Desktop** (>1024px): Left sidebar, expanded (icons + labels)
+1. Ensure the icon components (likely emoji or SVG) render on all platforms. If using custom icon fonts, verify they’re loaded. If using emoji, they should work everywhere.
+
+### 4B. Global Responsive Breakpoints
+
+Add these breakpoint constants and use them throughout:
+
+```javascript
+// client/src/constants/breakpoints.js (or inline in components)
+const BREAKPOINTS = {
+  mobile: 768,    // < 768px
+  tablet: 1024,   // 768-1024px
+  desktop: 1025,  // > 1024px
+};
+```
+
+Create a responsive hook:
+
+```javascript
+function useBreakpoint() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const handle = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', handle);
+    return () => window.removeEventListener('resize', handle);
+  }, []);
+  return {
+    isMobile: width < 768,
+    isTablet: width >= 768 && width <= 1024,
+    isDesktop: width > 1024,
+    width,
+  };
+}
+```
+
+### 4C. Key Responsive Rules for Every Component
+
+**Cards (Trade Ideas, Signals, etc.):**
+
+- Mobile: 1 column, full width, 12px padding
+- Tablet: 2 columns, 8px gap
+- Desktop: 2-3 columns, 12px gap
+
+**Font sizes:**
+
+- Mobile: body 14px, headers 18px, data 12px
+- Desktop: body 16px, headers 22px, data 14px
+
+**Touch targets (mobile):**
+
+- All buttons minimum 44px height (Apple HIG standard)
+- Chip selectors minimum 36px height
+- Adequate spacing between tappable elements (minimum 8px gap)
+
+**Navigation:**
+
+- Mobile: bottom tab bar, 56px height, icons centered, active tab highlighted gold
+- Tablet: left sidebar 60px wide, icons only
+- Desktop: left sidebar 200px wide, icons + labels
+
+**Tables/data grids:**
+
+- Mobile: stack vertically or horizontal scroll
+- Desktop: full width table
+
+**Price ticker bar (top):**
+
+- Mobile: horizontal scroll, show 4-5 assets
+- Desktop: show all 8 assets
+
+### 4D. Specific Components to Fix
+
+Go through EVERY tab and component and verify it renders correctly at:
+
+- 375px (iPhone SE)
+- 390px (iPhone 14)
+- 430px (iPhone 14 Pro Max)
+- 768px (iPad Mini)
+- 1024px (iPad Pro)
+- 1440px (Standard desktop)
+- 1920px (Full HD desktop)
+
+-----
+
+## PART 5 — QUANT SCANNER WRONG ASSETS FIX
+
+The user selects specific assets (e.g., FET, CL, NIKKEI) but the scan returns different assets (e.g., NVDA). This is critical.
+
+### Fix:
+
+1. Find the `runQuantScan()` function in `AITab.jsx` (or the new `QuantScanner.jsx`)
+1. Trace how `selectedAssets` is collected and passed to `/api/quant`
+1. The `/api/quant` endpoint receives `ticker` as a parameter — verify that ONLY the user’s selected tickers are sent
+1. In the system prompt for the Quant Engine, add this rule at the very top:
+
+```
+ASSET CONSTRAINT (NON-NEGOTIABLE): You are analyzing ONLY the ticker "{TICKER}". Do NOT substitute, recommend, or analyze any other asset. Your entire output must be about {TICKER} and nothing else. If you cannot generate a signal for {TICKER}, output signal: "NEUTRAL" with a reason — do NOT switch to a different asset.
+```
+
+1. Add a server-side validation after the AI response:
+
+```typescript
+// After parsing AI response in /api/quant:
+if (result.token && result.token !== ticker && result.asset && !result.asset.includes(ticker)) {
+  console.warn(`[Quant] AI returned wrong asset: expected ${ticker}, got ${result.token || result.asset}`);
+  // Force correct the token
+  result.token = ticker;
+}
+```
+
+-----
+
+## PART 6 — MARKET SUMMARY TRADE IDEAS TIER GATING
+
+The Morning Brief / Market Summary currently shows trade ideas. Update the tier gating:
+
+|Tier |Trade Ideas in Market Summary|
+|-----|-----------------------------|
+|Free |0 — show upgrade prompt      |
+|Pro  |1 trade idea                 |
+|Elite|4 trade ideas                |
+
+### Fix:
+
+1. Find the Morning Brief generator (`generateBrief()` in App.jsx)
+1. Adjust the system prompt to accept a `{TRADE_COUNT}` variable:
+
+```typescript
+const tradeCount = isElite ? 4 : isPro ? 1 : 0;
+```
+
+1. If `tradeCount === 0` (free user), skip the trade ideas section of the brief entirely. Show:
+
+```
+┌──────────────────────────────────────┐
+│  🔒 Trade Ideas — Pro Feature        │
+│  Upgrade to see today's top trade.   │
+│  [Upgrade to Pro — $19/mo]           │
+└──────────────────────────────────────┘
+```
+
+1. In the Morning Brief system prompt, change:
+
+```
+Return EXACTLY {TRADE_COUNT} trade ideas in the topTrade and additionalTrades fields.
+If TRADE_COUNT is 1, return only topTrade (no additionalTrades array).
+If TRADE_COUNT is 4, return topTrade + 3 additionalTrades.
+If TRADE_COUNT is 0, omit topTrade and additionalTrades entirely.
+```
+
+1. In the brief display component, gate the rendering:
+
+```javascript
+{tradeCount === 0 && <UpgradePrompt feature="Trade Ideas" />}
+{tradeCount >= 1 && briefData.topTrade && <TradeIdeaCard trade={briefData.topTrade} />}
+{tradeCount >= 4 && briefData.additionalTrades?.map(t => <TradeIdeaCard key={t.asset} trade={t} />)}
+```
+
+-----
+
+## IMPLEMENTATION ORDER
+
+1. Part 1 — Fix Track Record in production (database, workers, auth)
+1. Part 2A — Create `ai_signal_log` table
+1. Part 2B — Add logging hooks to Trade Ideas, Quant Scanner, Signals, Basket
+1. Part 2C — Build and start Outcome Resolver worker
+1. Part 2D — Update Track Record API to include ai_signal_log data
+1. Part 3A — Build performance context generator and inject into AI prompts
+1. Part 3B — Build adaptive thresholds table and recalculation job
+1. Part 3C — Build admin panel (owner only)
+1. Part 4 — Fix responsive design (desktop icons, breakpoints, all components)
+1. Part 5 — Fix Quant Scanner wrong assets
+1. Part 6 — Market Summary tier gating (0/1/4 trade ideas)
+1. Deploy to Railway and verify everything works in production
+
+-----
+
+## FINAL VERIFICATION CHECKLIST
+
+- [ ] Track Record loads on clvrquantai.com (production) with real data
+- [ ] Track Record is accessible to ALL users (free users see aggregate stats, Pro sees details)
+- [ ] Signal worker generates and resolves signals in production
+- [ ] Trade Ideas, Quant Scan, Signals, and Basket all log to ai_signal_log
+- [ ] Outcome resolver correctly resolves TP1/TP2/TP3/SL hits and kill clock expiry
+- [ ] AI prompts include historical performance context
+- [ ] Adaptive thresholds auto-adjust hourly based on outcomes
+- [ ] Low win-rate combos get higher thresholds or suppressed
+- [ ] High win-rate combos get lower thresholds (more signals)
+- [ ] Admin panel shows all thresholds (owner only)
+- [ ] Manual override freezes auto-tuning
+- [ ] Desktop: all icons and navigation visible
+- [ ] Mobile (375px-430px): bottom nav, single column cards, touch-friendly
+- [ ] Tablet (768px-1024px): sidebar + 2-column layout
+- [ ] Desktop (1024px+): full sidebar + 2-3 column layout
+- [ ] Quant Scanner: ONLY selected assets appear in results (no substitution)
+- [ ] Market Summary: Free=0, Pro=1, Elite=4 trade ideas
+- [ ] No 429 rate limit errors
+- [ ] No “malformed data” errors
+- [ ] All existing features still work (signals, alerts, squawk, etc.)
+
+## WHAT NOT TO DO
+
+❌ Do NOT add a watchlist (permanently removed)
+❌ Do NOT modify vite.config.ts or server/vite.ts
+❌ Do NOT change the pricing structure ($19 Pro / $49 Elite)
+❌ Do NOT install unnecessary npm packages
+❌ Do NOT change the design system (navy/gold, Playfair/IBM Plex Mono/Barlow)
+❌ Do NOT break existing features while adding new ones
+❌ Do NOT skip database migrations on Railway
