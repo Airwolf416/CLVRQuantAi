@@ -136,20 +136,42 @@ export async function initializeDatabase(): Promise<void> {
     // ── signal_history ───────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS signal_history (
-        id          SERIAL PRIMARY KEY,
-        signal_id   INTEGER NOT NULL,
-        token       TEXT NOT NULL,
-        direction   TEXT NOT NULL,
-        entry       TEXT,
-        tp1         TEXT,
-        sl          TEXT,
-        confidence  INTEGER,
-        outcome     TEXT NOT NULL DEFAULT 'PENDING',
-        pnl_pct     TEXT,
-        ts          TIMESTAMP NOT NULL DEFAULT NOW(),
-        resolved_at TIMESTAMP
+        id              SERIAL PRIMARY KEY,
+        signal_id       INTEGER NOT NULL,
+        token           TEXT NOT NULL,
+        direction       TEXT NOT NULL,
+        conf            INTEGER NOT NULL DEFAULT 0,
+        advanced_score  INTEGER DEFAULT 0,
+        entry           TEXT NOT NULL,
+        tp1             TEXT,
+        stop_loss       TEXT,
+        leverage        TEXT,
+        pct_move        TEXT,
+        tp1_pct         TEXT,
+        stop_pct        TEXT,
+        reasoning       TEXT[],
+        score_breakdown TEXT,
+        is_strong_signal BOOLEAN DEFAULT FALSE,
+        outcome         TEXT DEFAULT 'PENDING',
+        pnl_pct         TEXT,
+        ts              TIMESTAMP NOT NULL DEFAULT NOW(),
+        created_at      TIMESTAMP DEFAULT NOW(),
+        updated_at      TIMESTAMP DEFAULT NOW()
       )
     `);
+    // Migrate old signal_history tables that may be missing columns
+    const sigCols = ['conf', 'advanced_score', 'stop_loss', 'leverage', 'pct_move',
+      'tp1_pct', 'stop_pct', 'reasoning', 'score_breakdown', 'is_strong_signal',
+      'created_at', 'updated_at'];
+    for (const col of sigCols) {
+      const colType = col === 'conf' ? 'INTEGER DEFAULT 0'
+        : col === 'advanced_score' ? 'INTEGER DEFAULT 0'
+        : col === 'is_strong_signal' ? 'BOOLEAN DEFAULT FALSE'
+        : col === 'reasoning' ? 'TEXT[]'
+        : col === 'created_at' || col === 'updated_at' ? 'TIMESTAMP DEFAULT NOW()'
+        : 'TEXT';
+      await client.query(`ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS ${col} ${colType}`).catch(() => {});
+    }
 
     // ── trade_journal ─────────────────────────────────────────────────────────
     await client.query(`
@@ -168,6 +190,18 @@ export async function initializeDatabase(): Promise<void> {
         pnl_pct     TEXT,
         created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
         closed_at   TIMESTAMP
+      )
+    `);
+
+    // ── watchlist_items ────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS watchlist_items (
+        id          SERIAL PRIMARY KEY,
+        user_id     TEXT NOT NULL,
+        symbol      TEXT NOT NULL,
+        asset_class TEXT NOT NULL DEFAULT 'crypto',
+        note        TEXT,
+        created_at  TIMESTAMP DEFAULT NOW()
       )
     `);
 
