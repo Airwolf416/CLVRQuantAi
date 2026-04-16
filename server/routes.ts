@@ -3204,7 +3204,7 @@ ${suppression.flagsForAI.map((f, i) => `${i + 9}. ${f}`).join("\n")}` : ""}
 
 DIRECTION CONSISTENCY CHECK: If 3+ edge factors are bullish (bull cross, bullish divergence, price above key MA), the signal direction MUST be LONG. If 3+ edge factors are bearish, the direction MUST be SHORT. Never output a SHORT signal with majority bullish factors or vice versa. If factors conflict (mixed bull/bear), set signal to NEUTRAL.
 
-ASSET CONSTRAINT: You are analyzing ONLY the asset "${ticker}". Do NOT substitute, reference, or generate signals for any other asset. Every price level must correspond to ${ticker}.
+ASSET CONSTRAINT (NON-NEGOTIABLE): You are analyzing ONLY the ticker "${ticker}". Do NOT substitute, recommend, or analyze any other asset. Your entire output must be about ${ticker} and nothing else. If you cannot generate a signal for ${ticker}, output signal: "NEUTRAL" with a reason — do NOT switch to a different asset. Every price level must correspond to ${ticker}.
 
 OUTPUT LENGTH RULES — STRICTLY ENFORCED:
 - quant_rationale: MAX 2 sentences. State the setup and the catalyst. Nothing else.
@@ -3306,6 +3306,17 @@ Every level must be technically defensible. Return JSON only.`;
         console.error("[/api/quant parse]", rawText.slice(0,500));
         return res.status(500).json({ error: "AI returned malformed data — please retry." });
       }
+
+      // ── Asset constraint validation: force-correct token if AI substituted ──
+      if (parsed.token && parsed.token !== ticker) {
+        console.warn(`[Quant] AI returned wrong token: expected ${ticker}, got ${parsed.token} — overriding`);
+      }
+      if (parsed.asset && typeof parsed.asset === "string" && !parsed.asset.toUpperCase().includes(ticker.toUpperCase())) {
+        console.warn(`[Quant] AI returned wrong asset: expected ${ticker}, got ${parsed.asset} — overriding`);
+      }
+      parsed.token = ticker;
+      parsed.asset = ticker;
+
       parsed.indicators        = ind;
       parsed.multi_tf          = confluence;
       parsed.bayesian          = bayesian;
