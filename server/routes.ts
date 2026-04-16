@@ -1481,7 +1481,13 @@ export async function registerRoutes(
     } catch { /* */ }
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
     const offset = parseInt(req.query.offset as string) || 0;
-    const records = await storage.getSignalHistory(limit, offset);
+    let records;
+    try {
+      records = await storage.getSignalHistory(limit, offset);
+    } catch (e: any) {
+      console.error("[signal-history] fetch failed:", e.message);
+      return res.json({ signals: [], isPaidUser, isDelayed: false });
+    }
     if (isPaidUser) {
       return res.json({ signals: records, isPaidUser: true, isDelayed: false });
     }
@@ -1529,7 +1535,13 @@ export async function registerRoutes(
         }
       } catch { /* */ }
     }
-    const stats = await storage.getSignalStats();
+    let stats;
+    try {
+      stats = await storage.getSignalStats();
+    } catch (e: any) {
+      console.error("[track-record] getSignalStats failed:", e.message);
+      stats = { total: 0, wins: 0, losses: 0, pending: 0, avgPnl: 0, weeklyData: [], byAsset: [], byDirection: [] };
+    }
     const winRate = (stats.wins + stats.losses) > 0
       ? Math.round(stats.wins / (stats.wins + stats.losses) * 100)
       : 0;
