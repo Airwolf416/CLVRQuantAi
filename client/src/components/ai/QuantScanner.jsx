@@ -122,8 +122,11 @@ export default function QuantScanner({ mode, isPro, isElite }) {
     setResults(collected);
   };
 
-  const qualifying = results.filter(r => r.result && r.result.signal !== "SUPPRESSED" && r.result.signal && r.result.entry?.price && (r.result.rr == null || r.result.rr >= 1.3))
+  const hasValidSignal = (r) => r.result && r.result.signal !== "SUPPRESSED" && r.result.signal && r.result.entry?.price;
+  const qualifying = results.filter(r => hasValidSignal(r) && (r.result.rr == null || r.result.rr >= 1.3))
     .sort((a, b) => (b.result.win_probability || 0) - (a.result.win_probability || 0));
+  const belowThreshold = results.filter(r => hasValidSignal(r) && r.result.rr != null && r.result.rr < 1.3)
+    .sort((a, b) => (b.result.rr || 0) - (a.result.rr || 0));
   const suppressed = results.filter(r => r.result && r.result.signal === "SUPPRESSED");
   const errors = results.filter(r => r.error);
   const hasDone = results.length > 0 && !scanning;
@@ -241,9 +244,22 @@ export default function QuantScanner({ mode, isPro, isElite }) {
 
       {qualifying.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {qualifying.slice(0, 3).map((r, i) => (
+          {qualifying.map((r, i) => (
             <SignalCard key={r.ticker} ticker={r.ticker} result={r.result} rank={i} mode={mode} />
           ))}
+        </div>
+      )}
+
+      {belowThreshold.length > 0 && hasDone && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 8, color: "#f59e0b", fontFamily: MONO, letterSpacing: "0.08em", marginBottom: 6 }}>
+            ⚠ BELOW R:R 1.3 THRESHOLD — {belowThreshold.length} setup{belowThreshold.length !== 1 ? "s" : ""} (shown for transparency)
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, opacity: 0.85 }}>
+            {belowThreshold.map((r, i) => (
+              <SignalCard key={r.ticker} ticker={r.ticker} result={r.result} rank={qualifying.length + i} mode={mode} />
+            ))}
+          </div>
         </div>
       )}
 
@@ -254,7 +270,7 @@ export default function QuantScanner({ mode, isPro, isElite }) {
         </div>
       )}
 
-      {hasDone && qualifying.length === 0 && suppressed.length === 0 && (
+      {hasDone && qualifying.length === 0 && belowThreshold.length === 0 && suppressed.length === 0 && (
         <div style={{ textAlign: "center", padding: "32px 16px", background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10 }}>
           <div style={{ fontSize: 28, marginBottom: 8 }}>⛔</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", fontFamily: MONO }}>NO SETUPS FOUND</div>
