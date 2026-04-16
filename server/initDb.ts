@@ -173,6 +173,40 @@ export async function initializeDatabase(): Promise<void> {
       await client.query(`ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS ${col} ${colType}`).catch(() => {});
     }
 
+    // ── ai_signal_log (unified log for Trade Ideas / Quant / Signals / Basket) ─
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_signal_log (
+        id                 SERIAL PRIMARY KEY,
+        source             VARCHAR(30) NOT NULL,
+        token              VARCHAR(20) NOT NULL,
+        direction          VARCHAR(10) NOT NULL,
+        trade_type         VARCHAR(20),
+        entry_price        DECIMAL(20,8) NOT NULL,
+        tp1_price          DECIMAL(20,8),
+        tp2_price          DECIMAL(20,8),
+        tp3_price          DECIMAL(20,8),
+        stop_loss          DECIMAL(20,8),
+        leverage           VARCHAR(10),
+        conviction         INTEGER,
+        edge_score         VARCHAR(10),
+        edge_source        VARCHAR(20),
+        kronos             BOOLEAN DEFAULT FALSE,
+        kill_clock_hours   INTEGER,
+        kill_clock_expires TIMESTAMP,
+        outcome            VARCHAR(20) DEFAULT 'PENDING',
+        pnl_pct            DECIMAL(10,4),
+        resolved_at        TIMESTAMP,
+        thesis             TEXT,
+        invalidation       TEXT,
+        scores             JSONB,
+        created_at         TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_outcome ON ai_signal_log (outcome)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_source ON ai_signal_log (source)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_created ON ai_signal_log (created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_pending_expires ON ai_signal_log (outcome, kill_clock_expires) WHERE outcome = 'PENDING'`);
+
     // ── trade_journal ─────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS trade_journal (

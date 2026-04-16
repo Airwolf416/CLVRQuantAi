@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, serial, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, serial, integer, decimal, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -140,6 +140,37 @@ export const signalHistory = pgTable("signal_history", {
 });
 
 export type SignalHistoryRecord = typeof signalHistory.$inferSelect;
+
+// ── AI Signal Log (unified log for Trade Ideas / Quant / Signals / Basket) ──
+export const aiSignalLog = pgTable("ai_signal_log", {
+  id: serial("id").primaryKey(),
+  source: varchar("source", { length: 30 }).notNull(),          // 'trade_ideas' | 'quant_scanner' | 'signals_tab' | 'basket'
+  token: varchar("token", { length: 20 }).notNull(),
+  direction: varchar("direction", { length: 10 }).notNull(),    // 'LONG' | 'SHORT'
+  tradeType: varchar("trade_type", { length: 20 }),             // 'SCALP' | 'DAY_TRADE' | 'SWING' | 'POSITION'
+  entryPrice: decimal("entry_price", { precision: 20, scale: 8 }).notNull(),
+  tp1Price: decimal("tp1_price", { precision: 20, scale: 8 }),
+  tp2Price: decimal("tp2_price", { precision: 20, scale: 8 }),
+  tp3Price: decimal("tp3_price", { precision: 20, scale: 8 }),
+  stopLoss: decimal("stop_loss", { precision: 20, scale: 8 }),
+  leverage: varchar("leverage", { length: 10 }),
+  conviction: integer("conviction"),                             // 0-100
+  edgeScore: varchar("edge_score", { length: 10 }),              // '68%'
+  edgeSource: varchar("edge_source", { length: 20 }),            // 'OI-verified' | 'estimated' | 'no OI'
+  kronos: boolean("kronos").default(false),
+  killClockHours: integer("kill_clock_hours"),
+  killClockExpires: timestamp("kill_clock_expires"),
+  outcome: varchar("outcome", { length: 20 }).default("PENDING"),// 'PENDING' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED_WIN' | 'EXPIRED_LOSS'
+  pnlPct: decimal("pnl_pct", { precision: 10, scale: 4 }),
+  resolvedAt: timestamp("resolved_at"),
+  thesis: text("thesis"),
+  invalidation: text("invalidation"),
+  scores: jsonb("scores"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type AiSignalLogRecord = typeof aiSignalLog.$inferSelect;
+export type InsertAiSignalLog = typeof aiSignalLog.$inferInsert;
 
 // ── Watchlist Items (Pro+) ────────────────────────────────────────────────────
 export const watchlistItems = pgTable("watchlist_items", {

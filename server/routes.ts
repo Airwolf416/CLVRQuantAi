@@ -3,7 +3,8 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { pool, db } from "./db";
-import { signalHistory } from "@shared/schema";
+import { signalHistory, aiSignalLog } from "@shared/schema";
+import { logSignal } from "./lib/signalLogger";
 import { eq, and, lte, gt, desc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
@@ -935,6 +936,20 @@ function detectMoves() {
       ts: new Date(signal.ts),
     }).catch(e => console.error("[signal-db] persist failed:", e));
 
+    // Also log to unified ai_signal_log (non-blocking)
+    logSignal({
+      source: "signals_tab",
+      token: signal.token,
+      direction: signal.dir === "LONG" || signal.dir === "SHORT" ? signal.dir : (signal.dir?.includes("LONG") ? "LONG" : "SHORT"),
+      entryPrice: signal.entry,
+      tp1Price: signal.tp1 ?? null,
+      stopLoss: signal.stopLoss ?? null,
+      leverage: signal.lev ? String(signal.lev) : null,
+      conviction: signal.advancedScore || signal.conf || null,
+      killClockHours: 24,
+      scores: signal.scoreBreakdown || null,
+    }).catch(() => {});
+
     // ── BROADCAST PUSH NOTIFICATION FOR STRONG SIGNALS (score ≥ 80) ─────────
     if (advanced.isStrong) {
       broadcastSignalPushParallel(signal).catch(() => {});
@@ -1542,14 +1557,58 @@ export async function registerRoutes(
       console.error("[track-record] getSignalStats failed:", e.message);
       stats = { total: 0, wins: 0, losses: 0, pending: 0, avgPnl: 0, weeklyData: [], byAsset: [], byDirection: [] };
     }
-    const winRate = (stats.wins + stats.losses) > 0
-      ? Math.round(stats.wins / (stats.wins + stats.losses) * 100)
+
+    // Merge in stats from ai_signal_log (Trade Ideas + Quant Scanner + Basket)
+    let ai = { total: 0, wins: 0, losses: 0, pending: 0, pnlSum: 0, pnlCount: 0, bySource: {} as Record<string, { wins: number; losses: number; total: number }> };
+    try {
+      const rows = await db.select({
+        source: aiSignalLog.source,
+        outcome: aiSignalLog.outcome,
+        pnlPct: aiSignalLog.pnlPct,
+      }).from(aiSignalLog);
+      for (const r of rows) {
+        ai.total++;
+        const o = r.outcome || "PENDING";
+        const isWin  = o === "TP1_HIT" || o === "TP2_HIT" || o === "TP3_HIT" || o === "EXPIRED_WIN";
+        const isLoss = o === "SL_HIT" || o === "EXPIRED_LOSS";
+        if (isWin) ai.wins++;
+        else if (isLoss) ai.losses++;
+        else ai.pending++;
+        const pnl = r.pnlPct != null ? parseFloat(r.pnlPct) : NaN;
+        if (Number.isFinite(pnl) && (isWin || isLoss)) { ai.pnlSum += pnl; ai.pnlCount++; }
+        const src = r.source || "unknown";
+        if (!ai.bySource[src]) ai.bySource[src] = { wins: 0, losses: 0, total: 0 };
+        ai.bySource[src].total++;
+        if (isWin)  ai.bySource[src].wins++;
+        if (isLoss) ai.bySource[src].losses++;
+      }
+    } catch (e: any) {
+      console.error("[track-record] ai_signal_log aggregate failed:", e?.message);
+    }
+
+    const totalAll   = stats.total  + ai.total;
+    const winsAll    = stats.wins   + ai.wins;
+    const lossesAll  = stats.losses + ai.losses;
+    const pendingAll = stats.pending + ai.pending;
+    const resolvedAll = winsAll + lossesAll;
+    const winRate = resolvedAll > 0 ? Math.round((winsAll / resolvedAll) * 100) : 0;
+    const legacyResolved = stats.wins + stats.losses;
+    const legacyPnlSum = stats.avgPnl * legacyResolved;
+    const avgPnlAll = (legacyResolved + ai.pnlCount) > 0
+      ? (legacyPnlSum + ai.pnlSum) / (legacyResolved + ai.pnlCount)
       : 0;
-    const publicData = {
-      winRate, total: stats.total, wins: stats.wins, losses: stats.losses,
-      pending: stats.pending, avgPnl: stats.avgPnl,
-      weeklyData: stats.weeklyData, lastUpdated: new Date().toISOString(),
+
+    const publicData: any = {
+      winRate,
+      total: totalAll,
+      wins: winsAll,
+      losses: lossesAll,
+      pending: pendingAll,
+      avgPnl: avgPnlAll,
+      weeklyData: stats.weeklyData,
+      lastUpdated: new Date().toISOString(),
       isPaidUser,
+      sources: ai.bySource,
     };
     if (isPaidUser) {
       return res.json({ ...publicData, byAsset: stats.byAsset, byDirection: stats.byDirection });
@@ -3307,10 +3366,77 @@ Every level must be technically defensible. Return JSON only.`;
         const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);
         parsed.rr = rAmt > 0.000001 ? rwAmt / rAmt : 0;
       }
+      // ── Log to ai_signal_log (non-blocking) ──────────────────────────────
+      if (parsed.signal && (parsed.signal.includes("LONG") || parsed.signal.includes("SHORT")) && parsed.entry?.price) {
+        const killHours = tf.id === "scalp" ? 4 : tf.id === "day" ? 24 : tf.id === "swing" ? 72 : 168;
+        logSignal({
+          source: "quant_scanner",
+          token: ticker,
+          direction: parsed.signal.includes("LONG") ? "LONG" : "SHORT",
+          tradeType: tf.id || null,
+          entryPrice: parsed.entry.price,
+          tp1Price: parsed.tp1?.price ?? null,
+          tp2Price: parsed.tp2?.price ?? null,
+          tp3Price: parsed.tp3?.price ?? null,
+          stopLoss: parsed.stopLoss?.price ?? null,
+          leverage: parsed.leverage ? String(parsed.leverage) : null,
+          conviction: typeof parsed.conviction === "number" ? parsed.conviction : (bayesian?.score ?? null),
+          edgeScore: parsed.edge || null,
+          edgeSource: parsed.edge_source || null,
+          kronos: !!parsed.kronos,
+          killClockHours: killHours,
+          thesis: parsed.thesis || null,
+          invalidation: parsed.invalidation || null,
+          scores: { bayesian: bayesian?.score, advanced: adjScore, confluence: confluence?.score },
+        }).catch(() => {});
+      }
       res.json(parsed);
     } catch (err: any) {
       console.error("[Quant Engine]", err);
       res.status(500).json({ error:"Internal server error in Quant Engine." });
+    }
+  });
+
+  // ── /api/ai/log-trades — called by client after Trade Ideas are parsed ──
+  app.post("/api/ai/log-trades", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      const trades = Array.isArray(req.body?.trades) ? req.body.trades : [];
+      if (!trades.length) return res.json({ logged: 0 });
+      let logged = 0;
+      for (const t of trades) {
+        const token = String(t.token || t.symbol || "").toUpperCase();
+        const dirRaw = String(t.direction || t.signal || "").toUpperCase();
+        const direction = dirRaw.includes("LONG") ? "LONG" : dirRaw.includes("SHORT") ? "SHORT" : null;
+        const entry = t.entryPrice ?? t.entry ?? t.entry_price;
+        if (!token || !direction || entry == null) continue;
+        const id = await logSignal({
+          source: "trade_ideas",
+          token,
+          direction,
+          tradeType: t.tradeType || t.trade_type || null,
+          entryPrice: entry,
+          tp1Price: t.tp1 ?? t.tp1Price ?? null,
+          tp2Price: t.tp2 ?? t.tp2Price ?? null,
+          tp3Price: t.tp3 ?? t.tp3Price ?? null,
+          stopLoss: t.stopLoss ?? t.sl ?? t.stop_loss ?? null,
+          leverage: t.leverage ? String(t.leverage) : null,
+          conviction: typeof t.conviction === "number" ? t.conviction : null,
+          edgeScore: t.edge || t.edgeScore || null,
+          edgeSource: t.edgeSource || t.edge_source || null,
+          kronos: !!t.kronos,
+          killClockHours: t.killClockHours ?? t.kill_clock_hours ?? 24,
+          thesis: t.thesis || null,
+          invalidation: t.invalidation || null,
+          scores: t.scores || null,
+        });
+        if (id) logged++;
+      }
+      res.json({ logged });
+    } catch (e: any) {
+      console.error("[log-trades]", e);
+      res.status(500).json({ error: "Failed to log trades" });
     }
   });
 
