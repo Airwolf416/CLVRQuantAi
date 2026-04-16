@@ -199,6 +199,7 @@ export default function QuantScanner({ mode, isPro, isElite }) {
         <select data-testid="select-scan-market" value={market} onChange={e => setMarket(e.target.value)} style={{ flex: 1, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
           <option value="PERP">PERP</option>
           <option value="SPOT">SPOT</option>
+          <option value="BOTH">BOTH</option>
         </select>
         <select data-testid="select-scan-risk" value={risk} onChange={e => setRisk(e.target.value)} style={{ flex: 1, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
           <option value="low">Conservative</option>

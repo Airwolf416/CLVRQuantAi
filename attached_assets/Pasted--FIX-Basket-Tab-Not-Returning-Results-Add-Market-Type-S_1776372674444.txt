@@ -1,0 +1,223 @@
+# FIX — Basket Tab Not Returning Results + Add Market Type Selector to AI Tab
+
+⚠️ BUG FIX ONLY. Do NOT create new tabs, pages, or unrelated features.
+
+-----
+
+## BUG 1: Basket Tab Returns No Results
+
+The Basket tab lets the user select 5 assets and a trading style, but after clicking “Analyze My Swing Basket” it shows “Let me run deeper price-level analysis before finalizing levels” and then never returns actual trade signals.
+
+### Diagnosis Steps (do these first, show me the results):
+
+1. Find the API call in `MyBasket.jsx` that fires when “Analyze My Basket” is clicked
+1. Check what endpoint it calls — is it `/api/ai/analyze` or a separate basket endpoint?
+1. Check the `max_tokens` value — if it’s too low for 5 assets, the response gets cut off mid-sentence (which is exactly what “Let me run deeper analysis” looks like — the AI started talking and got truncated)
+1. Check the system prompt for the basket — is it instructing the AI to return JSON or free text?
+1. Check the server logs (Railway) for any errors when the basket analyze button is pressed
+
+### Likely Fix:
+
+The AI is returning conversational text instead of structured signal data, and/or the response is being truncated.
+
+**Fix 1: Increase max_tokens for basket analysis:**
+
+```typescript
+// In the basket API call, increase max_tokens to handle 5 assets:
+maxTokens: 6144  // Needs to be high enough for 5 full signal outputs
+```
+
+**Fix 2: Force JSON output in the basket system prompt:**
+
+Find the basket system prompt and replace or append this instruction:
+
+```
+You MUST respond with ONLY valid JSON — no conversational text, no preamble, no "let me analyze", no markdown. Start your response with { and end with }.
+
+Return this exact JSON structure:
+{
+  "generated": "ISO-8601 timestamp",
+  "basket": [
+    {
+      "asset": "BTC",
+      "direction": "LONG",
+      "tradeType": "SWING",
+      "marketType": "PERP",
+      "entry": 75138,
+      "tp1": {"price": 76500, "pct": 50, "rr": "1.4:1"},
+      "tp2": {"price": 78000, "pct": 30, "rr": "2.1:1"},
+      "sl": 73500,
+      "leverage": "5x",
+      "conviction": 72,
+      "thesis": "Two sentences max.",
+      "invalidation": "One sentence.",
+      "killClock": "72H"
+    }
+  ]
+}
+
+Return one signal object per asset in the basket. If an asset has no valid setup, include it with "direction": "NEUTRAL" and explain why in the thesis field. NEVER skip an asset — the user selected it and expects analysis for ALL of them.
+```
+
+**Fix 3: Handle the response properly in the frontend:**
+
+In `MyBasket.jsx`, find where the API response is displayed. If it’s just dumping raw text, update it to parse JSON and render signal cards:
+
+```javascript
+// After receiving the API response:
+try {
+  const cleaned = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  const data = JSON.parse(cleaned);
+  // Render signal cards for each asset in data.basket
+} catch (e) {
+  // Fallback: display as formatted text if JSON parsing fails
+  // But log the error so we can debug
+  console.error('[Basket] Failed to parse JSON response:', e);
+  console.error('[Basket] Raw response:', responseText.substring(0, 500));
+}
+```
+
+**Fix 4: Ensure market data is actually being passed to the AI:**
+
+The basket prompt needs live price data for the selected assets. Verify that the API call includes:
+
+- Current prices for all 5 selected assets (from DataBus/Hyperliquid/Finnhub)
+- Funding rates and OI for crypto assets (from Hyperliquid)
+- The user’s selected trading style (Scalp/Day/Swing) mapped to the correct timeframe
+
+If the market data snapshot is empty or missing, the AI has nothing to analyze — which could cause it to stall with “let me analyze” instead of giving concrete levels.
+
+-----
+
+## BUG 2: AI Tab Needs PERP / SPOT / BOTH Market Type Selector
+
+The AI tab Trade Ideas section currently has no way for the user to choose between PERP, SPOT, or BOTH. Add this selector.
+
+### UI Change:
+
+Add a market type selector row between the timeframe pills (Today/Mid/Long) and the “Generate” button:
+
+```
+Trade Ideas
+AI-GENERATED · 6 SIGNALS · INTRADAY
+
+[Today] [Mid] [Long]          ← existing timeframe pills
+
+[PERP] [SPOT] [BOTH]          ← NEW market type pills (add this row)
+
+[🔄 Generate Top 6 Trade Ideas ✦]
+```
+
+### Design:
+
+- Same pill/chip style as the timeframe selector
+- Default: `BOTH` (selected, gold border)
+- `PERP` and `SPOT` are unselected (dark background, subtle border)
+- Only one can be selected at a time
+
+### Wiring:
+
+1. Add state in the AI tab component:
+
+```javascript
+const [marketTypeFilter, setMarketTypeFilter] = useState('BOTH'); // 'PERP' | 'SPOT' | 'BOTH'
+```
+
+1. Pass this to the Trade Ideas system prompt. In the user message or system prompt, add:
+
+```
+MARKET TYPE FILTER: {marketTypeFilter}
+- If PERP: Only recommend perpetual futures / leveraged trades. Use Hyperliquid perp data (Section A) as primary. Include leverage suggestions.
+- If SPOT: Only recommend spot / cash trades. No leverage. Use Section B (HL spot) and Section C (CoinGecko/Finnhub). Entry/TP/SL in cash terms.
+- If BOTH: Mix of perp and spot opportunities. For each trade, specify marketType as "PERP" or "SPOT" in the JSON output. Diversify across both.
+
+For SPOT trades:
+- Set leverage to "1x" (no leverage)
+- Thesis should reference spot-specific factors (accumulation zones, DCA levels, portfolio allocation)
+- SL can be wider (spot holders have more patience)
+- Kill clock can be longer (spot = hold)
+
+For PERP trades:
+- Include leverage suggestion (respect asset class caps)
+- Thesis should reference funding rate, OI, liquidation levels
+- SL must be tight (leveraged = less room for error)
+```
+
+1. Update the Trade Ideas JSON schema to include `marketType` in each trade:
+
+```json
+{
+  "rank": 1,
+  "asset": "BTC/USDT",
+  "direction": "LONG",
+  "tradeType": "DAY TRADE",
+  "marketType": "PERP",   // ← make sure this is included
+  ...
+}
+```
+
+1. In the TradeIdeaCard, display the market type as a small badge:
+
+```
+[PERP] or [SPOT] badge next to the direction badge
+```
+
+- PERP badge: cyan background, dark text
+- SPOT badge: purple/magenta background, dark text
+
+### Also apply to the Quant Scanner:
+
+The Quant Scanner already has a PERP/SPOT toggle (from Step 3 in the old UI). Make sure it still works and also add a “BOTH” option:
+
+```
+[PERP] [SPOT] [BOTH]    ← in the scan settings row
+```
+
+When BOTH is selected, the scanner should:
+
+- Scan crypto assets for both PERP and SPOT setups
+- Non-crypto assets (equities, commodities, FX) always use SPOT
+- Return the market type in each signal result
+
+-----
+
+## BUG 3: Basket Tab Should Also Have PERP / SPOT / BOTH Selector
+
+The Basket tab should let users choose their market type too:
+
+Add below the Trading Style selector:
+
+```
+TRADING STYLE
+[Scalp] [Day] [Swing]
+
+MARKET TYPE                    ← NEW
+[PERP] [SPOT] [BOTH]          ← NEW
+
+[Analyze My Swing Basket (5 assets) ✦]
+```
+
+Pass the selected market type into the basket analysis prompt so the AI knows whether to suggest leveraged perp trades or spot accumulation plays.
+
+-----
+
+## VERIFICATION
+
+- [ ] Basket tab: clicking “Analyze” returns actual signal cards with Entry/TP/SL for ALL 5 selected assets
+- [ ] Basket tab: no “let me analyze” conversational text — only structured signal output
+- [ ] Basket tab: PERP/SPOT/BOTH selector is visible and functional
+- [ ] AI tab Trade Ideas: PERP/SPOT/BOTH pills appear between timeframe and generate button
+- [ ] AI tab Trade Ideas: selecting PERP returns only leveraged perp trades with leverage suggestions
+- [ ] AI tab Trade Ideas: selecting SPOT returns only cash/spot trades with leverage “1x”
+- [ ] AI tab Trade Ideas: selecting BOTH returns a mix with marketType labeled on each card
+- [ ] Quant Scanner: PERP/SPOT/BOTH selector works
+- [ ] Each trade card shows a [PERP] or [SPOT] badge
+- [ ] No truncated responses or “malformed data” errors
+
+## WHAT NOT TO DO
+
+❌ Do NOT create new database tables for this fix
+❌ Do NOT modify the navigation structure
+❌ Do NOT change the asset library
+❌ Do NOT touch the Track Record or adaptive learning system
+❌ Do NOT change the design theme

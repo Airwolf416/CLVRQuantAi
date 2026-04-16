@@ -18,6 +18,7 @@ export default function TopTradeIdeas({
   const [trades, setTrades] = useState(null);
   const [error, setError] = useState(null);
   const [timeframe, setTimeframe] = useState("today");
+  const [marketTypeFilter, setMarketTypeFilter] = useState("BOTH");
   const [preflight, setPreflight] = useState(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
 
@@ -61,7 +62,15 @@ export default function TopTradeIdeas({
 
       const tfLabel = timeframe === "midterm" ? "MID-TERM (1-4 week)" : timeframe === "longterm" ? "LONG-TERM (1-3 month)" : "INTRADAY/SWING";
 
+      const marketTypeRule = marketTypeFilter === "PERP"
+        ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged trades. Use Hyperliquid perp data (Section A) as primary. Include leverage suggestion on every trade (respect asset class caps). Tight SL. Thesis must reference funding rate, OI, or liquidation levels. Every trade MUST set "marketType":"PERP".`
+        : marketTypeFilter === "SPOT"
+        ? `MARKET TYPE FILTER: SPOT ONLY. Recommend ONLY spot / cash trades. NO leverage — set "leverage":"1x" on every trade. Use Section B (HL spot) and Section C (CoinGecko/Finnhub). Thesis should reference accumulation zones, DCA levels, or portfolio allocation. SL can be wider, kill clock can be longer. Every trade MUST set "marketType":"SPOT".`
+        : `MARKET TYPE FILTER: BOTH. Mix of PERP and SPOT opportunities — diversify across both. For each trade, label "marketType":"PERP" or "SPOT" explicitly. PERP trades: include leverage suggestion, tight SL, funding/OI rationale. SPOT trades: "leverage":"1x", wider SL acceptable, accumulation/DCA rationale.`;
+
       const sys = `You are CLVRQuantAI's Trade Idea Generator. Return exactly ${tradeCount} trade ideas as a JSON object. No markdown. No prose. Only valid JSON.
+
+${marketTypeRule}
 
 MANDATORY STEP 1 — MACRO PRE-FLIGHT CHECK:
 ${macroCtx || "No macro data available. Proceed with CAUTION flag."}
@@ -82,7 +91,7 @@ TODAY: ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeri
 ${snap.sections}
 
 RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
-{"generated":"ISO-DATE","regime":{"score":63,"label":"RISK-ON","bias":"Mean-Reversion"},"macroStatus":{"clear":true,"nextEvent":"Event name","notes":"..."},"volRegime":"HIGH","trades":[{"rank":1,"asset":"BTC/USDT","direction":"LONG","tradeType":"DAY TRADE","entry":65000,"sl":63500,"tp1":{"price":67000,"pct":50,"rr":"1.3:1"},"tp2":{"price":69000,"pct":30,"rr":"2.4:1"},"tp3":{"price":71000,"pct":20,"trailing":true},"leverage":"3x","killClock":"24H","conviction":72,"edge":"72%","edgeSource":"OI-verified","volRegime":"NORMAL","thesis":"Short thesis.","invalidation":"Break below $63.5K","flags":["flag1"],"scores":{"trend":75,"momentum":80,"structure":68,"oi":65,"volume":55,"macro":70},"postTp1":"SL to breakeven","kronos":false}]}`;
+{"generated":"ISO-DATE","regime":{"score":63,"label":"RISK-ON","bias":"Mean-Reversion"},"macroStatus":{"clear":true,"nextEvent":"Event name","notes":"..."},"volRegime":"HIGH","trades":[{"rank":1,"asset":"BTC/USDT","direction":"LONG","tradeType":"DAY TRADE","marketType":"PERP","entry":65000,"sl":63500,"tp1":{"price":67000,"pct":50,"rr":"1.3:1"},"tp2":{"price":69000,"pct":30,"rr":"2.4:1"},"tp3":{"price":71000,"pct":20,"trailing":true},"leverage":"3x","killClock":"24H","conviction":72,"edge":"72%","edgeSource":"OI-verified","volRegime":"NORMAL","thesis":"Short thesis.","invalidation":"Break below $63.5K","flags":["flag1"],"scores":{"trend":75,"momentum":80,"structure":68,"oi":65,"volume":55,"macro":70},"postTp1":"SL to breakeven","kronos":false}]}`;
 
       const userMsg = `Generate ${tfLabel} TOP ${tradeCount} TRADE IDEAS. Return ONLY valid JSON matching the structure. No markdown, no text. Use live prices.`;
 
@@ -190,6 +199,25 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           </div>
         )}
       </div>
+
+      {isPro && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO, letterSpacing: "0.1em", marginRight: 2 }}>MARKET:</span>
+          {["PERP", "SPOT", "BOTH"].map(m => {
+            const col = m === "PERP" ? "#00d4ff" : m === "SPOT" ? "#a855f7" : "#e8c96d";
+            const sel = marketTypeFilter === m;
+            return (
+              <button key={m} data-testid={`btn-market-${m}`} onClick={() => setMarketTypeFilter(m)} style={{
+                padding: "5px 12px", borderRadius: 6,
+                border: `1px solid ${sel ? col : "rgba(255,255,255,0.08)"}`,
+                background: sel ? `${col}15` : "transparent",
+                color: sel ? col : "rgba(255,255,255,0.4)",
+                fontFamily: MONO, fontSize: 9, cursor: "pointer", fontWeight: sel ? 700 : 400, letterSpacing: "0.06em",
+              }}>{m}</button>
+            );
+          })}
+        </div>
+      )}
 
       <MacroPreFlight data={preflight} loading={preflightLoading} />
 
