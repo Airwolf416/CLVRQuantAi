@@ -337,10 +337,24 @@ RULES:
         messages: [{ role: "user", content: prompt }],
       }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "(no body)");
+      console.log(`[daily-brief] Claude HTTP ${response.status}: ${errText.slice(0, 400)}`);
+      return null;
+    }
     const data: any = await response.json();
-    return data.content?.[0]?.text || "";
-  } catch {
+    if (data?.error) {
+      console.log(`[daily-brief] Claude API error:`, JSON.stringify(data.error).slice(0, 400));
+      return null;
+    }
+    const text = data.content?.[0]?.text || "";
+    if (!text.trim()) {
+      console.log("[daily-brief] Claude returned empty content");
+      return null;
+    }
+    return text;
+  } catch (e: any) {
+    console.log(`[daily-brief] generateBriefContent threw: ${e?.message || e}`);
     return null;
   }
 }
@@ -480,15 +494,47 @@ async function sendApologyBriefEmails() {
   console.log(`[daily-brief] Generating apology brief for ${today}...`);
 
   const marketData = await fetchMarketData();
-  const briefText = await generateBriefContent(marketData);
-  if (!briefText) { console.log("[daily-brief] Failed to generate brief content — NOT marking sent, retry allowed"); return; }
+  console.log(`[apology-brief] Market data fetched: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
 
-  let briefJson: any;
-  try {
-    const jsonMatch = briefText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON found");
-    briefJson = JSON.parse(jsonMatch[0]);
-  } catch (e) { console.log("[daily-brief] Failed to parse brief JSON:", e); return; }
+  const briefText = await generateBriefContent(marketData);
+  let briefJson: any = null;
+  let usedFallback = false;
+
+  if (briefText) {
+    try {
+      const jsonMatch = briefText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON object in Claude response");
+      briefJson = JSON.parse(jsonMatch[0]);
+      console.log("[apology-brief] Brief JSON parsed successfully");
+    } catch (e: any) {
+      console.log("[apology-brief] Failed to parse brief JSON — falling back:", e?.message || e);
+      briefJson = null;
+    }
+  } else {
+    console.log("[apology-brief] Claude generation returned null — using fallback brief");
+  }
+
+  // ── FALLBACK: if Claude failed, build a minimal brief from live market data only
+  //    so the apology email still goes out. This is what service-disruption does. ─
+  if (!briefJson) {
+    usedFallback = true;
+    briefJson = {
+      headline: "Market Brief — Live Prices (AI Analysis Unavailable)",
+      marketSentiment: "neutral",
+      macroRegime: "NEUTRAL",
+      macroRisk: "NORMAL",
+      macroRiskNote: "AI analysis temporarily unavailable — showing live prices only.",
+      commentary: [
+        { emoji: "⚡", title: "Service Note",
+          text: "Our AI analysis engine is temporarily unavailable. We're sending this brief with live market prices so you still receive today's update. Full 5-layer analysis will resume shortly." },
+      ],
+      topTrade: null,
+      additionalTrades: [],
+      watchItems: ["Live prices are included below. Full analysis resumes once the AI engine recovers."],
+      riskLevel: "medium",
+      riskNote: "Without AI analysis, apply extra caution. Do not trade on this brief alone.",
+    };
+  }
 
   // Apology note injected right after the header banner
   const apologyNote = `
