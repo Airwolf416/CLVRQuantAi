@@ -1711,7 +1711,7 @@ function useWindowSize(){
     window.addEventListener("resize",fn);
     return()=>window.removeEventListener("resize",fn);
   },[]);
-  return{w:size.w,isMobile:size.w<768,isTablet:size.w>=768&&size.w<1200,isDesktop:size.w>=1200};
+  return{w:size.w,isMobile:size.w<768,isTablet:size.w>=768&&size.w<=1024,isDesktop:size.w>1024};
 }
 
 // ─── SIDE NAV (tablet / desktop) ───────────────────────────
@@ -3934,27 +3934,52 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                 <div style={{fontSize:11,color:C.text,lineHeight:1.7}}>{briefData.keyRisk}</div>
               </div>
             </div>}
-            {briefData.topTrade&&<div style={{...panel,border:`1px solid rgba(201,168,76,.2)`}}>
-              <div style={{...ph,background:"rgba(201,168,76,.04)"}}><PTitle>{userTier==="pro"?"Trade Ideas (Pro — 4 Ideas)":"Today's Top Trade Idea"}</PTitle></div>
-              {[briefData.topTrade,...(userTier==="pro"&&Array.isArray(briefData.additionalTrades)?briefData.additionalTrades:[])].map((trade,idx)=>(
-                <div key={idx} style={{padding:"14px",borderBottom:idx<(userTier==="pro"?3:0)?`1px solid ${C.border}`:"none"}}>
-                  <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.18em",marginBottom:8,fontWeight:700}}>⚡ TRADE IDEA {idx+1}</div>
-                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:14,color:C.white,marginBottom:10,fontStyle:"italic"}}>{trade.riskLabel||"🟡"} {trade.asset||""} {trade.dir||""}</div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 16px",fontFamily:MONO,fontSize:10,color:C.text,lineHeight:2}}>
-                    <div>📍 Entry: <span style={{color:C.white}}>{trade.entry||"—"}</span></div>
-                    <div>🛑 Stop: <span style={{color:C.red}}>{trade.stop||"—"}</span></div>
-                    <div>🎯 TP1: <span style={{color:C.green}}>{trade.tp1||"—"}</span></div>
-                    <div>🎯 TP2: <span style={{color:C.green}}>{trade.tp2||"—"}</span></div>
-                    <div>📊 Confidence: <span style={{color:C.gold}}>{trade.confidence||"—"}</span></div>
-                    <div>⚠️ Flags: <span style={{color:C.muted}}>{trade.flags||"None"}</span></div>
+            {(() => {
+              const briefTradeCount = userTier === "elite" ? 4 : userTier === "pro" ? 1 : 0;
+              if (briefTradeCount === 0) {
+                return (
+                  <div style={{...panel,border:`1px solid rgba(201,168,76,.25)`,padding:"22px 18px",textAlign:"center"}}>
+                    <div style={{fontSize:24,marginBottom:8}}>🔒</div>
+                    <div style={{fontFamily:SERIF,fontWeight:700,fontSize:15,color:C.gold,marginBottom:6,fontStyle:"italic"}}>Trade Ideas — Pro Feature</div>
+                    <div style={{fontFamily:MONO,fontSize:10,color:C.muted,letterSpacing:"0.06em",marginBottom:14,lineHeight:1.6}}>
+                      Upgrade to see today's top trade ideas — entry, stops, targets, confidence, and edge.
+                    </div>
+                    <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowUpgrade && setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
+                      Upgrade to Pro — $29.99/mo
+                    </button>
                   </div>
-                  {trade.edge&&<div style={{marginTop:8,fontFamily:SERIF,fontStyle:"italic",fontSize:11,color:C.muted,lineHeight:1.6}}>💡 {trade.edge}</div>}
+                );
+              }
+              const trades = [
+                ...(briefData.topTrade ? [briefData.topTrade] : []),
+                ...(briefTradeCount >= 4 && Array.isArray(briefData.additionalTrades) ? briefData.additionalTrades.slice(0, 3) : []),
+              ];
+              if (trades.length === 0) return null;
+              const titleLabel = briefTradeCount === 1 ? "Today's Top Trade Idea" : `Trade Ideas (Elite — ${trades.length} Ideas)`;
+              return (
+                <div style={{...panel,border:`1px solid rgba(201,168,76,.2)`}}>
+                  <div style={{...ph,background:"rgba(201,168,76,.04)"}}><PTitle>{titleLabel}</PTitle></div>
+                  {trades.map((trade,idx)=>(
+                    <div key={idx} style={{padding:"14px",borderBottom:idx<trades.length-1?`1px solid ${C.border}`:"none"}}>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.18em",marginBottom:8,fontWeight:700}}>⚡ TRADE IDEA {idx+1}</div>
+                      <div style={{fontFamily:SERIF,fontWeight:700,fontSize:14,color:C.white,marginBottom:10,fontStyle:"italic"}}>{trade.riskLabel||"🟡"} {trade.asset||""} {trade.dir||""}</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 16px",fontFamily:MONO,fontSize:10,color:C.text,lineHeight:2}}>
+                        <div>📍 Entry: <span style={{color:C.white}}>{trade.entry||"—"}</span></div>
+                        <div>🛑 Stop: <span style={{color:C.red}}>{trade.stop||"—"}</span></div>
+                        <div>🎯 TP1: <span style={{color:C.green}}>{trade.tp1||"—"}</span></div>
+                        <div>🎯 TP2: <span style={{color:C.green}}>{trade.tp2||"—"}</span></div>
+                        <div>📊 Confidence: <span style={{color:C.gold}}>{trade.confidence||"—"}</span></div>
+                        <div>⚠️ Flags: <span style={{color:C.muted}}>{trade.flags||"None"}</span></div>
+                      </div>
+                      {trade.edge&&<div style={{marginTop:8,fontFamily:SERIF,fontStyle:"italic",fontSize:11,color:C.muted,lineHeight:1.6}}>💡 {trade.edge}</div>}
+                    </div>
+                  ))}
+                  {userTier === "pro" && <div style={{padding:"10px 14px",background:"rgba(201,168,76,.04)",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>
+                    🔒 <span style={{color:C.gold}}>Elite members get 4 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
+                  </div>}
                 </div>
-              ))}
-              {userTier!=="pro"&&<div style={{padding:"10px 14px",background:"rgba(201,168,76,.04)",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>
-                🔒 <span style={{color:C.gold}}>Pro members get 4 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
-              </div>}
-            </div>}
+              );
+            })()}
             <div style={panel}>
               <div style={{padding:"14px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:12,alignItems:"center"}}>
                 <div style={{width:36,height:36,border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
