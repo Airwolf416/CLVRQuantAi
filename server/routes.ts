@@ -3744,17 +3744,60 @@ Every level must be technically defensible. Return JSON only.`;
 
       const currentPrice = recent[recent.length - 1].c;
       const closes = recent.map((c: any) => c.c);
+      const highs = recent.map((c: any) => c.h);
+      const lows = recent.map((c: any) => c.l);
       const logReturns = closes.slice(1).map((c: number, i: number) => Math.log(c / closes[i]));
       const meanR = logReturns.reduce((a: number, b: number) => a + b, 0) / logReturns.length;
       const variance = logReturns.reduce((a: number, b: number) => a + Math.pow(b - meanR, 2), 0) / logReturns.length;
       const histVolAnnualized = Math.sqrt(variance * 252) * 100;
       const nextCandleRangePct = Math.sqrt(variance) * 100 * 2;
 
+      // ── RSI(14) ──
+      const rsiPeriod = Math.min(14, closes.length - 1);
+      let gains = 0, losses = 0;
+      for (let i = closes.length - rsiPeriod; i < closes.length; i++) {
+        const diff = closes[i] - closes[i - 1];
+        if (diff >= 0) gains += diff; else losses -= diff;
+      }
+      const avgGain = gains / rsiPeriod;
+      const avgLoss = losses / rsiPeriod;
+      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      const rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+      const rsiZone = rsi >= 70 ? "OVERBOUGHT" : rsi <= 30 ? "OVERSOLD" : rsi >= 55 ? "BULLISH" : rsi <= 45 ? "BEARISH" : "NEUTRAL";
+
+      // ── ATR(14) for SL/TP sizing ──
+      const atrPeriod = Math.min(14, recent.length - 1);
+      let atrSum = 0;
+      for (let i = recent.length - atrPeriod; i < recent.length; i++) {
+        const tr = Math.max(
+          highs[i] - lows[i],
+          Math.abs(highs[i] - closes[i - 1]),
+          Math.abs(lows[i] - closes[i - 1]),
+        );
+        atrSum += tr;
+      }
+      const atr = atrSum / atrPeriod;
+      const atrPct = (atr / currentPrice) * 100;
+
+      // ── Leverage suggestion based on asset class + volatility ──
+      const suggestedLeverage = (() => {
+        if (cls === "equity") return "1x (no leverage — equities)";
+        if (cls === "commodity") return histVolAnnualized > 60 ? "2x" : "3x";
+        // crypto
+        if (histVolAnnualized > 100) return "2x (extreme vol)";
+        if (histVolAnnualized > 70) return "3x";
+        if (histVolAnnualized > 40) return "5x";
+        return "5-10x (vol is low — still respect stops)";
+      })();
+
       const ohlcvStr = recent
         .map((c: any, i: number) => `T${i < recent.length - 1 ? `-${recent.length - 1 - i}` : "+0"}: O=${c.o} H=${c.h} L=${c.l} C=${c.c} V=${c.v}`)
         .join("\n");
 
-      const system = `You are the Kronos Forecast Engine — a probabilistic K-line sequence model inspired by the Kronos foundation model (AAAI 2026, arXiv:2508.02739). You analyze OHLCV sequences using autoregressive pattern recognition to generate multi-trajectory price forecasts.
+      // ── Inject adaptive-learning performance context (last 30d win rates, losing combos) ──
+      const kronosPerfCtx = await buildPerformanceContext().catch(() => "");
+
+      const system = `${kronosPerfCtx ? kronosPerfCtx + "\n\n" : ""}You are the Kronos Forecast Engine — a probabilistic K-line sequence model inspired by the Kronos foundation model (AAAI 2026, arXiv:2508.02739). You analyze OHLCV sequences using autoregressive pattern recognition to generate multi-trajectory price forecasts.
 
 Your methodology:
 1. Analyze the K-line sequence for momentum, mean-reversion pressure, volatility regime, and structural pivot levels
@@ -3784,10 +3827,32 @@ Output ONLY valid JSON. No markdown, no backticks, no text outside the JSON obje
   },
   "key_levels": { "resistance": number, "support": number },
   "sequence_pattern": "string",
+  "trade_plan": {
+    "direction": "LONG"|"SHORT"|"NO_TRADE",
+    "entry": number,
+    "entry_logic": "string — MUST reference the RSI value and zone provided (e.g. 'RSI 28 oversold — enter on reclaim of T+0 close')",
+    "tp1": number,
+    "tp1_pct": number,
+    "tp2": number,
+    "tp2_pct": number,
+    "sl": number,
+    "sl_pct": number,
+    "rr_tp1": "string (e.g. '1.8:1')",
+    "rr_tp2": "string (e.g. '3.2:1')",
+    "leverage": "string (use the suggested leverage unless you have strong reason to deviate — if you deviate, explain why)",
+    "invalidation": "string — what price action invalidates this setup",
+    "notes": "string — risk caveats, kill clock, post-TP1 management"
+  },
   "model_note": "string"
 }
 
-Rules: trajectory probabilities must sum to exactly 100. prices arrays must have exactly 5 values. final_pct_change is relative to current_price. Be precise — derive all price levels from the actual OHLCV data provided.
+Rules:
+- Trajectory probabilities must sum to exactly 100. prices arrays must have exactly 5 values. final_pct_change is relative to current_price.
+- trade_plan MUST be internally consistent with ensemble_signal: LONG plans for LONG/STRONG_LONG, SHORT plans for SHORT/STRONG_SHORT, NO_TRADE for NEUTRAL or when R:R < 1.5:1.
+- Derive entry using RSI: oversold (<30) → enter LONG on reclaim of recent pivot; overbought (>70) → enter SHORT on rejection; in-range → enter on pullback to key level.
+- SL must be placed beyond the nearest invalidation level (support for LONG, resistance for SHORT), typically 1.0–1.5x ATR away.
+- TP1 at 1.5–2x ATR (R:R ≥ 1.5:1). TP2 at 2.5–4x ATR.
+- Use the suggested_leverage provided unless you have strong reason to deviate.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 KRONOS OVERLAY: Only fire when ALL conditions met: edge>72%, vol NORMAL or HIGH, macro clear for full kill clock, OI confirms direction, 3+ factors score >70, R:R to TP1 >= 1.5:1. If any fail, output: "Kronos: No qualifying setup. Failed: [list]". Tag qualifying signals with "⚡ KRONOS — HIGH CONVICTION". If rolling win rate drops below 60% over 20 signals, self-mute 24H.`;
@@ -3796,10 +3861,15 @@ KRONOS OVERLAY: Only fire when ALL conditions met: edge>72%, vol NORMAL or HIGH,
 Current Price: $${currentPrice}
 Historical Volatility: ${histVolAnnualized.toFixed(1)}% annualized | Est. next-candle range: ±${nextCandleRangePct.toFixed(2)}%
 
+━━━ INDICATORS (server-computed — use exactly these values in trade_plan) ━━━
+RSI(14): ${rsi.toFixed(1)} — ZONE: ${rsiZone}
+ATR(14): ${atr.toFixed(6)} (${atrPct.toFixed(2)}% of price)
+Suggested leverage: ${suggestedLeverage}
+
 OHLCV K-LINE SEQUENCE — ${recent.length} candles (T-${recent.length - 1} oldest → T+0 current):
 ${ohlcvStr}
 
-Detect the dominant K-line pattern in this sequence, then generate probabilistic 5-candle forecast trajectories.`;
+Detect the dominant K-line pattern, generate probabilistic 5-candle forecast trajectories, AND produce a concrete trade_plan (entry based on RSI zone, TP1/TP2 sized from ATR, SL beyond nearest invalidation, using the suggested leverage). If the setup does not meet R:R ≥ 1.5:1, set trade_plan.direction = "NO_TRADE".`;
 
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -3852,6 +3922,32 @@ Detect the dominant K-line pattern in this sequence, then generate probabilistic
       }
 
       parsed.generated_at = new Date().toISOString();
+
+      // ── Attach server-computed indicators (always trustworthy; never AI-hallucinated) ──
+      parsed.indicators = {
+        rsi: parseFloat(rsi.toFixed(1)),
+        rsi_zone: rsiZone,
+        atr: parseFloat(atr.toFixed(6)),
+        atr_pct: parseFloat(atrPct.toFixed(2)),
+        suggested_leverage: suggestedLeverage,
+      };
+
+      // ── Sanity-check trade_plan — force NO_TRADE if clearly inconsistent ──
+      if (parsed.trade_plan && parsed.trade_plan.direction !== "NO_TRADE") {
+        const tp = parsed.trade_plan;
+        const e = parseFloat(tp.entry);
+        const sl = parseFloat(tp.sl);
+        const t1 = parseFloat(tp.tp1);
+        if (Number.isFinite(e) && Number.isFinite(sl) && Number.isFinite(t1)) {
+          const risk = Math.abs(e - sl);
+          const reward = Math.abs(t1 - e);
+          const rr = risk > 0 ? reward / risk : 0;
+          if (rr < 1.2) {
+            parsed.trade_plan.direction = "NO_TRADE";
+            parsed.trade_plan.notes = `Auto-flagged NO_TRADE: R:R to TP1 = ${rr.toFixed(2)}:1 (below 1.2:1 minimum). ${parsed.trade_plan.notes || ""}`;
+          }
+        }
+      }
 
       // ── Kronos flip push notification ────────────────────────────────────────
       try {

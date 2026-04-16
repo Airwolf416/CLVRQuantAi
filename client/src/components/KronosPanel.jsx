@@ -337,6 +337,106 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
                 <TrajectoryCard traj={result.trajectories?.bear} color="#ff2d55" label="BEAR" icon="⬇" currentPrice={result.current_price} />
               </div>
 
+              {/* ── TRADE PLAN (entry / TP1 / TP2 / SL / leverage / RSI) ── */}
+              {result.trade_plan && (() => {
+                const tp = result.trade_plan;
+                const ind = result.indicators || {};
+                const dirIsLong = tp.direction === "LONG";
+                const dirIsShort = tp.direction === "SHORT";
+                const noTrade = tp.direction === "NO_TRADE" || (!dirIsLong && !dirIsShort);
+                const dirCol = noTrade ? "#6b7a99" : dirIsLong ? "#00ff88" : "#ff2d55";
+                const rsiVal = ind.rsi;
+                const rsiCol = rsiVal >= 70 ? "#ff2d55" : rsiVal <= 30 ? "#00ff88" : "#f59e0b";
+                const fmt = (v) => (v == null || Number.isNaN(parseFloat(v)))
+                  ? "—"
+                  : `$${parseFloat(v).toLocaleString("en-US", { maximumFractionDigits: 4 })}`;
+                return (
+                  <div style={{
+                    background: `${dirCol}08`,
+                    border: `1px solid ${dirCol}33`,
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    marginBottom: 10,
+                  }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                      <div style={{ fontSize:8, color:"#9b8cff", fontFamily:mono, letterSpacing:1.5, fontWeight:800 }}>
+                        ◆ TRADE PLAN
+                      </div>
+                      <div style={{
+                        fontSize:9, fontWeight:800, fontFamily:mono, color: dirCol,
+                        background: `${dirCol}12`, border: `1px solid ${dirCol}33`,
+                        borderRadius:3, padding:"2px 7px", letterSpacing:0.5,
+                      }}>
+                        {noTrade ? "⛔ NO TRADE" : dirIsLong ? "⬆ LONG" : "⬇ SHORT"}
+                      </div>
+                    </div>
+
+                    {/* RSI + leverage strip */}
+                    <div style={{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap" }}>
+                      <div style={{ flex:1, minWidth:90, background:`${rsiCol}10`, border:`1px solid ${rsiCol}33`, borderRadius:5, padding:"6px 8px" }}>
+                        <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1 }}>RSI(14)</div>
+                        <div style={{ fontSize:12, fontWeight:900, color:rsiCol, fontFamily:mono }}>
+                          {typeof rsiVal === "number" ? rsiVal.toFixed(1) : "—"}
+                        </div>
+                        <div style={{ fontSize:7, color:rsiCol, fontFamily:mono, opacity:0.8 }}>
+                          {ind.rsi_zone || "—"}
+                        </div>
+                      </div>
+                      <div style={{ flex:1, minWidth:90, background:"rgba(255,255,255,0.02)", border:"1px solid #1a2235", borderRadius:5, padding:"6px 8px" }}>
+                        <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1 }}>LEVERAGE</div>
+                        <div style={{ fontSize:11, fontWeight:900, color:"#e8c96d", fontFamily:mono }}>
+                          {tp.leverage || ind.suggested_leverage || "—"}
+                        </div>
+                      </div>
+                      <div style={{ flex:1, minWidth:90, background:"rgba(255,255,255,0.02)", border:"1px solid #1a2235", borderRadius:5, padding:"6px 8px" }}>
+                        <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1 }}>ATR</div>
+                        <div style={{ fontSize:11, fontWeight:900, color:"#9b8cff", fontFamily:mono }}>
+                          {typeof ind.atr_pct === "number" ? `${ind.atr_pct.toFixed(2)}%` : "—"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {!noTrade && (
+                      <>
+                        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:6, marginBottom:6 }}>
+                          <div style={{ background:"rgba(232,201,109,0.06)", border:"1px solid rgba(232,201,109,0.2)", borderRadius:5, padding:"6px 8px" }}>
+                            <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1 }}>ENTRY</div>
+                            <div style={{ fontSize:11, fontWeight:900, color:"#e8c96d", fontFamily:mono }}>{fmt(tp.entry)}</div>
+                          </div>
+                          <div style={{ background:"rgba(255,45,85,0.06)", border:"1px solid rgba(255,45,85,0.2)", borderRadius:5, padding:"6px 8px" }}>
+                            <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1 }}>STOP LOSS</div>
+                            <div style={{ fontSize:11, fontWeight:900, color:"#ff2d55", fontFamily:mono }}>{fmt(tp.sl)}</div>
+                          </div>
+                          <div style={{ background:"rgba(0,255,136,0.06)", border:"1px solid rgba(0,255,136,0.2)", borderRadius:5, padding:"6px 8px" }}>
+                            <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1 }}>TP1 · {tp.rr_tp1 || "—"}</div>
+                            <div style={{ fontSize:11, fontWeight:900, color:"#00ff88", fontFamily:mono }}>{fmt(tp.tp1)}</div>
+                          </div>
+                          <div style={{ background:"rgba(0,255,136,0.06)", border:"1px solid rgba(0,255,136,0.2)", borderRadius:5, padding:"6px 8px" }}>
+                            <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1 }}>TP2 · {tp.rr_tp2 || "—"}</div>
+                            <div style={{ fontSize:11, fontWeight:900, color:"#00ff88", fontFamily:mono }}>{fmt(tp.tp2)}</div>
+                          </div>
+                        </div>
+                        {tp.entry_logic && (
+                          <div style={{ fontSize:8, color:"#a0aec0", fontFamily:mono, lineHeight:1.6, marginTop:6 }}>
+                            <span style={{ color:"#9b8cff" }}>Entry logic:</span> {tp.entry_logic}
+                          </div>
+                        )}
+                        {tp.invalidation && (
+                          <div style={{ fontSize:8, color:"#a0aec0", fontFamily:mono, lineHeight:1.6, marginTop:3 }}>
+                            <span style={{ color:"#ff2d55" }}>Invalidation:</span> {tp.invalidation}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {tp.notes && (
+                      <div style={{ fontSize:8, color:"#6b7a99", fontFamily:mono, lineHeight:1.6, marginTop:5, borderTop:"1px solid rgba(255,255,255,0.04)", paddingTop:5 }}>
+                        {tp.notes}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Pattern detected */}
               {result.sequence_pattern && (
                 <div style={{
