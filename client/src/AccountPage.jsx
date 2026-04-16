@@ -64,7 +64,7 @@ function OwnerEmailTool({ C, MONO, title, description, endpoint, testId, buttonL
   const handle = async () => {
     setStatus("sending"); setMsg("");
     try {
-      const r = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" } });
+      const r = await fetch(endpoint, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } });
       const d = await r.json();
       if (r.ok) {
         setStatus("sent");
