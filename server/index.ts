@@ -394,13 +394,18 @@ app.post(
   }
 );
 
-app.use(
-  express.json({
-    verify: (req: any, _res, buf) => {
-      req.rawBody = buf;
-    },
-  }),
-);
+// Default JSON parser (100kb). Skip it for routes that install their own
+// larger-limit parser (e.g. /api/journal/extract handles up to 12mb images).
+const SKIP_GLOBAL_JSON_PATHS = new Set(["/api/journal/extract"]);
+const globalJsonParser = express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  },
+});
+app.use((req, res, next) => {
+  if (SKIP_GLOBAL_JSON_PATHS.has(req.path)) return next();
+  return globalJsonParser(req, res, next);
+});
 
 app.use(express.urlencoded({ extended: false }));
 
