@@ -2280,6 +2280,7 @@ function Dashboard({user,setUser,onShowAuth}){
 
   const [userTier,setUserTier]=useState(()=>{try{return user?.tier||localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
   const isPreview=user?.preview===true;
+  const isOwner=(user?.email||"").toLowerCase()==="mikeclaver@gmail.com";
 
   // ── Market Data Store (shared singleton, all tabs read from here) ──────────
   const {
@@ -2524,7 +2525,9 @@ function Dashboard({user,setUser,onShowAuth}){
               if(!notifHashesRef.current.has(nHash)){
                 notifHashesRef.current.add(nHash);
                 if(notifHashesRef.current.size>50){const arr=[...notifHashesRef.current];notifHashesRef.current=new Set(arr.slice(-50));}
-                try{if(typeof Notification!=="undefined"&&Notification.permission==="granted"){new Notification(`CLVRQuant · ${s0.token} ${s0.dir}`,{body:s0.desc});}}catch(e){}
+                // OS notification is handled server-side via the push subscription
+                // (broadcastSignalPushParallel → service worker). Calling
+                // new Notification() here would create a duplicate.
                 addAlert({type:"price",title:`CLVRQuant · ${s0.token} ${s0.dir}`,body:s0.desc,assets:[s0.token],id:`sig-${s0.id}`});
               }
             }
@@ -2863,24 +2866,34 @@ function Dashboard({user,setUser,onShowAuth}){
     const HIGH_MACRO_KW=["FOMC","CPI","NFP","Non-Farm","GDP","PCE","PPI","Interest Rate"];
     const macroRiskEvts=macroEvents.filter(e=>e.impact==="HIGH"&&e.date&&new Date(e.date)>=new Date()&&new Date(e.date)<=now48h&&HIGH_MACRO_KW.some(k=>(e.name||"").includes(k)));
     const macroRiskNote=macroRiskEvts.length>0?`🔴 MACRO RISK: ${macroRiskEvts.map(e=>e.name).join(", ")} within 48h — SIZE DOWN, cap leverage ≤2x`:"";
-    const prompt=`You are CLVR AI — elite quantitative trading analyst, powered by Claude. Generate a morning brief for ${todayStr} using the 5-layer trading framework. ALL data below is REAL and LIVE from exchanges.
+    const prompt=`You are CLVR AI — a senior markets correspondent (think Bloomberg / FT / Reuters) writing the morning brief for ${todayStr}. Voice: clear, calm, authoritative economic-journalism prose. Short concrete sentences. No marketing fluff, no hedging clichés. Always name the WHY, not just the WHAT.
 
-LAYER 1 — MACRO REGIME:
-${macroRiskNote||"No HIGH-impact macro events within 48h — normal risk environment."}
-${macroSnap}
+⚠️ MANDATORY: Before writing the analysis sections, USE THE web_search TOOL to pull the latest 24-hour headlines for any asset that has moved >2%. In particular, you MUST research:
+  • Geopolitics moving oil (US–Iran nuclear talks, OPEC+ statements, Strait of Hormuz, Russia/Ukraine, Red Sea shipping)
+  • Fed / ECB / BOJ commentary in the last 24h
+  • Any breaking macro story affecting today's price action
+Cite the cause in your prose (e.g. "WTI fell 11% after US–Iran officials resumed talks in Muscat, easing supply-disruption premiums"). Do NOT speculate — only state causes you actually find via web_search.
 
-LAYER 2 — LIVE MARKET DATA:
+LIVE PRICES (use these EXACT numbers, do not invent any):
 CRYPTO: ${cryptoBrief}
 EQUITIES: ${stockBrief}
 COMMODITIES: ${metalBrief}
-FOREX: ${fxBrief}${sigBrief}${newsFeed.length>0?`\nNEWS: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:""}
+FOREX: ${fxBrief}${sigBrief}${newsFeed.length>0?`\nINTERNAL NEWS WIRE: ${newsFeed.slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,80)}`).join(" | ")}`:""}
 
-LAYERS 3-5: Apply session awareness (current ET time), ensure min R:R 1.5:1, use 🔴/🟡/🟢 risk labels.
+MACRO CONTEXT:
+${macroRiskNote||"No HIGH-impact macro events within 48h — normal risk environment."}
+${macroSnap}
 
-Write JSON (no markdown). Use the EXACT prices above. Reference 🔴/🟡/🟢 risk labels in analysis when appropriate:
+STYLE RULES:
+• Each asset section is a tight paragraph (4–6 sentences). Lead with the move + the cause, then the technical level, then the outlook.
+• Use full sentences and connective tissue ("because", "after", "as", "while"). No bullet-style fragments inside the prose fields.
+• Embed risk colour at the END of each section as " 🟢 bias" / " 🟡 bias" / " 🔴 bias".
+• Keep R:R for any trade idea ≥ 1.5:1.
+
+Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT live prices above.
 {"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","oil":"3-4 sentences covering WTI AND Brent prices, supply/demand drivers (OPEC+, US inventories, demand), geopolitical risk premium (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), and natural gas price if notable. End with 🟢/🟡/🔴 bias for energy sector","equities":"3-4 sentences covering SPX AND NDX levels and overnight move, mega-cap leadership (NVDA/TSLA/AAPL/MSFT/META direction), breadth and sector rotation, key earnings or Fed cross-currents, VIX context. End with 🟢/🟡/🔴 bias for US equities","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","impactfulNews":[{"title":"short headline (<80 chars)","impact":"BULLISH|BEARISH|NEUTRAL","assets":"comma-separated tickers most affected","takeaway":"one sentence — what a trader should DO or WATCH because of this"}],"watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it","topTrade":{"asset":"Best trade today","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence edge","riskLabel":"🟢 or 🟡 or 🔴","flags":"macro risk flags or None"},"additionalTrades":[{"asset":"2nd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"4th trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"}]}`;
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt,maxTokens:4000,skipTools:true})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt,maxTokens:6000,skipTools:true,enableWebSearch:true})});
       const data=await res.json();
       if(!res.ok){setToast(data.error||"Brief generation failed");setBriefLoading(false);return;}
       const txt=data.text||"";
@@ -4145,25 +4158,25 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                 </span>
                 {briefData.macroRisk==="HIGH"&&<span style={{padding:"4px 14px",borderRadius:2,fontFamily:MONO,fontSize:8,letterSpacing:"0.15em",background:"rgba(255,64,96,.1)",color:C.red,border:"1px solid rgba(255,64,96,.3)"}}>🔴 MACRO RISK</span>}
               </div>
-              <div style={{marginTop:12,fontFamily:SERIF,fontSize:13,color:C.text,fontStyle:"italic",lineHeight:1.6}}>"{briefData.headline}"</div>
+              <div style={{marginTop:12,fontFamily:SERIF,fontSize:15,color:C.text,fontStyle:"italic",lineHeight:1.7}}>"{briefData.headline}"</div>
             </div>
             <div style={panel}>
               <div style={ph}><PTitle>Live Prices</PTitle></div>
-              {[{sym:"BTC",label:"BTC/USD",prices:cryptoPrices},{sym:"ETH",label:"ETH/USD",prices:cryptoPrices},{sym:"SOL",label:"SOL/USD",prices:cryptoPrices},{sym:"SPX",label:"S&P 500",prices:equityPrices},{sym:"NDX",label:"Nasdaq 100",prices:equityPrices},{sym:"EURUSD",label:"EUR/USD",prices:forexPrices},{sym:"USDJPY",label:"USD/JPY",prices:forexPrices},{sym:"USDCAD",label:"USD/CAD",prices:forexPrices},{sym:"XAU",label:"Gold XAU",prices:metalPrices},{sym:"XAG",label:"Silver XAG",prices:metalPrices},{sym:"WTI",label:"Oil WTI",prices:metalPrices},{sym:"BRENT",label:"Oil Brent",prices:metalPrices},{sym:"NATGAS",label:"Nat Gas",prices:metalPrices}].map(({sym,label,prices})=>{
+              {[{sym:"BTC",label:"BTC/USD",prices:cryptoPrices},{sym:"ETH",label:"ETH/USD",prices:cryptoPrices},{sym:"SOL",label:"SOL/USD",prices:cryptoPrices},{sym:"EURUSD",label:"EUR/USD",prices:forexPrices},{sym:"USDJPY",label:"USD/JPY",prices:forexPrices},{sym:"USDCAD",label:"USD/CAD",prices:forexPrices},{sym:"XAU",label:"Gold XAU",prices:metalPrices},{sym:"XAG",label:"Silver XAG",prices:metalPrices},{sym:"WTI",label:"Oil WTI",prices:metalPrices},{sym:"BRENT",label:"Oil Brent",prices:metalPrices},{sym:"NATGAS",label:"Nat Gas",prices:metalPrices}].map(({sym,label,prices})=>{
                 const d=prices[sym];const chg=d?.chg||0;
-                return(<div key={sym} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:10,alignItems:"center",padding:"10px 14px",borderBottom:`1px solid ${C.border}`}}>
-                  <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.06em"}}>{label}</div>
-                  <div style={{fontFamily:MONO,fontSize:11,color:C.white}}>{fmt(d?.price,sym)}</div>
-                  <div style={{fontFamily:MONO,fontSize:10,fontWeight:600,color:chg>=0?C.green:C.red}}>{chg>=0?"▲":"▼"} {Math.abs(chg).toFixed(2)}%</div>
+                return(<div key={sym} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:10,alignItems:"center",padding:"12px 14px",borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{fontFamily:MONO,fontSize:12,color:C.muted2,letterSpacing:"0.06em"}}>{label}</div>
+                  <div style={{fontFamily:MONO,fontSize:13,color:C.white}}>{fmt(d?.price,sym)}</div>
+                  <div style={{fontFamily:MONO,fontSize:12,fontWeight:600,color:chg>=0?C.green:C.red}}>{chg>=0?"▲":"▼"} {Math.abs(chg).toFixed(2)}%</div>
                 </div>);
               })}
             </div>
             <div style={panel}>
               <div style={ph}><PTitle>Analysis & Outlook</PTitle></div>
               {[{icon:"₿",label:"Bitcoin",key:"btc",col:C.gold},{icon:"Ξ",label:"Ethereum",key:"eth",col:C.purple},{icon:"◎",label:"Solana",key:"sol",col:C.cyan},{icon:"📈",label:"US Equities (SPX · NDX)",key:"equities",col:C.blue},{icon:"▣",label:"Gold XAU",key:"xau",col:C.gold2},{icon:"◈",label:"Silver XAG",key:"xag",col:C.muted2},{icon:"🛢️",label:"Oil & Gas (WTI · Brent · NatGas)",key:"oil",col:C.orange},{icon:"€",label:"EUR/USD",key:"eurusd",col:C.blue},{icon:"¥",label:"USD/JPY",key:"usdjpy",col:C.teal},{icon:"$",label:"USD/CAD",key:"usdcad",col:C.green}].filter(s=>briefData[s.key]).map(s=>(
-                <div key={s.key} style={{padding:"13px 14px",borderBottom:`1px solid ${C.border}`}}>
-                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:13,color:s.col,marginBottom:5,fontStyle:"italic"}}>{s.icon} {s.label}</div>
-                  <div style={{fontSize:11,color:C.text,lineHeight:1.8}}>{briefData[s.key]}</div>
+                <div key={s.key} style={{padding:"16px 16px",borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:16,color:s.col,marginBottom:8,fontStyle:"italic"}}>{s.icon} {s.label}</div>
+                  <div style={{fontSize:14,color:C.text,lineHeight:1.75,fontFamily:SERIF}}>{briefData[s.key]}</div>
                 </div>
               ))}
             </div>
@@ -4175,27 +4188,27 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                 const iBg=impact==="BULLISH"?"rgba(0,199,135,.1)":impact==="BEARISH"?"rgba(255,64,96,.1)":"rgba(201,168,76,.1)";
                 return(<div key={i} style={{padding:"12px 14px",borderBottom:i<Math.min(briefData.impactfulNews.length,5)-1?`1px solid ${C.border}`:"none"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
-                    <div style={{fontSize:12,fontWeight:700,color:C.white,lineHeight:1.4,flex:1}}>{n.title||"—"}</div>
-                    <span style={{fontFamily:MONO,fontSize:8,fontWeight:700,color:iColor,background:iBg,border:`1px solid ${iColor}40`,borderRadius:2,padding:"2px 7px",letterSpacing:"0.1em",flexShrink:0}}>{impact||"NEUTRAL"}</span>
+                    <div style={{fontSize:14,fontWeight:700,color:C.white,lineHeight:1.4,flex:1}}>{n.title||"—"}</div>
+                    <span style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:iColor,background:iBg,border:`1px solid ${iColor}40`,borderRadius:2,padding:"3px 8px",letterSpacing:"0.1em",flexShrink:0}}>{impact||"NEUTRAL"}</span>
                   </div>
-                  {n.assets&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em",marginBottom:5}}>📍 {n.assets}</div>}
-                  {n.takeaway&&<div style={{fontFamily:SERIF,fontStyle:"italic",fontSize:11,color:C.text,lineHeight:1.6}}>→ {n.takeaway}</div>}
+                  {n.assets&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em",marginBottom:6}}>📍 {n.assets}</div>}
+                  {n.takeaway&&<div style={{fontFamily:SERIF,fontStyle:"italic",fontSize:13,color:C.text,lineHeight:1.7}}>→ {n.takeaway}</div>}
                 </div>);
               })}
             </div>}
             {briefData.watchToday&&<div style={{...panel,border:`1px solid ${C.border2}`}}>
               <div style={{...ph,background:"rgba(201,168,76,.04)"}}><PTitle>What to Watch Today</PTitle></div>
               {briefData.watchToday.map((item,i)=>(
-                <div key={i} style={{padding:"9px 14px",borderBottom:i<briefData.watchToday.length-1?`1px solid ${C.border}`:"none",display:"flex",alignItems:"flex-start",gap:10}}>
-                  <span style={{fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold,flexShrink:0}}>{i+1}.</span>
-                  <div style={{fontSize:10,color:C.text,lineHeight:1.7}}>{item}</div>
+                <div key={i} style={{padding:"12px 14px",borderBottom:i<briefData.watchToday.length-1?`1px solid ${C.border}`:"none",display:"flex",alignItems:"flex-start",gap:10}}>
+                  <span style={{fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,color:C.gold,flexShrink:0}}>{i+1}.</span>
+                  <div style={{fontSize:13,color:C.text,lineHeight:1.7,fontFamily:SERIF}}>{item}</div>
                 </div>
               ))}
             </div>}
             {briefData.keyRisk&&<div style={{...panel,border:`1px solid rgba(255,64,96,.2)`}}>
-              <div style={{padding:"12px 14px",background:"rgba(255,64,96,.04)",display:"flex",gap:10,alignItems:"flex-start"}}>
-                <span style={{fontFamily:MONO,fontSize:9,color:C.red,letterSpacing:"0.15em",fontWeight:600,flexShrink:0,marginTop:2}}>RISK</span>
-                <div style={{fontSize:11,color:C.text,lineHeight:1.7}}>{briefData.keyRisk}</div>
+              <div style={{padding:"14px 16px",background:"rgba(255,64,96,.04)",display:"flex",gap:10,alignItems:"flex-start"}}>
+                <span style={{fontFamily:MONO,fontSize:10,color:C.red,letterSpacing:"0.15em",fontWeight:600,flexShrink:0,marginTop:3}}>RISK</span>
+                <div style={{fontSize:13.5,color:C.text,lineHeight:1.75,fontFamily:SERIF}}>{briefData.keyRisk}</div>
               </div>
             </div>}
             {(() => {
@@ -4428,8 +4441,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult}/>);
           })()}
 
-          {/* ── Signal Performance Tracker (Elite) ── */}
-          <SignalHistoryPanel isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>
+          {/* ── Signal Performance Tracker — owner-only diagnostic; the
+              public Track Record tab already exposes per-user history. ── */}
+          {isOwner&&<SignalHistoryPanel isElite={true} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
         </>}
 
 
