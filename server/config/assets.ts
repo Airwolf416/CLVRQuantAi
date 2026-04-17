@@ -168,12 +168,14 @@ export const BACKTEST_WIN_RATES: Record<string, number> = {
 
 // AGGRESSIVE thresholds — raised across all sessions to cut signal noise.
 // Required: ≥1.2% move, ≥2.0x volume, ≥$5M OI for any signal to qualify.
+// STRICTER thresholds (v2 Apr 2026): require ≥1.5% move + ≥2.0× volume across all sessions
+// to cut fakeout noise that was dragging the win rate below 30%.
 export const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: number; minOI: number }> = {
   ASIAN:   { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
-  LONDON:  { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
-  NY:      { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
-  POST_NY: { minMove: 1.5, minVolMult: 2.5, minOI: 5_000_000 },
-  DEFAULT: { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
+  LONDON:  { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
+  NY:      { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
+  POST_NY: { minMove: 1.8, minVolMult: 2.5, minOI: 5_000_000 },
+  DEFAULT: { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
 };
 
 // Cap auto-signals per hour across the whole system (prevents spam during volatility)

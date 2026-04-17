@@ -6,6 +6,19 @@ const WIN_OUTCOMES = new Set(["TP1_HIT", "TP2_HIT", "TP3_HIT", "EXPIRED_WIN"]);
 const INTERVAL_MS = 30 * 60 * 1000; // 30 min — aggressive adaptation cadence
 let started = false;
 
+// Wilson lower bound at 90% one-sided (z=1.645).
+// Conservative: doesn't trip on small samples, statistically sound.
+export function wilsonLower(wins: number, n: number, z = 1.645): number {
+  if (n <= 0) return 0;
+  const p = wins / n;
+  const denom = 1 + (z * z) / n;
+  const centre = (p + (z * z) / (2 * n)) / denom;
+  const margin = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / denom;
+  return Math.max(0, centre - margin);
+}
+
+const WILSON_SUPPRESS_THRESHOLD = 0.30; // suppress if Wilson lower bound < 30%
+
 export async function recalculateThresholds(): Promise<number> {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
@@ -44,8 +57,10 @@ export async function recalculateThresholds(): Promise<number> {
     else                    adjustment = -15;
     adjustment = Math.max(-25, Math.min(25, adjustment));
 
-    // Auto-suppress at <25% WR with 10+ resolved signals (was <40%)
-    const suppressed = winRate < 25 && g.total >= 10;
+    // Auto-suppress when Wilson lower bound < 30% with 10+ resolved signals.
+    // Wilson is statistically conservative — won't trip on small samples / noise.
+    const wLow = wilsonLower(g.wins, g.total);
+    const suppressed = g.total >= 10 && wLow < WILSON_SUPPRESS_THRESHOLD;
     const winRateRounded = Math.round(winRate * 100) / 100;
 
     // Upsert via raw SQL to respect manual_override (skip auto-updates when true)
@@ -68,7 +83,7 @@ export async function recalculateThresholds(): Promise<number> {
     } finally {
       client.release();
     }
-    console.log(`[AdaptiveThresholds] ${g.token} ${g.direction}: ${winRate.toFixed(0)}% (${g.total}) → threshold ${75 + adjustment}% (adj ${adjustment >= 0 ? "+" : ""}${adjustment})${suppressed ? " ⛔SUPPRESSED" : ""}`);
+    console.log(`[AdaptiveThresholds] ${g.token} ${g.direction}: ${winRate.toFixed(0)}% (${g.total}, wL=${(wLow * 100).toFixed(0)}%) → threshold ${75 + adjustment}% (adj ${adjustment >= 0 ? "+" : ""}${adjustment})${suppressed ? " ⛔SUPPRESSED" : ""}`);
   }
   if (updated > 0) console.log(`[AdaptiveThresholds] Recalculated ${updated} combos`);
   return updated;
@@ -111,7 +126,7 @@ export async function suppressHistoricalBleeders(): Promise<number> {
           WHERE outcome IS NOT NULL AND outcome <> 'PENDING'
           GROUP BY token, direction
           HAVING COUNT(*) >= 10
-             AND (100.0 * SUM(${winSql}) / COUNT(*)) < 25
+             AND (100.0 * SUM(${winSql}) / COUNT(*)) < 30
         )
         INSERT INTO adaptive_thresholds
           (token, direction, trade_type, baseline_threshold, current_threshold,

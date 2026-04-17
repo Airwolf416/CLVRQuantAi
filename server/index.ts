@@ -12,6 +12,7 @@ import { startDailyBriefScheduler } from "./dailyBrief";
 import { initializeDatabase } from "./initDb";
 import { startOutcomeResolver } from "./lib/outcomeResolver";
 import { startAdaptiveThresholds, suppressHistoricalBleeders } from "./lib/adaptiveThresholds";
+import { startCircuitBreaker } from "./lib/circuitBreaker";
 import { initSocketIO } from "./socketServer";
 
 let shuttingDown = false;
@@ -559,8 +560,9 @@ async function initStripe() {
   startDailyBriefScheduler();
   startOutcomeResolver();
   startAdaptiveThresholds();
+  startCircuitBreaker();
   // Catch up the system to historical reality on every startup (idempotent).
-  // Suppresses any token+direction with <25% WR over 10+ resolved signals.
+  // Suppresses any token+direction with <30% WR over 10+ resolved signals.
   suppressHistoricalBleeders().catch(e => console.error("[startup] suppressHistoricalBleeders failed:", e));
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
