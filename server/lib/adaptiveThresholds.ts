@@ -3,7 +3,7 @@ import { db, pool } from "../db";
 import { aiSignalLog, adaptiveThresholds } from "@shared/schema";
 
 const WIN_OUTCOMES = new Set(["TP1_HIT", "TP2_HIT", "TP3_HIT", "EXPIRED_WIN"]);
-const INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const INTERVAL_MS = 30 * 60 * 1000; // 30 min — aggressive adaptation cadence
 let started = false;
 
 export async function recalculateThresholds(): Promise<number> {
@@ -31,16 +31,21 @@ export async function recalculateThresholds(): Promise<number> {
     if (g.total < 5) continue;
 
     const winRate = (g.wins / g.total) * 100;
+    // AGGRESSIVE adjustment scale — matched to overall ~32% win rate problem
     let adjustment = 0;
-    if      (winRate < 40)  adjustment =  15;
-    else if (winRate < 50)  adjustment =  10;
+    if      (winRate < 20)  adjustment =  25;  // catastrophic
+    else if (winRate < 30)  adjustment =  20;  // very bad
+    else if (winRate < 40)  adjustment =  15;  // bad
+    else if (winRate < 50)  adjustment =  10;  // below average
     else if (winRate < 55)  adjustment =   5;
     else if (winRate <= 65) adjustment =   0;
     else if (winRate <= 75) adjustment =  -5;
-    else                    adjustment = -10;
-    adjustment = Math.max(-20, Math.min(20, adjustment));
+    else if (winRate <= 85) adjustment = -10;
+    else                    adjustment = -15;
+    adjustment = Math.max(-25, Math.min(25, adjustment));
 
-    const suppressed = winRate < 40 && g.total >= 10;
+    // Auto-suppress at <25% WR with 10+ resolved signals (was <40%)
+    const suppressed = winRate < 25 && g.total >= 10;
     const winRateRounded = Math.round(winRate * 100) / 100;
 
     // Upsert via raw SQL to respect manual_override (skip auto-updates when true)
@@ -99,5 +104,5 @@ export function startAdaptiveThresholds(): void {
       recalculateThresholds().catch(e => console.error("[AdaptiveThresholds] recalc failed:", e));
     }, INTERVAL_MS);
   }, 2 * 60 * 1000);
-  console.log("[AdaptiveThresholds] Started — recalculating every hour");
+  console.log("[AdaptiveThresholds] Started — recalculating every 30 min");
 }

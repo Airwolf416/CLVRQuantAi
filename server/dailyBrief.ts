@@ -359,6 +359,84 @@ RULES:
   }
 }
 
+// ── Retry wrapper: 3 attempts with exponential backoff (2s, 4s, 8s) ──────────
+async function generateBriefContentWithRetry(marketData: MarketData, retries = 3): Promise<string | null> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    console.log(`[daily-brief] Generating brief (attempt ${attempt}/${retries})...`);
+    const text = await generateBriefContent(marketData);
+    if (text) {
+      console.log(`[daily-brief] ✓ Brief generated on attempt ${attempt}`);
+      return text;
+    }
+    if (attempt < retries) {
+      const delayMs = Math.pow(2, attempt) * 1000;
+      console.log(`[daily-brief] Attempt ${attempt} failed, waiting ${delayMs}ms before retry...`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  console.log(`[daily-brief] All ${retries} attempts failed — trying condensed fallback prompt`);
+  return null;
+}
+
+// ── Condensed fallback prompt (smaller payload, less likely to rate-limit) ───
+async function generateCondensedBrief(marketData: MarketData): Promise<string | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+  const cryptoStr = marketData.crypto.slice(0, 5).map(c => `${c.symbol}: ${c.price} (${c.change})`).join(", ");
+  const fxStr = marketData.forex.slice(0, 3).map(f => `${f.symbol}: ${f.price} (${f.change})`).join(", ");
+  const metalStr = marketData.metals.slice(0, 2).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(", ");
+  const prompt = `Generate a concise market brief as JSON. Return ONLY valid JSON, no markdown.
+
+PRICES:
+Crypto: ${cryptoStr}
+FX: ${fxStr}
+Metals: ${metalStr}
+
+Return EXACTLY:
+{
+  "headline": "One compelling headline (max 12 words)",
+  "marketSentiment": "bullish" | "bearish" | "neutral",
+  "macroRegime": "RISK ON" | "RISK OFF" | "NEUTRAL",
+  "macroRisk": "NORMAL",
+  "macroRiskNote": "One sentence on macro state",
+  "commentary": [
+    {"emoji":"₿","title":"Bitcoin","text":"2 sentences on BTC trend and key level. End with 🟢/🟡/🔴."},
+    {"emoji":"🇪🇺","title":"EUR/USD","text":"2 sentences on EUR/USD. End with 🟢/🟡/🔴."},
+    {"emoji":"🥇","title":"Gold","text":"2 sentences on Gold. End with 🟢/🟡/🔴."}
+  ],
+  "topTrade": {"asset":"asset","dir":"LONG|SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"None"},
+  "additionalTrades": [],
+  "watchItems": ["3 specific items to watch today with price levels"],
+  "riskLevel": "low" | "medium" | "high",
+  "riskNote": "One sentence: biggest risk and how to manage it"
+}`;
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": apiKey },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 1500,
+        system: "You are CLVR AI. Return concise market brief as valid JSON only.",
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "(no body)");
+      console.log(`[daily-brief] Condensed fallback HTTP ${response.status}: ${errText.slice(0, 300)}`);
+      return null;
+    }
+    const data: any = await response.json();
+    if (data?.error) { console.log(`[daily-brief] Condensed fallback error:`, JSON.stringify(data.error).slice(0, 300)); return null; }
+    const text = data.content?.[0]?.text || "";
+    if (text.trim()) console.log("[daily-brief] ✓ Condensed fallback brief generated");
+    return text.trim() ? text : null;
+  } catch (e: any) {
+    console.log(`[daily-brief] Condensed fallback threw: ${e?.message || e}`);
+    return null;
+  }
+}
+
 
 async function sendDailyBriefEmails() {
   const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -379,20 +457,46 @@ async function sendDailyBriefEmails() {
   const marketData = await fetchMarketData();
   console.log(`[daily-brief] Market data: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
 
-  const briefText = await generateBriefContent(marketData);
+  // Try full brief with 3 retries → condensed fallback prompt → minimal placeholder
+  let briefText: string | null = await generateBriefContentWithRetry(marketData, 3);
+  let usedCondensed = false;
   if (!briefText) {
-    console.log("[daily-brief] Failed to generate brief content");
-    return;
+    briefText = await generateCondensedBrief(marketData);
+    usedCondensed = !!briefText;
   }
 
-  let briefJson: any;
-  try {
-    const jsonMatch = briefText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON found");
-    briefJson = JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    console.log("[daily-brief] Failed to parse brief JSON:", e);
-    return;
+  let briefJson: any = null;
+  if (briefText) {
+    try {
+      const jsonMatch = briefText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON found");
+      briefJson = JSON.parse(jsonMatch[0]);
+      console.log(`[daily-brief] Brief JSON parsed (${usedCondensed ? "condensed" : "full"})`);
+    } catch (e: any) {
+      console.log("[daily-brief] Failed to parse brief JSON:", e?.message || e);
+      briefJson = null;
+    }
+  }
+
+  // Absolute last resort: minimal placeholder so subscribers still get the email
+  if (!briefJson) {
+    console.log("[daily-brief] All AI generation failed (3 full + 1 condensed) — using minimal placeholder");
+    briefJson = {
+      headline: "Market Brief — Live Prices",
+      marketSentiment: "neutral",
+      macroRegime: "NEUTRAL",
+      macroRisk: "NORMAL",
+      macroRiskNote: "Live prices below. Full AI analysis will resume in the next brief.",
+      commentary: [
+        { emoji: "⚡", title: "Service Note",
+          text: "We're delivering live prices while our AI engine reconnects. Your full analysis brief will resume in the next scheduled send." },
+      ],
+      topTrade: null,
+      additionalTrades: [],
+      watchItems: ["Live prices are included below."],
+      riskLevel: "medium",
+      riskNote: "Apply extra caution today. Do not trade on this brief alone.",
+    };
   }
 
   // Join subscribers with users table to get tier
@@ -496,43 +600,47 @@ async function sendApologyBriefEmails() {
   const marketData = await fetchMarketData();
   console.log(`[apology-brief] Market data fetched: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
 
-  const briefText = await generateBriefContent(marketData);
-  let briefJson: any = null;
-  let usedFallback = false;
+  // Try full brief with 3 retries (exponential backoff) → fallback to condensed prompt → only then minimal placeholder
+  let briefText: string | null = await generateBriefContentWithRetry(marketData, 3);
+  let usedCondensed = false;
+  if (!briefText) {
+    briefText = await generateCondensedBrief(marketData);
+    usedCondensed = !!briefText;
+  }
 
+  let briefJson: any = null;
   if (briefText) {
     try {
       const jsonMatch = briefText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("No JSON object in Claude response");
       briefJson = JSON.parse(jsonMatch[0]);
-      console.log("[apology-brief] Brief JSON parsed successfully");
+      console.log(`[apology-brief] Brief JSON parsed (${usedCondensed ? "condensed" : "full"})`);
     } catch (e: any) {
-      console.log("[apology-brief] Failed to parse brief JSON — falling back:", e?.message || e);
+      console.log("[apology-brief] Failed to parse brief JSON:", e?.message || e);
       briefJson = null;
     }
-  } else {
-    console.log("[apology-brief] Claude generation returned null — using fallback brief");
   }
 
-  // ── FALLBACK: if Claude failed, build a minimal brief from live market data only
-  //    so the apology email still goes out. This is what service-disruption does. ─
+  // ── ABSOLUTE LAST RESORT: minimal placeholder so subscribers still get email
+  let usedFallback = false;
   if (!briefJson) {
     usedFallback = true;
+    console.log("[apology-brief] All AI generation failed (3 full + 1 condensed) — using minimal placeholder");
     briefJson = {
-      headline: "Market Brief — Live Prices (AI Analysis Unavailable)",
+      headline: "Market Brief — Live Prices",
       marketSentiment: "neutral",
       macroRegime: "NEUTRAL",
       macroRisk: "NORMAL",
-      macroRiskNote: "AI analysis temporarily unavailable — showing live prices only.",
+      macroRiskNote: "Live prices below. Full AI analysis will resume in the next brief.",
       commentary: [
         { emoji: "⚡", title: "Service Note",
-          text: "Our AI analysis engine is temporarily unavailable. We're sending this brief with live market prices so you still receive today's update. Full 5-layer analysis will resume shortly." },
+          text: "We're delivering live prices while our AI engine reconnects. Your full analysis brief will resume in the next scheduled send." },
       ],
       topTrade: null,
       additionalTrades: [],
-      watchItems: ["Live prices are included below. Full analysis resumes once the AI engine recovers."],
+      watchItems: ["Live prices are included below."],
       riskLevel: "medium",
-      riskNote: "Without AI analysis, apply extra caution. Do not trade on this brief alone.",
+      riskNote: "Apply extra caution today. Do not trade on this brief alone.",
     };
   }
 
