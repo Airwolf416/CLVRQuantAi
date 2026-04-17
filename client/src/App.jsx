@@ -660,15 +660,26 @@ function unlockSpeechSynthesis(){
   }catch(e){}
 }
 
+// Global helper so other components can trigger squawk (macro alerts, kill switch, etc.)
+// Stores last call so the SquawkBox effect can react. Priority: 'normal' | 'urgent'
+const __squawkQueue = { last: null };
+export function emitSquawk(message, priority = "normal") {
+  __squawkQueue.last = { message, priority, ts: Date.now() };
+  try { window.dispatchEvent(new CustomEvent("clvr-squawk", { detail: __squawkQueue.last })); } catch {}
+}
+
 function SquawkBox({signals,soundEnabled,isPro,muted}){
   const lastAnnouncedRef=useRef(null);
   const voiceRef=useRef(null);
 
-  // Load best available voice
+  // Load best available voice — prefer professional desk-trader voices
   useEffect(()=>{
     const load=()=>{
       const voices=window.speechSynthesis?.getVoices()||[];
-      voiceRef.current=voices.find(v=>v.lang==="en-US"&&(v.name.includes("Google")||v.name.includes("Enhanced")||v.name.includes("Samantha")))||voices.find(v=>v.lang.startsWith("en"))||voices[0]||null;
+      voiceRef.current=
+        voices.find(v=>v.lang==="en-US"&&(v.name.includes("Daniel")||v.name.includes("Alex")||v.name.includes("Google")||v.name.includes("Enhanced")||v.name.includes("Samantha")))
+        ||voices.find(v=>v.lang.startsWith("en"))
+        ||voices[0]||null;
     };
     load();
     if(window.speechSynthesis)window.speechSynthesis.onvoiceschanged=load;
@@ -683,7 +694,25 @@ function SquawkBox({signals,soundEnabled,isPro,muted}){
     return()=>clearInterval(id);
   },[isPro,muted,soundEnabled]);
 
-  // Announce new signals
+  // Internal speak helper with priority tuning
+  const speak=useCallback((text,priority="normal")=>{
+    if(!isPro||muted||!soundEnabled)return;
+    try{
+      const ss=window.speechSynthesis;
+      if(!ss)return;
+      if(ss.paused)ss.resume();
+      // For urgent: cancel queue and speak immediately. For normal: queue.
+      if(priority==="urgent")ss.cancel();
+      const utt=new SpeechSynthesisUtterance(text);
+      utt.voice=voiceRef.current;
+      utt.rate=priority==="urgent"?1.15:1.05;
+      utt.pitch=priority==="urgent"?1.2:0.95;
+      utt.volume=priority==="urgent"?1.0:0.85;
+      ss.speak(utt);
+    }catch(e){}
+  },[isPro,muted,soundEnabled]);
+
+  // Announce new signals (normal priority)
   useEffect(()=>{
     if(!isPro||muted||!soundEnabled)return;
     const sig=signals?.[0];
@@ -691,19 +720,19 @@ function SquawkBox({signals,soundEnabled,isPro,muted}){
     lastAnnouncedRef.current=sig.id;
     const score=sig.masterScore?`Master score ${sig.masterScore}.`:"";
     const dir=sig.dir==="LONG"?"long":"short";
-    const text=`${sig.token} ${dir} signal. ${score}`;
-    try{
-      const ss=window.speechSynthesis;
-      if(!ss)return;
-      // Resume in case Chrome paused it
-      if(ss.paused)ss.resume();
-      ss.cancel();
-      const utt=new SpeechSynthesisUtterance(text);
-      utt.voice=voiceRef.current;
-      utt.rate=1.05;utt.pitch=0.95;utt.volume=1.0;
-      ss.speak(utt);
-    }catch(e){}
-  },[signals,isPro,muted,soundEnabled]);
+    speak(`${sig.token} ${dir} signal. ${score}`,"normal");
+  },[signals,isPro,muted,soundEnabled,speak]);
+
+  // Listen for emitSquawk() calls from anywhere in the app (macro, kill switch, big moves)
+  useEffect(()=>{
+    if(!isPro||muted||!soundEnabled)return;
+    const handler=(e)=>{
+      const{message,priority}=e.detail||{};
+      if(message)speak(message,priority||"normal");
+    };
+    window.addEventListener("clvr-squawk",handler);
+    return()=>window.removeEventListener("clvr-squawk",handler);
+  },[isPro,muted,soundEnabled,speak]);
 
   return null;
 }
@@ -1384,6 +1413,99 @@ function TradeJournalTab({isElite,onUpgrade}){
   const[closeData,setCloseData]=useState({outcome:"WIN",pnlPct:""});
   const[form,setForm]=useState({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:""});
   const[saving,setSaving]=useState(false);
+  const[importing,setImporting]=useState(false);
+  const[importErr,setImportErr]=useState("");
+  const[importUrl,setImportUrl]=useState("");
+  const[showImport,setShowImport]=useState(false);
+  const fileInRef=useRef(null);
+  async function extractFromImage(file){
+    if(!file)return;
+    setImportErr("");setImporting(true);
+    try{
+      const reader=new FileReader();
+      const dataUrl=await new Promise((resolve,reject)=>{reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});
+      const r=await fetch("/api/journal/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageBase64:dataUrl,mediaType:file.type||"image/png"})});
+      const j=await r.json();
+      if(!r.ok){setImportErr(j.error||"Extraction failed");setImporting(false);return;}
+      const ex=j.extracted||{};
+      setForm(f=>({asset:ex.asset||f.asset,direction:ex.direction||f.direction,entry:ex.entry||f.entry,stop:ex.stop||f.stop,tp1:ex.tp1||f.tp1,tp2:ex.tp2||f.tp2,size:ex.size||f.size,notes:ex.notes||f.notes}));
+      setShowImport(false);setShowForm(true);
+    }catch(e){setImportErr("Upload failed — please retry or enter manually.");}
+    setImporting(false);
+  }
+  async function extractFromUrl(){
+    if(!importUrl.trim())return;
+    setImportErr("");setImporting(true);
+    try{
+      const r=await fetch("/api/journal/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:importUrl.trim()})});
+      const j=await r.json();
+      if(!r.ok){setImportErr(j.error||"Extraction failed");setImporting(false);return;}
+      const ex=j.extracted||{};
+      setForm(f=>({asset:ex.asset||f.asset,direction:ex.direction||f.direction,entry:ex.entry||f.entry,stop:ex.stop||f.stop,tp1:ex.tp1||f.tp1,tp2:ex.tp2||f.tp2,size:ex.size||f.size,notes:ex.notes||f.notes}));
+      setImportUrl("");setShowImport(false);setShowForm(true);
+    }catch(e){setImportErr("Extraction failed — please enter manually.");}
+    setImporting(false);
+  }
+  async function shareTradeCard(e){
+    try{
+      const W=900,H=1100;
+      const cv=document.createElement("canvas");cv.width=W;cv.height=H;
+      const ctx=cv.getContext("2d");
+      // Background — luxury navy
+      ctx.fillStyle="#080d18";ctx.fillRect(0,0,W,H);
+      // Gold border
+      ctx.strokeStyle="#c9a84c";ctx.lineWidth=4;ctx.strokeRect(20,20,W-40,H-40);
+      // Header
+      ctx.fillStyle="#c9a84c";ctx.font="bold 56px Georgia, serif";ctx.textAlign="center";
+      ctx.fillText("CLVRQuant",W/2,110);
+      ctx.fillStyle="#8b7d5a";ctx.font="14px 'IBM Plex Mono', monospace";
+      ctx.fillText("AI · MARKET INTELLIGENCE",W/2,140);
+      // Asset + direction
+      ctx.fillStyle="#e8d5b7";ctx.font="bold 84px 'IBM Plex Mono', monospace";
+      ctx.fillText(`${e.asset}`,W/2,260);
+      const dirCol=e.direction==="LONG"?"#00c787":"#ff4060";
+      ctx.fillStyle=dirCol;ctx.font="bold 36px 'IBM Plex Mono', monospace";
+      ctx.fillText(e.direction,W/2,310);
+      // Outcome / PnL big
+      const isWin=e.outcome==="WIN";
+      const pnlNum=e.pnlPct?parseFloat(e.pnlPct):null;
+      const pnlCol=pnlNum==null?"#8b7d5a":pnlNum>0?"#00c787":"#ff4060";
+      ctx.fillStyle=pnlCol;ctx.font="bold 110px 'IBM Plex Mono', monospace";
+      const pnlTxt=pnlNum!=null?`${pnlNum>0?"+":""}${pnlNum.toFixed(1)}%`:e.outcome||"OPEN";
+      ctx.fillText(pnlTxt,W/2,460);
+      ctx.fillStyle="#8b7d5a";ctx.font="16px 'IBM Plex Mono', monospace";
+      ctx.fillText(e.outcome==="OPEN"?"OPEN POSITION":(isWin?"WIN":"LOSS"),W/2,495);
+      // Levels grid
+      const lvls=[["Entry",e.entry],["Stop",e.stop],["TP1",e.tp1],["TP2",e.tp2]].filter(([,v])=>v);
+      const startY=600,rowH=70;
+      lvls.forEach(([lab,val],i)=>{
+        const y=startY+i*rowH;
+        ctx.fillStyle="#1a2540";ctx.fillRect(120,y-30,W-240,55);
+        ctx.strokeStyle="#2a3960";ctx.lineWidth=1;ctx.strokeRect(120,y-30,W-240,55);
+        ctx.fillStyle="#8b7d5a";ctx.font="14px 'IBM Plex Mono', monospace";ctx.textAlign="left";
+        ctx.fillText(lab.toUpperCase(),150,y+5);
+        ctx.fillStyle="#e8d5b7";ctx.font="bold 22px 'IBM Plex Mono', monospace";ctx.textAlign="right";
+        ctx.fillText(String(val),W-150,y+5);
+      });
+      // Footer
+      ctx.fillStyle="#8b7d5a";ctx.font="14px 'IBM Plex Mono', monospace";ctx.textAlign="center";
+      ctx.fillText("CLVRQuantAI.com",W/2,H-70);
+      ctx.fillStyle="#4a5d80";ctx.font="11px 'IBM Plex Mono', monospace";
+      ctx.fillText("Educational use only. Not financial advice.",W/2,H-45);
+      const dataUrl=cv.toDataURL("image/png");
+      const fileName=`clvrquant-${e.asset}-${e.direction}-${e.id}.png`;
+      // Try Web Share API
+      if(navigator.canShare){
+        const blob=await(await fetch(dataUrl)).blob();
+        const file=new File([blob],fileName,{type:"image/png"});
+        if(navigator.canShare({files:[file]})){
+          try{await navigator.share({files:[file],title:`${e.asset} ${e.direction} ${pnlTxt}`,text:`${e.asset} ${e.direction} via CLVRQuant`});return;}catch(err){}
+        }
+      }
+      // Fallback: download
+      const a=document.createElement("a");a.href=dataUrl;a.download=fileName;document.body.appendChild(a);a.click();a.remove();
+    }catch(err){console.error("share card failed",err);}
+  }
   const{data,isLoading,refetch}=useQuery({queryKey:["/api/journal"],queryFn:async()=>{const r=await fetch("/api/journal");return r.json();},enabled:isElite,refetchInterval:120000});
   const entries=data?.entries||[];
   const closed=entries.filter(e=>e.outcome!=="OPEN");
@@ -1450,10 +1572,31 @@ function TradeJournalTab({isElite,onUpgrade}){
         </div>
       ))}
     </div>
-    {/* Add trade button */}
-    <div style={{marginBottom:10}}>
-      <button data-testid="btn-journal-add" onClick={()=>setShowForm(v=>!v)} style={{padding:"9px 18px",background:"rgba(201,168,76,.1)",border:"1px solid rgba(201,168,76,.35)",borderRadius:4,fontFamily:MONO,fontSize:10,color:"#d4af37",cursor:"pointer",letterSpacing:"0.1em"}}>{showForm?"✕ CANCEL":"+ LOG NEW TRADE"}</button>
+    {/* Add trade buttons */}
+    <div style={{marginBottom:10,display:"flex",gap:8,flexWrap:"wrap"}}>
+      <button data-testid="btn-journal-add" onClick={()=>{setShowForm(v=>!v);setShowImport(false);}} style={{padding:"9px 18px",background:"rgba(201,168,76,.1)",border:"1px solid rgba(201,168,76,.35)",borderRadius:4,fontFamily:MONO,fontSize:10,color:"#d4af37",cursor:"pointer",letterSpacing:"0.1em"}}>{showForm?"✕ CANCEL":"+ LOG NEW TRADE"}</button>
+      <button data-testid="btn-journal-import" onClick={()=>{setShowImport(v=>!v);setShowForm(false);setImportErr("");}} style={{padding:"9px 18px",background:"rgba(0,212,255,.08)",border:"1px solid rgba(0,212,255,.3)",borderRadius:4,fontFamily:MONO,fontSize:10,color:C.cyan,cursor:"pointer",letterSpacing:"0.1em"}}>{showImport?"✕ CANCEL":"📷 IMPORT FROM SCREENSHOT / LINK"}</button>
     </div>
+    {/* Import dialog */}
+    {showImport&&(
+      <div style={{...panelS,padding:"16px"}}>
+        <div style={{fontFamily:MONO,fontSize:8,color:"#8b7d5a",letterSpacing:"0.12em",marginBottom:12}}>IMPORT TRADE — CLAUDE WILL EXTRACT FIELDS</div>
+        <div style={{marginBottom:12}}>
+          <div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:6}}>OPTION 1: UPLOAD SCREENSHOT (Bybit, Hyperliquid, Binance, Phantom, etc.)</div>
+          <input ref={fileInRef} type="file" accept="image/*" data-testid="input-journal-import-image" onChange={ev=>extractFromImage(ev.target.files?.[0])} style={{display:"none"}}/>
+          <button data-testid="btn-journal-import-image" disabled={importing} onClick={()=>fileInRef.current?.click()} style={{padding:"10px 20px",background:"rgba(0,212,255,.08)",border:"1px solid rgba(0,212,255,.3)",borderRadius:4,fontFamily:MONO,fontSize:10,color:C.cyan,cursor:importing?"not-allowed":"pointer",opacity:importing?0.5:1}}>{importing?"Analyzing screenshot…":"📷 Choose Screenshot"}</button>
+        </div>
+        <div style={{borderTop:`1px solid ${C.border}`,paddingTop:12,marginBottom:8}}>
+          <div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:6}}>OPTION 2: PASTE SHARE LINK (Bybit / Hyperliquid / Binance position URL)</div>
+          <div style={{display:"flex",gap:6}}>
+            <input data-testid="input-journal-import-url" value={importUrl} onChange={ev=>setImportUrl(ev.target.value)} placeholder="https://..." style={inp}/>
+            <button data-testid="btn-journal-import-url" disabled={importing||!importUrl.trim()} onClick={extractFromUrl} style={{padding:"8px 16px",background:"rgba(0,212,255,.08)",border:"1px solid rgba(0,212,255,.3)",borderRadius:4,fontFamily:MONO,fontSize:10,color:C.cyan,cursor:importing||!importUrl.trim()?"not-allowed":"pointer",opacity:importing||!importUrl.trim()?0.5:1,whiteSpace:"nowrap"}}>{importing?"…":"Extract"}</button>
+          </div>
+        </div>
+        {importErr&&<div style={{fontFamily:MONO,fontSize:8,color:C.red,marginTop:8}}>{importErr}</div>}
+        <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:8,fontStyle:"italic"}}>Extracted fields will pre-fill the new trade form — review before saving. Images are NOT stored.</div>
+      </div>
+    )}
     {/* Add trade form */}
     {showForm&&(
       <div style={{...panelS,padding:"16px"}}>
@@ -1520,6 +1663,7 @@ function TradeJournalTab({isElite,onUpgrade}){
                     <button data-testid={`btn-journal-close-${e.id}`} onClick={()=>setClosing(e.id)} style={{padding:"4px 12px",background:"rgba(201,168,76,.08)",border:"1px solid rgba(201,168,76,.25)",borderRadius:3,fontFamily:MONO,fontSize:8,color:"#d4af37",cursor:"pointer"}}>Close Trade</button>
                   )
                 )}
+                <button data-testid={`btn-journal-share-${e.id}`} onClick={()=>shareTradeCard(e)} style={{padding:"4px 10px",background:"rgba(201,168,76,.08)",border:"1px solid rgba(201,168,76,.25)",borderRadius:3,fontFamily:MONO,fontSize:8,color:"#d4af37",cursor:"pointer"}}>📤 Share Card</button>
                 <button data-testid={`btn-journal-delete-${e.id}`} disabled={deleting===e.id} onClick={()=>deleteEntry(e.id)} style={{padding:"4px 10px",background:"rgba(255,64,96,.06)",border:"1px solid rgba(255,64,96,.2)",borderRadius:3,fontFamily:MONO,fontSize:8,color:C.red,cursor:"pointer",opacity:deleting===e.id?0.5:1}}>{deleting===e.id?"…":"Delete"}</button>
               </div>
             </div>
@@ -3313,6 +3457,13 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                       <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}} viewBox="0 0 30 24">
                         <line x1="4" y1="20" x2="26" y2="4" stroke="#ff4060" strokeWidth="2.2" strokeLinecap="round"/>
                       </svg>
+                    )}
+                    {sqActive&&(
+                      <span data-testid="squawk-live-dot" style={{
+                        position:"absolute",top:-2,right:-2,width:8,height:8,borderRadius:"50%",
+                        background:"#22c55e",boxShadow:"0 0 0 0 rgba(34,197,94,0.7)",
+                        animation:"squawkPulse 1.6s ease-out infinite",pointerEvents:"none",
+                      }}/>
                     )}
                   </div>
                 </div>

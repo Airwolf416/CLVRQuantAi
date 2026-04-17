@@ -7,6 +7,13 @@ const MONO = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
 const SANS = "'Barlow', system-ui, sans-serif";
 
+// Granular Today sub-timeframes — Quick / Hours / Full Day
+const TODAY_MODES = {
+  quick:   { label: "⚡ Quick",     subtitle: "5-30 min scalps", atrRef: "ATR(5m)", tp1Mult: 0.3, tp2Mult: 0.6, slMult: 0.20, killClock: "30 min", maxLev: { crypto: 10, equity: 5, commodity: 5, fx: 20 }, hold: "5-30 minutes", killHours: 0.5, style: "AGGRESSIVE — maximize gain on quick momentum bursts" },
+  hours:   { label: "📊 Hours",     subtitle: "1-4 hour holds",  atrRef: "ATR(1H)", tp1Mult: 0.5, tp2Mult: 1.0, slMult: 0.35, killClock: "4H",     maxLev: { crypto: 7,  equity: 3, commodity: 5, fx: 15 }, hold: "1-4 hours",    killHours: 4,   style: "BALANCED — standard intraday parameters" },
+  fullDay: { label: "☀️ Full Day",  subtitle: "4-12 hour holds", atrRef: "ATR(4H)", tp1Mult: 0.5, tp2Mult: 1.0, slMult: 0.50, killClock: "12H",    maxLev: { crypto: 5,  equity: 2, commodity: 3, fx: 10 }, hold: "4-12 hours",   killHours: 12,  style: "PATIENT — ride the full session move" },
+};
+
 export default function TopTradeIdeas({
   mode, isElite, isPro, isPreview,
   storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
@@ -18,6 +25,7 @@ export default function TopTradeIdeas({
   const [trades, setTrades] = useState(null);
   const [error, setError] = useState(null);
   const [timeframe, setTimeframe] = useState("today");
+  const [todayMode, setTodayMode] = useState("hours"); // quick | hours | fullDay
   const [marketTypeFilter, setMarketTypeFilter] = useState("BOTH");
   const [preflight, setPreflight] = useState(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
@@ -60,7 +68,27 @@ export default function TopTradeIdeas({
 
       const macroCtx = buildMacroPreflightContext(freshPreflight);
 
-      const tfLabel = timeframe === "midterm" ? "MID-TERM (1-4 week)" : timeframe === "longterm" ? "LONG-TERM (1-3 month)" : "INTRADAY/SWING";
+      const tm = timeframe === "today" ? TODAY_MODES[todayMode] : null;
+      const tfLabel = timeframe === "midterm" ? "MID-TERM (1-4 week)"
+        : timeframe === "longterm" ? "LONG-TERM (1-3 month)"
+        : `TODAY ${tm.label} (${tm.subtitle})`;
+
+      const todayModeRule = tm ? `
+TIMEFRAME MODE: ${tm.label} — ${tm.subtitle}
+- ATR reference: ${tm.atrRef}
+- TP1 = ${tm.tp1Mult}× ATR (50% position), TP2 = ${tm.tp2Mult}× ATR (30%), trail remainder
+- SL    = ${tm.slMult}× ATR
+- Kill clock: ${tm.killClock}
+- Max hold: ${tm.hold}
+- Style: ${tm.style}
+- Max leverage caps: crypto ${tm.maxLev.crypto}x, equity ${tm.maxLev.equity}x, commodity ${tm.maxLev.commodity}x, fx ${tm.maxLev.fx}x
+
+CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER hit. Keep TPs TIGHT and REALISTIC for the hold duration.
+- ${todayMode === "quick"   ? 'Quick mode: typical crypto TP1 = 0.3-0.8%, TP2 = 0.6-1.5%. SL ~0.4-0.6%.'
+   : todayMode === "hours"  ? 'Hours mode: typical crypto TP1 = 0.5-2%, TP2 = 1-3%. SL ~0.7-1.5%.'
+                            : 'Full Day mode: typical crypto TP1 = 1-4%, TP2 = 2-6%. SL ~1.2-2.5%.'}
+- Set "killClock":"${tm.killClock}" on every trade
+- Respect the leverage caps above` : "";
 
       const marketTypeRule = marketTypeFilter === "PERP"
         ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged trades. Use Hyperliquid perp data (Section A) as primary. Include leverage suggestion on every trade (respect asset class caps). Tight SL. Thesis must reference funding rate, OI, or liquidation levels. Every trade MUST set "marketType":"PERP".`
@@ -71,6 +99,7 @@ export default function TopTradeIdeas({
       const sys = `You are CLVRQuantAI's Trade Idea Generator. Return exactly ${tradeCount} trade ideas as a JSON object. No markdown. No prose. Only valid JSON.
 
 ${marketTypeRule}
+${todayModeRule}
 
 MANDATORY STEP 1 — MACRO PRE-FLIGHT CHECK:
 ${macroCtx || "No macro data available. Proceed with CAUTION flag."}
@@ -199,6 +228,28 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           </div>
         )}
       </div>
+
+      {isPro && timeframe === "today" && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO, letterSpacing: "0.1em", marginRight: 2 }}>HORIZON:</span>
+          {Object.entries(TODAY_MODES).map(([key, m]) => {
+            const sel = todayMode === key;
+            return (
+              <button key={key} data-testid={`btn-todaymode-${key}`} onClick={() => setTodayMode(key)} style={{
+                padding: "5px 10px", borderRadius: 6,
+                border: `1px solid ${sel ? "rgba(201,168,76,0.4)" : "rgba(255,255,255,0.08)"}`,
+                background: sel ? "rgba(201,168,76,0.1)" : "transparent",
+                color: sel ? "#e8c96d" : "rgba(255,255,255,0.4)",
+                fontFamily: MONO, fontSize: 9, cursor: "pointer", fontWeight: sel ? 700 : 400,
+                display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.2,
+              }}>
+                <span>{m.label}</span>
+                <span style={{ fontSize: 7, opacity: 0.7, marginTop: 1 }}>{m.subtitle}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {isPro && (
         <div style={{ display: "flex", gap: 4, marginBottom: 10, alignItems: "center" }}>
