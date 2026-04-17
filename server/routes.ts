@@ -3835,6 +3835,9 @@ Every level must be technically defensible. Return JSON only.`;
     const model = CLAUDE_MODEL;
     // Callers can request more tokens (e.g. Morning Brief needs ~3000 for full JSON)
     const maxTokens = Math.min(parseInt(req.body.maxTokens) || 1500, 8192);
+    // Callers can disable tool use (e.g. Morning Brief — has all data inline,
+    // tool use causes Claude to return empty content after the tool round).
+    const skipTools = req.body.skipTools === true;
 
     const callClaude = async (messages: any[], withTools = true) => {
       const body: any = {
@@ -3858,7 +3861,7 @@ Every level must be technically defensible. Return JSON only.`;
 
     try {
       const messages: any[] = [{ role: "user", content: userMessage }];
-      let response = await callClaude(messages);
+      let response = await callClaude(messages, !skipTools);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -3920,7 +3923,22 @@ Every level must be technically defensible. Return JSON only.`;
         if (data.error) return res.status(400).json({ error: data.error.message || "AI error" });
       }
 
-      const text = (data.content || []).map((b: any) => b.text || "").join("");
+      let text = (data.content || []).map((b: any) => b.text || "").join("");
+
+      // Defensive fallback: if Claude returned empty content after a tool-use
+      // round (known failure mode where model emits end_turn with []), retry
+      // once with the original prompt only and tools disabled.
+      if (!text && toolRounds > 0) {
+        console.warn("[ai/analyze] Empty content after tool use — retrying without tools.");
+        try {
+          const retryRes = await callClaude([{ role: "user", content: userMessage }], false);
+          if (retryRes.ok) {
+            const retryData: any = await retryRes.json();
+            text = (retryData.content || []).map((b: any) => b.text || "").join("");
+          }
+        } catch {}
+      }
+
       if (!text) {
         const errMsg = "CLVR AI did not return a response — please try again.";
         console.error("[ai/analyze] Claude returned empty content. stop_reason:", data.stop_reason, "content_types:", (data.content||[]).map((b:any)=>b.type));
