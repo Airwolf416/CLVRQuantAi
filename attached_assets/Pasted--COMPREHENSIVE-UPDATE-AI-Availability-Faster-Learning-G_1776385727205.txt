@@ -1,0 +1,685 @@
+# COMPREHENSIVE UPDATE — AI Availability, Faster Learning, Granular Timeframes, Squawk, Journal Import
+
+⚠️ READ FULLY BEFORE CODING. Execute in order. Do NOT create unrelated features.
+
+-----
+
+## PART 1 — FIX AI ANALYSIS “TEMPORARILY UNAVAILABLE”
+
+The Daily Brief email is showing “Our AI analysis engine is temporarily unavailable” with a fallback of just live prices. The AI must ALWAYS generate analysis — never send a brief without it.
+
+### Fix:
+
+1. Find the daily brief generation logic (App.jsx `generateBrief()` or the server-side cron that triggers it at 6:00 AM ET).
+1. Find the error handling that triggers the “Service Note” fallback. It’s catching an AI API error and falling back to a price-only brief. The problem is likely:
+- 429 rate limit (prompt too large)
+- Anthropic API timeout
+- Credit balance issue
+1. **Add retry logic with exponential backoff:**
+
+```typescript
+async function callAIWithRetry(system, userMessage, maxTokens, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await callClaudeAPI(system, userMessage, maxTokens);
+      if (response && response.text) return response;
+    } catch (err) {
+      console.error(`[AI] Attempt ${attempt}/${retries} failed:`, err.message);
+      if (attempt < retries) {
+        const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  return null; // All retries failed
+}
+```
+
+1. **If the AI is truly down, generate a condensed brief using a shorter prompt:**
+
+```typescript
+// Fallback: use a much shorter prompt that's less likely to hit rate limits
+const fallbackSystem = `You are CLVRQuantAI. Generate a brief market summary as JSON: {"headline":"...", "bias":"RISK ON|OFF|NEUTRAL", "macroRisk":"HIGH|NORMAL", "watchToday":["3 items"], "keyRisk":"one sentence"}. Use the price data below. Keep it under 500 tokens.`;
+```
+
+1. **Never send a brief with “AI Analysis Unavailable”** — if even the fallback fails, delay the brief by 15 minutes and retry. Only send the price-only fallback as an absolute last resort after 3 retry cycles (45 minutes).
+1. **Add server monitoring:** Log every brief generation attempt and outcome so you can see in Railway logs when the AI fails and why:
+
+```typescript
+console.log(`[Brief] Generating for ${new Date().toISOString()}`);
+console.log(`[Brief] AI response received: ${response ? 'YES' : 'FAILED'}`);
+console.log(`[Brief] Fallback used: ${usedFallback ? 'YES' : 'NO'}`);
+```
+
+-----
+
+## PART 2 — FASTER ADAPTIVE LEARNING (Improve Win Rate Urgently)
+
+Current stats: **32% win rate, -1.51% avg PnL, 456W/962L**. This is terrible. The adaptive learning needs to be MUCH more aggressive.
+
+### 2A. Aggressive Threshold Adjustments
+
+The current adaptive thresholds only show SUI SHORT at 90% threshold. That’s way too slow — with 32% overall win rate, MOST token/direction combos should be suppressed or heavily gated.
+
+**Change the recalculation to run every 30 MINUTES (not hourly):**
+
+```typescript
+setInterval(recalculateThresholds, 1800000); // 30 minutes, not 3600000
+```
+
+**Make the adjustment more aggressive:**
+
+```typescript
+// OLD (too gentle):
+if (winRate < 40) adjustment = 15;
+if (winRate < 50) adjustment = 10;
+
+// NEW (aggressive — your 32% win rate needs this):
+if (winRate < 20) adjustment = 25;       // Catastrophic — nearly suppress
+else if (winRate < 30) adjustment = 20;  // Very bad — heavy gate
+else if (winRate < 40) adjustment = 15;  // Bad — strong gate
+else if (winRate < 50) adjustment = 10;  // Below average
+else if (winRate < 55) adjustment = 5;   // Slightly below
+else if (winRate <= 65) adjustment = 0;  // Acceptable
+else if (winRate <= 75) adjustment = -5; // Good
+else if (winRate <= 85) adjustment = -10;// Very good
+else adjustment = -15;                    // Excellent
+
+// Clamp to ±25 (wider range)
+adjustment = Math.max(-25, Math.min(25, adjustment));
+
+// AUTO-SUPPRESS if win rate < 25% with 10+ signals
+const suppressed = winRate < 25 && data.total >= 10;
+```
+
+### 2B. Require Minimum Sample Before Trusting Signals
+
+Looking at the data: LONG 0% win rate (19 signals), SHORT 11% (18 signals). The system is generating too many bad signals. Add a **cold start gate**:
+
+```typescript
+// In the signal generation logic, before allowing a signal:
+// If we have 10+ resolved signals for this token and win rate < 30%, SUPPRESS
+const tokenStats = await getTokenWinRate(ticker, direction);
+if (tokenStats.total >= 10 && tokenStats.winRate < 30) {
+  return { signal: 'SUPPRESSED', reason: `${ticker} ${direction} has ${tokenStats.winRate}% win rate over ${tokenStats.total} signals. Suppressed until performance improves.` };
+}
+```
+
+### 2C. Add Performance Context to Signal Generation (Not Just AI Chat)
+
+The performance context MUST also be injected into the auto-signal generator (the worker that creates the 2170+ signals in track record). Find the signal generation worker and add:
+
+```typescript
+// Before generating any signal in the auto-worker:
+const perfContext = await buildPerformanceContext();
+// Include perfContext in the signal evaluation logic
+// If overall win rate < 40%, raise ALL thresholds by 10%
+// If a specific token has < 25% win rate, skip it entirely
+```
+
+### 2D. Fix the Signal Quality at the Source
+
+The core problem: the auto-signal generator is firing on 0.8%+ moves in 5 minutes, which catches every spike — including fakeouts. Tighten the criteria:
+
+```typescript
+// CURRENT: fires on 0.8% move in 5 min — too loose
+// NEW: require confirmation before signaling
+
+const SIGNAL_CRITERIA = {
+  minMove: 1.2,        // Raise from 0.8% to 1.2% — fewer but better signals
+  minVolMultiple: 2.0, // Volume must be 2x average (confirms real move, not noise)
+  minOI: 5000000,      // $5M minimum OI (filters illiquid garbage)
+  requireTrendAlign: true, // Signal direction must align with 1H EMA trend
+  maxSignalsPerHour: 5,    // Cap signal generation to prevent spam
+};
+```
+
+### 2E. Immediately Suppress Worst Performers
+
+Based on the track record data visible in the screenshots, these combos are bleeding:
+
+- WIF: 24% win rate, -1.35% avg PnL
+- SEI: 3% win rate, -4.16% avg PnL (!!!)
+- JUP: 11% win rate, -13.05% avg PnL (!!!)
+- TIA: 19% win rate, -3.18% avg PnL
+- NEAR: 14% win rate, -1.21% avg PnL
+
+**Run an immediate suppression for all combos below 25% win rate with 10+ signals.** Add this one-time migration:
+
+```typescript
+// Run once on startup to catch up with poor performers:
+await db.execute(sql`
+  INSERT INTO adaptive_thresholds (token, direction, trade_type, baseline_threshold, current_threshold, adjustment, win_rate_30d, sample_size, suppressed, manual_override)
+  SELECT 
+    token, direction, 'ALL', 75, 95, 20,
+    ROUND(100.0 * SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) / COUNT(*), 2),
+    COUNT(*),
+    true,  -- SUPPRESSED
+    false
+  FROM signal_outcomes
+  WHERE outcome != 'PENDING'
+  GROUP BY token, direction
+  HAVING COUNT(*) >= 10
+  AND (100.0 * SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) / COUNT(*)) < 25
+  ON CONFLICT (token, direction, trade_type) DO UPDATE SET
+    suppressed = true, current_threshold = 95, adjustment = 20,
+    win_rate_30d = EXCLUDED.win_rate_30d, sample_size = EXCLUDED.sample_size
+`);
+```
+
+-----
+
+## PART 3 — GRANULAR TIMEFRAMES IN AI TAB (Today Section)
+
+The “Today” button currently maps to scalp-intraday. Break it into 3 sub-options:
+
+### UI Change:
+
+When user selects “Today”, show a sub-selector:
+
+```
+Trade Ideas
+[Today ▼] [Mid] [Long]
+
+  ┌─ TODAY SUB-OPTIONS ──────────────────────┐
+  │ [⚡ Quick]    [📊 Hours]    [☀️ Full Day] │
+  │  5-30 min      1-4 hours     4-12 hours  │
+  └──────────────────────────────────────────┘
+
+[PERP] [SPOT] [BOTH]
+```
+
+### Timeframe Parameters:
+
+```javascript
+const TODAY_MODES = {
+  quick: {
+    label: '⚡ Quick',
+    subtitle: '5-30 min scalps',
+    atrRef: 'ATR(5m)',    // Very tight ATR reference
+    tp1Mult: 0.3,         // Tight TP — 0.3x ATR (must be hittable in minutes)
+    tp2Mult: 0.6,
+    slMult: 0.2,          // Very tight SL
+    killClock: '30 min',
+    maxLeverage: { crypto: 10, equity: 5, commodity: 5, fx: 20 },
+    holdDescription: '5-30 minutes',
+    style: 'AGGRESSIVE — maximize gain on quick momentum bursts',
+  },
+  hours: {
+    label: '📊 Hours',
+    subtitle: '1-4 hour holds',
+    atrRef: 'ATR(1H)',
+    tp1Mult: 0.5,
+    tp2Mult: 1.0,
+    slMult: 0.35,
+    killClock: '4H',
+    maxLeverage: { crypto: 7, equity: 3, commodity: 5, fx: 15 },
+    holdDescription: '1-4 hours',
+    style: 'BALANCED — standard intraday parameters',
+  },
+  fullDay: {
+    label: '☀️ Full Day',
+    subtitle: '4-12 hour holds',
+    atrRef: 'ATR(4H)',
+    tp1Mult: 0.5,
+    tp2Mult: 1.0,
+    slMult: 0.5,
+    killClock: '12H',
+    maxLeverage: { crypto: 5, equity: 2, commodity: 3, fx: 10 },
+    holdDescription: '4-12 hours',
+    style: 'PATIENT — ride the full session move',
+  },
+};
+```
+
+### Pass to AI Prompt:
+
+Add to the Trade Ideas system prompt:
+
+```
+TIMEFRAME MODE: {mode.label} — {mode.subtitle}
+- ATR reference: {mode.atrRef}
+- TP1 = {mode.tp1Mult}x ATR (50% position), TP2 = {mode.tp2Mult}x ATR (30%), trail remainder
+- SL = {mode.slMult}x ATR
+- Kill clock: {mode.killClock}
+- Max hold: {mode.holdDescription}
+- Style: {mode.style}
+
+CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER hit. Keep TPs TIGHT and REALISTIC for the hold duration. For "Quick" mode, typical crypto TP should be 0.3-0.8%. For "Hours" mode, 0.5-2%. For "Full Day", 1-4%.
+```
+
+-----
+
+## PART 4 — CLEAR LEVERAGE AND HOLD DURATION ON ALL OUTPUTS
+
+Every signal card, trade idea card, and basket recommendation must prominently display:
+
+### UI Requirement:
+
+Add a dedicated row on EVERY signal/trade card between the TP/SL levels and the thesis:
+
+```
+┌──────────────────────────────────────┐
+│  ⚡ LEVERAGE        ⏱ HOLD TIME     │
+│     5x MAX            4-12 hours    │
+│                                      │
+│  Exit by: 11:30 PM ET tonight       │
+└──────────────────────────────────────┘
+```
+
+### Design:
+
+- Background: slightly darker panel `rgba(0,0,0,0.3)`
+- Leverage: bold, gold color `#c9a84c`, large font (16px)
+- Hold time: bold, white, large font (16px)
+- “Exit by” timestamp: smaller, cyan, calculated from kill clock
+- This row must be visible in BOTH Simple and Pro modes
+
+### Implementation:
+
+- In TradeIdeaCard, SignalCard, and any basket signal card, add this row
+- Calculate “Exit by” time: `new Date(Date.now() + killClockHours * 3600000).toLocaleTimeString()`
+- If leverage is missing from AI response, display “—” not a random default
+
+-----
+
+## PART 5 — SQUAWK BOX AUTO-PLAY FOR PAID USERS
+
+The Squawk Box should automatically play audio alerts when the sound is enabled and the user is Pro or Elite.
+
+### Fix:
+
+1. Find the Squawk Box component and its sound toggle logic
+1. When sound is ON and user is paid (Pro or Elite):
+- Auto-play squawk audio when new breaking market events arrive
+- Use the Web Speech API or a pre-recorded audio snippet
+- Events that trigger squawk: signal regime flips, macro events within 2H, breaking news, kill switch activation, significant price moves (>3% in 15 min on major assets)
+1. **Sound implementation:**
+
+```javascript
+function playSquawk(message, priority = 'normal') {
+  if (!soundEnabled || !isPaidUser) return;
+
+  // Use Web Speech API for text-to-speech
+  const utterance = new SpeechSynthesisUtterance(message);
+  utterance.rate = 1.1;  // Slightly fast — desk trader style
+  utterance.pitch = priority === 'urgent' ? 1.2 : 1.0;
+  utterance.volume = priority === 'urgent' ? 1.0 : 0.8;
+
+  // Use a professional-sounding voice
+  const voices = speechSynthesis.getVoices();
+  const preferredVoice = voices.find(v => v.name.includes('Daniel') || v.name.includes('Alex') || v.lang === 'en-US');
+  if (preferredVoice) utterance.voice = preferredVoice;
+
+  speechSynthesis.speak(utterance);
+}
+
+// Trigger squawk on events:
+// 1. New signal generated
+playSquawk(`New ${direction} signal on ${token}. Entry ${entry}, target ${tp1}.`);
+
+// 2. Macro event approaching
+playSquawk(`Warning: ${eventName} in ${minutesAway} minutes. Tighten stops.`, 'urgent');
+
+// 3. Kill switch activated
+playSquawk(`Kill switch activated. ${reason}. All signals paused.`, 'urgent');
+
+// 4. Big price move
+playSquawk(`Alert: ${token} moved ${pctChange}% in ${minutes} minutes.`);
+```
+
+1. **Tier gate:** Free users see the squawk toggle but it’s locked with an upgrade prompt. Pro/Elite can toggle freely.
+1. **Visual indicator:** When squawk is active, show a small pulsing green dot next to the sound icon in the header bar.
+
+-----
+
+## PART 6 — JOURNAL TRADE IMPORT FROM WALLET SCREENSHOTS/LINKS
+
+### 6A. Image Upload & Data Extraction
+
+Add a trade import feature to the Journal tab:
+
+```
+┌──────────────────────────────────────┐
+│  📸 IMPORT TRADE                     │
+│                                      │
+│  [Upload Screenshot]  [Paste Link]   │
+│                                      │
+│  Supports: Phantom, Hyperliquid,     │
+│  Binance, Bybit screenshots          │
+└──────────────────────────────────────┘
+```
+
+**Image Upload Flow:**
+
+1. User uploads a screenshot (like the INJ +18.81% Phantom screenshot)
+1. Send the image to Claude Sonnet 4.6 via the API with this prompt:
+
+```
+Extract trade data from this screenshot. Return ONLY this JSON:
+{
+  "asset": "INJ",
+  "direction": "LONG",
+  "leverage": "4x",
+  "entry": 3.2356,
+  "exit": 3.3953,
+  "pnl_pct": 18.81,
+  "platform": "Phantom",
+  "status": "closed"
+}
+
+If you cannot extract all fields, set missing ones to null. Do not guess — only extract what is clearly visible in the image.
+```
+
+1. Show the extracted data to the user for confirmation:
+
+```
+┌──────────────────────────────────────┐
+│  ✅ Trade Extracted                  │
+│                                      │
+│  INJ LONG 4x                        │
+│  Entry: $3.2356  →  Exit: $3.3953   │
+│  PnL: +18.81% 🔥                    │
+│  Platform: Phantom                   │
+│                                      │
+│  [✓ Save to Journal]  [✗ Discard]   │
+└──────────────────────────────────────┘
+```
+
+1. On “Save to Journal” — store in the database, DELETE the uploaded image immediately:
+
+```typescript
+// Save trade data to journal
+await db.insert(journal_trades).values({
+  user_id: req.session.userId,
+  asset: extractedData.asset,
+  direction: extractedData.direction,
+  leverage: extractedData.leverage,
+  entry_price: extractedData.entry,
+  exit_price: extractedData.exit,
+  pnl_pct: extractedData.pnl_pct,
+  platform: extractedData.platform,
+  status: 'closed',
+  imported_at: new Date(),
+});
+
+// DELETE the uploaded image immediately — only data stays
+await fs.unlink(uploadedFilePath);
+```
+
+**Link Import Flow:**
+
+1. User pastes a link like `https://phantom.app/ul/v1/perps/inj-usd`
+1. The system extracts the asset from the URL pattern
+1. If the link contains trade data (some platforms encode it in the URL), extract it
+1. If not, prompt the user to manually enter: direction, leverage, entry, exit
+1. Save to journal, same as above
+
+### 6B. Journal Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS journal_trades (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  asset VARCHAR(20) NOT NULL,
+  direction VARCHAR(10),
+  leverage VARCHAR(10),
+  entry_price DECIMAL(20,8),
+  exit_price DECIMAL(20,8),
+  pnl_pct DECIMAL(10,4),
+  pnl_usd DECIMAL(20,4),
+  platform VARCHAR(30),
+  status VARCHAR(20) DEFAULT 'closed',
+  notes TEXT,
+  tags TEXT,
+  imported_at TIMESTAMPTZ DEFAULT NOW(),
+  trade_date TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_journal_user ON journal_trades(user_id);
+CREATE INDEX idx_journal_date ON journal_trades(trade_date);
+```
+
+### 6C. PnL Summary Dashboard (Daily / Weekly / Monthly)
+
+Add to the Journal tab, above the trade list:
+
+```
+┌──────────────────────────────────────────────┐
+│  📊 PERFORMANCE SUMMARY                      │
+│                                              │
+│  [Daily]  [Weekly]  [Monthly]                │
+│                                              │
+│  Period: Apr 14-16, 2026                     │
+│  Trades: 8  │  Win Rate: 62%                 │
+│  Total PnL: +$847.32  │  Avg: +$105.92       │
+│  Best: INJ +18.81%  │  Worst: TIA -2.4%      │
+│                                              │
+│  📈 Cumulative PnL Chart                     │
+│  ┌────────────────────────────────┐          │
+│  │         ╱╲                     │          │
+│  │    ╱╲╱╱   ╲╱╲                 │          │
+│  │╱╱╱            ╲╱╱╲╱╲╱╲╱      │          │
+│  └────────────────────────────────┘          │
+└──────────────────────────────────────────────┘
+```
+
+### 6D. Shareable Summary Card with Branding
+
+Add a “Share” button that generates a branded image:
+
+```
+[📤 Share My Results]
+```
+
+When clicked, generate a branded card (use HTML Canvas or a React component rendered to image):
+
+```
+┌──────────────────────────────────────┐
+│  ┌────┐                             │
+│  │CLVR│  CLVRQuant                  │
+│  │Quan│  TRADE SMARTER WITH AI      │
+│  └────┘                             │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│                                      │
+│  📊 WEEKLY PERFORMANCE               │
+│  Apr 10-16, 2026                     │
+│                                      │
+│  Total PnL:  +$1,247.89             │
+│  Win Rate:   68% (17W / 8L)         │
+│  Best Trade: INJ LONG +18.81%       │
+│                                      │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│  Trade smarter at clvrquantai.com    │
+│  @clvrquantai                        │
+└──────────────────────────────────────┘
+```
+
+**Design specs:**
+
+- Background: navy #080d18
+- Gold accent border
+- CLVRQuant logo/text at top
+- PnL in green (positive) or red (negative)
+- Website URL and social handle at bottom
+- Generate as PNG image that can be shared to:
+  - WhatsApp (via Web Share API)
+  - Instagram Stories
+  - Twitter/X
+  - Copy to clipboard
+  - Download
+
+```javascript
+// Share functionality:
+async function shareResults(summaryData) {
+  const canvas = generateShareCard(summaryData); // Render the branded card to canvas
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+  const file = new File([blob], 'clvrquant-results.png', { type: 'image/png' });
+
+  if (navigator.share && navigator.canShare({ files: [file] })) {
+    // Native share (works on mobile — WhatsApp, Instagram, etc.)
+    await navigator.share({
+      title: 'My CLVRQuant Trading Results',
+      text: `${summaryData.pnl >= 0 ? '+' : ''}$${summaryData.pnl.toFixed(2)} this week on CLVRQuant 🔥`,
+      files: [file],
+    });
+  } else {
+    // Fallback: download the image
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'clvrquant-results.png';
+    a.click();
+  }
+}
+```
+
+-----
+
+## PART 7 — API ENDPOINT FOR IMAGE TRADE EXTRACTION
+
+Create a new endpoint for processing uploaded trade screenshots:
+
+```typescript
+// POST /api/journal/import-image
+app.post("/api/journal/import-image", upload.single('image'), async (req, res) => {
+  const user = await getUser(req.session?.userId);
+  if (!user) return res.status(401).json({ error: "Not authenticated" });
+  const tier = getEffectiveTier(user);
+  if (tier === 'free') return res.status(403).json({ error: "Pro feature" });
+
+  try {
+    const imageBuffer = fs.readFileSync(req.file.path);
+    const base64Image = imageBuffer.toString('base64');
+    const mimeType = req.file.mimetype; // image/png, image/jpeg
+
+    // Call Claude with the image
+    const response = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 500,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: mimeType, data: base64Image },
+          },
+          {
+            type: 'text',
+            text: 'Extract trade data from this screenshot. Return ONLY valid JSON: {"asset":"...","direction":"LONG|SHORT","leverage":"...","entry":0.00,"exit":0.00,"pnl_pct":0.00,"platform":"...","status":"closed"}. Set missing fields to null.',
+          },
+        ],
+      }],
+    });
+
+    const text = response.content[0].text;
+    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const tradeData = JSON.parse(cleaned);
+
+    // DELETE the uploaded image immediately
+    fs.unlinkSync(req.file.path);
+
+    res.json({ success: true, trade: tradeData });
+  } catch (err) {
+    // Clean up image on error too
+    if (req.file?.path) fs.unlinkSync(req.file.path);
+    res.status(500).json({ error: 'Failed to extract trade data' });
+  }
+});
+
+// POST /api/journal/save
+app.post("/api/journal/save", async (req, res) => {
+  const user = await getUser(req.session?.userId);
+  if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+  const { asset, direction, leverage, entry_price, exit_price, pnl_pct, platform, notes, trade_date } = req.body;
+
+  await db.insert(journal_trades).values({
+    user_id: user.id,
+    asset, direction, leverage, entry_price, exit_price, pnl_pct, platform, notes,
+    trade_date: trade_date ? new Date(trade_date) : new Date(),
+  });
+
+  res.json({ success: true });
+});
+
+// GET /api/journal/summary?period=weekly
+app.get("/api/journal/summary", async (req, res) => {
+  const user = await getUser(req.session?.userId);
+  if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+  const period = req.query.period || 'weekly'; // daily, weekly, monthly
+  const now = new Date();
+  let startDate;
+
+  if (period === 'daily') startDate = new Date(now.setHours(0,0,0,0));
+  else if (period === 'weekly') startDate = new Date(now.setDate(now.getDate() - 7));
+  else startDate = new Date(now.setMonth(now.getMonth() - 1));
+
+  const trades = await db.select().from(journal_trades)
+    .where(and(
+      eq(journal_trades.user_id, user.id),
+      sql`${journal_trades.trade_date} >= ${startDate}`
+    ));
+
+  const wins = trades.filter(t => t.pnl_pct > 0);
+  const losses = trades.filter(t => t.pnl_pct <= 0);
+  const totalPnl = trades.reduce((sum, t) => sum + (parseFloat(t.pnl_pct) || 0), 0);
+  const best = trades.reduce((b, t) => (!b || parseFloat(t.pnl_pct) > parseFloat(b.pnl_pct)) ? t : b, null);
+  const worst = trades.reduce((w, t) => (!w || parseFloat(t.pnl_pct) < parseFloat(w.pnl_pct)) ? t : w, null);
+
+  res.json({
+    period,
+    trades: trades.length,
+    winRate: trades.length > 0 ? Math.round((wins.length / trades.length) * 100) : 0,
+    totalPnl: Math.round(totalPnl * 100) / 100,
+    avgPnl: trades.length > 0 ? Math.round((totalPnl / trades.length) * 100) / 100 : 0,
+    best: best ? { asset: best.asset, pnl: best.pnl_pct } : null,
+    worst: worst ? { asset: worst.asset, pnl: worst.pnl_pct } : null,
+    wins: wins.length,
+    losses: losses.length,
+  });
+});
+```
+
+-----
+
+## IMPLEMENTATION ORDER
+
+1. **Part 1** — Fix AI brief availability (retry logic, fallback prompt)
+1. **Part 2A-E** — Aggressive adaptive learning (tighten thresholds, suppress worst performers immediately)
+1. **Part 3** — Granular “Today” sub-timeframes (Quick/Hours/Full Day)
+1. **Part 4** — Leverage and hold time prominent on all cards
+1. **Part 5** — Squawk auto-play for paid users
+1. **Part 6** — Journal trade import UI (upload screenshot, paste link)
+1. **Part 7** — Backend endpoint for image extraction + journal save + summary
+1. **Part 6D** — Shareable branded summary card
+
+-----
+
+## VERIFICATION CHECKLIST
+
+- [ ] Daily Brief ALWAYS includes AI analysis (never shows “temporarily unavailable” unless truly impossible after 3 retry cycles)
+- [ ] Adaptive thresholds recalculate every 30 minutes
+- [ ] All tokens with <25% win rate and 10+ signals are suppressed
+- [ ] Signal generation requires 1.2% minimum move (not 0.8%)
+- [ ] “Today” section shows 3 sub-options: Quick (5-30min), Hours (1-4H), Full Day (4-12H)
+- [ ] Quick mode TPs are tight (0.3-0.8% for crypto)
+- [ ] Every trade card shows leverage and hold time prominently
+- [ ] “Exit by” timestamp shown on every card
+- [ ] Squawk auto-plays when sound is ON and user is Pro/Elite
+- [ ] Squawk does NOT play for free users
+- [ ] Journal: can upload screenshot → data extracted → saved → image deleted
+- [ ] Journal: PnL summary shows Daily/Weekly/Monthly views
+- [ ] Journal: Share button generates branded PNG with CLVRQuant logo
+- [ ] Share works on mobile (WhatsApp, Instagram via Web Share API)
+- [ ] All new features respect tier gating (Free/Pro/Elite)
+
+## WHAT NOT TO DO
+
+❌ Do NOT add a watchlist
+❌ Do NOT change the design system or fonts
+❌ Do NOT modify vite.config.ts
+❌ Do NOT store uploaded images permanently — extract data then delete
+❌ Do NOT install heavy image processing libraries — use Claude vision API for extraction
+❌ Do NOT break existing features while adding new ones
