@@ -228,36 +228,10 @@ Return a JSON object with EXACTLY these fields:
   "macroRisk": "${macroRiskEvents.length > 0 ? "HIGH" : "NORMAL"}",
   "macroRiskNote": "${macroRiskEvents.length > 0 ? macroRiskEvents[0] : "No critical events within 48h"}",
   "commentary": [
-    {
-      "emoji": "₿",
-      "title": "Bitcoin (BTC/USD)",
-      "text": "3-4 sentences: current price, trend (momentum or mean-reversion?), key support/resistance levels, funding rate context, what macro catalyst could break structure. End with a 🟢/🟡/🔴 bias."
-    },
-    {
-      "emoji": "🇪🇺",
-      "title": "EUR/USD",
-      "text": "3-4 sentences: current rate, DXY impact, ECB vs Fed divergence, key support/resistance. End with 🟢/🟡/🔴 bias."
-    },
-    {
-      "emoji": "🍁",
-      "title": "USD/CAD",
-      "text": "3-4 sentences: current rate, oil correlation (WTI/Brent price), BOC posture, key levels. End with 🟢/🟡/🔴 bias."
-    },
-    {
-      "emoji": "🇯🇵",
-      "title": "USD/JPY",
-      "text": "3-4 sentences: current rate, BOJ stance, real yield differential, intervention risk levels. End with 🟢/🟡/🔴 bias."
-    },
-    {
-      "emoji": "🥇",
-      "title": "Gold & Silver",
-      "text": "3-4 sentences: XAU current price and trend, real yield driver, DXY correlation, silver ratio. End with 🟢/🟡/🔴 bias."
-    },
-    {
-      "emoji": "🛢️",
-      "title": "Oil & Gas — Geopolitical Watch",
-      "text": "4-5 sentences covering: (1) WTI and Brent crude current prices and today's move direction, (2) key supply/demand drivers — OPEC+ production decisions, US inventory data, or demand outlook, (3) geopolitical risk premium — any active conflicts, sanctions, or shipping disruptions affecting energy flows (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), (4) natural gas price if notable, (5) how oil price trajectory affects inflation expectations and central bank posture. End with 🟢/🟡/🔴 bias for energy sector."
-    }
+    {"emoji":"₿","title":"Bitcoin (BTC/USD)","text":"2 concise sentences: current price + key level, plus 1 catalyst to watch. End with 🟢/🟡/🔴."},
+    {"emoji":"💱","title":"FX Majors (EUR/USD, USD/JPY)","text":"2 concise sentences covering DXY direction and the most actionable major. End with 🟢/🟡/🔴."},
+    {"emoji":"🥇","title":"Gold & Silver","text":"2 concise sentences: XAU price, real-yield driver, key level. End with 🟢/🟡/🔴."},
+    {"emoji":"🛢️","title":"Oil & Energy","text":"2 concise sentences: WTI/Brent move + 1 supply or geopolitical driver. End with 🟢/🟡/🔴."}
   ],
   "topTrade": {
     "asset": "Best trade idea for today — asset name",
@@ -272,44 +246,10 @@ Return a JSON object with EXACTLY these fields:
     "flags": "${macroRiskEvents.length > 0 ? "MACRO RISK" : "None"}"
   },
   "additionalTrades": [
-    {
-      "asset": "2nd best trade idea — different asset class from topTrade",
-      "dir": "LONG or SHORT",
-      "entry": "price",
-      "stop": "price",
-      "tp1": "price",
-      "tp2": "price",
-      "confidence": "X%",
-      "edge": "one sentence",
-      "riskLabel": "🟢 or 🟡 or 🔴",
-      "flags": "any flags"
-    },
-    {
-      "asset": "3rd trade idea — different asset class",
-      "dir": "LONG or SHORT",
-      "entry": "price",
-      "stop": "price",
-      "tp1": "price",
-      "tp2": "price",
-      "confidence": "X%",
-      "edge": "one sentence",
-      "riskLabel": "🟢 or 🟡 or 🔴",
-      "flags": "any flags"
-    },
-    {
-      "asset": "4th trade idea — different asset class",
-      "dir": "LONG or SHORT",
-      "entry": "price",
-      "stop": "price",
-      "tp1": "price",
-      "tp2": "price",
-      "confidence": "X%",
-      "edge": "one sentence",
-      "riskLabel": "🟢 or 🟡 or 🔴",
-      "flags": "any flags"
-    }
+    {"asset":"2nd trade — different asset class from topTrade","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"},
+    {"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"}
   ],
-  "watchItems": ["5-7 specific things to watch today — include price levels, event names, and what to do if they trigger"],
+  "watchItems": ["3-4 specific things to watch — include price levels, event names, and what to do if they trigger"],
   "riskLevel": "low" or "medium" or "high",
   "riskNote": "One sentence: biggest risk to positions today and how to manage it"
 }
@@ -332,7 +272,7 @@ RULES:
       },
       body: JSON.stringify({
         model: CLAUDE_MODEL,
-        max_tokens: 3000,
+        max_tokens: 4096,
         system: "You are CLVR AI — powered by Claude — an elite quantitative trading analyst applying a 5-layer decision framework (Macro Regime → Market Structure → Session Awareness → Signal Generation → Risk Rules). Generate precise, data-driven morning briefs with exact prices, 🔴/🟡/🟢 risk labels, macro risk flags when FOMC/CPI is within 48h, and one actionable top trade idea per brief. Always reference the actual prices provided. Return valid JSON only.",
         messages: [{ role: "user", content: prompt }],
       }),
@@ -552,7 +492,7 @@ async function sendDailyBriefEmails() {
           const resp = await client.emails.send({
             from: "CLVRQuant <hello@clvrquantai.com>",
             to: sub.email,
-            replyTo: "MikeClaver@CLVRQuantAI.com",
+            replyTo: "noreply@clvrquantai.com",
             subject: `CLVRQuant Morning Brief — ${today}`,
             headers: {
               "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}>`,
@@ -685,7 +625,7 @@ async function sendApologyBriefEmails() {
         const resp = await client.emails.send({
           from: "CLVRQuant <noreply@clvrquantai.com>",
           to: sub.email,
-          replyTo: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "noreply@clvrquantai.com",
           subject: `📊 CLVRQuant Morning Brief — ${today}`,
           html: apologyHtml,
         });
@@ -801,7 +741,7 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
       const resp = await client.emails.send({
         from: "CLVRQuant <noreply@clvrquantai.com>",
         to: r.email,
-        replyTo: "MikeClaver@CLVRQuantAI.com",
+        replyTo: "noreply@clvrquantai.com",
         subject: "🎁 Share CLVRQuant & Earn 1 Week Free Pro",
         html,
       });
