@@ -54,3 +54,9 @@ body {
   font-family: 'IBM Plex Mono', monospace;
   color: #d0deff;
 }
+
+@keyframes squawkPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(34,197,94,0.7); }
+  70%  { box-shadow: 0 0 0 8px rgba(34,197,94,0);   }
+  100% { box-shadow: 0 0 0 0   rgba(34,197,94,0);   }
+}

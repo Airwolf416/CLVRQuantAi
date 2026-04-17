@@ -86,6 +86,16 @@ CLVRQuant uses a tiered monetization model (Free and Pro) with Stripe for subscr
 
 -   `FINNHUB_KEY`, `ANTHROPIC_API_KEY`, `RAPIDAPI_KEY`, `CRYPTOPANIC_API_KEY` (optional), `SESSION_SECRET`, `OWNER_CODE`.
 
+### Trade Journal (Elite, Apr 2026)
+
+-   `tradeJournal` table in `shared/schema.ts`. CRUD via `/api/journal` (GET/POST/PATCH/DELETE), all gated by `requireElite`.
+-   Screenshot/link import: `POST /api/journal/extract` accepts `imageBase64`+`mediaType` (allowlist: png/jpeg/webp/gif) OR an `http(s)` URL. Calls Claude vision with `CLAUDE_MODEL`, returns parsed `{asset,direction,entry,stop,tp1,tp2,size,notes}`. Route uses a scoped 12mb express.json parser + `aiIpLimiter`. Images NOT persisted.
+-   Frontend: `TradeJournalTab` in `client/src/App.jsx`. Import dialog pre-fills the new-trade form. `shareTradeCard()` builds a navy/gold PNG via canvas → Web Share API with download fallback.
+
+### Squawk Box (Elite, Apr 2026)
+
+-   `SquawkBox` in `client/src/App.jsx` auto-announces new signals via SpeechSynthesis. Pulsing green dot indicator (`squawkPulse` keyframe in `client/src/index.css`) shown when LIVE. `emitSquawk(message, "normal"|"urgent")` exported helper lets any component trigger announcements (urgent = higher pitch/rate, cancels queue).
+
 ### Email System (Resend)
 
 -   Integrated via Replit connector for sending welcome emails, daily briefs, and promo expiry reminders. Subscribers are managed in a DB table.

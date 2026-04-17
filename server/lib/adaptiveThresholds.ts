@@ -94,6 +94,60 @@ export async function getThresholdFor(token: string, direction: string): Promise
   }
 }
 
+// One-time on-startup migration: suppress every token+direction with
+// <25% win rate over 10+ resolved signals. Catches up the system to reality
+// even before the first 30-min recalc runs. Idempotent — safe to call repeatedly.
+export async function suppressHistoricalBleeders(): Promise<number> {
+  try {
+    const client = await pool.connect();
+    try {
+      const winSql = `(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END)`;
+      const result = await client.query(`
+        WITH stats AS (
+          SELECT token, direction,
+                 COUNT(*) AS total,
+                 ROUND(100.0 * SUM(${winSql}) / COUNT(*), 2) AS win_rate
+          FROM ai_signal_log
+          WHERE outcome IS NOT NULL AND outcome <> 'PENDING'
+          GROUP BY token, direction
+          HAVING COUNT(*) >= 10
+             AND (100.0 * SUM(${winSql}) / COUNT(*)) < 25
+        )
+        INSERT INTO adaptive_thresholds
+          (token, direction, trade_type, baseline_threshold, current_threshold,
+           adjustment, win_rate_30d, sample_size, suppressed, manual_override,
+           last_recalc, updated_at)
+        SELECT token, direction, 'ALL', 75, 95, 20, win_rate, total, true, false, NOW(), NOW()
+        FROM stats
+        ON CONFLICT (token, direction, trade_type) DO UPDATE SET
+          suppressed        = CASE WHEN adaptive_thresholds.manual_override THEN adaptive_thresholds.suppressed        ELSE true  END,
+          current_threshold = CASE WHEN adaptive_thresholds.manual_override THEN adaptive_thresholds.current_threshold ELSE 95    END,
+          adjustment        = CASE WHEN adaptive_thresholds.manual_override THEN adaptive_thresholds.adjustment        ELSE 20    END,
+          win_rate_30d      = EXCLUDED.win_rate_30d,
+          sample_size       = EXCLUDED.sample_size,
+          last_recalc       = NOW(),
+          updated_at        = NOW()
+        RETURNING token, direction, win_rate_30d, sample_size
+      `);
+      const count = result.rowCount || 0;
+      if (count > 0) {
+        console.log(`[AdaptiveThresholds] ⛔ Suppressed ${count} historical bleeders:`);
+        for (const r of result.rows) {
+          console.log(`  • ${r.token} ${r.direction}: ${r.win_rate_30d}% over ${r.sample_size} signals`);
+        }
+      } else {
+        console.log("[AdaptiveThresholds] No historical bleeders to suppress");
+      }
+      return count;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error("[AdaptiveThresholds] suppressHistoricalBleeders failed:", e);
+    return 0;
+  }
+}
+
 export function startAdaptiveThresholds(): void {
   if (started) return;
   started = true;

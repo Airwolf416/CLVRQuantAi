@@ -1,4 +1,4 @@
-import type { Express, Response, Request, NextFunction } from "express";
+import express, { type Express, type Response, type Request, type NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -38,7 +38,7 @@ import {
   HL_PERP_SYMS, HL_TO_APP, APP_TO_HL,
   EQUITY_SYMS, EQUITY_BASE, EQUITY_FH_MAP,
   METALS_BASE, BASKET_YAHOO_MAP, ENERGY_ETF_MAP, COMMODITY_FH_SYMS, FOREX_BASE,
-  BASKET_PRICE_TTL, SESSION_THRESHOLDS, HIGH_IMPACT_KEYWORDS,
+  BASKET_PRICE_TTL, SESSION_THRESHOLDS, MAX_SIGNALS_PER_HOUR, HIGH_IMPACT_KEYWORDS,
   MOVE_WINDOW, SIGNAL_COOLDOWN, AI_CACHE_TTL,
   BASKET_EQUITIES_US, BASKET_INTL_FH, BASKET_COMMODITIES,
 } from "./config/assets";
@@ -677,7 +677,7 @@ function calcLiquidityIndex() {
   };
 }
 
-function detectMoves() {
+async function detectMoves() {
   const now = Date.now();
   for (const sym of CRYPTO_SYMS) {
     const hist = priceHistory[sym];
@@ -754,6 +754,26 @@ function detectMoves() {
     if (passedCount < minPassed) {
       const failed = Object.entries(checks).filter(([,v]) => !v.pass).map(([k]) => k).join(", ");
       console.log(`[SIGNAL] ${sym} FILTERED — only ${passedCount}/${totalChecks} checks passed. Failed: ${failed}`);
+      continue;
+    }
+
+    // ── ADAPTIVE SUPPRESSION GATE ──────────────────────────────────────────
+    // If this token+direction has been historically suppressed (<25% WR with
+    // 10+ resolved signals), block the signal at source — don't even log it.
+    try {
+      const adapt = await getThresholdFor(sym, dir);
+      if (adapt?.suppressed) {
+        console.log(`[SIGNAL] ${sym} ${dir} SUPPRESSED — ${adapt.winRate ?? "?"}% WR over ${adapt.sampleSize} signals (adaptive threshold)`);
+        continue;
+      }
+    } catch {}
+
+    // ── PER-HOUR GLOBAL CAP ───────────────────────────────────────────────
+    // Prevent signal spam during volatile periods.
+    const hourAgo = now - 60 * 60 * 1000;
+    const recentSignalCount = Object.values(lastSignalTime).filter(t => t >= hourAgo).length;
+    if (recentSignalCount >= MAX_SIGNALS_PER_HOUR) {
+      console.log(`[SIGNAL] ${sym} CAPPED — ${recentSignalCount} signals in last hour (max ${MAX_SIGNALS_PER_HOUR})`);
       continue;
     }
 
@@ -1709,6 +1729,97 @@ export async function registerRoutes(
     if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
     await storage.deleteTradeJournalEntry(id, userId);
     res.json({ ok: true });
+  });
+
+  // ── Journal: extract trade fields from screenshot or link via Claude vision ─
+  // Route-scoped 12mb JSON parser (overrides default global parser for this route only)
+  // Plus aiIpLimiter to prevent Anthropic-credit drain attacks.
+  const journalExtractParser = express.json({ limit: "12mb" });
+  app.post("/api/journal/extract", journalExtractParser, aiIpLimiter, async (req, res) => {
+    const userId = await requireElite(req, res);
+    if (!userId) return;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: "AI extraction unavailable" });
+    const { imageBase64, mediaType, url } = req.body || {};
+    if (!imageBase64 && !url) return res.status(400).json({ error: "imageBase64 or url required" });
+    // Validate mediaType against an allowlist
+    if (imageBase64) {
+      const ALLOWED_MT = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+      const mt = String(mediaType || "image/png").toLowerCase();
+      if (!ALLOWED_MT.includes(mt)) return res.status(400).json({ error: "Unsupported image type. Use PNG, JPEG, WebP, or GIF." });
+    }
+    // Basic URL validation
+    if (url) {
+      try {
+        const u = new URL(String(url));
+        if (!["http:", "https:"].includes(u.protocol)) return res.status(400).json({ error: "URL must be http(s)" });
+        if (String(url).length > 2000) return res.status(400).json({ error: "URL too long" });
+      } catch { return res.status(400).json({ error: "Invalid URL" }); }
+    }
+
+    const prompt = `You are a trading-screenshot parser. Extract the trade details from the input. Return ONLY a single JSON object with these fields (use null where not visible):
+{
+  "asset": "string ticker like BTC, ETH, TAO (no -USD or -PERP suffix)",
+  "direction": "LONG" | "SHORT",
+  "entry": "string number, the average entry price",
+  "stop": "string number or null",
+  "tp1": "string number or null",
+  "tp2": "string number or null",
+  "size": "string like '0.5 BTC' or '$5000' or '2x' or null",
+  "leverage": "string like '10x' or null",
+  "platform": "Bybit" | "Hyperliquid" | "Binance" | "Phantom" | "Other" | null,
+  "notes": "short context if visible (entry reason, P&L if shown), else null"
+}
+Output JSON only, no prose, no code fences.`;
+
+    try {
+      const content: any[] = [];
+      if (imageBase64) {
+        const mt = (mediaType || "image/png").toString();
+        const b64 = String(imageBase64).replace(/^data:[^;]+;base64,/, "");
+        content.push({ type: "image", source: { type: "base64", media_type: mt, data: b64 } });
+        content.push({ type: "text", text: prompt });
+      } else {
+        content.push({ type: "text", text: `${prompt}\n\nLink: ${url}\nIf this is a Bybit/Hyperliquid/Binance shareable position link, infer fields from the URL parameters where possible. If insufficient info, return what you can and null the rest.` });
+      }
+      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 800, messages: [{ role: "user", content }] }),
+      });
+      if (!aiRes.ok) {
+        const errTxt = await aiRes.text();
+        console.error("[/api/journal/extract] AI error:", errTxt.slice(0, 300));
+        return res.status(502).json({ error: "Extraction failed — please retry or enter manually." });
+      }
+      const data: any = await aiRes.json();
+      const rawText: string = (data.content || []).map((b: any) => b.text || "").join("").trim();
+      let t = rawText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+      if (t.includes("{")) t = t.slice(t.indexOf("{"));
+      if (t.lastIndexOf("}") > 0) t = t.slice(0, t.lastIndexOf("}") + 1);
+      let parsed: any = null;
+      try { parsed = JSON.parse(t); } catch {}
+      if (!parsed) {
+        console.error("[/api/journal/extract] parse fail:", rawText.slice(0, 300));
+        return res.status(500).json({ error: "Could not parse trade details — please enter manually." });
+      }
+      // Normalize
+      if (parsed.asset) parsed.asset = String(parsed.asset).toUpperCase().replace(/[-_/].*$/, "");
+      if (parsed.direction) {
+        const d = String(parsed.direction).toUpperCase();
+        parsed.direction = d.startsWith("L") || d === "BUY" ? "LONG" : "SHORT";
+      }
+      // Stuff leverage into size or notes (DB has no leverage column)
+      if (parsed.leverage && !parsed.size) parsed.size = parsed.leverage;
+      else if (parsed.leverage && parsed.size) parsed.size = `${parsed.size} @ ${parsed.leverage}`;
+      if (parsed.platform && parsed.notes) parsed.notes = `[${parsed.platform}] ${parsed.notes}`;
+      else if (parsed.platform) parsed.notes = `[${parsed.platform}]`;
+      delete parsed.leverage; delete parsed.platform;
+      res.json({ extracted: parsed });
+    } catch (e: any) {
+      console.error("[/api/journal/extract] exception:", e?.message);
+      res.status(500).json({ error: "Extraction failed — please enter manually." });
+    }
   });
 
   app.get("/api/regime", (_req, res) => {

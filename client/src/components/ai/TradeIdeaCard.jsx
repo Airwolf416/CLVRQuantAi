@@ -87,6 +87,36 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
     return `Hold up to ${kc}`;
   };
 
+  // Parse killClock → hours (for "Exit by" timestamp)
+  const parseKillHours = (kc) => {
+    if (!kc) return null;
+    const s = String(kc).toUpperCase().trim();
+    const minMatch = s.match(/(\d+)\s*MIN/);
+    if (minMatch) return parseInt(minMatch[1], 10) / 60;
+    const hMatch = s.match(/(\d+(?:\.\d+)?)\s*H/);
+    if (hMatch) return parseFloat(hMatch[1]);
+    if (s.includes("DAY")) return 24;
+    if (s.includes("SWING")) return 72;
+    if (s.includes("SCALP")) return 4;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : null;
+  };
+  const killHours = parseKillHours(trade.killClock);
+  const exitByLabel = killHours
+    ? new Date(Date.now() + killHours * 3600000).toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        weekday: killHours >= 24 ? "short" : undefined,
+        hour: "numeric", minute: "2-digit",
+      }) + " ET"
+    : null;
+  const holdLabel = killHours
+    ? killHours < 1 ? `${Math.round(killHours * 60)} min`
+      : killHours <= 4 ? `${Math.round(killHours)}H`
+      : killHours <= 12 ? "Today"
+      : killHours <= 24 ? "Today/Overnight"
+      : `${Math.round(killHours / 24)}D`
+    : null;
+
   return (
     <div
       data-testid={`trade-idea-card-${rank}`}
@@ -184,6 +214,36 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
           )}
         </div>
       </div>
+
+      {/* PROMINENT LEVERAGE + HOLD-TIME STRIP — visible in BOTH simple & pro modes */}
+      {(trade.leverage || holdLabel) && (
+        <div data-testid={`leverage-hold-strip-${rank}`} style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 0,
+          padding: "10px 14px",
+          margin: "0 14px 8px",
+          background: "rgba(0,0,0,0.3)",
+          border: "1px solid rgba(201,168,76,0.12)",
+          borderRadius: 8,
+        }}>
+          <div style={{ borderRight: "1px solid rgba(255,255,255,0.06)", paddingRight: 10 }}>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,0.45)", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 3 }}>⚡ LEVERAGE</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#c9a84c", fontFamily: MONO, lineHeight: 1 }}>
+              {trade.leverage || "—"}{trade.leverage && !String(trade.leverage).includes("MAX") ? <span style={{ fontSize: 9, fontWeight: 400, color: "rgba(201,168,76,0.6)", marginLeft: 4 }}>MAX</span> : null}
+            </div>
+          </div>
+          <div style={{ paddingLeft: 12 }}>
+            <div style={{ fontSize: 8, color: "rgba(255,255,255,0.45)", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 3 }}>⏱ HOLD TIME</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#e0e0e0", fontFamily: MONO, lineHeight: 1 }}>{holdLabel || "—"}</div>
+            {exitByLabel && (
+              <div style={{ fontSize: 8, color: "#00d4ff", fontFamily: MONO, marginTop: 4, letterSpacing: "0.04em" }}>
+                Exit by: {exitByLabel}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: "10px 14px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>

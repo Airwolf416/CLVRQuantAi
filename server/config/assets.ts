@@ -166,13 +166,18 @@ export const BACKTEST_WIN_RATES: Record<string, number> = {
   "SHORT_DEFAULT_NY": 0.56,  "SHORT_DEFAULT_LONDON": 0.54,  "SHORT_DEFAULT_ASIAN": 0.51,
 };
 
+// AGGRESSIVE thresholds — raised across all sessions to cut signal noise.
+// Required: ≥1.2% move, ≥2.0x volume, ≥$5M OI for any signal to qualify.
 export const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: number; minOI: number }> = {
-  ASIAN:   { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
-  LONDON:  { minMove: 0.8, minVolMult: 1.5, minOI: 3_000_000 },
-  NY:      { minMove: 0.8, minVolMult: 1.5, minOI: 3_000_000 },
-  POST_NY: { minMove: 1.0, minVolMult: 2.0, minOI: 5_000_000 },
-  DEFAULT: { minMove: 0.8, minVolMult: 1.5, minOI: 3_000_000 },
+  ASIAN:   { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
+  LONDON:  { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
+  NY:      { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
+  POST_NY: { minMove: 1.5, minVolMult: 2.5, minOI: 5_000_000 },
+  DEFAULT: { minMove: 1.2, minVolMult: 2.0, minOI: 5_000_000 },
 };
+
+// Cap auto-signals per hour across the whole system (prevents spam during volatility)
+export const MAX_SIGNALS_PER_HOUR = 5;
 
 export const HIGH_IMPACT_KEYWORDS = [
   "FOMC","CPI","NFP","Non-Farm","Fed Rate","Interest Rate","GDP","PCE","PPI","Powell",
