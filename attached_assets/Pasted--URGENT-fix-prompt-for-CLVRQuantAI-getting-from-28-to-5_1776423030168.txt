@@ -1,0 +1,900 @@
+# URGENT fix prompt for CLVRQuantAI: getting from 28% to 55%+ win rate
+
+Below is a copy-paste-ready Replit Agent prompt. It implements, in order: (1) an immediate bleed-stop SQL migration that suppresses bad pairs and installs a database-level gate, (2) a new deterministic TypeScript filter layer that replaces “asking Claude nicely,” (3) a Discounted Thompson Sampling + EMA + Wilson-score adaptive core, (4) a three-tier circuit breaker modeled on NYSE MWCB + SEC Rule 15c3-5, and (5) a 10-filter institutional-grade signal scorer with concrete numerical thresholds.
+
+**The core diagnosis before you paste anything**: your adaptive system is almost certainly broken in three specific ways that the research literature pins down — (a) the hourly batch threshold is stale by up to 59 minutes, so signals keep firing on old permissive values; (b) the threshold check is happening *after* signal generation or in a code path the worker bypasses (Knight Capital–style dead-path problem); and (c) Claude Sonnet 4.6 does not reliably follow negative instructions like “don’t signal WIF short” — this is a well-documented LLM failure mode  (NeQA, “Language Models Are Not Naysayers”)  that requires a deterministic post-filter, not prompt engineering. The fix is to move all suppression logic into Postgres triggers + a single `emitSignal()` gate, then replace your threshold system with per-arm Discounted Thompson Sampling  (γ=0.99) and EMA (α=0.10) that update atomically on every trade close.
+
+-----
+
+## The Replit Agent prompt (copy-paste everything below)
+
+```
+# CLVRQuantAI EMERGENCY FIX — Win Rate Recovery (28% → 55%+)
+
+## CONTEXT
+Platform: Express.js + PostgreSQL + React + Claude Sonnet 4.6, deployed on Railway.
+Current state: 28% win rate (679W/1743L), avg PnL -0.96%, getting worse.
+Root causes (do not skip):
+1. Adaptive threshold recalcs hourly → stale by up to 59 min, signals fire on old values.
+2. Suppression check happens AFTER signal generation or a worker bypasses it entirely.
+3. Claude is told "don't signal bad pairs" in the prompt — LLMs ignore negative instructions
+   (documented: NeQA, "Beyond Positive Scaling"). Only deterministic code gates work.
+4. Signal trigger is 0.8% / 5min — this is inside the noise band (~1× 5m ATR for BTC/ETH).
+5. No volume, OI, funding, HTF, or liquidation-cluster filters.
+
+## TASK
+Implement all changes below IN THIS ORDER. Do not skip steps. Do not add features not listed.
+Each step is independently deployable. After each step, verify the acceptance criterion before
+proceeding.
+
+========================================================================================
+STEP 1 — EMERGENCY BLEED-STOP (deploy within 30 minutes)
+========================================================================================
+
+Create migration: migrations/2026XXXX_emergency_stop.sql
+
+-- 1a. Enum + core tables
+CREATE TYPE signal_direction AS ENUM ('LONG','SHORT');
+
+CREATE TABLE IF NOT EXISTS signal_suppression (
+  id                    bigserial PRIMARY KEY,
+  symbol                text NOT NULL,
+  direction             signal_direction NOT NULL,
+  suppressed_until      timestamptz NOT NULL,
+  reason                text NOT NULL,
+  created_by            text NOT NULL,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  win_rate_at_block     numeric(5,4),
+  sample_size_at_block  int,
+  CHECK (suppressed_until > created_at)
+);
+CREATE INDEX suppression_lookup_idx
+  ON signal_suppression(symbol, direction, suppressed_until);
+
+CREATE TABLE IF NOT EXISTS circuit_breaker (
+  singleton       boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  active          boolean NOT NULL DEFAULT false,
+  level           int     NOT NULL DEFAULT 0 CHECK (level BETWEEN 0 AND 3),
+  reason          text,
+  tripped_at      timestamptz,
+  tripped_by      text,
+  auto_resume_at  timestamptz
+);
+INSERT INTO circuit_breaker(singleton) VALUES (true) ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS signal_outcome (
+  signal_id  bigint PRIMARY KEY REFERENCES signals(id) ON DELETE CASCADE,
+  outcome    text NOT NULL CHECK (outcome IN ('win','loss','breakeven','open','expired')),
+  pnl_pct    numeric(8,4),
+  closed_at  timestamptz
+);
+
+-- 1b. Per-arm adaptive state (Thompson Sampling + EMA + circuit state)
+CREATE TABLE IF NOT EXISTS arm_state (
+  symbol           text NOT NULL,
+  direction        signal_direction NOT NULL,
+  alpha            double precision NOT NULL DEFAULT 2.0,   -- Beta(2,5) pessimistic prior
+  beta             double precision NOT NULL DEFAULT 5.0,
+  ema_winrate      double precision NOT NULL DEFAULT 0.286, -- prior mean
+  n                int NOT NULL DEFAULT 0,
+  wins             int NOT NULL DEFAULT 0,
+  consec_losses    int NOT NULL DEFAULT 0,
+  breaker_state    text NOT NULL DEFAULT 'CLOSED'
+                    CHECK (breaker_state IN ('CLOSED','OPEN','HALF_OPEN')),
+  suppress_until   timestamptz,
+  suppression_ms   bigint NOT NULL DEFAULT 900000,  -- 15 min base
+  last_outcome_at  timestamptz,
+  last_updated     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (symbol, direction)
+);
+
+-- 1c. Wilson upper/lower bound as SQL functions (needed in trigger + jobs)
+CREATE OR REPLACE FUNCTION wilson_lower(wins int, n int, z float DEFAULT 1.645)
+RETURNS float AS $$
+DECLARE p float; denom float; centre float; margin float;
+BEGIN
+  IF n = 0 THEN RETURN 0; END IF;
+  p := wins::float/n;
+  denom  := 1 + (z*z)/n;
+  centre := (p + (z*z)/(2*n)) / denom;
+  margin := (z * sqrt((p*(1-p))/n + (z*z)/(4*n*n))) / denom;
+  RETURN centre - margin;
+END; $$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION wilson_upper(wins int, n int, z float DEFAULT 1.645)
+RETURNS float AS $$
+DECLARE p float; denom float; centre float; margin float;
+BEGIN
+  IF n = 0 THEN RETURN 1; END IF;
+  p := wins::float/n;
+  denom  := 1 + (z*z)/n;
+  centre := (p + (z*z)/(2*n)) / denom;
+  margin := (z * sqrt((p*(1-p))/n + (z*z)/(4*n*n))) / denom;
+  RETURN centre + margin;
+END; $$ LANGUAGE plpgsql IMMUTABLE;
+
+-- 1d. DATABASE-LEVEL GATE — this is the Knight Capital lesson.
+--     Every INSERT into signals, from ANY worker/endpoint/script, is gated here.
+CREATE OR REPLACE FUNCTION reject_bad_signals() RETURNS trigger AS $$
+DECLARE cb record; sup record; arm record;
+BEGIN
+  SELECT active, level INTO cb FROM circuit_breaker WHERE singleton = true;
+  IF cb.active AND cb.level >= 2 THEN
+    RAISE EXCEPTION 'SIGNAL_HALTED: circuit breaker L% active', cb.level
+      USING ERRCODE='check_violation';
+  END IF;
+
+  SELECT 1 INTO sup FROM signal_suppression
+   WHERE symbol = NEW.symbol
+     AND direction = NEW.direction::signal_direction
+     AND suppressed_until > now()
+   LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'SIGNAL_SUPPRESSED: % % is suppressed',
+      NEW.symbol, NEW.direction USING ERRCODE='check_violation';
+  END IF;
+
+  SELECT breaker_state, suppress_until INTO arm FROM arm_state
+   WHERE symbol=NEW.symbol AND direction=NEW.direction::signal_direction;
+  IF FOUND AND arm.breaker_state = 'OPEN' AND arm.suppress_until > now() THEN
+    RAISE EXCEPTION 'ARM_CIRCUIT_OPEN: % % cooling down', NEW.symbol, NEW.direction
+      USING ERRCODE='check_violation';
+  END IF;
+
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS signals_gate ON signals;
+CREATE TRIGGER signals_gate BEFORE INSERT ON signals
+FOR EACH ROW EXECUTE FUNCTION reject_bad_signals();
+
+-- 1e. IMMEDIATE BULK SUPPRESSION — run once, right now
+-- Suppresses every (symbol, direction) combo with <30% WR and >=20 signals over 30 days
+-- for 7 days. WIF, APT, SEI and any other bad pairs will be blocked instantly.
+WITH pair_stats AS (
+  SELECT s.symbol,
+         s.direction::signal_direction AS direction,
+         count(*) FILTER (WHERE o.outcome IN ('win','loss')) AS n,
+         count(*) FILTER (WHERE o.outcome = 'win')           AS wins
+  FROM signals s
+  JOIN signal_outcome o ON o.signal_id = s.id
+  WHERE s.created_at >= now() - interval '30 days'
+  GROUP BY s.symbol, s.direction
+),
+bad AS (
+  SELECT symbol, direction, wins, n, wins::float/n AS wr
+  FROM pair_stats WHERE n >= 20 AND wins::float/n < 0.30
+)
+INSERT INTO signal_suppression
+  (symbol, direction, suppressed_until, reason, created_by,
+   win_rate_at_block, sample_size_at_block)
+SELECT b.symbol, b.direction, now() + interval '7 days',
+       format('auto-emergency: wr=%s over %s signals (30d)', round(b.wr::numeric,3), b.n),
+       'auto:emergency_migration', b.wr, b.n
+FROM bad b
+LEFT JOIN signal_suppression exist
+  ON exist.symbol=b.symbol AND exist.direction=b.direction
+ AND exist.suppressed_until > now()
+WHERE exist.id IS NULL;
+
+-- 1f. NUCLEAR OPTION — if win rate is still collapsing, activate full halt:
+-- UPDATE circuit_breaker
+--    SET active=true, level=3, reason='emergency manual halt',
+--        tripped_at=now(), tripped_by='ops';
+
+ACCEPTANCE CRITERIA step 1:
+- Every pair with <30% WR & >=20 signals has a row in signal_suppression with
+  suppressed_until = now()+7d.
+- Manually INSERT a row into signals for WIF LONG → trigger raises SIGNAL_SUPPRESSED.
+- Setting circuit_breaker.level=3 blocks ALL inserts.
+
+========================================================================================
+STEP 2 — SINGLE EMIT GATE (TypeScript) — kill all legacy signal paths
+========================================================================================
+
+Create: src/signals/emitGate.ts
+
+import { z } from 'zod';
+import { pool } from '../db';
+import { scoreConfluence } from './confluence';  // step 5
+import { sampleBeta } from './stats';            // step 3
+
+const Signal = z.object({
+  symbol:     z.string().regex(/^[A-Z0-9]{2,10}(USDT|USD)?$/),
+  direction:  z.enum(['LONG','SHORT']),
+  entry:      z.number().positive(),
+  tp:         z.number().positive(),
+  sl:         z.number().positive(),
+  confidence: z.number().min(0).max(1),
+  rationale:  z.string().max(2000),
+  features:   z.record(z.any()),    // OI, funding, volume, ATR, etc.
+});
+export type Signal = z.infer<typeof Signal>;
+
+export type EmitResult =
+  | { ok: true; id: number }
+  | { ok: false; reason: string; detail?: string };
+
+const MIN_CONFIDENCE = 0.70;
+const MIN_CONFLUENCE = 70;     // out of 100
+const MIN_THOMPSON   = 0.50;   // sampled Beta must beat 50%
+
+export async function emitSignal(raw: unknown): Promise<EmitResult> {
+  // 1. Schema — reject malformed LLM output; never try to "fix" it
+  const parsed = Signal.safeParse(raw);
+  if (!parsed.success) return { ok:false, reason:'SCHEMA', detail: parsed.error.message };
+  const s = parsed.data;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+
+    // 2. Circuit breaker
+    const cb = await client.query(
+      `SELECT active, level FROM circuit_breaker WHERE singleton=true`);
+    if (cb.rows[0].active && cb.rows[0].level >= 2) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'CIRCUIT_BREAKER_L'+cb.rows[0].level };
+    }
+
+    // 3. Pair-level suppression
+    const sup = await client.query(
+      `SELECT 1 FROM signal_suppression
+        WHERE symbol=$1 AND direction=$2 AND suppressed_until > now() LIMIT 1`,
+      [s.symbol, s.direction]);
+    if (sup.rowCount) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'SUPPRESSED_PAIR' };
+    }
+
+    // 4. Per-arm circuit breaker & Wilson floor
+    const arm = await client.query(
+      `SELECT alpha, beta, ema_winrate, n, wins, consec_losses,
+              breaker_state, suppress_until
+         FROM arm_state WHERE symbol=$1 AND direction=$2 FOR UPDATE`,
+      [s.symbol, s.direction]);
+    const a = arm.rows[0] ?? { alpha:2, beta:5, ema_winrate:0.286,
+                                n:0, wins:0, consec_losses:0,
+                                breaker_state:'CLOSED', suppress_until:null };
+
+    if (a.breaker_state === 'OPEN' && a.suppress_until && new Date(a.suppress_until) > new Date()) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'ARM_COOLDOWN' };
+    }
+
+    // Wilson lower bound @ 90% — only trust after n>=20
+    if (a.n >= 20) {
+      const wl = wilsonLower(a.wins, a.n, 1.645);
+      if (wl < 0.45) {
+        await client.query('ROLLBACK');
+        return { ok:false, reason:'WILSON_FLOOR', detail:`wl=${wl.toFixed(3)}` };
+      }
+    }
+
+    // 5. Discounted Thompson sample — probabilistic filter, no mode collapse
+    const theta = sampleBeta(a.alpha, a.beta);
+    const minTheta = a.n < 20 ? 0.60 : MIN_THOMPSON;  // cold start stricter
+    if (theta < minTheta) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'TS_SAMPLE_LOW', detail:`theta=${theta.toFixed(3)}` };
+    }
+
+    // 6. LLM confidence floor (deterministic, NOT in prompt)
+    if (s.confidence < MIN_CONFIDENCE) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'LOW_CONFIDENCE' };
+    }
+
+    // 7. Confluence score — the 10-filter institutional scorer (step 5)
+    const score = scoreConfluence(s.features, s.direction);
+    if (score.hardReject) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'HARD_REJECT', detail: score.rejectReasons.join(',') };
+    }
+    if (score.total < MIN_CONFLUENCE) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'CONFLUENCE_LOW', detail:`score=${score.total}` };
+    }
+
+    // 8. R:R minimum 2:1
+    const risk   = Math.abs(s.entry - s.sl);
+    const reward = Math.abs(s.tp - s.entry);
+    if (reward / risk < 2.0) {
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'RR_TOO_LOW', detail:`rr=${(reward/risk).toFixed(2)}` };
+    }
+
+    // 9. Rate limits — Knight lesson: bound runaway
+    const rl = await client.query(
+      `SELECT count(*)::int AS c FROM signals
+        WHERE symbol=$1 AND created_at > now() - interval '1 hour'`, [s.symbol]);
+    if (rl.rows[0].c >= 5) {   // max 5 signals/hour/symbol
+      await client.query('ROLLBACK');
+      return { ok:false, reason:'RATE_LIMIT_SYMBOL' };
+    }
+
+    // 10. Insert — DB trigger is the last line of defense
+    const ins = await client.query(
+      `INSERT INTO signals(symbol, direction, entry_price, tp, sl, confidence,
+                           rationale, confluence_score, thompson_sample, features)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+      [s.symbol, s.direction, s.entry, s.tp, s.sl, s.confidence,
+       s.rationale, score.total, theta, s.features]);
+
+    await client.query('COMMIT');
+    return { ok:true, id: ins.rows[0].id };
+  } catch (e: any) {
+    await client.query('ROLLBACK');
+    return { ok:false, reason:'DB_ERROR', detail: e.message };
+  } finally {
+    client.release();
+  }
+}
+
+function wilsonLower(w:number, n:number, z=1.645): number {
+  if (n===0) return 0;
+  const p = w/n, d = 1 + z*z/n;
+  const c = (p + z*z/(2*n))/d;
+  const m = (z*Math.sqrt(p*(1-p)/n + z*z/(4*n*n)))/d;
+  return c - m;
+}
+
+MANDATORY REFACTOR: grep the codebase for every `INSERT INTO signals` and every call to
+the signal broadcast queue. Route ALL of them through emitSignal(). Delete any legacy
+endpoint (e.g., /api/generate-signal-v1, emitSignalDirect, debug tools). This is the
+Knight Capital lesson — dead code paths reactivate with deadly consequences.
+
+ACCEPTANCE CRITERIA step 2:
+- Only ONE function inserts into signals in the entire codebase: emitSignal().
+- Unit test: feed a suppressed pair → returns {ok:false, reason:'SUPPRESSED_PAIR'}.
+- Unit test: R:R=1.5 → returns {ok:false, reason:'RR_TOO_LOW'}.
+- Unit test: malformed LLM JSON → returns {ok:false, reason:'SCHEMA'}.
+
+========================================================================================
+STEP 3 — ADAPTIVE CORE (Discounted TS + EMA + per-arm breaker)
+========================================================================================
+
+Create: src/signals/stats.ts
+
+// Beta(a,b) sampler via two Gammas (Marsaglia–Tsang for shape>=1)
+function gaussian(): number {
+  let u=0, v=0;
+  while(u===0) u=Math.random();
+  while(v===0) v=Math.random();
+  return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+function sampleGamma(shape:number): number {
+  if (shape < 1) return sampleGamma(shape+1) * Math.pow(Math.random(), 1/shape);
+  const d = shape - 1/3, c = 1/Math.sqrt(9*d);
+  while (true) {
+    let x:number, v:number;
+    do { x = gaussian(); v = 1 + c*x; } while (v <= 0);
+    v = v*v*v;
+    const u = Math.random();
+    if (u < 1 - 0.0331*x*x*x*x) return d*v;
+    if (Math.log(u) < 0.5*x*x + d*(1 - v + Math.log(v))) return d*v;
+  }
+}
+export function sampleBeta(a:number, b:number): number {
+  const x = sampleGamma(Math.max(a,0.01)), y = sampleGamma(Math.max(b,0.01));
+  return x/(x+y);
+}
+
+Create: src/signals/armUpdate.ts
+
+import { pool } from '../db';
+
+const EMA_ALPHA       = 0.10;   // half-life ~6.6 signals
+const DISCOUNT_GAMMA  = 0.99;   // Discounted Thompson
+const BASE_COOLDOWN_MS= 15 * 60 * 1000;        // 15 min
+const MAX_COOLDOWN_MS = 24 * 60 * 60 * 1000;   // 24 h
+
+/**
+ * Called atomically every time a trade closes.
+ * Updates per-arm Beta posterior (discounted), EMA, and circuit breaker state.
+ * This REPLACES the hourly batch job. No more 59-minute staleness.
+ */
+export async function onTradeClose(
+  signalId: number, symbol: string, direction: 'LONG'|'SHORT',
+  won: boolean, pnlPct: number
+) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Idempotency: don't double-count a retried webhook
+    const dup = await client.query(
+      `SELECT 1 FROM signal_outcome WHERE signal_id=$1`, [signalId]);
+    if (dup.rowCount) { await client.query('ROLLBACK'); return; }
+
+    await client.query(
+      `INSERT INTO signal_outcome(signal_id, outcome, pnl_pct, closed_at)
+       VALUES ($1, $2, $3, now())`,
+      [signalId, won ? 'win' : 'loss', pnlPct]);
+
+    // Lock the arm row
+    const r = await client.query(
+      `SELECT alpha, beta, ema_winrate, n, wins, consec_losses,
+              breaker_state, suppression_ms
+         FROM arm_state WHERE symbol=$1 AND direction=$2 FOR UPDATE`,
+      [symbol, direction]);
+
+    const prev = r.rows[0] ?? {
+      alpha:2, beta:5, ema_winrate:0.286, n:0, wins:0,
+      consec_losses:0, breaker_state:'CLOSED', suppression_ms:BASE_COOLDOWN_MS
+    };
+
+    // Discounted Beta update
+    const reward = won ? 1 : 0;
+    const newAlpha = Math.max(1, DISCOUNT_GAMMA * prev.alpha + reward);
+    const newBeta  = Math.max(1, DISCOUNT_GAMMA * prev.beta  + (1 - reward));
+
+    // EMA update
+    const newEma = EMA_ALPHA * reward + (1 - EMA_ALPHA) * prev.ema_winrate;
+
+    // Circuit breaker transitions
+    let consec = won ? 0 : prev.consec_losses + 1;
+    let state: 'CLOSED'|'OPEN'|'HALF_OPEN' = prev.breaker_state;
+    let suppMs = prev.suppression_ms;
+    let suppressUntil: Date | null = null;
+
+    if (state === 'HALF_OPEN') {
+      state = won ? 'CLOSED' : 'OPEN';
+      if (!won) suppMs = Math.min(suppMs * 2, MAX_COOLDOWN_MS);
+    }
+    if (!won && consec >= 3) {
+      state = 'OPEN';
+      suppMs = Math.min(BASE_COOLDOWN_MS * Math.pow(2, Math.min(consec, 8)),
+                        MAX_COOLDOWN_MS);
+    }
+    if (state === 'OPEN') {
+      const jitter = 0.5 + Math.random();  // 0.5×–1.5×
+      suppressUntil = new Date(Date.now() + suppMs * jitter);
+    }
+    if (won) { state = 'CLOSED'; suppMs = BASE_COOLDOWN_MS; }
+
+    await client.query(
+      `INSERT INTO arm_state(symbol, direction, alpha, beta, ema_winrate,
+                             n, wins, consec_losses, breaker_state,
+                             suppress_until, suppression_ms, last_outcome_at,
+                             last_updated)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())
+       ON CONFLICT (symbol, direction) DO UPDATE
+         SET alpha=$3, beta=$4, ema_winrate=$5, n=$6, wins=$7,
+             consec_losses=$8, breaker_state=$9, suppress_until=$10,
+             suppression_ms=$11, last_outcome_at=now(), last_updated=now()`,
+      [symbol, direction, newAlpha, newBeta, newEma,
+       prev.n + 1, prev.wins + (won?1:0), consec, state,
+       suppressUntil, suppMs]);
+
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+DELETE the hourly batch recalculation job. Call onTradeClose() from your trade-close
+webhook handler. Every outcome now updates the threshold atomically.
+
+Scheduled job (15 min): suppression_job.ts
+
+/**
+ * Runs every 15 minutes. Applies the Wilson-upper rule as a belt to the per-arm
+ * circuit breaker's suspenders.
+ */
+export async function runSuppressionJob() {
+  await pool.query(`
+    WITH stats AS (
+      SELECT s.symbol, s.direction::signal_direction AS direction,
+             count(*) FILTER (WHERE o.outcome IN ('win','loss')) AS n,
+             count(*) FILTER (WHERE o.outcome = 'win')           AS wins
+      FROM signals s
+      JOIN signal_outcome o ON o.signal_id = s.id
+      WHERE s.created_at >= now() - interval '30 days'
+      GROUP BY s.symbol, s.direction
+    ),
+    bad AS (
+      SELECT symbol, direction, wins, n
+      FROM stats
+      WHERE n >= 20 AND wilson_upper(wins, n, 1.645) < 0.40
+    )
+    INSERT INTO signal_suppression
+      (symbol, direction, suppressed_until, reason, created_by,
+       win_rate_at_block, sample_size_at_block)
+    SELECT b.symbol, b.direction, now() + interval '3 days',
+           format('wilson upper=%s, wr=%s, n=%s',
+                  round(wilson_upper(b.wins, b.n, 1.645)::numeric,3),
+                  round((b.wins::float/b.n)::numeric,3), b.n),
+           'auto:wilson_job', b.wins::float/b.n, b.n
+    FROM bad b
+    LEFT JOIN signal_suppression existing
+      ON existing.symbol=b.symbol AND existing.direction=b.direction
+     AND existing.suppressed_until > now()
+    WHERE existing.id IS NULL;
+  `);
+}
+
+Use pg_cron or BullMQ with an advisory lock (`SELECT pg_advisory_xact_lock(hashtext('suppression_job'))`)
+so only ONE runner executes at a time.
+
+ACCEPTANCE CRITERIA step 3:
+- Simulate 3 consecutive losses for BTC LONG → arm_state.breaker_state='OPEN',
+  suppress_until = now()+60min.
+- Next trade close (win) → breaker_state='CLOSED', consec_losses=0.
+- EMA after 1 loss on a fresh arm: 0.10*0 + 0.90*0.286 = 0.2574.
+
+========================================================================================
+STEP 4 — WIN-RATE CIRCUIT BREAKER (platform-wide, NYSE MWCB pattern)
+========================================================================================
+
+Scheduled job (every 60 seconds): circuit_breaker_job.ts
+
+import { pool } from '../db';
+
+const WINDOWS = [
+  { label:'1h',  interval:"interval '1 hour'",   minN:20 },
+  { label:'4h',  interval:"interval '4 hours'",  minN:30 },
+  { label:'24h', interval:"interval '24 hours'", minN:40 },
+];
+
+// Tiered thresholds — trip on WORST window, require Wilson upper < threshold
+// so we don't trip on noise.
+const TIERS = [
+  { level: 3, thresholds: { '1h':0.30, '4h':0.35, '24h':0.40 } }, // HALT
+  { level: 2, thresholds: { '1h':0.35, '4h':0.40, '24h':0.45 } }, // PAUSE
+  { level: 1, thresholds: { '1h':0.40, '4h':0.45, '24h':0.50 } }, // WARN
+];
+
+export async function checkCircuitBreaker() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('cb_recompute'))`);
+
+    const windowStats: Record<string,{wins:number; n:number; wu:number}> = {};
+    for (const w of WINDOWS) {
+      const r = await client.query(`
+        SELECT count(*) FILTER (WHERE o.outcome IN ('win','loss'))::int AS n,
+               count(*) FILTER (WHERE o.outcome = 'win')::int          AS wins
+        FROM signals s JOIN signal_outcome o ON o.signal_id=s.id
+        WHERE s.created_at > now() - ${w.interval}
+      `);
+      const n = r.rows[0].n, wins = r.rows[0].wins;
+      const wu = n >= w.minN
+        ? (await client.query(`SELECT wilson_upper($1,$2,1.645) AS wu`, [wins,n])).rows[0].wu
+        : 1.0;
+      windowStats[w.label] = { wins, n, wu };
+    }
+
+    // Determine tier: worst window drives the level
+    let triggeredLevel = 0;
+    let reason = '';
+    for (const tier of TIERS) {
+      for (const w of WINDOWS) {
+        const s = windowStats[w.label];
+        if (s.n < w.minN) continue;
+        if (s.wu < tier.thresholds[w.label as '1h'|'4h'|'24h']) {
+          triggeredLevel = Math.max(triggeredLevel, tier.level);
+          reason = `${w.label} wilson_upper=${s.wu.toFixed(3)} < ${tier.thresholds[w.label as '1h'|'4h'|'24h']} (n=${s.n})`;
+        }
+      }
+      if (triggeredLevel) break;
+    }
+
+    const cur = await client.query(
+      `SELECT active, level FROM circuit_breaker WHERE singleton=true FOR UPDATE`);
+
+    if (triggeredLevel >= 2) {
+      await client.query(
+        `UPDATE circuit_breaker
+            SET active=true, level=$1, reason=$2, tripped_at=now(),
+                tripped_by='auto:cb_job', auto_resume_at=NULL
+          WHERE singleton=true AND (active=false OR level < $1)`,
+        [triggeredLevel, reason]);
+      // TODO: PagerDuty fire
+    } else if (triggeredLevel === 1 && cur.rows[0].level < 1) {
+      await client.query(
+        `UPDATE circuit_breaker SET level=1, reason=$1, tripped_at=now(),
+                                    tripped_by='auto:cb_job'
+          WHERE singleton=true`, [reason]);
+      // TODO: Slack warning
+    }
+    // NOTE: never auto-RESUME — require human sign-off (see runbook below).
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK'); throw e;
+  } finally { client.release(); }
+}
+
+/**
+ * Resume endpoint: POST /admin/circuit-breaker/resume  (auth-gated, audited)
+ * Preflight checklist (all must pass):
+ *  1. Replay last 7d signals → aggregate WR >= 0.50, Wilson lower >= 0.40.
+ *  2. Build SHA matches expected current build on every pod.
+ *  3. No stale auto-suppressions from the incident root cause.
+ *  4. Two-human sign-off (approver_id + resumed_by).
+ */
+export async function resumeCircuitBreaker(resumedBy: string, approvedBy: string) {
+  // Preflight replay
+  const replay = await pool.query(`
+    SELECT count(*)::int AS n,
+           (count(*) FILTER (WHERE o.outcome='win')::float /
+            NULLIF(count(*) FILTER (WHERE o.outcome IN ('win','loss')),0)) AS wr,
+           wilson_lower(
+             count(*) FILTER (WHERE o.outcome='win')::int,
+             count(*) FILTER (WHERE o.outcome IN ('win','loss'))::int,
+             1.645) AS wl
+      FROM signals s JOIN signal_outcome o ON o.signal_id=s.id
+     WHERE s.created_at > now() - interval '7 days'
+  `);
+  const { n, wr, wl } = replay.rows[0];
+  if (n < 40 || wr < 0.50 || wl < 0.40) {
+    throw new Error(`PREFLIGHT_FAIL: n=${n}, wr=${wr}, wilson_lower=${wl}`);
+  }
+  if (!approvedBy || approvedBy === resumedBy) {
+    throw new Error('TWO_HUMAN_SIGNOFF_REQUIRED');
+  }
+  await pool.query(
+    `UPDATE circuit_breaker
+        SET active=false, level=0, reason=NULL, tripped_at=NULL, tripped_by=NULL
+      WHERE singleton=true`);
+  await pool.query(
+    `INSERT INTO circuit_breaker_events(action, resumed_by, approved_by, created_at)
+     VALUES ('resume',$1,$2,now())`, [resumedBy, approvedBy]);
+}
+
+Also add a Slack slash command /signal-halt and a CLI one-liner
+  psql $DATABASE_URL -c "UPDATE circuit_breaker SET active=true,level=3,
+    reason='manual',tripped_at=now(),tripped_by='ops';"
+for when the API is itself broken. Rehearse quarterly.
+
+ACCEPTANCE CRITERIA step 4:
+- Seed 50 losing signals in the last 1h → breaker auto-trips to level 2.
+- Hitting /admin/circuit-breaker/resume without approvedBy → 400.
+- Hitting resume while 7d WR < 50% → 409 PREFLIGHT_FAIL.
+
+========================================================================================
+STEP 5 — INSTITUTIONAL 10-FILTER CONFLUENCE SCORER
+========================================================================================
+
+Create: src/signals/confluence.ts
+
+export interface Features {
+  move_pct_15m: number;                 // e.g. 0.018 = 1.8%
+  bbw_percentile_100: number;           // 0..1
+  vol_ratio_20: number;                 // current / SMA20
+  cvd_confirms: boolean;
+  cvd_divergence: boolean;
+  oi_change_1h: number;                 // e.g. 0.04 = +4%
+  oi_change_15m: number;
+  funding_8h: number;                   // e.g. 0.0006 = +0.06%
+  nearest_same_side_liq_atr: number;    // distance in ATR units
+  opposing_liq_within_3atr: boolean;
+  htf_agreement: 0 | 1 | 2 | 3;         // of {4H,1H,15m}
+  price_above_ema50_1h: boolean;
+  ema50_above_ema200_1h: boolean;
+  price_above_vwap: boolean;
+  entry_type: 'retest_fib' | 'breakout_chase';
+  rejection_candle: boolean;
+  adx_1h: number;
+}
+
+export interface ScoreResult {
+  total: number;
+  hardReject: boolean;
+  rejectReasons: string[];
+  breakdown: Record<string, number>;
+}
+
+export function scoreConfluence(fRaw: unknown, dir: 'LONG'|'SHORT'): ScoreResult {
+  const f = fRaw as Features;
+  const rej: string[] = [];
+  const br: Record<string, number> = {};
+  const sgn = dir === 'LONG' ? 1 : -1;
+
+  // === HARD REJECTS (any one → signal killed) ===
+  if (f.cvd_divergence)                              rej.push('CVD_DIVERGENCE');
+  if (f.htf_agreement <= 1)                          rej.push('HTF_DISAGREES');
+  if (sgn * f.oi_change_1h < -0.02)                  rej.push('OI_AGAINST');
+  if (dir === 'LONG'  && f.funding_8h >  0.0005)     rej.push('LONG_FUNDING_OVERHEATED');
+  if (dir === 'SHORT' && f.funding_8h < -0.0005)     rej.push('SHORT_FUNDING_OVERHEATED');
+  if (f.nearest_same_side_liq_atr < 1.0)             rej.push('LIQ_MAGNET_AHEAD');
+  if (f.vol_ratio_20 < 1.5)                          rej.push('VOLUME_TOO_LOW');
+  if (f.adx_1h < 20 && f.entry_type === 'breakout_chase')
+                                                     rej.push('CHOP_REGIME_CHASE');
+
+  if (rej.length) return { total:0, hardReject:true, rejectReasons:rej, breakdown:br };
+
+  // === SCORED FILTERS (100 total) ===
+  // 1. Move + compression (10)
+  br.move = (f.move_pct_15m >= 0.015 && f.bbw_percentile_100 <= 0.30) ? 10
+          : (f.move_pct_15m >= 0.010)                                 ? 5 : 0;
+
+  // 2. Volume (15)
+  br.volume = f.vol_ratio_20 >= 3.0 ? 15
+            : f.vol_ratio_20 >= 2.5 ? 12
+            : f.vol_ratio_20 >= 2.0 ? 8 : 4;
+
+  // 3. CVD alignment (10)
+  br.cvd = f.cvd_confirms ? 10 : 5;
+
+  // 4. Open Interest (15)
+  const oiAligned = sgn * f.oi_change_1h;
+  br.oi = oiAligned >= 0.05 ? 15 : oiAligned >= 0.03 ? 10 : 5;
+
+  // 5. Funding tailwind (10)
+  br.funding = (sgn * f.funding_8h < 0)           ? 10  // contrarian tailwind
+             : Math.abs(f.funding_8h) < 0.0002    ? 7
+             :                                      4;
+
+  // 6. Liquidation landscape (10)
+  br.liq = f.opposing_liq_within_3atr ? 10 : 5;
+
+  // 7. HTF alignment (15)
+  br.htf = f.htf_agreement === 3 ? 15 : 8;
+
+  // 8. EMA structure (5)
+  const emaOk = dir === 'LONG'
+    ? (f.price_above_ema50_1h && f.ema50_above_ema200_1h)
+    : (!f.price_above_ema50_1h && !f.ema50_above_ema200_1h);
+  br.ema = emaOk ? 5 : 0;
+
+  // 9. VWAP (5)
+  br.vwap = (dir === 'LONG' ? f.price_above_vwap : !f.price_above_vwap) ? 5 : 0;
+
+  // 10. Entry type (5)
+  br.entry = (f.entry_type === 'retest_fib' && f.rejection_candle) ? 5 : 0;
+
+  const total = Object.values(br).reduce((a,b)=>a+b, 0);
+  return { total, hardReject:false, rejectReasons:[], breakdown:br };
+}
+
+MINIMUM TRIGGER CRITERIA (replace your "0.8% in 5 min" trigger ENTIRELY):
+  - move_pct_15m    >= 1.5%      OR  move_pct_1h >= 2.5%
+  - vol_ratio_20    >= 2.0       (2.5x preferred)
+  - oi_change_1h    >= +3% aligned with direction
+  - funding_8h:     in [-0.05%, +0.05%] or contrarian to direction
+  - htf_agreement   >= 2 of {4H,1H,15m}
+  - bbw_percentile_100 <= 0.30   (volatility contraction)
+  - adx_1h          >= 20        (trend regime)
+  - entry_type      = 'retest_fib' with rejection_candle
+  - stop_loss       = 1.5×–2× ATR(14) on 5m, beyond nearest liquidation cluster + 0.5 ATR
+  - take_profit     = >= 2:1 R:R, TP1=2R, TP2=prior swing, runner = Chandelier(3×ATR)
+
+Signal worker workflow:
+  1. Every 5 min, scan the universe.
+  2. For each (symbol, direction), compute Features from Binance fapi + Coinglass.
+  3. If pre-filter passes (minimum trigger criteria) → call Claude with the feature blob.
+  4. Claude returns Signal candidate (JSON).
+  5. Pipe through emitSignal() → only survivors hit the DB.
+
+DO NOT tell Claude to "avoid" bad pairs. Instead, don't even CALL Claude for suppressed
+pairs — query signal_suppression first and skip the LLM entirely. Saves tokens, avoids
+the negation-failure mode.
+
+ACCEPTANCE CRITERIA step 5:
+- Feed CVD divergence → hardReject=true.
+- Feed funding_8h=+0.0008 with direction LONG → hardReject=true.
+- Full-confluence setup → total >= 85.
+
+========================================================================================
+STEP 6 — PROMPT CHANGES FOR CLAUDE (minimal — do NOT rely on this for safety)
+========================================================================================
+
+Update the system prompt to describe ONLY what Claude is good at: reasoning over features.
+Remove all "don't signal X" instructions — they will be ignored by the LLM and are
+replaced by deterministic code gates.
+
+SYSTEM PROMPT (replace existing):
+"""
+You are a feature-aware trading analyst for crypto perpetual futures. You will receive a
+JSON blob of pre-computed technical features (move_pct_15m, vol_ratio_20, cvd_confirms,
+oi_change_1h, funding_8h, htf_agreement, adx_1h, bbw_percentile_100, nearest_same_side_liq_atr,
+entry_type, rejection_candle, price_above_ema50_1h, price_above_vwap, etc.) plus recent
+price/volume bars.
+
+Produce a JSON signal candidate with: {symbol, direction, entry, tp, sl, confidence, rationale, features}.
+- confidence is your posterior probability the trade hits TP before SL, in [0,1].
+- Set confidence < 0.70 if any feature is ambiguous or conflicting.
+- entry, tp, sl must obey: R:R = |tp-entry| / |entry-sl| >= 2.0.
+- sl must be >= 1.5 * ATR(14) from entry.
+- rationale: 2-3 sentences citing specific features.
+- DO NOT invent features not in the input.
+- DO NOT omit the features field — copy all inputs you used.
+- Reply with JSON only, no markdown fences.
+
+Downstream deterministic filters will reject your candidate on suppression, circuit
+breaker, R:R, confluence score, or confidence floor — you do not need to enforce these.
+Focus on producing the most calibrated confidence you can.
+"""
+
+Temperature: 0.0 for extraction. Max tokens: 500. JSON mode enabled.
+
+========================================================================================
+STEP 7 — OBSERVABILITY (required before resuming from any halt)
+========================================================================================
+
+Prometheus metrics:
+  signals_emitted_total{symbol,direction,status}
+  signals_rejected_total{reason}          // schema|suppressed|cb|arm_cooldown|wilson|ts|confluence|rr|rate
+  signal_win_rate{window}                 // 1h|4h|24h, gauge
+  signal_expectancy_r{window}             // in R-multiples
+  circuit_breaker_level                   // page if >0
+  suppression_active_count
+  llm_call_duration_seconds
+  arm_thompson_mean{symbol,direction}
+
+Dashboard panels (Grafana): status strip (CB + suppressions + last signal + build SHA),
+rolling WR with threshold lines, signal volume per hour, suppression table, rejection
+reasons bar, CB event log.
+
+Alerts:
+  P1: circuit_breaker_level >= 2 → page on-call.
+  P1: signals_emitted_total == 0 for 30 min during 24/7 markets → filter over-blocking.
+  P1: rate of DB trigger SIGNAL_SUPPRESSED exceptions > 5/min → a worker is bypassing
+      emitSignal().
+  P2: L1 warn; new auto-suppression; LLM latency p99 > 10s.
+
+========================================================================================
+ROLLOUT PLAN (strict order)
+========================================================================================
+
+Day 0 (now):
+  - Deploy migration (step 1). Run bulk suppression. Verify WIF/APT/SEI are blocked.
+  - If situation still degrading: set circuit_breaker.level=3 manually.
+
+Day 1:
+  - Deploy emitSignal() (step 2). Delete legacy paths. Run regression tests.
+
+Day 2:
+  - Deploy adaptive core (step 3). Delete hourly batch job. Wire onTradeClose() to
+    webhook.
+
+Day 3:
+  - Deploy CB job + resume endpoint (step 4). Add Slack /signal-halt.
+
+Day 4:
+  - Deploy confluence scorer + new Features pipeline (step 5). Raise trigger from 0.8%/5m
+    to the new criteria. Update Claude prompt (step 6).
+
+Day 5:
+  - Observability (step 7). Chaos test: simulate losing streak → verify L1→L2→L3.
+
+Days 6–14:
+  - Monitor. Do not ship new features. Expect signal volume to drop 70–90%; this is
+    correct — most old signals were noise. If 24h Wilson lower bound rises above 0.45
+    sustained for 3 days, tune MIN_CONFLUENCE from 70 → 65 to admit slightly more volume.
+    If still below 0.40 after 7 days, the LLM itself lacks edge and the feature pipeline,
+    not the gating, is the problem.
+
+========================================================================================
+DO NOT
+========================================================================================
+- Do not add "please avoid WIF" to the Claude prompt. LLMs do not reliably follow negation.
+- Do not cache signal_config or suppression in Node memory > 5 seconds.
+- Do not let any code path insert into `signals` without going through emitSignal().
+- Do not auto-resume the circuit breaker on a timer. Require human sign-off + preflight.
+- Do not reuse the old 'direction' text column — migrate to the enum to prevent 'short'
+  vs 'SHORT' mismatches.
+- Do not trust a win-rate estimate with n < 20. Use the Bayesian posterior (alpha/(alpha+beta))
+  instead for small samples.
+- Do not lower MIN_CONFIDENCE below 0.70 to "get more signals." The problem isn't volume,
+  it's quality.
+```
+
+-----
+
+## Why this plan will hit the target (and the honest caveats)
+
+**The math**: your current 28% win rate with ~1:1 R:R has expectancy ≈ −0.44R. Switching to a system that admits only setups scoring ≥70/100 on the 10-filter confluence scorer should push win rate into the 50–60% range (backed by aggregated pullback-entry studies showing 45–70% win rates vs. 30–55% for breakout chases). Combined with a minimum 2:1 R:R, expectancy at 55% WR becomes 0.55×2 − 0.45×1 = **+0.65R per trade** — a complete regime change in profitability. Volume will drop 70–90%, which is the point: you’re replacing a noise generator with a conviction filter.
+
+**The core architectural shift**: your adaptive layer is moving from a **hourly-batch, LLM-instruction-based** system (which is stale and unreliable) to an **atomic, per-arm, code-enforced** system. Every trade close atomically updates a Discounted Thompson posterior (γ=0.99, ~100-signal memory), an EMA (α=0.10, ~6.6-signal half-life), and a three-state circuit breaker. The threshold a signal sees at 14:47 reflects every closed trade up to 14:46 — **zero staleness**. The suppression enforcement lives at the database trigger level, below the code that can have bugs, following the Knight Capital lesson directly.
+
+**What to watch for in week 1**: signal volume collapse is expected and healthy. The warning sign would be **zero signals for >6 hours during high-volume market periods** — that indicates the filters are over-blocking, and you should lower `MIN_CONFLUENCE` from 70 to 65 or relax the BBW compression requirement. Track `signals_rejected_total{reason}` to see which gate is dominating rejections. If “CONFLUENCE_LOW” dominates, your features are never good enough; if “SUPPRESSED_PAIR” dominates, the auto-suppressor may be too aggressive.
+
+**Honest caveats**: (1) If after 14 days with ≥100 closed trades the 24h Wilson lower bound never exceeds 0.45, the LLM signal generator itself lacks edge — no meta-layer can fix that, and you need to revisit the feature engineering and prompt rather than the gating logic. (2) The Beta(2,5) pessimistic prior means cold-start assets need ~15–20 wins before they’re trusted; this is intentional but will feel slow. (3) The discount factor γ=0.99, EMA α=0.10, and confluence threshold 70 are principled defaults from the 2024–2026 literature but should be walk-forward tuned on your specific PnL data after 30 days. (4) Coinglass liquidation heatmap values are estimates based on assumed leverage distributions, not ground truth — use them directionally. (5) Claims of 60%+ win rates from signal vendors are marketing-adjacent; realistic well-filtered systems land at 50–60% sustainably, and that is the target to hold yourself to.
+
+**The one non-negotiable**: if you implement only one thing from this plan, implement the **database-level BEFORE-INSERT trigger** in Step 1d. It is the single highest-leverage change because it closes every legacy code path — including the ones you don’t know exist — with one atomic deployment. That alone will stop the bleed. Everything else is quality.
