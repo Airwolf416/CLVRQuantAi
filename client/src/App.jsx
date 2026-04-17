@@ -1602,17 +1602,17 @@ function TradeJournalTab({isElite,onUpgrade}){
       <div style={{...panelS,padding:"16px"}}>
         <div style={{fontFamily:MONO,fontSize:8,color:"#8b7d5a",letterSpacing:"0.12em",marginBottom:12}}>NEW TRADE ENTRY</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>ASSET *</div><input data-testid="input-journal-asset" value={form.asset} onChange={e=>setForm(f=>({...f,asset:e.target.value.toUpperCase()}))} placeholder="BTC" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>ASSET *</div><input data-testid="input-journal-asset" value={form.asset} onChange={e=>setForm(f=>({...f,asset:e.target.value.toUpperCase()}))} placeholder="e.g. BTC" style={inp}/></div>
           <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>DIRECTION *</div>
             <select data-testid="input-journal-direction" value={form.direction} onChange={e=>setForm(f=>({...f,direction:e.target.value}))} style={{...inp}}>
               <option value="LONG">LONG</option><option value="SHORT">SHORT</option>
             </select>
           </div>
-          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>ENTRY PRICE *</div><input data-testid="input-journal-entry" value={form.entry} onChange={e=>setForm(f=>({...f,entry:e.target.value}))} placeholder="71500" style={inp}/></div>
-          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>STOP LOSS</div><input data-testid="input-journal-stop" value={form.stop} onChange={e=>setForm(f=>({...f,stop:e.target.value}))} placeholder="70100" style={inp}/></div>
-          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>TP1</div><input data-testid="input-journal-tp1" value={form.tp1} onChange={e=>setForm(f=>({...f,tp1:e.target.value}))} placeholder="73200" style={inp}/></div>
-          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>TP2</div><input data-testid="input-journal-tp2" value={form.tp2} onChange={e=>setForm(f=>({...f,tp2:e.target.value}))} placeholder="75800" style={inp}/></div>
-          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>POSITION SIZE</div><input data-testid="input-journal-size" value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="0.5 BTC / $5000 / 2%" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>ENTRY PRICE *</div><input data-testid="input-journal-entry" value={form.entry} onChange={e=>setForm(f=>({...f,entry:e.target.value}))} placeholder="e.g. 71500" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>STOP LOSS</div><input data-testid="input-journal-stop" value={form.stop} onChange={e=>setForm(f=>({...f,stop:e.target.value}))} placeholder="e.g. 70100" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>TP1</div><input data-testid="input-journal-tp1" value={form.tp1} onChange={e=>setForm(f=>({...f,tp1:e.target.value}))} placeholder="e.g. 73200" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>TP2</div><input data-testid="input-journal-tp2" value={form.tp2} onChange={e=>setForm(f=>({...f,tp2:e.target.value}))} placeholder="e.g. 75800" style={inp}/></div>
+          <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>POSITION SIZE</div><input data-testid="input-journal-size" value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="e.g. 0.5 BTC / $5000 / 2%" style={inp}/></div>
         </div>
         <div style={{marginBottom:8}}><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>NOTES</div><textarea data-testid="input-journal-notes" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Why you took this trade, market context, thesis..." style={{...inp,minHeight:56,resize:"vertical"}}/></div>
         <button data-testid="btn-journal-save" disabled={saving||!form.asset||!form.entry} onClick={addEntry} style={{padding:"9px 22px",background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.35)",borderRadius:4,fontFamily:MONO,fontSize:10,color:C.green,cursor:saving||!form.asset||!form.entry?"not-allowed":"pointer",opacity:saving||!form.asset||!form.entry?0.5:1}}>{saving?"Saving…":"SAVE TRADE"}</button>
