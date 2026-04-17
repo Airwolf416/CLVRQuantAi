@@ -4564,9 +4564,35 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           </div>
           <div style={{...panel,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",gap:12}}>
             <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.08em"}}>New here? Take a quick walkthrough</div>
-            <button data-testid="btn-take-tour" onClick={()=>{try{localStorage.removeItem("clvr_tour_v1_done");}catch{}setShowTour(true);}} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,padding:"7px 16px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",whiteSpace:"nowrap"}}>
+            <button data-testid="btn-take-tour" onClick={()=>{try{localStorage.removeItem("clvr_tour_v1_done");}catch{}setShowTour(true);}} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,padding:"7px 16px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",whiteSpace:"nowrap",borderRadius:4}}>
               Take the Tour
             </button>
+          </div>
+
+          {/* ── WHAT'S NEW THIS WEEK ── */}
+          <div style={{...panel,border:`1px solid rgba(0,229,255,.22)`,background:"linear-gradient(180deg,rgba(0,229,255,.04),transparent)"}}>
+            <div style={ph}><PTitle>What's New This Week</PTitle><Badge label="v2 · Apr 17, 2026" color="gold"/></div>
+            <div style={{padding:"4px 16px 16px"}}>
+              {[
+                {emoji:"📓",t:"Trade Journal — Import from Screenshot or Link",d:"Snap a photo of any open position (Phantom, Hyperliquid, Binance, IBKR…) or paste a URL — Claude vision reads asset, direction, entry, stop, TP1/TP2 and pre-fills the form."},
+                {emoji:"📤",t:"Luxury Share Cards",d:"Tap Share Card on any closed trade to generate a navy/gold PNG ready for X, Instagram, or Discord. One tap — no editing."},
+                {emoji:"📷",t:"Phone-Friendly Uploads",d:"iPhone & iPad screenshots (often 4–12MB) are now auto-compressed in your browser before upload — uploads land instantly with live status."},
+                {emoji:"📣",t:"Squawk Box Upgrades (Elite)",d:"Pulsing green LIVE dot when active, urgent vs normal voice priorities — high-conviction signals interrupt the queue and are spoken louder/faster."},
+                {emoji:"⏱",t:"Granular Today Timeframes",d:"Today filter now splits into Quick (<1h), Hours (1–8h), and Full Day — instantly see only the signals that match your trading window."},
+                {emoji:"🧠",t:"Aggressive Adaptive Learning",d:"Engine recalculates every 30 minutes (was 4 hours), automatically suppresses any setup with <25% historical win rate, and caps signals per asset per hour."},
+                {emoji:"🚀",t:"Leverage & Hold Time on Every Card",d:"Suggested leverage (1x–10x) and expected hold time are now displayed prominently on each signal — at a glance, you know how big and how long."},
+                {emoji:"✉",t:"Faster, Cleaner Morning Brief",d:"Commentary trimmed to a 4-block summary (BTC, FX, Gold, Oil) for faster, more reliable AI generation. Reply-to switched to no-reply (support stays in the body at Support@CLVRQuantAI.com)."},
+                {emoji:"🎯",t:"AI Brief Reliability",d:"3-attempt retry with exponential backoff and a condensed-prompt fallback ensure the morning brief lands on time even if Claude hits a hiccup."},
+              ].map(({emoji,t,d},i)=>(
+                <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 0",borderBottom:i<8?`1px solid ${C.border}`:"none"}}>
+                  <div style={{fontSize:16,lineHeight:1.2,flexShrink:0,width:22,textAlign:"center"}}>{emoji}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:SERIF,fontSize:13,fontWeight:700,color:C.gold2,marginBottom:3}}>{t}</div>
+                    <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,lineHeight:1.7}}>{d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           <div style={panel}>
             <div style={ph}><PTitle>Why CLVRQuant?</PTitle></div>
@@ -4739,6 +4765,16 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           </div>
 
           {[
+            {cat:"What's New (April 2026)",color:"#00e5ff",items:[
+              {q:"How do I import a trade from a screenshot or link?",a:"Open the 📓 Journal tab and tap '📷 Import from Screenshot / Link'. Upload a screenshot of your open position from any broker (Phantom, Hyperliquid, Binance, IBKR…) or paste a URL — Claude vision reads asset, direction, entry, stop, TP1, TP2 and pre-fills the new-trade form. Review and tap SAVE TRADE."},
+              {q:"My iPhone screenshot is huge — will it upload?",a:"Yes. Your browser now auto-compresses every image (max 1600px wide JPEG ~85% quality) before sending — typically 300–800 KB instead of multi-MB. You'll see live status: Compressing → Uploading (XXX KB) → Analyzing with AI."},
+              {q:"What is the Share Card on closed trades?",a:"On any closed trade tap '📤 Share Card' to generate a luxury navy/gold PNG showing the asset, R-multiple, and your P&L. Share it to X, Instagram, or Discord with one tap, or download the PNG."},
+              {q:"What changed in the Squawk Box?",a:"(Elite) The 📣 button now shows a pulsing green LIVE dot when active so you can confirm at a glance it's listening. High-conviction signals are now spoken with urgent priority — louder, faster, and they cut to the front of the speech queue."},
+              {q:"What are the new Today timeframes?",a:"In the signals view, the Today filter now splits into Quick (<1h), Hours (1–8h), and Full Day so you can see only setups that fit your trading window. Tap the sub-filter chips above the signal list."},
+              {q:"How does the new Adaptive Learning work?",a:"The engine recalculates win-rate thresholds every 30 minutes (was 4 hours). Any setup with under 25% historical win rate over 10+ signals is automatically suppressed. Per-asset signals are also capped per hour to prevent noise."},
+              {q:"Where do I see leverage and hold time on signals?",a:"Every signal card now displays the suggested leverage (1x–10x based on conviction) and the expected hold time prominently — no need to dig into details to plan size and timing."},
+              {q:"Why did my Morning Brief change?",a:"The commentary is now a tighter 4-block summary (BTC, FX Majors, Gold, Oil) so it generates faster and lands more reliably. The reply-to address is also now no-reply@clvrquantai.com — for support, write to Support@CLVRQuantAI.com (still in the email body)."},
+            ]},
             {cat:"Getting Started",color:C.blue,items:[
               {q:"What is CLVRQuant?",a:"CLVRQuant is a mobile-first AI-powered market intelligence dashboard. It aggregates live prices across crypto, equities, commodities, and forex — combined with AI analysis, macro event tracking, and real-time signals — all in one clean app."},
               {q:"How do I create an account?",a:"Tap the Account tab (⚙) in the navigation bar, then choose Sign Up. Enter your email and password. That's it — you're in. Free accounts get access to all core market data, signals, and the daily brief."},

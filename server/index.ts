@@ -148,11 +148,11 @@ app.post(
             await resend.emails.send({
               from: payFrom,
               to: toEmail,
-              replyTo: 'MikeClaver@CLVRQuantAI.com',
+              replyTo: 'Support@clvrquantai.com',
               subject: isEliteSubscription ? '✦ Your CLVRQuantAI Elite Subscription is Active' : 'Your CLVRQuantAI Payment Confirmation',
               text: isEliteSubscription
-                ? `✦ Elite Access Confirmed — CLVRQuantAI\n\nWelcome to the Elite tier, ${customerName}. Your exclusive CLVRQuantAI Elite subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Elite features (full access):\n- Unlimited CLVR AI — Claude Sonnet, unrestricted\n- All real-time signals: crypto, equities, commodities & forex\n- Full Hyperliquid perpetuals data & funding rate monitor\n- Daily Morning Intelligence Brief\n- Priority price alerts & push notifications\n- Phantom Wallet Solana integration\n- Macro calendar with AI event analysis\n\nTrade with precision — CLVRQuant is your edge.\nhttps://clvrquantai.com\n\nQuestions? MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI`
-                : `Payment Confirmed — CLVRQuantAI\n\nThank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- 4 AI trade ideas per morning brief\n- Unlimited price alerts\n- Real-time signals with AI reasoning\n- Liquidation heatmap & whale tracker\n- Volume & funding rate monitors\n\nOpen your dashboard: https://clvrquantai.com\n\nQuestions? MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI`,
+                ? `✦ Elite Access Confirmed — CLVRQuantAI\n\nWelcome to the Elite tier, ${customerName}. Your exclusive CLVRQuantAI Elite subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Elite features (full access):\n- Unlimited CLVR AI — Claude Sonnet, unrestricted\n- All real-time signals: crypto, equities, commodities & forex\n- Full Hyperliquid perpetuals data & funding rate monitor\n- Daily Morning Intelligence Brief\n- Priority price alerts & push notifications\n- Phantom Wallet Solana integration\n- Macro calendar with AI event analysis\n\nTrade with precision — CLVRQuant is your edge.\nhttps://clvrquantai.com\n\nQuestions? Support@clvrquantai.com\n\n© 2026 CLVRQuantAI`
+                : `Payment Confirmed — CLVRQuantAI\n\nThank you, ${customerName}. Your CLVRQuantAI Pro subscription is now active.\n\nPlan: ${planName}\nAmount: ${planInterval}\nDate: ${txDate}\nTransaction: ${txId}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- 4 AI trade ideas per morning brief\n- Unlimited price alerts\n- Real-time signals with AI reasoning\n- Liquidation heatmap & whale tracker\n- Volume & funding rate monitors\n\nOpen your dashboard: https://clvrquantai.com\n\nQuestions? Support@clvrquantai.com\n\n© 2026 CLVRQuantAI`,
               html: `
 <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:0;margin:0">
   <div style="max-width:600px;margin:0 auto;padding:32px 24px">
@@ -219,7 +219,7 @@ app.post(
     <!-- Note -->
     <p style="font-size:12px;color:#4a5d80;line-height:1.8;text-align:center;margin-bottom:20px">
       Questions or need help? Reply to this email or reach us at<br>
-      <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">MikeClaver@CLVRQuantAI.com</a>
+      <a href="mailto:Support@clvrquantai.com" style="color:#c9a84c;text-decoration:none">Support@clvrquantai.com</a>
     </p>
 
     <!-- Footer -->
@@ -283,13 +283,13 @@ app.post(
             await resend.emails.send({
               from: billFrom,
               to: toEmail,
-              replyTo: 'MikeClaver@CLVRQuantAI.com',
+              replyTo: 'Support@clvrquantai.com',
               subject: `CLVRQuantAI — Billing Receipt ${invoiceNum}`,
               headers: {
                 'List-Unsubscribe': `<${unsubUrl}>`,
                 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
               },
-              text: `CLVRQuantAI — Billing Receipt\n\nHello ${custName},\n\nYour CLVRQuantAI subscription has been renewed successfully. Thank you!\n\nInvoice: ${invoiceNum}\nPlan: ${planName}\nAmount charged: ${planInterval}\nDate: ${txDate}\nPeriod end: ${periodEnd}\nNext billing: ${nextBill}\n\nView full invoice: ${invoiceUrl}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- Real-time signals with AI reasoning\n- Unlimited price alerts\n- Liquidation heatmap & whale tracker\n- Insider trading feed\n- Global asset basket (140+ assets)\n\nQuestions? Reply to this email or contact MikeClaver@CLVRQuantAI.com\n\n© 2026 CLVRQuantAI · 1 Place Ville-Marie, Montréal, QC, Canada\nThis email was sent because you have an active CLVRQuantAI Pro subscription.\nTo unsubscribe from billing receipts: ${unsubUrl}`,
+              text: `CLVRQuantAI — Billing Receipt\n\nHello ${custName},\n\nYour CLVRQuantAI subscription has been renewed successfully. Thank you!\n\nInvoice: ${invoiceNum}\nPlan: ${planName}\nAmount charged: ${planInterval}\nDate: ${txDate}\nPeriod end: ${periodEnd}\nNext billing: ${nextBill}\n\nView full invoice: ${invoiceUrl}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- Real-time signals with AI reasoning\n- Unlimited price alerts\n- Liquidation heatmap & whale tracker\n- Insider trading feed\n- Global asset basket (140+ assets)\n\nQuestions? Reply to this email or contact Support@clvrquantai.com\n\n© 2026 CLVRQuantAI · 1 Place Ville-Marie, Montréal, QC, Canada\nThis email was sent because you have an active CLVRQuantAI Pro subscription.\nTo unsubscribe from billing receipts: ${unsubUrl}`,
               html: `
 <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:0;margin:0">
   <div style="max-width:600px;margin:0 auto;padding:32px 24px">
@@ -355,7 +355,7 @@ app.post(
 
     <p style="font-size:12px;color:#4a5d80;line-height:1.8;text-align:center;margin-bottom:20px">
       Questions about your billing? Reply to this email or contact<br>
-      <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#c9a84c;text-decoration:none">MikeClaver@CLVRQuantAI.com</a>
+      <a href="mailto:Support@clvrquantai.com" style="color:#c9a84c;text-decoration:none">Support@clvrquantai.com</a>
     </p>
 
     <!-- CASL/CAN-SPAM footer -->
