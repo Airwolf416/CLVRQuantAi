@@ -3838,6 +3838,11 @@ Every level must be technically defensible. Return JSON only.`;
     // Callers can disable tool use (e.g. Morning Brief — has all data inline,
     // tool use causes Claude to return empty content after the tool round).
     const skipTools = req.body.skipTools === true;
+    // Callers can opt-in to Anthropic's server-side web search tool so Claude
+    // can pull in fresh real-world context (e.g. geopolitical headlines moving
+    // oil) before answering. This is a "server tool" — Anthropic handles the
+    // search results inline, so it doesn't trigger our local tool-use loop.
+    const enableWebSearch = req.body.enableWebSearch === true;
 
     const callClaude = async (messages: any[], withTools = true) => {
       const body: any = {
@@ -3846,7 +3851,10 @@ Every level must be technically defensible. Return JSON only.`;
         system: system || "",
         messages,
       };
-      if (withTools) body.tools = AI_TOOLS;
+      const tools: any[] = [];
+      if (withTools) tools.push(...AI_TOOLS);
+      if (enableWebSearch) tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 5 });
+      if (tools.length) body.tools = tools;
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
