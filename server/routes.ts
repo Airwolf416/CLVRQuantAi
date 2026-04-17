@@ -7,6 +7,8 @@ import { signalHistory, aiSignalLog, adaptiveThresholds } from "@shared/schema";
 import { logSignal } from "./lib/signalLogger";
 import { buildPerformanceContext, invalidatePerformanceContextCache } from "./lib/performanceContext";
 import { getThresholdFor, recalculateThresholds } from "./lib/adaptiveThresholds";
+import { getCircuitState, isHalted, manualHalt, manualResume, checkCircuitBreaker } from "./lib/circuitBreaker";
+import { logRejection, getRecentRejections, getRejectionStats } from "./lib/rejectionLog";
 import { eq, and, lte, gt, desc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
@@ -679,6 +681,20 @@ function calcLiquidityIndex() {
 
 async function detectMoves() {
   const now = Date.now();
+
+  // ── GLOBAL CIRCUIT BREAKER ─────────────────────────────────────────────
+  // If 1h win rate has collapsed (< 30% over 20+ signals), halt the auto
+  // scanner entirely until WR recovers ≥ 45% (auto-resume).
+  if (isHalted()) {
+    const cb = getCircuitState();
+    logRejection({
+      source: "auto_scanner", token: "*", direction: null,
+      reason: "CIRCUIT_BREAKER",
+      detail: `L${cb.level} ${cb.reason || "halted"}`,
+    });
+    return;
+  }
+
   for (const sym of CRYPTO_SYMS) {
     const hist = priceHistory[sym];
     if (!hist || hist.length < 3) continue;
@@ -754,16 +770,27 @@ async function detectMoves() {
     if (passedCount < minPassed) {
       const failed = Object.entries(checks).filter(([,v]) => !v.pass).map(([k]) => k).join(", ");
       console.log(`[SIGNAL] ${sym} FILTERED — only ${passedCount}/${totalChecks} checks passed. Failed: ${failed}`);
+      logRejection({
+        source: "auto_scanner", token: sym, direction: dir,
+        reason: "FILTER_FAILED",
+        detail: `${passedCount}/${totalChecks} checks; failed: ${failed}`,
+      });
       continue;
     }
 
     // ── ADAPTIVE SUPPRESSION GATE ──────────────────────────────────────────
-    // If this token+direction has been historically suppressed (<25% WR with
-    // 10+ resolved signals), block the signal at source — don't even log it.
+    // If this token+direction has been historically suppressed (Wilson lower
+    // bound < 30% with 10+ resolved signals), block at source. Skip Claude
+    // entirely — saves tokens and avoids LLM negation-failure mode.
     try {
       const adapt = await getThresholdFor(sym, dir);
       if (adapt?.suppressed) {
-        console.log(`[SIGNAL] ${sym} ${dir} SUPPRESSED — ${adapt.winRate ?? "?"}% WR over ${adapt.sampleSize} signals (adaptive threshold)`);
+        const detail = `${adapt.winRate ?? "?"}% WR over ${adapt.sampleSize} signals`;
+        console.log(`[SIGNAL] ${sym} ${dir} SUPPRESSED — ${detail} (adaptive)`);
+        logRejection({
+          source: "auto_scanner", token: sym, direction: dir,
+          reason: "ADAPTIVE_SUPPRESSED", detail,
+        });
         continue;
       }
     } catch {}
@@ -774,6 +801,11 @@ async function detectMoves() {
     const recentSignalCount = Object.values(lastSignalTime).filter(t => t >= hourAgo).length;
     if (recentSignalCount >= MAX_SIGNALS_PER_HOUR) {
       console.log(`[SIGNAL] ${sym} CAPPED — ${recentSignalCount} signals in last hour (max ${MAX_SIGNALS_PER_HOUR})`);
+      logRejection({
+        source: "auto_scanner", token: sym, direction: dir,
+        reason: "RATE_LIMIT",
+        detail: `${recentSignalCount} signals in last hour (max ${MAX_SIGNALS_PER_HOUR})`,
+      });
       continue;
     }
 
@@ -3044,6 +3076,23 @@ Output JSON only, no prose, no code fences.`;
       // Get live funding rate from HL data (crypto only)
       const fundingRate: number = cls === "crypto" ? (hlData[ticker]?.funding || 0) : 0;
 
+      // ── GLOBAL CIRCUIT BREAKER (1h WR collapse) ─────────────────────────
+      if (isHalted()) {
+        const cb = getCircuitState();
+        logRejection({
+          source: "ai_signal", token: ticker, direction: null,
+          reason: "CIRCUIT_BREAKER",
+          detail: `L${cb.level} ${cb.reason || "halted"}`,
+        });
+        return res.json({
+          signal: "SUPPRESSED",
+          suppressed: true,
+          suppression_message: `🛑 Signal Engine Halted — ${cb.reason || "1h win rate collapse detected"}. Auto-resume when 1h WR recovers ≥45%.`,
+          suppression_rules: ["CIRCUIT_BREAKER"],
+          circuit_breaker: cb,
+        });
+      }
+
       // ── Run Signal Suppression Rules BEFORE calling AI ────────────────────────
       const suppression = checkSignalSuppressionRules({
         ticker, cls, ind, candles1h, candles1d, candles15m, bayesian, macroKillSwitch, fundingRate,
@@ -3055,10 +3104,15 @@ Output JSON only, no prose, no code fences.`;
         getThresholdFor(ticker, "SHORT"),
       ]);
       if (adaptLong?.suppressed && adaptShort?.suppressed) {
+        logRejection({
+          source: "ai_signal", token: ticker, direction: "BOTH",
+          reason: "ADAPTIVE_SUPPRESSED",
+          detail: `LONG ${adaptLong.winRate}% / SHORT ${adaptShort.winRate}% over 30d`,
+        });
         return res.json({
           signal: "SUPPRESSED",
           suppressed: true,
-          suppression_message: `Adaptive learning: ${ticker} suppressed (LONG ${adaptLong.winRate}%, SHORT ${adaptShort.winRate}% — both below 40% over last 30d).`,
+          suppression_message: `Adaptive learning: ${ticker} suppressed (LONG ${adaptLong.winRate}%, SHORT ${adaptShort.winRate}% — both below 30% Wilson lower bound over last 30d).`,
           suppression_rules: ["ADAPTIVE_LEARNING"],
           adaptive: { long: adaptLong, short: adaptShort },
         });
@@ -3603,6 +3657,78 @@ Every level must be technically defensible. Return JSON only.`;
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: "Failed to reset" });
+    }
+  });
+
+  // ── PUBLIC: signal engine status (circuit breaker, rejection counts) ──────
+  // Read-only, lightweight, safe to poll from the dashboard.
+  app.get("/api/signal-status", async (_req, res) => {
+    try {
+      const cb = getCircuitState();
+      const rejStats1h = getRejectionStats(60 * 60 * 1000);
+      const rejStats24h = getRejectionStats(24 * 60 * 60 * 1000);
+      const suppressedRows = await db.select({
+        token: adaptiveThresholds.token,
+        direction: adaptiveThresholds.direction,
+        winRate: adaptiveThresholds.winRate30d,
+        sampleSize: adaptiveThresholds.sampleSize,
+      }).from(adaptiveThresholds).where(eq(adaptiveThresholds.suppressed, true));
+      res.json({
+        circuit_breaker: cb,
+        suppressed_pairs: suppressedRows,
+        suppressed_count: suppressedRows.length,
+        rejections_1h: rejStats1h,
+        rejections_24h: rejStats24h,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: "status fetch failed", detail: e?.message });
+    }
+  });
+
+  // ── ADMIN: rejection log (last N rejected signals with reasons) ───────────
+  app.get("/api/admin/rejections", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const limit = Math.min(500, Math.max(10, parseInt(String(req.query.limit ?? "200"), 10) || 200));
+      res.json({
+        rejections: getRecentRejections(limit),
+        stats_1h: getRejectionStats(60 * 60 * 1000),
+        stats_24h: getRejectionStats(24 * 60 * 60 * 1000),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to load rejections" });
+    }
+  });
+
+  // ── ADMIN: manually halt or resume circuit breaker ────────────────────────
+  app.post("/api/admin/circuit-breaker/halt", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const reason = String(req.body?.reason || "manual halt");
+      res.json({ success: true, state: manualHalt(reason) });
+    } catch (e: any) {
+      res.status(500).json({ error: "Halt failed" });
+    }
+  });
+
+  app.post("/api/admin/circuit-breaker/resume", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const state = manualResume(u.email || "owner");
+      // Trigger an immediate recheck so auto-trip kicks back in if conditions are still bad
+      checkCircuitBreaker().catch(() => {});
+      res.json({ success: true, state });
+    } catch (e: any) {
+      res.status(500).json({ error: "Resume failed" });
     }
   });
 

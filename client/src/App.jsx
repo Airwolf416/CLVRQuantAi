@@ -1737,6 +1737,49 @@ const SIGNAL_STEPS=[
   {n:5,title:"Take 50% Off at TP1, Trail Stop to Entry",body:"When price reaches TP1, close half the position and move your stop to breakeven. This locks in a free trade — worst case from here is 0% loss. Let the remaining half run."},
   {n:6,title:"Exit Fully at TP2 or on Invalidation",body:"Close the remaining position at TP2. If price closes back through your entry zone (invalidation), exit early regardless of TP — the thesis is broken. Never hold a signal through a regime change."},
 ];
+function SignalStatusBanner(){
+  const{C,SERIF,MONO}=useContext(ThemeCtx);
+  const[s,setS]=useState(null);
+  useEffect(()=>{
+    let alive=true;
+    const load=()=>fetch("/api/signal-status",{credentials:"include"}).then(r=>r.json()).then(d=>{if(alive)setS(d);}).catch(()=>{});
+    load();
+    const iv=setInterval(load,60000);
+    return()=>{alive=false;clearInterval(iv);};
+  },[]);
+  if(!s)return null;
+  const cb=s.circuit_breaker||{};
+  const halted=cb.active&&cb.level>=2;
+  const suppCount=s.suppressed_count||0;
+  if(!halted&&suppCount===0)return null;
+  return(
+    <div data-testid="banner-signal-status" style={{borderRadius:6,padding:"12px 14px",marginBottom:12,border:`1px solid ${halted?"rgba(255,80,80,.45)":"rgba(255,170,60,.35)"}`,background:halted?"rgba(255,80,80,.08)":"rgba(255,170,60,.06)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{fontSize:18,lineHeight:1}}>{halted?"🛑":"⚠️"}</div>
+        <div style={{flex:1,minWidth:200}}>
+          <div style={{fontFamily:MONO,fontSize:9,fontWeight:800,letterSpacing:"0.16em",color:halted?"#ff6b6b":"#ffae42",marginBottom:3}}>
+            {halted?"SIGNAL ENGINE HALTED":`${suppCount} PAIR${suppCount===1?"":"S"} AUTO-SUPPRESSED`}
+          </div>
+          <div style={{fontFamily:SERIF,fontSize:12,color:C.muted2,lineHeight:1.5}}>
+            {halted
+              ? <>1-hour win rate dropped to <b style={{color:"#ff6b6b"}}>{cb.rolling?.winRate!=null?(cb.rolling.winRate*100).toFixed(1):"?"}%</b> over {cb.rolling?.n||0} signals. New signals are paused. Auto-resume when 1h WR recovers ≥45%.</>
+              : <>Adaptive engine has paused these underperforming setups (Wilson 90% lower bound &lt; 30% over 10+ signals). They will be re-evaluated automatically as new outcomes resolve.</>
+            }
+          </div>
+          {halted&&cb.reason&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:5,letterSpacing:"0.06em"}}>REASON: {cb.reason}</div>}
+        </div>
+      </div>
+      {!halted&&suppCount>0&&suppCount<=12&&(
+        <div style={{marginTop:8,display:"flex",gap:6,flexWrap:"wrap"}}>
+          {(s.suppressed_pairs||[]).map((p,i)=>(
+            <span key={i} style={{fontFamily:MONO,fontSize:8,color:"#ffae42",background:"rgba(255,170,60,.08)",border:`1px solid rgba(255,170,60,.25)`,borderRadius:3,padding:"3px 7px",letterSpacing:"0.06em"}}>{p.token} {p.direction} · {p.winRate||"?"}%</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SignalGuideCard({isPro}){
   const{C}=useContext(ThemeCtx);
   const[open,setOpen]=useState(false);
@@ -4232,6 +4275,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {/* ══ SIGNALS ══ */}
         {tab==="signals"&&<>
           <div style={{marginBottom:10}}><SLabel>Quant AI Signals</SLabel></div>
+
+          {/* ── Signal engine status (circuit breaker + suppressed pairs) ── */}
+          <SignalStatusBanner/>
 
           {/* ── 30-min delay banner for free users ── */}
           {!isPro&&(
