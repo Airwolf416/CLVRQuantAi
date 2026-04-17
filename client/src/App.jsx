@@ -1415,23 +1415,56 @@ function TradeJournalTab({isElite,onUpgrade}){
   const[saving,setSaving]=useState(false);
   const[importing,setImporting]=useState(false);
   const[importErr,setImportErr]=useState("");
+  const[importMsg,setImportMsg]=useState("");
   const[importUrl,setImportUrl]=useState("");
   const[showImport,setShowImport]=useState(false);
+  const[saveErr,setSaveErr]=useState("");
   const fileInRef=useRef(null);
+
+  // Client-side downscale: shrinks any photo to max 1600px (long side) JPEG q=0.85.
+  // Brings 8MB iPhone screenshots down to ~300-800KB so the upload always fits.
+  async function fileToCompressedDataUrl(file){
+    const MAX_DIM=1600;
+    const dataUrl=await new Promise((resolve,reject)=>{
+      const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(new Error("Could not read file"));r.readAsDataURL(file);
+    });
+    const img=await new Promise((resolve,reject)=>{
+      const im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(new Error("Could not decode image"));im.src=dataUrl;
+    });
+    let{width:w,height:h}=img;
+    if(w>MAX_DIM||h>MAX_DIM){
+      const scale=MAX_DIM/Math.max(w,h);
+      w=Math.round(w*scale);h=Math.round(h*scale);
+    }
+    const cv=document.createElement("canvas");cv.width=w;cv.height=h;
+    const ctx=cv.getContext("2d");
+    ctx.fillStyle="#000";ctx.fillRect(0,0,w,h);
+    ctx.drawImage(img,0,0,w,h);
+    const out=cv.toDataURL("image/jpeg",0.85);
+    return{dataUrl:out,mediaType:"image/jpeg",sizeKB:Math.round(out.length*0.75/1024)};
+  }
+
   async function extractFromImage(file){
     if(!file)return;
-    setImportErr("");setImporting(true);
+    setImportErr("");setImportMsg("Compressing image…");setImporting(true);
     try{
-      const reader=new FileReader();
-      const dataUrl=await new Promise((resolve,reject)=>{reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});
-      const r=await fetch("/api/journal/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageBase64:dataUrl,mediaType:file.type||"image/png"})});
-      const j=await r.json();
-      if(!r.ok){setImportErr(j.error||"Extraction failed");setImporting(false);return;}
-      const ex=j.extracted||{};
+      const{dataUrl,mediaType,sizeKB}=await fileToCompressedDataUrl(file);
+      setImportMsg(`Uploading (${sizeKB} KB) — analyzing with AI…`);
+      const r=await fetch("/api/journal/extract",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageBase64:dataUrl,mediaType})});
+      let j=null;try{j=await r.json();}catch{}
+      if(!r.ok){
+        const msg=j?.error||`Server error ${r.status}`;
+        setImportErr(`Upload failed: ${msg}`);setImportMsg("");setImporting(false);return;
+      }
+      const ex=j?.extracted||{};
       setForm(f=>({asset:ex.asset||f.asset,direction:ex.direction||f.direction,entry:ex.entry||f.entry,stop:ex.stop||f.stop,tp1:ex.tp1||f.tp1,tp2:ex.tp2||f.tp2,size:ex.size||f.size,notes:ex.notes||f.notes}));
-      setShowImport(false);setShowForm(true);
-    }catch(e){setImportErr("Upload failed — please retry or enter manually.");}
+      setImportMsg("");setShowImport(false);setShowForm(true);
+    }catch(e){
+      console.error("[journal import]",e);
+      setImportErr(e?.message||"Upload failed — please retry or enter manually.");setImportMsg("");
+    }
     setImporting(false);
+    if(fileInRef.current)fileInRef.current.value="";
   }
   async function extractFromUrl(){
     if(!importUrl.trim())return;
@@ -1526,13 +1559,22 @@ function TradeJournalTab({isElite,onUpgrade}){
   })();
   const panelS={background:C.panel,border:`1px solid ${C.border}`,borderRadius:6,marginBottom:10};
   async function addEntry(){
-    if(!form.asset||!form.entry)return;
+    setSaveErr("");
+    if(!form.asset||!form.entry){setSaveErr("ASSET and ENTRY PRICE are required.");return;}
     setSaving(true);
     try{
-      await fetch("/api/journal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)});
+      const r=await fetch("/api/journal",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)});
+      let j=null;try{j=await r.json();}catch{}
+      if(!r.ok){
+        const msg=j?.error||`Server error ${r.status}`;
+        setSaveErr(`Save failed: ${msg}`);setSaving(false);return;
+      }
       setForm({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:""});
       setShowForm(false);refetch();
-    }catch(e){}
+    }catch(e){
+      console.error("[journal save]",e);
+      setSaveErr(e?.message||"Save failed — check your connection and try again.");
+    }
     setSaving(false);
   }
   async function closeEntry(id){
@@ -1615,7 +1657,19 @@ function TradeJournalTab({isElite,onUpgrade}){
           <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>POSITION SIZE</div><input data-testid="input-journal-size" value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="e.g. 0.5 BTC / $5000 / 2%" style={inp}/></div>
         </div>
         <div style={{marginBottom:8}}><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>NOTES</div><textarea data-testid="input-journal-notes" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Why you took this trade, market context, thesis..." style={{...inp,minHeight:56,resize:"vertical"}}/></div>
-        <button data-testid="btn-journal-save" disabled={saving||!form.asset||!form.entry} onClick={addEntry} style={{padding:"9px 22px",background:"rgba(0,199,135,.12)",border:"1px solid rgba(0,199,135,.35)",borderRadius:4,fontFamily:MONO,fontSize:10,color:C.green,cursor:saving||!form.asset||!form.entry?"not-allowed":"pointer",opacity:saving||!form.asset||!form.entry?0.5:1}}>{saving?"Saving…":"SAVE TRADE"}</button>
+        {(()=>{const ready=!saving&&form.asset&&form.entry;return(
+          <button data-testid="btn-journal-save" disabled={!ready} onClick={addEntry} style={{
+            padding:"11px 26px",
+            background:ready?"#00c787":"rgba(0,199,135,.08)",
+            border:`1px solid ${ready?"#00c787":"rgba(0,199,135,.25)"}`,
+            borderRadius:4,fontFamily:MONO,fontSize:11,fontWeight:700,letterSpacing:"0.12em",
+            color:ready?"#000":"rgba(0,199,135,.45)",
+            cursor:ready?"pointer":"not-allowed",
+            WebkitAppearance:"none",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",
+          }}>{saving?"SAVING…":"SAVE TRADE"}</button>
+        );})()}
+        {saveErr&&<div data-testid="text-journal-save-err" style={{marginTop:10,padding:"8px 10px",background:"rgba(255,64,96,.08)",border:"1px solid rgba(255,64,96,.3)",borderRadius:4,fontFamily:MONO,fontSize:9,color:C.red}}>{saveErr}</div>}
+        {!form.asset||!form.entry?<div style={{marginTop:8,fontFamily:MONO,fontSize:8,color:"#8b7d5a",fontStyle:"italic"}}>Tip: ASSET and ENTRY PRICE must be filled in before saving.</div>:null}
       </div>
     )}
     {/* Trade list */}
