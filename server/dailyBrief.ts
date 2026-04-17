@@ -485,7 +485,7 @@ async function sendDailyBriefEmails() {
             ``,
             `Visit https://clvrquantai.com for live data and AI analysis.`,
             ``,
-            `© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+            `© 2026 CLVRQuant · Support@clvrquantai.com`,
             `To unsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}`,
           ].join("\n");
 

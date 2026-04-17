@@ -456,19 +456,19 @@ async function checkAndGrantReferralReward(userId: string) {
       const { client: resend, fromEmail } = await getUncachableResendClient();
       await resend.emails.send({
         from: fromEmail, to: referrer.email,
-        replyTo: "MikeClaver@CLVRQuantAI.com",
+        replyTo: "Support@clvrquantai.com",
         subject: "CLVRQuant — You earned 1 week of Pro!",
         headers: {
-          "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+          "List-Unsubscribe": "<mailto:Support@clvrquantai.com?subject=unsubscribe>",
           "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         },
-        text: `Congratulations, ${referrer.name}!\n\nYour referral just subscribed to CLVRQuant Pro. You've earned 1 week of free Pro access as a thank you!\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com\nTo unsubscribe: MikeClaver@CLVRQuantAI.com`,
+        text: `Congratulations, ${referrer.name}!\n\nYour referral just subscribed to CLVRQuant Pro. You've earned 1 week of free Pro access as a thank you!\n\n© 2026 CLVRQuant · Support@clvrquantai.com\nTo unsubscribe: Support@clvrquantai.com`,
         html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
           <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
           <div style="border-top:1px solid #141e35;padding-top:20px">
             <p style="font-size:14px;color:#f0f4ff">Congratulations, ${referrer.name}!</p>
             <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your referral just subscribed to CLVRQuant Pro. You've earned <strong style="color:#e8c96d">1 week of free Pro access</strong> as a thank you!</p>
-            <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
+            <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
           <p style="font-size:9px;color:#2a3650;text-align:center;line-height:2">You are receiving this email because you have a CLVRQuant account. <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(referrer.email)}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a></p>
           </div></div>`,
       });
@@ -488,20 +488,20 @@ async function checkPromoExpiryReminders() {
         const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
         await resend.emails.send({
           from: fromEmail, to: u.email,
-          replyTo: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "Support@clvrquantai.com",
           subject: "CLVRQuant — Your Pro access expires in 2 weeks",
           headers: {
             "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}>`,
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
           },
-          text: `Hey ${u.name},\n\nYour CLVRQuant Pro access (promo code: ${u.promoCode}) expires on ${expiryDate}.\n\nTo keep uninterrupted access to AI analysis, signals, and all Pro features, subscribe before it expires at https://clvrquantai.com\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}`,
+          text: `Hey ${u.name},\n\nYour CLVRQuant Pro access (promo code: ${u.promoCode}) expires on ${expiryDate}.\n\nTo keep uninterrupted access to AI analysis, signals, and all Pro features, subscribe before it expires at https://clvrquantai.com\n\n© 2026 CLVRQuant · Support@clvrquantai.com\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
             <div style="border-top:1px solid #141e35;padding-top:20px">
               <p style="font-size:14px;color:#f0f4ff">Hey ${u.name},</p>
               <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant Pro access via promotion code <strong style="color:#e8c96d">${u.promoCode}</strong> expires on <strong style="color:#f0f4ff">${expiryDate}</strong>.</p>
               <p style="font-size:13px;color:#6b7fa8;line-height:1.8">To keep uninterrupted access to AI analysis, signals, and all Pro features, consider subscribing before it expires.</p>
-              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
               <p style="font-size:9px;color:#2a3650;text-align:center;line-height:2">You are receiving this email because you have a CLVRQuant account. <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a></p>
             </div></div>`,
         });
@@ -5006,10 +5006,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
           const { client: resend, fromEmail } = await getUncachableResendClient();
           await resend.emails.send({
             from: fromEmail,
-            replyTo: "MikeClaver@CLVRQuantAI.com",
+            replyTo: "Support@clvrquantai.com",
             to: activatedUser.email,
             subject: "✦ Your CLVRQuant Elite Access is Active",
-            text: `Welcome to CLVRQuant Elite, ${activatedUser.name || "Valued Member"}.\n\nYour exclusive Elite access is now active${promoExpiry ? ` through ${new Date(promoExpiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}` : ""}.\n\nAs an Elite member you have full access to:\n- Unlimited AI Market Analyst (Claude Sonnet)\n- Real-time CLVR Quant signals across all asset classes\n- Full Hyperliquid perpetuals data & funding rates\n- Morning Intelligence Brief delivered daily\n- Priority price alerts & push notifications\n- Phantom Wallet Solana integration\n- Macro calendar with AI event analysis\n\nTrade with precision — CLVRQuant is your edge.\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+            text: `Welcome to CLVRQuant Elite, ${activatedUser.name || "Valued Member"}.\n\nYour exclusive Elite access is now active${promoExpiry ? ` through ${new Date(promoExpiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}` : ""}.\n\nAs an Elite member you have full access to:\n- Unlimited AI Market Analyst (Claude Sonnet)\n- Real-time CLVR Quant signals across all asset classes\n- Full Hyperliquid perpetuals data & funding rates\n- Morning Intelligence Brief delivered daily\n- Priority price alerts & push notifications\n- Phantom Wallet Solana integration\n- Macro calendar with AI event analysis\n\nTrade with precision — CLVRQuant is your edge.\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
             html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
               <div style="text-align:center;margin-bottom:28px">
                 <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
@@ -5033,7 +5033,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
               <div style="border-top:1px solid #141e35;padding-top:20px;margin-top:24px;text-align:center">
                 <a href="https://clvrquantai.com" style="display:inline-block;background:#e8c96d;color:#050709;font-family:monospace;font-size:12px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none">OPEN TERMINAL →</a>
               </div>
-              <p style="font-size:10px;color:#2a3d5a;text-align:center;margin-top:24px">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.<br/>© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com</p>
+              <p style="font-size:10px;color:#2a3d5a;text-align:center;margin-top:24px">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.<br/>© 2026 CLVRQuant · Support@clvrquantai.com</p>
             </div>`,
           });
         } catch (emailErr: any) {
@@ -5260,14 +5260,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
           const dailyEmail = u.subscribe_to_brief;
           const emailResult = await resend.emails.send({
             from: senderAddress,
-            replyTo: "MikeClaver@CLVRQuantAI.com",
+            replyTo: "Support@clvrquantai.com",
             to: u.email,
             subject: "Welcome to CLVRQuant — Your Market Intelligence Terminal",
             headers: {
-              "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+              "List-Unsubscribe": "<mailto:Support@clvrquantai.com?subject=unsubscribe>",
               "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
             },
-            text: `Welcome to CLVRQuant, ${u.name}!\n\nYour account is now live at https://clvrquantai.com\n\nWhat you have access to:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n${dailyEmail ? "- Daily 6AM Brief — Subscribed\n" : ""}\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com\nTo unsubscribe reply with "unsubscribe"`,
+            text: `Welcome to CLVRQuant, ${u.name}!\n\nYour account is now live at https://clvrquantai.com\n\nWhat you have access to:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n${dailyEmail ? "- Daily 6AM Brief — Subscribed\n" : ""}\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.\n\n© 2026 CLVRQuant · Support@clvrquantai.com\nTo unsubscribe reply with "unsubscribe"`,
             html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
               <div style="text-align:center;margin-bottom:24px">
                 <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
@@ -5292,7 +5292,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   <div style="font-size:10px;color:#ff8c00;font-weight:700;letter-spacing:0.15em;margin-bottom:4px">IMPORTANT DISCLAIMER</div>
                   <div style="font-size:10px;color:#6b7fa8;line-height:1.7">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss. CLVRQuant and Mike Claver bear no liability for any financial decisions.</div>
                 </div>
-                <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a> · Not financial advice</p>
+                <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a> · Not financial advice</p>
               </div>
             </div>`,
           });
@@ -5354,14 +5354,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         const verifyUrl = `https://clvrquantai.com?verify=${verifyToken}`;
         const emailResult = await resend.emails.send({
           from: senderAddress,
-          replyTo: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "Support@clvrquantai.com",
           to: email.toLowerCase().trim(),
           subject: "Verify your CLVRQuant account",
           headers: {
-            "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+            "List-Unsubscribe": "<mailto:Support@clvrquantai.com?subject=unsubscribe>",
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
           },
-          text: `Welcome to CLVRQuant, ${name.trim()}!\n\nVerify your email to activate your account:\n${verifyUrl}\n\nFeatures included:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas (Pro)\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+          text: `Welcome to CLVRQuant, ${name.trim()}!\n\nVerify your email to activate your account:\n${verifyUrl}\n\nFeatures included:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas (Pro)\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:28px">
               <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
@@ -5396,7 +5396,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                 <div style="font-size:10px;color:#ff8c00;font-weight:700;letter-spacing:0.15em;margin-bottom:4px">IMPORTANT DISCLAIMER</div>
                 <div style="font-size:10px;color:#6b7fa8;line-height:1.7">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss. CLVRQuant and Mike Claver bear no liability for any financial decisions.</div>
               </div>
-              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a> · Not financial advice</p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a> · Not financial advice</p>
             </div>
           </div>`,
         });
@@ -5512,14 +5512,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const { client: resend, fromEmail: resendFrom } = await getUncachableResendClient();
       await resend.emails.send({
         from: resendFrom,
-        replyTo: "MikeClaver@CLVRQuantAI.com",
+        replyTo: "Support@clvrquantai.com",
         to: user.email,
         subject: "Verify your CLVRQuant email",
         headers: {
-          "List-Unsubscribe": "<mailto:MikeClaver@CLVRQuantAI.com?subject=unsubscribe>",
+          "List-Unsubscribe": "<mailto:Support@clvrquantai.com?subject=unsubscribe>",
           "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         },
-        text: `Hi ${user.name},\n\nClick the link below to verify your email and activate your CLVRQuant account:\n${verifyUrl}\n\nIf you didn't sign up, you can ignore this email.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+        text: `Hi ${user.name},\n\nClick the link below to verify your email and activate your CLVRQuant account:\n${verifyUrl}\n\nIf you didn't sign up, you can ignore this email.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
         html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
           <div style="text-align:center;margin-bottom:24px">
             <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
@@ -5531,7 +5531,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             <a href="${verifyUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-style:italic;font-weight:700;font-size:16px;padding:16px 40px;border-radius:6px;text-decoration:none">Verify My Email</a>
           </div>
           <p style="font-size:11px;color:#4a5d80;text-align:center;margin-bottom:6px">Or copy this link:<br><span style="font-family:monospace;font-size:10px;color:#6b7fa8;word-break:break-all">${verifyUrl}</span></p>
-          <p style="font-size:10px;color:#3a4d68;text-align:center;margin-top:20px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
+          <p style="font-size:10px;color:#3a4d68;text-align:center;margin-top:20px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
         </div>`,
       });
       res.json({ ok: true });
@@ -5619,10 +5619,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         const { client: resend, fromEmail } = await getUncachableResendClient();
         await resend.emails.send({
           from: fromEmail,
-          replyTo: "MikeClaver@CLVRQuantAI.com",
+          replyTo: "Support@clvrquantai.com",
           to: email.toLowerCase().trim(),
           subject: "CLVRQuant — Password Reset",
-          text: `Hello ${user.name},\n\nYou requested a password reset.\n\nTemporary password: ${tempPassword}\n\nOr reset via link (expires in 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email.\n\n© 2026 CLVRQuant · MikeClaver@CLVRQuantAI.com`,
+          text: `Hello ${user.name},\n\nYou requested a password reset.\n\nTemporary password: ${tempPassword}\n\nOr reset via link (expires in 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:24px">
               <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
@@ -5639,7 +5639,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                 <a href="${resetLink}" style="background:rgba(201,168,76,0.15);color:#e8c96d;padding:12px 32px;border-radius:4px;text-decoration:none;font-family:Georgia,serif;font-weight:700;font-size:14px;border:1px solid rgba(201,168,76,0.3)">Reset Password →</a>
               </div>
               <p style="font-size:11px;color:#4a5d80;margin-top:20px">This link expires in 1 hour. If you didn't request this, ignore this email.</p>
-              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:MikeClaver@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">MikeClaver@CLVRQuantAI.com</a></p>
+              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
             </div>
           </div>`,
         });
