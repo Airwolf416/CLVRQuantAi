@@ -1734,10 +1734,12 @@ export async function registerRoutes(
   app.post("/api/journal", async (req, res) => {
     const userId = await requireElite(req, res);
     if (!userId) return;
-    const { asset, direction, entry, stop, tp1, tp2, size, notes } = req.body;
+    const { asset, direction, entry, stop, tp1, tp2, size, notes, outcome, pnlPct } = req.body;
     if (!asset || !direction || !entry) return res.status(400).json({ error: "asset, direction, entry required" });
     if (!["LONG","SHORT"].includes(direction)) return res.status(400).json({ error: "direction must be LONG or SHORT" });
-    const newEntry = await storage.addTradeJournalEntry({ userId, asset: asset.toUpperCase(), direction, entry, stop: stop||null, tp1: tp1||null, tp2: tp2||null, size: size||null, notes: notes||null, outcome: "OPEN", pnlPct: null });
+    const safeOutcome = outcome && ["OPEN","WIN","LOSS"].includes(outcome) ? outcome : "OPEN";
+    const safePnl = safeOutcome !== "OPEN" && pnlPct != null && pnlPct !== "" ? String(pnlPct) : null;
+    const newEntry = await storage.addTradeJournalEntry({ userId, asset: asset.toUpperCase(), direction, entry, stop: stop||null, tp1: tp1||null, tp2: tp2||null, size: size||null, notes: notes||null, outcome: safeOutcome, pnlPct: safePnl });
     res.json({ entry: newEntry });
   });
 
@@ -1800,8 +1802,20 @@ export async function registerRoutes(
   "size": "string like '0.5 BTC' or '$5000' or '2x' or null",
   "leverage": "string like '10x' or null",
   "platform": "Bybit" | "Hyperliquid" | "Binance" | "Phantom" | "Other" | null,
-  "notes": "short context if visible (entry reason, P&L if shown), else null"
+  "status": "OPEN" | "CLOSED",
+  "exit": "string number or null — the exit/close price if the trade was closed",
+  "pnlPct": "string number (e.g. '9.32' or '-3.5') or null — realised percent P&L if shown",
+  "pnlUsd": "string number (e.g. '1.29' or '-12.40') or null — realised dollar P&L if shown",
+  "outcome": "WIN" | "LOSS" | null,
+  "notes": "short context if visible (entry reason, anything beyond the structured fields), else null"
 }
+
+CRITICAL — How to decide status / outcome:
+• If the screenshot shows wording like "Close Long Take Profit", "Closed P&L", "Closed", "Exit", "Realised", "TP Hit", "SL Hit", "Take Profit", "Stop Loss", "Liquidated", or shows a dedicated EXIT price — treat the trade as CLOSED.
+• Otherwise (an open position card, "Unrealised P&L", live size + mark price) — treat it as OPEN and leave exit/pnlPct/pnlUsd/outcome null.
+• outcome = WIN if pnlPct/pnlUsd is positive OR the wording is "Take Profit" / "TP Hit". outcome = LOSS if negative OR "Stop Loss" / "SL Hit" / "Liquidated".
+• Sign matters: a leading "+" means win, "-" or red text means loss. Always include the sign in pnlPct / pnlUsd.
+
 Output JSON only, no prose, no code fences.`;
 
     try {
@@ -1844,8 +1858,51 @@ Output JSON only, no prose, no code fences.`;
       // Stuff leverage into size or notes (DB has no leverage column)
       if (parsed.leverage && !parsed.size) parsed.size = parsed.leverage;
       else if (parsed.leverage && parsed.size) parsed.size = `${parsed.size} @ ${parsed.leverage}`;
-      if (parsed.platform && parsed.notes) parsed.notes = `[${parsed.platform}] ${parsed.notes}`;
-      else if (parsed.platform) parsed.notes = `[${parsed.platform}]`;
+
+      // Normalize closed-trade fields
+      const status = String(parsed.status || "").toUpperCase();
+      if (status !== "CLOSED") {
+        // Treat anything non-CLOSED as OPEN and clear realised fields to avoid noise.
+        parsed.status = "OPEN";
+        parsed.outcome = null;
+      } else {
+        parsed.status = "CLOSED";
+        // Infer outcome from pnl sign if model omitted it.
+        const pctStr = parsed.pnlPct != null ? String(parsed.pnlPct).replace(/[^\d.\-+]/g, "") : "";
+        const usdStr = parsed.pnlUsd != null ? String(parsed.pnlUsd).replace(/[^\d.\-+]/g, "") : "";
+        const pctNum = pctStr ? parseFloat(pctStr) : NaN;
+        const usdNum = usdStr ? parseFloat(usdStr) : NaN;
+        if (!parsed.outcome) {
+          if (!isNaN(pctNum)) parsed.outcome = pctNum >= 0 ? "WIN" : "LOSS";
+          else if (!isNaN(usdNum)) parsed.outcome = usdNum >= 0 ? "WIN" : "LOSS";
+        } else {
+          const o = String(parsed.outcome).toUpperCase();
+          parsed.outcome = o.startsWith("W") || o === "TP" || o.includes("PROFIT") ? "WIN" : "LOSS";
+        }
+        // Keep cleaned numeric strings for the client form.
+        if (!isNaN(pctNum)) parsed.pnlPct = String(pctNum);
+        if (!isNaN(usdNum)) parsed.pnlUsd = String(usdNum);
+      }
+
+      // Build a clean notes line that captures realised P&L + exit + platform
+      const noteParts: string[] = [];
+      if (parsed.platform) noteParts.push(`[${parsed.platform}]`);
+      if (parsed.status === "CLOSED") {
+        const pieces: string[] = [];
+        if (parsed.exit) pieces.push(`Exit ${parsed.exit}`);
+        if (parsed.pnlUsd != null && parsed.pnlUsd !== "") {
+          const n = parseFloat(parsed.pnlUsd);
+          if (!isNaN(n)) pieces.push(`P&L ${n >= 0 ? "+" : ""}$${Math.abs(n).toFixed(2)}`);
+        }
+        if (parsed.pnlPct != null && parsed.pnlPct !== "") {
+          const n = parseFloat(parsed.pnlPct);
+          if (!isNaN(n)) pieces.push(`(${n >= 0 ? "+" : ""}${n.toFixed(2)}%)`);
+        }
+        if (pieces.length) noteParts.push(pieces.join(" · "));
+      }
+      if (parsed.notes) noteParts.push(parsed.notes);
+      parsed.notes = noteParts.join(" ").trim() || null;
+
       delete parsed.leverage; delete parsed.platform;
       res.json({ extracted: parsed });
     } catch (e: any) {

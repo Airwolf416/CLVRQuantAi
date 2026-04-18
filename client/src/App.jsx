@@ -1411,7 +1411,7 @@ function TradeJournalTab({isElite,onUpgrade}){
   const[deleting,setDeleting]=useState(null);
   const[closing,setClosing]=useState(null);
   const[closeData,setCloseData]=useState({outcome:"WIN",pnlPct:""});
-  const[form,setForm]=useState({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:""});
+  const[form,setForm]=useState({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:"",status:"OPEN",outcome:"",pnlPct:"",pnlUsd:"",exit:""});
   const[saving,setSaving]=useState(false);
   const[importing,setImporting]=useState(false);
   const[importErr,setImportErr]=useState("");
@@ -1457,8 +1457,28 @@ function TradeJournalTab({isElite,onUpgrade}){
         setImportErr(`Upload failed: ${msg}`);setImportMsg("");setImporting(false);return;
       }
       const ex=j?.extracted||{};
-      setForm(f=>({asset:ex.asset||f.asset,direction:ex.direction||f.direction,entry:ex.entry||f.entry,stop:ex.stop||f.stop,tp1:ex.tp1||f.tp1,tp2:ex.tp2||f.tp2,size:ex.size||f.size,notes:ex.notes||f.notes}));
-      setImportMsg("");setShowImport(false);setShowForm(true);
+      const isClosed=String(ex.status||"").toUpperCase()==="CLOSED";
+      setForm(f=>({
+        asset:ex.asset||f.asset,
+        direction:ex.direction||f.direction,
+        entry:ex.entry||f.entry,
+        stop:ex.stop||f.stop,
+        tp1:ex.tp1||f.tp1,
+        tp2:ex.tp2||f.tp2,
+        size:ex.size||f.size,
+        notes:ex.notes||f.notes,
+        status:isClosed?"CLOSED":"OPEN",
+        outcome:isClosed?(ex.outcome||""):"",
+        pnlPct:isClosed?(ex.pnlPct||""):"",
+        pnlUsd:isClosed?(ex.pnlUsd||""):"",
+        exit:isClosed?(ex.exit||""):"",
+      }));
+      if(isClosed){
+        const pct=ex.pnlPct?` ${parseFloat(ex.pnlPct)>=0?"+":""}${parseFloat(ex.pnlPct).toFixed(2)}%`:"";
+        const usd=ex.pnlUsd?` (${parseFloat(ex.pnlUsd)>=0?"+":""}$${Math.abs(parseFloat(ex.pnlUsd)).toFixed(2)})`:"";
+        setImportMsg(`Detected CLOSED ${ex.outcome||"trade"} —${pct}${usd}`);
+      } else setImportMsg("");
+      setShowImport(false);setShowForm(true);
     }catch(e){
       console.error("[journal import]",e);
       setImportErr(e?.message||"Upload failed — please retry or enter manually.");setImportMsg("");
@@ -1474,7 +1494,22 @@ function TradeJournalTab({isElite,onUpgrade}){
       const j=await r.json();
       if(!r.ok){setImportErr(j.error||"Extraction failed");setImporting(false);return;}
       const ex=j.extracted||{};
-      setForm(f=>({asset:ex.asset||f.asset,direction:ex.direction||f.direction,entry:ex.entry||f.entry,stop:ex.stop||f.stop,tp1:ex.tp1||f.tp1,tp2:ex.tp2||f.tp2,size:ex.size||f.size,notes:ex.notes||f.notes}));
+      const isClosed=String(ex.status||"").toUpperCase()==="CLOSED";
+      setForm(f=>({
+        asset:ex.asset||f.asset,
+        direction:ex.direction||f.direction,
+        entry:ex.entry||f.entry,
+        stop:ex.stop||f.stop,
+        tp1:ex.tp1||f.tp1,
+        tp2:ex.tp2||f.tp2,
+        size:ex.size||f.size,
+        notes:ex.notes||f.notes,
+        status:isClosed?"CLOSED":"OPEN",
+        outcome:isClosed?(ex.outcome||""):"",
+        pnlPct:isClosed?(ex.pnlPct||""):"",
+        pnlUsd:isClosed?(ex.pnlUsd||""):"",
+        exit:isClosed?(ex.exit||""):"",
+      }));
       setImportUrl("");setShowImport(false);setShowForm(true);
     }catch(e){setImportErr("Extraction failed — please enter manually.");}
     setImporting(false);
@@ -1563,13 +1598,19 @@ function TradeJournalTab({isElite,onUpgrade}){
     if(!form.asset||!form.entry){setSaveErr("ASSET and ENTRY PRICE are required.");return;}
     setSaving(true);
     try{
-      const r=await fetch("/api/journal",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)});
+      const isClosed=form.status==="CLOSED"&&(form.outcome==="WIN"||form.outcome==="LOSS");
+      const payload={
+        asset:form.asset,direction:form.direction,entry:form.entry,
+        stop:form.stop,tp1:form.tp1,tp2:form.tp2,size:form.size,notes:form.notes,
+        ...(isClosed?{outcome:form.outcome,pnlPct:form.pnlPct||undefined}:{})
+      };
+      const r=await fetch("/api/journal",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
       let j=null;try{j=await r.json();}catch{}
       if(!r.ok){
         const msg=j?.error||`Server error ${r.status}`;
         setSaveErr(`Save failed: ${msg}`);setSaving(false);return;
       }
-      setForm({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:""});
+      setForm({asset:"",direction:"LONG",entry:"",stop:"",tp1:"",tp2:"",size:"",notes:"",status:"OPEN",outcome:"",pnlPct:"",pnlUsd:"",exit:""});
       setShowForm(false);refetch();
     }catch(e){
       console.error("[journal save]",e);
@@ -1657,16 +1698,52 @@ function TradeJournalTab({isElite,onUpgrade}){
           <div><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>POSITION SIZE</div><input data-testid="input-journal-size" value={form.size} onChange={e=>setForm(f=>({...f,size:e.target.value}))} placeholder="e.g. 0.5 BTC / $5000 / 2%" style={inp}/></div>
         </div>
         <div style={{marginBottom:8}}><div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>NOTES</div><textarea data-testid="input-journal-notes" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Why you took this trade, market context, thesis..." style={{...inp,minHeight:56,resize:"vertical"}}/></div>
-        {(()=>{const ready=!saving&&form.asset&&form.entry;return(
+        {form.status==="CLOSED"&&(()=>{
+          const isWin=form.outcome==="WIN";
+          const col=isWin?"#00c787":"#ff4060";
+          const pctNum=form.pnlPct?parseFloat(form.pnlPct):null;
+          const usdNum=form.pnlUsd?parseFloat(form.pnlUsd):null;
+          return(
+            <div data-testid="banner-journal-closed" style={{marginBottom:10,padding:"10px 12px",background:`${col}10`,border:`1px solid ${col}55`,borderRadius:4}}>
+              <div style={{fontFamily:MONO,fontSize:8,letterSpacing:"0.14em",color:col,marginBottom:6}}>CLOSED TRADE DETECTED — {isWin?"WIN":"LOSS"}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                <div>
+                  <div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>OUTCOME</div>
+                  <select data-testid="select-journal-outcome" value={form.outcome||"WIN"} onChange={e=>setForm(f=>({...f,outcome:e.target.value}))} style={inp}>
+                    <option value="WIN">WIN</option><option value="LOSS">LOSS</option>
+                  </select>
+                </div>
+                <div>
+                  <div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>P&L %</div>
+                  <input data-testid="input-journal-pnlpct" value={form.pnlPct} onChange={e=>setForm(f=>({...f,pnlPct:e.target.value}))} placeholder="e.g. 9.32" style={inp}/>
+                </div>
+                <div>
+                  <div style={{fontFamily:MONO,fontSize:7,color:"#8b7d5a",marginBottom:3}}>P&L $</div>
+                  <input data-testid="input-journal-pnlusd" value={form.pnlUsd} onChange={e=>setForm(f=>({...f,pnlUsd:e.target.value}))} placeholder="e.g. 1.29" style={inp}/>
+                </div>
+              </div>
+              {(pctNum!=null||usdNum!=null)&&(
+                <div style={{marginTop:6,fontFamily:MONO,fontSize:9,color:col,fontWeight:700}}>
+                  {usdNum!=null?`${usdNum>=0?"+":""}$${Math.abs(usdNum).toFixed(2)}`:""}{usdNum!=null&&pctNum!=null?" · ":""}{pctNum!=null?`${pctNum>=0?"+":""}${pctNum.toFixed(2)}%`:""}
+                </div>
+              )}
+              <div style={{marginTop:6,fontFamily:MONO,fontSize:8,color:"#8b7d5a"}}>
+                Saving will record this directly as a closed trade. Tap to switch back to OPEN if this looks wrong.
+                <button data-testid="btn-journal-mark-open" onClick={()=>setForm(f=>({...f,status:"OPEN",outcome:"",pnlPct:"",pnlUsd:"",exit:""}))} style={{marginLeft:8,padding:"3px 8px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:3,fontFamily:MONO,fontSize:8,color:"#8b7d5a",cursor:"pointer"}}>MARK AS OPEN</button>
+              </div>
+            </div>
+          );
+        })()}
+        {(()=>{const ready=!saving&&form.asset&&form.entry;const closed=form.status==="CLOSED";const bg=closed?(form.outcome==="LOSS"?"#ff4060":"#00c787"):"#00c787";return(
           <button data-testid="btn-journal-save" disabled={!ready} onClick={addEntry} style={{
             padding:"11px 26px",
-            background:ready?"#00c787":"rgba(0,199,135,.08)",
-            border:`1px solid ${ready?"#00c787":"rgba(0,199,135,.25)"}`,
+            background:ready?bg:"rgba(0,199,135,.08)",
+            border:`1px solid ${ready?bg:"rgba(0,199,135,.25)"}`,
             borderRadius:4,fontFamily:MONO,fontSize:11,fontWeight:700,letterSpacing:"0.12em",
             color:ready?"#000":"rgba(0,199,135,.45)",
             cursor:ready?"pointer":"not-allowed",
             WebkitAppearance:"none",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",
-          }}>{saving?"SAVING…":"SAVE TRADE"}</button>
+          }}>{saving?"SAVING…":(closed?`SAVE CLOSED ${form.outcome||"TRADE"}`:"SAVE TRADE")}</button>
         );})()}
         {saveErr&&<div data-testid="text-journal-save-err" style={{marginTop:10,padding:"8px 10px",background:"rgba(255,64,96,.08)",border:"1px solid rgba(255,64,96,.3)",borderRadius:4,fontFamily:MONO,fontSize:9,color:C.red}}>{saveErr}</div>}
         {!form.asset||!form.entry?<div style={{marginTop:8,fontFamily:MONO,fontSize:8,color:"#8b7d5a",fontStyle:"italic"}}>Tip: ASSET and ENTRY PRICE must be filled in before saving.</div>:null}
