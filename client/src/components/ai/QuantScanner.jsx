@@ -24,6 +24,11 @@ const FULL_ASSET_LIBRARY = [
   { ticker:"PENDLE", name:"Pendle", cat:"CRYPTO" },{ ticker:"HBAR", name:"Hedera", cat:"CRYPTO" },
   { ticker:"TRUMP", name:"Trump", cat:"CRYPTO" },{ ticker:"HYPE", name:"Hyperliquid", cat:"CRYPTO" },
   { ticker:"WIF", name:"dogwifhat", cat:"CRYPTO" },
+  { ticker:"SHIB", name:"Shiba Inu", cat:"CRYPTO" },{ ticker:"BONK", name:"Bonk", cat:"CRYPTO" },
+  { ticker:"FLOKI", name:"Floki", cat:"CRYPTO" },{ ticker:"ATOM", name:"Cosmos", cat:"CRYPTO" },
+  { ticker:"POL", name:"Polygon", cat:"CRYPTO" },{ ticker:"LDO", name:"Lido", cat:"CRYPTO" },
+  { ticker:"MKR", name:"Maker", cat:"CRYPTO" },{ ticker:"FIL", name:"Filecoin", cat:"CRYPTO" },
+  { ticker:"ICP", name:"Internet Computer", cat:"CRYPTO" },{ ticker:"WLD", name:"Worldcoin", cat:"CRYPTO" },
   { ticker:"TSLA", name:"Tesla", cat:"EQUITY" },{ ticker:"NVDA", name:"NVIDIA", cat:"EQUITY" },
   { ticker:"AAPL", name:"Apple", cat:"EQUITY" },{ ticker:"GOOGL", name:"Alphabet", cat:"EQUITY" },
   { ticker:"META", name:"Meta", cat:"EQUITY" },{ ticker:"MSFT", name:"Microsoft", cat:"EQUITY" },
@@ -34,6 +39,8 @@ const FULL_ASSET_LIBRARY = [
   { ticker:"TSM", name:"TSMC", cat:"EQUITY" },{ ticker:"GME", name:"GameStop", cat:"EQUITY" },
   { ticker:"RIVN", name:"Rivian", cat:"EQUITY" },{ ticker:"BABA", name:"Alibaba", cat:"EQUITY" },
   { ticker:"HIMS", name:"Hims & Hers", cat:"EQUITY" },{ ticker:"CRCL", name:"Circle", cat:"EQUITY" },
+  { ticker:"SPY", name:"S&P 500 ETF", cat:"EQUITY" },{ ticker:"QQQ", name:"Nasdaq 100 ETF", cat:"EQUITY" },
+  { ticker:"IWM", name:"Russell 2000 ETF", cat:"EQUITY" },{ ticker:"DIA", name:"Dow Jones ETF", cat:"EQUITY" },
   { ticker:"XAU", name:"Gold", cat:"COMMODITY" },{ ticker:"XAG", name:"Silver", cat:"COMMODITY" },
   { ticker:"WTI", name:"Oil WTI", cat:"COMMODITY" },{ ticker:"BRENT", name:"Brent Crude", cat:"COMMODITY" },
   { ticker:"NATGAS", name:"Natural Gas", cat:"COMMODITY" },{ ticker:"COPPER", name:"Copper", cat:"COMMODITY" },
@@ -63,7 +70,7 @@ export default function QuantScanner({ mode, isPro, isElite }) {
   const [selected, setSelected] = useState(["BTC"]);
   const [market, setMarket] = useState("PERP");
   const [risk, setRisk] = useState("mid");
-  const [tf, setTf] = useState("today");
+  const [tf, setTf] = useState("hours");
   const [scanning, setScanning] = useState(false);
   const [results, setResults] = useState([]);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -197,9 +204,13 @@ export default function QuantScanner({ mode, isPro, isElite }) {
 
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
         <select data-testid="select-scan-tf" value={tf} onChange={e => setTf(e.target.value)} style={{ flex: 1, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
-          <option value="today">Scalp / Intraday</option>
-          <option value="mid">Mid-Term (1-4 wks)</option>
-          <option value="long">Long-Term (1-3 mo)</option>
+          <optgroup label="Today">
+            <option value="quick">Quick (&lt;1h)</option>
+            <option value="hours">Hours (1–8h)</option>
+            <option value="fullday">Full Day (8–24h)</option>
+          </optgroup>
+          <option value="mid">Mid-Term (1–4 wks)</option>
+          <option value="long">Long-Term (1–3 mo)</option>
         </select>
         <select data-testid="select-scan-market" value={market} onChange={e => setMarket(e.target.value)} style={{ flex: 1, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
           <option value="PERP">PERP</option>

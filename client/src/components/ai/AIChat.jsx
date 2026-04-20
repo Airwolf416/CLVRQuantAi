@@ -17,6 +17,7 @@ export default function AIChat({
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [dailyCount, setDailyCount] = useState(0);
+  const [marketTypeFilter, setMarketTypeFilter] = useState("BOTH");
   const scrollRef = useRef(null);
 
   const dailyLimit = isElite ? 999 : 30;
@@ -56,7 +57,15 @@ export default function AIChat({
 
       const macroCtx = buildMacroPreflightContext(preflight);
 
+      const marketTypeRule = marketTypeFilter === "PERP"
+        ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged setups. Include leverage suggestion. Tight SL. Reference funding/OI/liquidation in thesis.`
+        : marketTypeFilter === "SPOT"
+        ? `MARKET TYPE FILTER: SPOT ONLY. Recommend ONLY spot / cash trades. NO leverage — set leverage 1x. Wider SL acceptable. Reference accumulation/DCA logic.`
+        : `MARKET TYPE FILTER: BOTH. Mix of PERP and SPOT — label every recommendation as PERP or SPOT. PERP: leverage + funding/OI rationale. SPOT: 1x, accumulation logic.`;
+
       const sys = `You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
+
+${marketTypeRule}
 
 MANDATORY STEP 1 — MACRO PRE-FLIGHT:
 ${macroCtx || "No macro data. Proceed with CAUTION."}
@@ -122,6 +131,28 @@ ${snap.sections}
         <div style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginTop: 2, letterSpacing: "0.08em" }}>
           CLVR AI · CLAUDE SONNET · {dailyCount}/{dailyLimit} TODAY
         </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+        {["PERP", "SPOT", "BOTH"].map(m => {
+          const col = m === "PERP" ? "#00d4ff" : m === "SPOT" ? "#a855f7" : "#e8c96d";
+          const sel = marketTypeFilter === m;
+          return (
+            <button
+              key={m}
+              data-testid={`btn-aichat-mkt-${m}`}
+              onClick={() => setMarketTypeFilter(m)}
+              style={{
+                padding: "4px 10px", borderRadius: 5,
+                border: `1px solid ${sel ? col : "rgba(255,255,255,0.08)"}`,
+                background: sel ? `${col}18` : "transparent",
+                color: sel ? col : "rgba(255,255,255,0.4)",
+                fontFamily: MONO, fontSize: 8, cursor: "pointer", fontWeight: sel ? 700 : 400,
+                letterSpacing: "0.08em",
+              }}
+            >{m}</button>
+          );
+        })}
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 10, flexWrap: "wrap" }}>

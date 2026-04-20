@@ -2721,10 +2721,25 @@ Output JSON only, no prose, no code fences.`;
     mid:  { label:"BALANCED",     slMultiplier:1.8, leverage:[3,7],   riskPct:2, minWinProb:80, tpRatios:[1.5,3.0], holdHorizon:"intraday to short swing — 4 hours to 3 days" },
     high: { label:"AGGRESSIVE",   slMultiplier:1.2, leverage:[5,15],  riskPct:4, minWinProb:75, tpRatios:[1.2,2.5], holdHorizon:"scalp to intraday — 15 minutes to 8 hours" },
   };
-  const QUANT_TIMEFRAMES: Record<string, { label:string; interval:string; count:number; binanceInterval:string }> = {
-    today: { label:"Today",     interval:"15m", count:200, binanceInterval:"15m" },
-    mid:   { label:"Mid-Term",  interval:"4h",  count:300, binanceInterval:"4h"  },
-    long:  { label:"Long-Term", interval:"1d",  count:200, binanceInterval:"1d"  },
+  // 5 timeframe param sets — Apr 2026 spec. Each carries its own candle interval,
+  // recommended leverage band, and hold-horizon string the prompt threads into the AI.
+  const QUANT_TIMEFRAMES: Record<string, {
+    label: string; interval: string; count: number; binanceInterval: string;
+    holdHorizon: string; leverage: [number, number]; tpRatios: [number, number];
+  }> = {
+    quick:   { label: "Quick (<1h)",       interval: "5m",  count: 180, binanceInterval: "5m",
+               holdHorizon: "scalp — 5 to 60 minutes",         leverage: [10, 25], tpRatios: [1.0, 1.8] },
+    hours:   { label: "Hours (1–8h)",      interval: "15m", count: 200, binanceInterval: "15m",
+               holdHorizon: "intraday — 1 to 8 hours",         leverage: [5, 15],  tpRatios: [1.2, 2.5] },
+    fullday: { label: "Full Day (8–24h)",  interval: "1h",  count: 168, binanceInterval: "1h",
+               holdHorizon: "session — 8 to 24 hours",         leverage: [3, 10],  tpRatios: [1.5, 3.0] },
+    mid:     { label: "Mid-Term (1–4 wks)",interval: "4h",  count: 300, binanceInterval: "4h",
+               holdHorizon: "swing — 3 to 28 days",            leverage: [2, 5],   tpRatios: [2.0, 4.0] },
+    long:    { label: "Long-Term (1–3 mo)",interval: "1d",  count: 200, binanceInterval: "1d",
+               holdHorizon: "position — 4 to 12 weeks",        leverage: [1, 3],   tpRatios: [3.0, 6.0] },
+    // Back-compat alias — old "today" still routes to the most common intraday set
+    today:   { label: "Today",             interval: "15m", count: 200, binanceInterval: "15m",
+               holdHorizon: "intraday — 1 to 8 hours",         leverage: [5, 15],  tpRatios: [1.2, 2.5] },
   };
   const BINANCE_SYMBOLS: Record<string, string> = {
     BTC:"BTCUSDT", ETH:"ETHUSDT", SOL:"SOLUSDT", AVAX:"AVAXUSDT",
@@ -3433,8 +3448,8 @@ ${adaptiveBlock}
 You are CLVRQuantAI Signal Engine — a precision trade signal generator for leveraged perpetual futures. Think like Paul Tudor Jones + Stan Druckenmiller. Capital preservation first. Never force a trade.
 
 PROFILE: ${risk.label}
-Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x | Risk/trade: ${risk.riskPct}% | Min win prob: ${risk.minWinProb}%
-TP1 ratio: ${risk.tpRatios[0]}:1 | TP2 ratio: ${risk.tpRatios[1]}:1 | Horizon: ${risk.holdHorizon}
+Leverage: ${Math.max(risk.leverage[0], tf.leverage[0])}x–${Math.min(risk.leverage[1], tf.leverage[1])}x (intersect risk × timeframe) | Risk/trade: ${risk.riskPct}% | Min win prob: ${risk.minWinProb}%
+TP1 ratio: ${Math.min(risk.tpRatios[0], tf.tpRatios[0])}:1 | TP2 ratio: ${Math.min(risk.tpRatios[1], tf.tpRatios[1])}:1 | Hold horizon: ${tf.holdHorizon} (timeframe-driven; risk floor: ${risk.holdHorizon})
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 1 — SIGNAL VALIDATION GATE (pre-computed — DO NOT recalculate)
@@ -3490,10 +3505,11 @@ ABSOLUTE RULES
 2. NEVER set entry at spike high. Use Fibonacci levels above.
 3. SL must be below structural low with ${risk.slMultiplier}× ATR buffer.
 4. R:R ≥ 1.5:1 required. If not achievable → NEUTRAL.
-5. Leverage: ${risk.leverage[0]}x–${risk.leverage[1]}x range only.
-6. ALWAYS include target_exit_min and hard_exit_min in hold object.
-7. If MACD, RSI, EMA, and volume all conflict → NEUTRAL. Confluence required.
-8. Output risk_flags for every active concern: macro, OI, session, funding, pattern.${suppression.flagsForAI.length > 0 ? `
+5. Leverage: ${Math.max(risk.leverage[0], tf.leverage[0])}x–${Math.min(risk.leverage[1], tf.leverage[1])}x range only (risk × timeframe intersect).
+6. Hold time / duration MUST fall inside "${tf.holdHorizon}" — do NOT recommend a longer or shorter horizon than the chosen timeframe permits.
+7. ALWAYS include target_exit_min and hard_exit_min in hold object.
+8. If MACD, RSI, EMA, and volume all conflict → NEUTRAL. Confluence required.
+9. Output risk_flags for every active concern: macro, OI, session, funding, pattern.${suppression.flagsForAI.length > 0 ? `
 
 SIGNAL SUPPRESSION OVERRIDES (enforce before finalizing):
 ${suppression.flagsForAI.map((f, i) => `${i + 9}. ${f}`).join("\n")}` : ""}
@@ -3503,8 +3519,9 @@ DIRECTION CONSISTENCY CHECK: If 3+ edge factors are bullish (bull cross, bullish
 ASSET CONSTRAINT (NON-NEGOTIABLE): You are analyzing ONLY the ticker "${ticker}". Do NOT substitute, recommend, or analyze any other asset. Your entire output must be about ${ticker} and nothing else. If you cannot generate a signal for ${ticker}, output signal: "NEUTRAL" with a reason — do NOT switch to a different asset. Every price level must correspond to ${ticker}.
 
 OUTPUT LENGTH RULES — STRICTLY ENFORCED:
-- quant_rationale: MAX 2 sentences. State the setup and the catalyst. Nothing else.
-- invalidation: MAX 2 sentences. State the price level and condition that kills the trade.
+- quant_rationale: EXACTLY 2 sentences. Sentence 1 = the setup (pattern + key indicator). Sentence 2 = the catalyst or confluence reason. No filler, no hedging.
+- invalidation: EXACTLY 1 sentence. State the precise price level AND the condition (e.g. "Invalidated on a 4H close below 62,400 — breaks the rising trendline.").
+- thesis: EXACTLY 2 sentences in plain English a non-quant can read. No jargon dumps.
 - Do NOT explain your scoring methodology, internal logic, or numbered supporting factors.
 - Do NOT reference "absolute rules", "pre-computed gates", "Kelly percentages", or internal calculations.
 
@@ -3555,10 +3572,11 @@ Respond ONLY with valid JSON. No markdown. No backticks. No text before or after
     "rationale": "string"
   },
   "technical_summary": { "trend": "string", "key_levels": "string", "momentum": "string", "volume": "string", "pattern": "string" },
-  "quant_rationale": "string",
+  "quant_rationale": "string — EXACTLY 2 sentences",
+  "thesis": "string — EXACTLY 2 plain-English sentences a non-quant can read",
   "risks": ["string"],
   "risk_flags": ["string — format: CATEGORY: description"],
-  "invalidation": "string"
+  "invalidation": "string — EXACTLY 1 sentence with price level + condition"
 }`;
 
       const userMsg = `ASSET: ${ticker} | MARKET: ${marketType} | CLASS: ${cls.toUpperCase()}
