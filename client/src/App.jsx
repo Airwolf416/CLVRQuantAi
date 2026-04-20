@@ -137,7 +137,10 @@ async function fetchFinnhub(){
 async function fetchNews(){
   const r=await fetch("/api/news");
   if(!r.ok)throw new Error(`News API ${r.status}`);
-  return await r.json();
+  const j=await r.json();
+  // Backward compat: server now returns {items, filtered}; older shape was a bare array.
+  if(Array.isArray(j))return{items:j,filtered:0};
+  return{items:Array.isArray(j?.items)?j.items:[],filtered:j?.filtered||0};
 }
 
 // ─── SPARKLINE ────────────────────────────────────────────
@@ -2279,6 +2282,8 @@ function Dashboard({user,setUser,onShowAuth}){
   const [liveSignals,setLiveSignals]=useState([]);
   const [newsFeed,setNewsFeed]=useState([]);
   const [newsFilter,setNewsFilter]=useState("ALL");
+  const [newsFilteredCount,setNewsFilteredCount]=useState(0);
+  const [spikeFilter,setSpikeFilter]=useState(null);
   const [insiderData,setInsiderData]=useState([]);
   const [sigTracking,setSigTracking]=useState(32);
   const [flashSigId,setFlashSigId]=useState(null);
@@ -2621,7 +2626,7 @@ function Dashboard({user,setUser,onShowAuth}){
 
   // ── News Feed — auto-refreshes every 60 seconds ─────────────────────────
   useEffect(()=>{
-    const doNews=async()=>{try{const data=await fetchNews();if(Array.isArray(data)&&data.length>0)setNewsFeed(data);}catch{}};
+    const doNews=async()=>{try{const data=await fetchNews();if(data){setNewsFeed(Array.isArray(data.items)?data.items:[]);setNewsFilteredCount(data.filtered||0);}}catch{}};
     doNews();
     const iv=setInterval(doNews,60000);
     return()=>clearInterval(iv);
@@ -3716,14 +3721,30 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </div>
         {/* Ticker chips */}
         <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:2}}>
-          {["BTC","ETH","SOL","XAU","WTI","EURUSD","TSLA","NVDA"].map(sym=>{
-            const d=allPrices[sym],flash=flashes[sym];const isUp=Number(d?.chg)>=0;
+          {["BTC","ETH","SOL","XAU","WTI","EURUSD","DXY","TSLA","NVDA"].map(sym=>{
+            // DXY: derived from EURUSD inverse (Finnhub free tier lacks DXY directly).
+            // Approx: DXY ≈ 1.08 / EURUSD * 100  (calibrated so EUR/USD=1.08 → DXY≈100).
+            let d, flash, derived=false;
+            if(sym==="DXY"){
+              const eu=forexPrices.EURUSD;
+              if(eu?.price){
+                const dxy=(1.08/eu.price)*100;
+                const dxyChg=-(eu.chg||0);
+                d={price:dxy,chg:dxyChg,live:!!eu.live};
+              }else d=null;
+              flash=null; derived=true;
+            }else{
+              d=allPrices[sym]; flash=flashes[sym];
+            }
+            const isUp=Number(d?.chg)>=0;
+            const label=sym==="DXY"?"DXY*":sym;
             return(
-              <div key={sym} data-testid={`ticker-${sym}`} onClick={()=>{setAiInput(`${sym} — long or short right now?`);setTab("ai");}}
+              <div key={sym} data-testid={`ticker-${sym}`} title={derived?"DXY derived from EUR/USD inverse (proxy)":undefined}
+                onClick={()=>{setAiInput(`${sym==="DXY"?"DXY (Dollar Index)":sym} — long or short right now?`);setTab("ai");}}
                 style={{background:flash==="green"?"rgba(0,199,135,.08)":flash==="red"?"rgba(255,64,96,.06)":C.panel,
                   border:`1px solid ${d?.live?"rgba(201,168,76,.18)":C.border}`,borderRadius:2,padding:"5px 9px",flexShrink:0,cursor:"pointer",minWidth:64,transition:"background .35s"}}>
-                <div style={{fontFamily:MONO,fontSize:8,color:d?.live?C.gold:C.muted,letterSpacing:"0.08em"}}>{sym}</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,transition:"color .5s ease-out",marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{fmt(d?.price,sym)}</div>
+                <div style={{fontFamily:MONO,fontSize:8,color:d?.live?C.gold:C.muted,letterSpacing:"0.08em"}}>{label}</div>
+                <div style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,transition:"color .5s ease-out",marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{d?.price!=null?(sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)):"—"}</div>
                 <div style={{fontFamily:MONO,fontSize:9,color:isUp?C.green:C.red}}>{pct(d?.chg)}</div>
               </div>
             );
@@ -3766,7 +3787,31 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
           <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
-          <TwitterMarketModeStrip />
+          <TwitterMarketModeStrip onSpikeClick={(tk)=>setSpikeFilter(tk)} activeSpike={spikeFilter}/>
+
+          {/* ── Fear & Greed widget — uses live data from useDataBus ── */}
+          {dbFearGreed?.value!=null&&(()=>{
+            const fgv=dbFearGreed.value, fgc=fearGreedColor(fgv), fgcl=dbFearGreed.classification||"Neutral";
+            const fgLabel=fgv<=25?"EXTREME FEAR":fgv<=45?"FEAR":fgv<=55?"NEUTRAL":fgv<=75?"GREED":"EXTREME GREED";
+            const fgHint=fgv<=25?"Contrarian bullish — capitulation zone":fgv>=75?"Distribution risk — froth zone":"Balanced sentiment";
+            return(
+              <div data-testid="panel-fear-greed" style={{background:C.panel,border:`1px solid ${fgc}44`,borderRadius:4,padding:"12px",marginBottom:12,display:"flex",alignItems:"center",gap:14}}>
+                <div style={{flexShrink:0,width:64,height:64,borderRadius:"50%",border:`3px solid ${fgc}`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:`${fgc}10`}}>
+                  <div style={{fontFamily:MONO,fontSize:20,fontWeight:900,color:fgc,lineHeight:1}}>{fgv}</div>
+                  <div style={{fontFamily:MONO,fontSize:6,color:C.muted,marginTop:2,letterSpacing:"0.1em"}}>/100</div>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:MONO,fontSize:9,color:C.gold,letterSpacing:"0.18em",marginBottom:4}}>FEAR &amp; GREED INDEX</div>
+                  <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,color:fgc,letterSpacing:"0.1em",marginBottom:5}}>{fgLabel} · <span style={{color:C.muted2,fontWeight:500}}>{fgcl}</span></div>
+                  <div style={{height:5,background:"rgba(255,255,255,.05)",borderRadius:3,overflow:"hidden",marginBottom:5,position:"relative"}}>
+                    <div style={{position:"absolute",inset:0,background:"linear-gradient(90deg,#ff4060 0%,#ff8c00 25%,#c9a84c 50%,#86c554 75%,#00c787 100%)",opacity:.35}}/>
+                    <div style={{position:"absolute",top:-2,bottom:-2,left:`${fgv}%`,width:2,background:fgc,boxShadow:`0 0 6px ${fgc}`}}/>
+                  </div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,lineHeight:1.4}}>{fgHint}</div>
+                </div>
+              </div>
+            );
+          })()}
 
           {regimeData&&<>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
@@ -3897,11 +3942,62 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             );
           })()}
 
-          {newsFeed.length>0&&<div style={{marginBottom:12}}>
+          {newsFeed.length>0&&(()=>{
+            // Source-diversity counts (Stocktwits/X/CryptoPanic/CryptoCompare/Conflict)
+            const counts={twitter:0,stocktwits:0,cryptopanic:0,cryptocompare:0,conflict:0,other:0};
+            for(const n of newsFeed){
+              if(n.isConflict||n.id?.startsWith?.("geo-")) counts.conflict++;
+              else if(n.src==="twitter"||n.id?.startsWith?.("x-")) counts.twitter++;
+              else if(n.src==="stocktwits"||n.id?.startsWith?.("st-")) counts.stocktwits++;
+              else if(n.id?.startsWith?.("cp-")) counts.cryptopanic++;
+              else if(n.id?.startsWith?.("cc-")) counts.cryptocompare++;
+              else counts.other++;
+            }
+            const total=newsFeed.length||1;
+            const srcBar=[
+              {k:"X",      label:"X / RAPIDAPI",   c:C.cyan,   v:counts.twitter},
+              {k:"ST",     label:"STOCKTWITS",     c:C.gold,   v:counts.stocktwits},
+              {k:"CP",     label:"CRYPTOPANIC",    c:C.purple, v:counts.cryptopanic},
+              {k:"CC",     label:"CRYPTOCOMPARE",  c:C.blue,   v:counts.cryptocompare},
+              {k:"GEO",    label:"CONFLICT",       c:C.red,    v:counts.conflict},
+              {k:"OTHER",  label:"OTHER",          c:C.muted2, v:counts.other},
+            ].filter(s=>s.v>0);
+            return(
+          <div style={{marginBottom:12}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
               <div style={{fontFamily:MONO,fontSize:10,color:C.blue,letterSpacing:"0.15em"}}>{i18n.newsIntel}</div>
-              <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{newsFeed.length} STORIES</div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {newsFilteredCount>0&&<div data-testid="badge-noise-filter" title={`${newsFilteredCount} item(s) hidden by noise filter`} style={{fontFamily:MONO,fontSize:8,color:C.muted,padding:"2px 7px",border:`1px solid ${C.border}`,borderRadius:2,letterSpacing:"0.08em"}}>🛡 NOISE FILTERED · {newsFilteredCount}</div>}
+                <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{newsFeed.length} STORIES</div>
+              </div>
             </div>
+
+            {/* Source-diversity breakdown bar */}
+            <div data-testid="bar-source-diversity" style={{marginBottom:8,background:C.panel,border:`1px solid ${C.border}`,borderRadius:3,padding:"7px 9px"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+                <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.12em"}}>SOURCE DIVERSITY · {srcBar.length} CHANNELS</div>
+              </div>
+              <div style={{display:"flex",height:5,borderRadius:2,overflow:"hidden",background:"rgba(255,255,255,.04)"}}>
+                {srcBar.map(s=><div key={s.k} title={`${s.label}: ${s.v}`} style={{width:`${(s.v/total)*100}%`,background:s.c,opacity:.85}}/>)}
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6}}>
+                {srcBar.map(s=>(
+                  <div key={s.k} data-testid={`src-chip-${s.k}`} style={{display:"flex",alignItems:"center",gap:4}}>
+                    <span style={{width:6,height:6,borderRadius:1,background:s.c,display:"inline-block"}}/>
+                    <span style={{fontFamily:MONO,fontSize:7,color:C.muted2,letterSpacing:"0.06em"}}>{s.label} · <span style={{color:C.text,fontWeight:700}}>{s.v}</span></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Active spike filter pill */}
+            {spikeFilter&&(
+              <div data-testid="pill-spike-filter" style={{marginBottom:8,display:"flex",alignItems:"center",gap:8,background:`${C.gold}10`,border:`1px solid ${C.gold}44`,borderRadius:3,padding:"6px 10px"}}>
+                <span style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.12em",fontWeight:700}}>⚠ FILTERED BY SPIKE: ${spikeFilter}</span>
+                <span style={{flex:1,fontFamily:MONO,fontSize:8,color:C.muted}}>showing news mentioning {spikeFilter}</span>
+                <button data-testid="btn-clear-spike" onClick={()=>setSpikeFilter(null)} style={{background:"none",border:`1px solid ${C.gold}55`,borderRadius:2,padding:"2px 8px",fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer",letterSpacing:"0.1em"}}>CLEAR ×</button>
+              </div>
+            )}
             <div style={{display:"flex",gap:4,marginBottom:8,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
               {[
                 {k:"ALL",label:"ALL",col:C.blue},
@@ -3969,7 +4065,11 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             })()}
 
             {/* Regular news feed (non-conflict filters) */}
-            {newsFilter!=="CONFLICT"&&(newsFilter==="ALL"?newsFeed:newsFeed.filter(n=>{if(newsFilter==="SOCIAL")return n.categories?.includes("twitter");if(newsFilter==="EQUITIES")return n.assets?.some(a=>["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"].includes(a));return n.assets?.includes(newsFilter);})).slice(0,12).map(n=>{
+            {newsFilter!=="CONFLICT"&&(()=>{
+              let base=newsFilter==="ALL"?newsFeed:newsFeed.filter(n=>{if(newsFilter==="SOCIAL")return n.categories?.includes("twitter");if(newsFilter==="EQUITIES")return n.assets?.some(a=>["TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR","AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS"].includes(a));return n.assets?.includes(newsFilter);});
+              if(spikeFilter)base=base.filter(n=>n.assets?.includes(spikeFilter)||n.title?.toUpperCase().includes("$"+spikeFilter));
+              return base;
+            })().slice(0,12).map(n=>{
               const sentColor=n.sentiment>0.3?C.green:n.sentiment<-0.3?C.red:C.muted2;
               const srcColor={blue:C.blue,cyan:C.cyan,orange:C.orange,green:C.green,gold:C.gold}[n.color]||C.blue;
               const ago=((Date.now()-n.ts)/60000);const agoStr=ago<60?`${Math.floor(ago)}m`:ago<1440?`${Math.floor(ago/60)}h`:`${Math.floor(ago/1440)}d`;
@@ -3996,7 +4096,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               );
             })}
             {newsFilter!=="CONFLICT"&&newsFeed.length>12&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,textAlign:"center",padding:"6px 0",letterSpacing:"0.1em"}}>{newsFeed.length-12} MORE STORIES</div>}
-          </div>}
+          </div>
+            );
+          })()}
 
           {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
             <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:10}}>{i18n.nextMacro}</div>

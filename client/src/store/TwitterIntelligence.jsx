@@ -162,7 +162,7 @@ export function TwitterSentimentBadge() {
 }
 
 // ── COMPONENT 2: TwitterMarketModeStrip — compact strip for Market tab ────────
-export function TwitterMarketModeStrip() {
+export function TwitterMarketModeStrip({ onSpikeClick, activeSpike } = {}) {
   const { sentiment, mentions, loading } = useTwitterIntelligence();
   const col = sentColor(sentiment.score);
   if (loading && !sentiment.totalTweets) return (
@@ -183,11 +183,30 @@ export function TwitterMarketModeStrip() {
       <div style={{ flex:1, height:3, background:"rgba(255,255,255,0.06)", borderRadius:2, overflow:"hidden", minWidth:40 }}>
         <div style={{ height:"100%", width:`${sentiment.score}%`, background:col, borderRadius:2, transition:"width 1s ease" }}/>
       </div>
-      {spikes.map(m => (
-        <div key={m.ticker} style={{ background:"rgba(201,168,76,.08)", border:"1px solid rgba(201,168,76,.2)", borderRadius:3, padding:"2px 6px" }}>
-          <span style={{ fontSize:7, color:"#c9a84c", fontFamily:MONO }}>⚠ {m.ticker} spike</span>
-        </div>
-      ))}
+      {spikes.map(m => {
+        const tk = m.ticker.replace("$", "");
+        const isActive = activeSpike === tk;
+        const clickable = typeof onSpikeClick === "function";
+        return (
+          <div
+            key={m.ticker}
+            data-testid={`spike-tag-${tk}`}
+            onClick={clickable ? () => onSpikeClick(isActive ? null : tk) : undefined}
+            style={{
+              background: isActive ? "rgba(255,255,255,.10)" : "rgba(201,168,76,.08)",
+              border: `1px solid ${isActive ? "#ffffff" : "rgba(201,168,76,.2)"}`,
+              borderRadius: 3,
+              padding: "2px 6px",
+              cursor: clickable ? "pointer" : "default",
+              userSelect: "none",
+            }}
+          >
+            <span style={{ fontSize: 7, color: isActive ? "#ffffff" : "#c9a84c", fontFamily: MONO }}>
+              ⚠ {m.ticker} spike{isActive ? " ×" : ""}
+            </span>
+          </div>
+        );
+      })}
       <span style={{ fontSize:7, color:"#2a3650", fontFamily:MONO }}>𝕏 · {sentiment.sampleSize}</span>
     </div>
   );

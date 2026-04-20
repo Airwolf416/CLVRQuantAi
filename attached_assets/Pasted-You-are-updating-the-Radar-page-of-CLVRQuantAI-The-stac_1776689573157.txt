@@ -1,0 +1,93 @@
+You are updating the Radar page of CLVRQuantAI. 
+The stack is React + Express on Replit, deployed to Railway. 
+Do not break any existing functionality. Make targeted, surgical changes only.
+
+--- CHANGE 1: X/Twitter Feed via RapidAPI ---
+I am subscribed to RapidAPI. Add an X/Twitter feed alongside the existing 
+Stocktwits feed in the Political Alpha / news section.
+
+- Use the RapidAPI Twitter endpoint already configured in the backend 
+  (use process.env.RAPIDAPI_KEY)
+- Fetch recent tweets filtered by: $BTC $ETH $SPY $NVDA $TSLA macro trading
+- Label each post with its source: show a small "X" or "ST" badge 
+  next to each item so the user can distinguish Twitter vs Stocktwits
+- Merge and sort both feeds by recency (newest first)
+- Limit combined feed to 20 items max
+
+--- CHANGE 2: Source Diversity Indicator ---
+Above the news feed, add a small horizontal bar showing source breakdown:
+- e.g. "Sources: Stocktwits 60% | X/Twitter 30% | BBC/News 10%"
+- Color code: Stocktwits = yellow, Twitter = cyan, News = orange
+- Calculate percentages dynamically from current feed items
+
+--- CHANGE 3: Noise Filter ---
+Add a backend filter before rendering feed items:
+- Block posts containing: profanity, explicit political insults, 
+  any mention of sexual acts or violence unrelated to markets
+- Use a simple keyword blacklist array (make it easy to extend)
+- If a post is filtered, do not show it at all — no placeholder
+- Add a small counter: "X posts filtered" shown subtly below the feed
+
+--- CHANGE 4: Fear & Greed Index Widget ---
+Add a Fear & Greed widget to the Command Center section 
+(place it next to or below Market Regime):
+- Fetch from: https://api.alternative.me/fng/ (free, no key needed)
+- Display: score (0-100), label (Extreme Fear / Fear / Neutral / Greed / 
+  Extreme Greed), and a small arc/gauge visual
+- Color: red for fear, yellow for neutral, green for greed
+- Match the existing dark terminal aesthetic
+
+--- CHANGE 5: DXY Display ---
+Add DXY (US Dollar Index) to the top ticker bar alongside BTC, ETH, SOL, 
+XAU, WTI, EURUSD, TSLA, NVDA:
+- Source it from Finnhub using the existing Finnhub integration 
+  (symbol: "OANDA:USD_INDEX" or nearest equivalent)
+- Style it the same as existing tickers
+- DXY is a critical macro anchor — if it's not available on Finnhub, 
+  use EURUSD as an inverse proxy and label it clearly
+
+--- CHANGE 6: Elevate Crash Detector + Liquidity Index ---
+Move the Crash Detector and Global Liquidity Index widgets ABOVE 
+the news feed, directly below Market Regime. They are the two 
+highest-value signals on the page and should not require scrolling.
+Keep the layout responsive.
+
+--- CHANGE 7: Sentiment Spike Tag Click-Through ---
+The spike tags (e.g. $TSLA spike, $MSTR spike, $BTC spike) in the 
+Command Center are currently static labels.
+Make them clickable:
+- On click, filter the news feed below to show only posts 
+  mentioning that ticker
+- Add a small "x" to clear the filter and show all posts again
+- Highlight the active filter tag in a different color (e.g. white border)
+
+--- CHANGE 8: Reddit Sentiment (if RapidAPI has Reddit endpoint) ---
+Check if my RapidAPI subscription includes a Reddit API endpoint.
+If yes:
+- Pull top posts from r/wallstreetbets and r/CryptoCurrency 
+  (last 2 hours, sorted by hot)
+- Add "Reddit" as a third source in the feed with a Reddit badge
+- Include it in the Source Diversity Indicator
+If the endpoint is unavailable, skip this change and log a comment 
+in the code: // TODO: Reddit feed - needs RapidAPI Reddit endpoint
+
+--- STYLING RULES ---
+- Keep the dark terminal aesthetic: black background, yellow/green 
+  neon accents, monospace or techy font
+- All new widgets must match existing card/panel styling
+- Do not introduce any new color schemes — use existing CSS variables
+- Mobile/tablet responsive (the app is used on iPad as shown)
+
+--- ENV VARIABLES ---
+All API keys must use process.env — never hardcode keys.
+Existing keys already in .env: RAPIDAPI_KEY, FINNHUB_API_KEY
+Do not add new required keys unless absolutely necessary — 
+prefer free endpoints (alternative.me F&G is free).
+
+--- DELIVERABLE ---
+Show me the full updated files for:
+1. The Radar page React component
+2. Any new or updated Express backend routes
+3. Any changes to the data bus / feed aggregator service
+
+Flag any breaking changes or dependencies I need to install.

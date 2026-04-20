@@ -2068,12 +2068,29 @@ Output JSON only, no prose, no code fences.`;
     return { isPolitical: true, marketImpact };
   }
 
+  // ── Noise filter — block profanity, slurs, sexual/violent content unrelated to markets.
+  // Easy to extend: just add lowercase words/phrases.
+  const NOISE_BLACKLIST = [
+    "fuck","shit","bitch","cunt","asshole","dick","pussy","whore","slut","faggot",
+    "nigger","retard","kike","tranny",
+    "porn","nude","onlyfans","sex tape","blowjob","handjob","masturbat","orgasm",
+    "rape","pedo","child abuse","murder spree","beheading","suicide bomb",
+    "kill yourself","kys",
+  ];
+  function isNoise(text: string): boolean {
+    if (!text) return false;
+    const t = text.toLowerCase();
+    return NOISE_BLACKLIST.some(kw => t.includes(kw));
+  }
+  let _newsFilteredCount = 0;
+
   app.get("/api/news", async (_req, res) => {
     const cached = cache["news"];
     if (cached && Date.now() - cached.ts < 60000) {
       return res.json(cached.data);
     }
     const results: any[] = [];
+    _newsFilteredCount = 0;
     const TRACKED = [...CRYPTO_SYMS, ...EQUITY_SYMS, "XAU", "XAG", "GOLD", "SILVER", "OIL", "USD", "EUR", "JPY", "GBP"];
     const matchAssets = (text: string) => {
       const upper = text.toUpperCase();
@@ -2169,6 +2186,36 @@ Output JSON only, no prose, no code fences.`;
         console.error("CryptoPanic news error:", e.message);
       }
     }
+    // ── X / Twitter posts via RapidAPI ────────────────────────────────────
+    try {
+      const { getRapidTwitterPosts } = await import("./twitterRapid");
+      const tweets = await getRapidTwitterPosts();
+      for (const t of tweets) {
+        if (isNoise(t.text)) { _newsFilteredCount++; continue; }
+        const { isPolitical, marketImpact } = classifyPolitical(t.text);
+        results.push({
+          id:          "x-" + t.id,
+          source:      `@${t.handle} (X)`,
+          src:         "twitter",
+          icon:        "X",
+          color:       "cyan",
+          title:       t.text.slice(0, 220),
+          body:        "",
+          sentiment:   0,
+          score:       Math.min(10, 4 + Math.round((t.likes + t.retweets * 2) / 50)),
+          assets:      t.assets,
+          categories:  ["twitter", "social", ...(isPolitical ? ["political"] : [])],
+          political:   isPolitical,
+          marketImpact: isPolitical ? marketImpact : null,
+          ts:          new Date(t.createdAt).getTime() || Date.now(),
+          url:         t.url,
+          imageUrl:    null,
+        });
+      }
+    } catch (e: any) {
+      console.warn("[news] X/RapidAPI inject error:", e.message);
+    }
+
     // ── Stocktwits social posts → inject into news feed for SOCIAL filter ──
     try {
       const { getTwitterData } = await import("./twitter");
@@ -2195,13 +2242,15 @@ Output JSON only, no prose, no code fences.`;
         }
         allPosts.sort((a, b) => b.likes - a.likes);
         for (const post of allPosts.slice(0, 12)) {
+          if (isNoise(post.text)) { _newsFilteredCount++; continue; }
           const sentNum = post.sentiment === "bullish" ? 0.6 : post.sentiment === "bearish" ? -0.6 : 0;
           const { isPolitical, marketImpact } = classifyPolitical(post.text);
           results.push({
             id:          "st-" + (post.id || Math.random().toString(36).slice(2)),
             source:      `@${post.handle} (Stocktwits)`,
+            src:         "stocktwits",
             icon:        "ST",
-            color:       "cyan",
+            color:       "yellow",
             title:       post.text.slice(0, 220),
             body:        "",
             sentiment:   sentNum,
@@ -2310,12 +2359,20 @@ Output JSON only, no prose, no code fences.`;
       }
     }
 
-    results.sort((a, b) => b.ts - a.ts);
-    const deduped = results.filter((item, index, self) =>
+    // Apply noise filter to all remaining items + tag default `src` = "news"
+    const cleaned: any[] = [];
+    for (const item of results) {
+      if (isNoise(item.title) || isNoise(item.body || "")) { _newsFilteredCount++; continue; }
+      if (!item.src) item.src = "news";
+      cleaned.push(item);
+    }
+    cleaned.sort((a, b) => b.ts - a.ts);
+    const deduped = cleaned.filter((item, index, self) =>
       index === self.findIndex(t => t.title === item.title)
     ).slice(0, 60);
-    cache["news"] = { data: deduped, ts: Date.now() };
-    res.json(deduped);
+    const payload = { items: deduped, filtered: _newsFilteredCount };
+    cache["news"] = { data: payload, ts: Date.now() };
+    res.json(payload);
   });
 
   // ── MACRO INTEL FEED (CryptoPanic — macro-filtered, for Elite) ──────────────
