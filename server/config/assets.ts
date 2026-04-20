@@ -180,6 +180,8 @@ export const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: n
 
 // Cap auto-signals per hour across the whole system (prevents spam during volatility)
 export const MAX_SIGNALS_PER_HOUR = 5;
+// Cap auto-signals per asset per hour (Apr 2026 spec — prevents one volatile coin from monopolising the queue)
+export const MAX_SIGNALS_PER_ASSET_PER_HOUR = 3;
 
 export const HIGH_IMPACT_KEYWORDS = [
   "FOMC","CPI","NFP","Non-Farm","Fed Rate","Interest Rate","GDP","PCE","PPI","Powell",

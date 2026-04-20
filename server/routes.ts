@@ -40,7 +40,7 @@ import {
   HL_PERP_SYMS, HL_TO_APP, APP_TO_HL,
   EQUITY_SYMS, EQUITY_BASE, EQUITY_FH_MAP,
   METALS_BASE, BASKET_YAHOO_MAP, ENERGY_ETF_MAP, COMMODITY_FH_SYMS, FOREX_BASE,
-  BASKET_PRICE_TTL, SESSION_THRESHOLDS, MAX_SIGNALS_PER_HOUR, HIGH_IMPACT_KEYWORDS,
+  BASKET_PRICE_TTL, SESSION_THRESHOLDS, MAX_SIGNALS_PER_HOUR, MAX_SIGNALS_PER_ASSET_PER_HOUR, HIGH_IMPACT_KEYWORDS,
   MOVE_WINDOW, SIGNAL_COOLDOWN, AI_CACHE_TTL,
   BASKET_EQUITIES_US, BASKET_INTL_FH, BASKET_COMMODITIES,
 } from "./config/assets";
@@ -73,7 +73,7 @@ import { startDataBus, getDataBusStatus, setDataBusMacroNews } from "./databus";
 import {
   hlData, priceHistory, livePrices, cache, metalsRef,
   sseClients, serverPriceCache, alertLastFiredMs,
-  liveSignals, nextSignalId, tokenSentimentCache,
+  liveSignals, nextSignalId, tokenSentimentCache, perAssetSignalLog,
   lastSignalTime, whaleAlerts, sharedMacroCache,
   recordPrice, broadcastSSE,
   updateSharedMacroCache,
@@ -809,6 +809,18 @@ async function detectMoves() {
       continue;
     }
 
+    // ── PER-ASSET HOURLY CAP (Apr 2026 spec — max 3 signals per asset per hour) ─
+    const recentForSym = (perAssetSignalLog[sym] || []).filter(t => t >= hourAgo);
+    if (recentForSym.length >= MAX_SIGNALS_PER_ASSET_PER_HOUR) {
+      console.log(`[SIGNAL] ${sym} ASSET-CAPPED — ${recentForSym.length} signals in last hour (max ${MAX_SIGNALS_PER_ASSET_PER_HOUR}/asset)`);
+      logRejection({
+        source: "auto_scanner", token: sym, direction: dir,
+        reason: "RATE_LIMIT_ASSET",
+        detail: `${recentForSym.length} for ${sym} in last hour (max ${MAX_SIGNALS_PER_ASSET_PER_HOUR})`,
+      });
+      continue;
+    }
+
     const checksArray = Object.entries(checks).map(([key, c]) => ({
       key,
       pass: c.pass,
@@ -968,6 +980,11 @@ async function detectMoves() {
     liveSignals.unshift(signal);
     if (liveSignals.length > 50) liveSignals.length = 50;
     lastSignalTime[sym] = now;
+    if (!perAssetSignalLog[sym]) perAssetSignalLog[sym] = [];
+    perAssetSignalLog[sym].push(now);
+    // Trim entries older than 1 hour to keep the log bounded
+    const _hourCutoff = now - 60 * 60 * 1000;
+    perAssetSignalLog[sym] = perAssetSignalLog[sym].filter(t => t >= _hourCutoff);
     console.log(`[SIGNAL] ${sym} ${dir} ${absPct}% in ${elapsed}min — price $${fmt2(current.price, sym)} | MasterScore: ${master.score} | AdvancedScore: ${advanced.advancedScore}${advanced.isStrong ? " ⚡ STRONG" : ""}`);
 
     // ── PERSIST SIGNAL TO DATABASE (non-blocking) ──────────────────────────
