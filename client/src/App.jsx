@@ -2974,16 +2974,34 @@ STYLE RULES:
 
 Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT live prices above.
 {"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","oil":"3-4 sentences covering WTI AND Brent prices, supply/demand drivers (OPEC+, US inventories, demand), geopolitical risk premium (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), and natural gas price if notable. End with 🟢/🟡/🔴 bias for energy sector","equities":"3-4 sentences covering SPX AND NDX levels and overnight move, mega-cap leadership (NVDA/TSLA/AAPL/MSFT/META direction), breadth and sector rotation, key earnings or Fed cross-currents, VIX context. End with 🟢/🟡/🔴 bias for US equities","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","impactfulNews":[{"title":"short headline (<80 chars)","impact":"BULLISH|BEARISH|NEUTRAL","assets":"comma-separated tickers most affected","takeaway":"one sentence — what a trader should DO or WATCH because of this"}],"watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it","topTrade":{"asset":"Best trade today","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence edge","riskLabel":"🟢 or 🟡 or 🔴","flags":"macro risk flags or None"},"additionalTrades":[{"asset":"2nd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"4th trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"}]}`;
-    try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({userMessage:prompt,maxTokens:6000,skipTools:true,enableWebSearch:true})});
-      const data=await res.json();
-      if(!res.ok){setToast(data.error||"Brief generation failed");setBriefLoading(false);return;}
-      const txt=data.text||"";
-      const clean=txt.replace(/```json|```/g,"").trim();
-      const jsonMatch=clean.match(/\{[\s\S]*\}/);
-      if(!jsonMatch)throw new Error("No JSON found");
-      setBriefData(JSON.parse(jsonMatch[0]));setBriefDate(todayStr);
-    }catch(e){setToast("Brief generation failed: "+(e.message||"Try again."));}
+    // Retry with exponential backoff — never show "unavailable" without trying 3 times
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        if (attempt > 1) {
+          setToast(`Retrying brief (attempt ${attempt}/3)...`);
+          await new Promise(r => setTimeout(r, 1500 * Math.pow(2, attempt - 2))); // 1.5s, 3s
+        }
+        const res = await fetch("/api/ai/analyze", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userMessage: prompt, maxTokens: 6000, skipTools: true, enableWebSearch: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) { lastErr = new Error(data.error || `HTTP ${res.status}`); continue; }
+        const txt = data.text || "";
+        const clean = txt.replace(/```json|```/g, "").trim();
+        const jsonMatch = clean.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) { lastErr = new Error("No JSON found"); continue; }
+        setBriefData(JSON.parse(jsonMatch[0]));
+        setBriefDate(todayStr);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (lastErr) setToast("Brief is taking longer than usual — please tap Generate again in a moment.");
     setBriefLoading(false);
   };
 
@@ -3504,7 +3522,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
       <GlobalBellOverlay bellFlash={bellFlash} secsToClose={globalSecsToClose}/>
       {activeAlerts.length>0&&<div style={{animation:"slideDown .3s ease"}}><AlertBanner alerts={activeAlerts} onDismiss={dismissAlert} C={C}/></div>}
       {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
-      <SquawkBox signals={liveSignals} soundEnabled={soundEnabled} isPro={isElite} muted={squawkMuted} onToggle={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})}/>
+      <SquawkBox signals={liveSignals} soundEnabled={soundEnabled} isPro={isPro || isElite} muted={squawkMuted} onToggle={()=>setSquawkMuted(v=>{const nv=!v;try{localStorage.setItem("clvr_squawk",nv?"off":"on");}catch(e){}return nv;})}/>
       {tradeModalSig&&<TradeConfirmationModal sig={tradeModalSig} currentPrice={(cryptoPrices[tradeModalSig.token]||{}).price} masterScore={tradeModalSig.masterScore||50} riskOn={tradeModalSig.riskOn||50} onApprove={()=>{setToast(`Trade approved: ${tradeModalSig.token} ${tradeModalSig.dir}`);setTradeModalSig(null);}} onCancel={()=>setTradeModalSig(null)} C={C}/>}
 
       <PricingModal
