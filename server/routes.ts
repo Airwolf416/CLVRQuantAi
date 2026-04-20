@@ -2728,9 +2728,9 @@ Output JSON only, no prose, no code fences.`;
     holdHorizon: string; leverage: [number, number]; tpRatios: [number, number];
   }> = {
     quick:   { label: "Quick (<1h)",       interval: "5m",  count: 180, binanceInterval: "5m",
-               holdHorizon: "scalp — 5 to 60 minutes",         leverage: [10, 25], tpRatios: [1.0, 1.8] },
+               holdHorizon: "scalp — 5 to 60 minutes",         leverage: [5, 12],  tpRatios: [1.8, 3.0] },
     hours:   { label: "Hours (1–8h)",      interval: "15m", count: 200, binanceInterval: "15m",
-               holdHorizon: "intraday — 1 to 8 hours",         leverage: [5, 15],  tpRatios: [1.2, 2.5] },
+               holdHorizon: "intraday — 1 to 8 hours",         leverage: [3, 10],  tpRatios: [1.8, 3.5] },
     fullday: { label: "Full Day (8–24h)",  interval: "1h",  count: 168, binanceInterval: "1h",
                holdHorizon: "session — 8 to 24 hours",         leverage: [3, 10],  tpRatios: [1.5, 3.0] },
     mid:     { label: "Mid-Term (1–4 wks)",interval: "4h",  count: 300, binanceInterval: "4h",
@@ -3518,6 +3518,12 @@ DIRECTION CONSISTENCY CHECK: If 3+ edge factors are bullish (bull cross, bullish
 
 ASSET CONSTRAINT (NON-NEGOTIABLE): You are analyzing ONLY the ticker "${ticker}". Do NOT substitute, recommend, or analyze any other asset. Your entire output must be about ${ticker} and nothing else. If you cannot generate a signal for ${ticker}, output signal: "NEUTRAL" with a reason — do NOT switch to a different asset. Every price level must correspond to ${ticker}.
 
+🚨 ANTI-CHASE RULE (NON-NEGOTIABLE — VIOLATIONS WILL BE OVERRIDDEN TO NEUTRAL):
+- Current position in 24h range: ${ind.posInRange}% (0 = at low, 100 = at high). 24h range size: ${ind.range24hPct}%.
+- DO NOT recommend LONG when posInRange ≥ 80 AND range24hPct ≥ 4. The asset is already extended near the daily high — entering here is buying the top after the move. Recommend NEUTRAL or wait for pullback to mid-range (40–60%).
+- DO NOT recommend SHORT when posInRange ≤ 20 AND range24hPct ≥ 4. The asset is already exhausted near the daily low — shorting here is selling the bottom. Recommend NEUTRAL or wait for retest of mid-range.
+- The ONLY exception: a confirmed breakout to NEW 7-day highs/lows on volume ≥ 2x average AND with multi-timeframe confluence aligned. Otherwise treat extended price as a chase.
+
 OUTPUT LENGTH RULES — STRICTLY ENFORCED:
 - quant_rationale: EXACTLY 2 sentences. Sentence 1 = the setup (pattern + key indicator). Sentence 2 = the catalyst or confluence reason. No filler, no hedging.
 - invalidation: EXACTLY 1 sentence. State the precise price level AND the condition (e.g. "Invalidated on a 4H close below 62,400 — breaks the rising trendline.").
@@ -3630,6 +3636,37 @@ Every level must be technically defensible. Return JSON only.`;
       }
       parsed.token = ticker;
       parsed.asset = ticker;
+
+      // ── ANTI-CHASE OVERRIDE — force NEUTRAL when entering a fully-extended move ──
+      // Catches the "buy the top after a 5% pump" failure mode (e.g. PENDLE LONG at +5.5% intraday).
+      // Triggered when price is at the extreme of the 24h range AND the daily range is >=4%.
+      // Exception: legitimate breakout to NEW 7d high/low with strong volume + multi-tf confluence.
+      const sigStr = String(parsed.signal || "").toUpperCase();
+      const isLongSig  = sigStr.includes("LONG");
+      const isShortSig = sigStr.includes("SHORT");
+      const range24Pct = ind.range24hPct || 0;
+      const pir        = ind.posInRange ?? 50;
+      const volSurge   = (ind.volumeRatio || 1) >= 2.0;
+      const breakoutHigh = ind.high7d && ind.currentPrice >= ind.high7d * 0.999;
+      const breakoutLow  = ind.low7d  && ind.currentPrice <= ind.low7d  * 1.001;
+      const tfAligned    = confluence?.aligned === true;
+
+      const longChase  = isLongSig  && pir >= 80 && range24Pct >= 4 && !(breakoutHigh && volSurge && tfAligned);
+      const shortChase = isShortSig && pir <= 20 && range24Pct >= 4 && !(breakoutLow  && volSurge && tfAligned);
+
+      if (longChase || shortChase) {
+        const reason = longChase
+          ? `Anti-chase override: posInRange ${pir}% near 24h high, range ${range24Pct}% — buying the top risk`
+          : `Anti-chase override: posInRange ${pir}% near 24h low, range ${range24Pct}% — selling the bottom risk`;
+        console.warn(`[Quant] ${ticker} ${sigStr} blocked — ${reason}`);
+        parsed.signal = "NEUTRAL";
+        parsed.signal_strength = 0;
+        parsed.anti_chase_blocked = true;
+        parsed.anti_chase_reason = reason;
+        parsed.quant_rationale = `${ticker} is currently at ${pir}% of its 24h range with a ${range24Pct}% daily span — entering ${isLongSig ? "long" : "short"} here means chasing a move that is already extended. Wait for a pullback toward the 40–60% range zone before re-evaluating.`;
+        parsed.invalidation = `Setup re-validated only after price retraces to ${(ind.low24 + (ind.high24 - ind.low24) * 0.5).toFixed(4)} or breaks decisively beyond ${isLongSig ? ind.high24.toFixed(4) : ind.low24.toFixed(4)} on 2x+ volume.`;
+        parsed.thesis = `The asset is exhausted at the edge of its 24h range, so a fresh ${isLongSig ? "long" : "short"} here has poor reward-to-risk. Patience for a mean-reversion entry will give a far better setup.`;
+      }
 
       parsed.indicators        = ind;
       parsed.multi_tf          = confluence;
