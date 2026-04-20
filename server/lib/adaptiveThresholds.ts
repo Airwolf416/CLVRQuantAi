@@ -3,7 +3,7 @@ import { db, pool } from "../db";
 import { aiSignalLog, adaptiveThresholds } from "@shared/schema";
 
 const WIN_OUTCOMES = new Set(["TP1_HIT", "TP2_HIT", "TP3_HIT", "EXPIRED_WIN"]);
-const INTERVAL_MS = 30 * 60 * 1000; // 30 min — aggressive adaptation cadence
+const INTERVAL_MS = 15 * 60 * 1000; // 15 min — aggressive adaptation cadence (tightened Apr 2026)
 let started = false;
 
 // Wilson lower bound at 90% one-sided (z=1.645).
@@ -57,10 +57,14 @@ export async function recalculateThresholds(): Promise<number> {
     else                    adjustment = -15;
     adjustment = Math.max(-25, Math.min(25, adjustment));
 
-    // Auto-suppress when Wilson lower bound < 30% with 10+ resolved signals.
-    // Wilson is statistically conservative — won't trip on small samples / noise.
+    // Auto-suppress when EITHER:
+    //   (a) Wilson lower bound < 30% with 10+ resolved signals (conservative), OR
+    //   (b) raw win rate < 30% with 20+ resolved signals (per Apr 2026 spec — catches
+    //       persistent bleeders that Wilson takes too long to lock down).
     const wLow = wilsonLower(g.wins, g.total);
-    const suppressed = g.total >= 10 && wLow < WILSON_SUPPRESS_THRESHOLD;
+    const wilsonSuppress = g.total >= 10 && wLow < WILSON_SUPPRESS_THRESHOLD;
+    const rawSuppress    = g.total >= 20 && winRate < 30;
+    const suppressed     = wilsonSuppress || rawSuppress;
     const winRateRounded = Math.round(winRate * 100) / 100;
 
     // Upsert via raw SQL to respect manual_override (skip auto-updates when true)
@@ -173,5 +177,5 @@ export function startAdaptiveThresholds(): void {
       recalculateThresholds().catch(e => console.error("[AdaptiveThresholds] recalc failed:", e));
     }, INTERVAL_MS);
   }, 2 * 60 * 1000);
-  console.log("[AdaptiveThresholds] Started — recalculating every 30 min");
+  console.log(`[AdaptiveThresholds] Started — recalculating every ${INTERVAL_MS / 60000} min`);
 }

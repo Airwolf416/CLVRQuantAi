@@ -61,6 +61,9 @@ export const tokenSentimentCache: Record<string, {
 // ── Cooldown tracking: last time a signal fired per symbol ───────────────────
 export const lastSignalTime: Record<string, number> = {};
 
+// ── Per-asset hourly signal log: timestamps (ms) per symbol for rate-cap ──────
+export const perAssetSignalLog: Record<string, number[]> = {};
+
 // ── Recent whale-size moves ───────────────────────────────────────────────────
 export const whaleAlerts: { sym: string; ts: number; type: string; amount: string }[] = [];
 
