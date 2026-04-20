@@ -1,0 +1,753 @@
+# MASTER CONSOLIDATED PROMPT — Everything In One Paste
+
+⚠️ THIS IS THE SINGLE SOURCE OF TRUTH. Execute sections IN ORDER. Do NOT skip.
+
+This prompt consolidates ALL pending improvements from the past week plus emergency fixes.
+Do NOT create features not listed here. Do NOT modify vite.config.ts or server/vite.ts.
+
+-----
+
+## SECTION 1 — EMERGENCY: SUPPRESS LOSING ASSETS IMMEDIATELY
+
+The adaptive suppression system is NOT working. Assets with sub-15% win rates over 120+ signals are STILL generating new signals. This is the #1 priority.
+
+### 1A. Diagnose
+
+Run this query and show me the output:
+
+```sql
+SELECT * FROM adaptive_thresholds WHERE suppressed = true ORDER BY win_rate_30d ASC;
+```
+
+Also run:
+
+```sql
+SELECT token, direction, COUNT(*) as total,
+  ROUND(100.0 * SUM(CASE WHEN outcome IN ('WIN','TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as win_rate,
+  ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE NULL END)::numeric, 2) as avg_pnl
+FROM signal_outcomes
+WHERE outcome != 'PENDING'
+GROUP BY token, direction
+HAVING COUNT(*) >= 20
+ORDER BY win_rate ASC
+LIMIT 30;
+```
+
+### 1B. Hard-Block Every Asset Below 25% Win Rate
+
+For EVERY (token, direction) combo with <25% win rate AND >=20 signals, insert suppression:
+
+```sql
+INSERT INTO adaptive_thresholds (token, direction, trade_type, baseline_threshold, current_threshold, adjustment, win_rate_30d, sample_size, suppressed, manual_override)
+SELECT
+  token, direction, 'ALL', 75, 99, 24,
+  ROUND(100.0 * SUM(CASE WHEN outcome IN ('WIN','TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) / COUNT(*), 2),
+  COUNT(*),
+  true,
+  false
+FROM signal_outcomes
+WHERE outcome != 'PENDING'
+GROUP BY token, direction
+HAVING COUNT(*) >= 20
+AND (100.0 * SUM(CASE WHEN outcome IN ('WIN','TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) / COUNT(*)) < 25
+ON CONFLICT (token, direction, trade_type) DO UPDATE SET
+  suppressed = true, current_threshold = 99, adjustment = 24,
+  win_rate_30d = EXCLUDED.win_rate_30d, sample_size = EXCLUDED.sample_size,
+  updated_at = NOW();
+```
+
+### 1C. Verify Signal Worker Checks Suppression
+
+Find the signal generation worker — the code that fires when an asset moves and creates signal entries. Search for:
+
+- `INSERT INTO signal` (any signal table)
+- Functions that call the Anthropic API for auto-signals
+- setInterval or cron that generates signals periodically
+
+In EVERY code path that generates a signal, verify there is a suppression check BEFORE the signal is created. If there isn’t one, add it:
+
+```typescript
+// Add this check BEFORE generating any signal:
+async function isAssetSuppressed(token: string, direction: string): Promise<boolean> {
+  try {
+    const result = await db.execute(sql`
+      SELECT suppressed FROM adaptive_thresholds
+      WHERE token = ${token}
+      AND (direction = ${direction} OR direction = 'ALL')
+      AND trade_type = 'ALL'
+      AND suppressed = true
+      LIMIT 1
+    `);
+    return result.rows.length > 0;
+  } catch { return false; }
+}
+
+// In the signal generation flow:
+if (await isAssetSuppressed(ticker, direction)) {
+  console.log(`[Signal] BLOCKED: ${ticker} ${direction} is suppressed (adaptive threshold)`);
+  return; // Do NOT generate signal, do NOT call Claude
+}
+```
+
+### 1D. Lower Auto-Suppress Threshold
+
+Find the adaptive threshold recalculation function. Change the suppression condition:
+
+```typescript
+// OLD (too lenient):
+const suppressed = winRate < 25 && data.total >= 10;
+
+// NEW (aggressive):
+const suppressed = winRate < 30 && data.total >= 20;
+```
+
+Also change recalculation frequency:
+
+```typescript
+// OLD: every 60 minutes
+// NEW: every 15 minutes
+setInterval(recalculateThresholds, 900000); // 15 min
+```
+
+### 1E. Signal Generation Trigger Tightening
+
+Find where the auto-signal generator fires. Currently triggers on 0.8% moves in 5 minutes. Change to:
+
+```typescript
+const SIGNAL_TRIGGER = {
+  minMovePct: 1.5,          // Was 0.8% — raised to filter fakeouts
+  minVolMultiple: 2.0,       // Volume must be 2x 20-period average
+  minOI: 5000000,            // $5M minimum OI
+  maxSignalsPerAssetPerHour: 3,  // Was unlimited — cap it
+};
+```
+
+### VERIFY SECTION 1:
+
+- [ ] Query shows all assets <25% WR are in adaptive_thresholds with suppressed=true
+- [ ] JUP, WIF, SEI, TIA, ONDO are confirmed suppressed
+- [ ] Signal worker has suppression check BEFORE signal generation
+- [ ] No new signals generated for suppressed assets (check Railway logs for “BLOCKED” messages)
+- [ ] Signal trigger threshold raised to 1.5%
+
+-----
+
+## SECTION 2 — AI TAB: TIMEFRAME-ADAPTED TP/SL FOR ALL ASSETS
+
+The AI tab needs to give different TP/SL levels based on the user’s selected trading style. Currently TPs are often too wide for scalps and too tight for swings.
+
+### 2A. “Today” Sub-Timeframes
+
+When user selects “Today”, show 3 sub-options:
+
+```
+[⚡ Quick]        [📊 Hours]        [☀️ Full Day]
+  5-30 min           1-4 hours         4-12 hours
+```
+
+Each sub-timeframe has its own TP/SL multipliers:
+
+```javascript
+const TIMEFRAME_PARAMS = {
+  quick: {
+    label: '⚡ Quick (5-30 min)',
+    atrTimeframe: '5m',
+    tp1Mult: 0.3,   // Very tight — must be hittable in minutes
+    tp2Mult: 0.6,
+    tp3Mult: 1.0,
+    slMult: 0.25,
+    killClock: '30min',
+    typicalTpRange: '0.3-0.8% for crypto, 0.1-0.3% for FX, 0.2-0.5% for equities',
+    maxLeverage: { crypto: 10, equity: 5, commodity: 5, fx: 20 },
+  },
+  hours: {
+    label: '📊 Hours (1-4H)',
+    atrTimeframe: '1h',
+    tp1Mult: 0.5,
+    tp2Mult: 1.0,
+    tp3Mult: 1.5,
+    slMult: 0.4,
+    killClock: '4H',
+    typicalTpRange: '0.5-2% for crypto, 0.2-0.8% for FX, 0.3-1% for equities',
+    maxLeverage: { crypto: 7, equity: 3, commodity: 5, fx: 15 },
+  },
+  fullDay: {
+    label: '☀️ Full Day (4-12H)',
+    atrTimeframe: '4h',
+    tp1Mult: 0.5,
+    tp2Mult: 1.0,
+    tp3Mult: 1.5,
+    slMult: 0.5,
+    killClock: '12H',
+    typicalTpRange: '1-4% for crypto, 0.5-1.5% for FX, 0.5-2% for equities',
+    maxLeverage: { crypto: 5, equity: 2, commodity: 3, fx: 10 },
+  },
+  mid: {
+    label: 'Mid-Term (1-4 weeks)',
+    atrTimeframe: '1d',
+    tp1Mult: 1.0,
+    tp2Mult: 2.0,
+    tp3Mult: 3.0,
+    slMult: 1.0,
+    killClock: '7D',
+    typicalTpRange: '5-15% for crypto, 2-5% for FX, 3-8% for equities',
+    maxLeverage: { crypto: 3, equity: 2, commodity: 2, fx: 5 },
+  },
+  long: {
+    label: 'Long-Term (1-3 months)',
+    atrTimeframe: '1w',
+    tp1Mult: 1.5,
+    tp2Mult: 3.0,
+    tp3Mult: 5.0,
+    slMult: 1.5,
+    killClock: '30D',
+    typicalTpRange: '10-40% for crypto, 3-10% for FX, 5-20% for equities',
+    maxLeverage: { crypto: 2, equity: 1, commodity: 1, fx: 3 },
+  },
+};
+```
+
+### 2B. Inject Timeframe Params Into ALL AI Prompts
+
+In the Trade Ideas, Quant Scanner, and Basket system prompts, add this dynamic section:
+
+```
+TIMEFRAME: {timeframe.label}
+ATR reference: {timeframe.atrTimeframe}
+TP scaling: TP1 = {timeframe.tp1Mult}x ATR ({tp1Pct}%), TP2 = {timeframe.tp2Mult}x ATR, TP3 = {timeframe.tp3Mult}x ATR (trailing)
+SL = {timeframe.slMult}x ATR
+Kill clock: {timeframe.killClock}
+Max leverage by asset class: Crypto {maxLev.crypto}x, Equity {maxLev.equity}x, Commodity {maxLev.commodity}x, FX {maxLev.fx}x
+
+CRITICAL SCALING RULE: {timeframe.typicalTpRange}
+- For QUICK (5-30min): A scalp TP of 5% will NEVER hit. Keep TPs at 0.3-0.8% for crypto perps. The user wants to be in and out fast.
+- For HOURS (1-4H): Standard intraday. TPs 0.5-2%.
+- For FULL DAY (4-12H): Patient intraday. TPs 1-4%.
+- For MID-TERM: Swing positions. TPs 5-15%.
+- For LONG-TERM: Position trades. TPs 10-40%.
+Scale leverage DOWN as timeframe gets longer. A 10x leveraged swing trade is extremely risky.
+```
+
+### 2C. Every Output Must Show Leverage + Hold Duration Clearly
+
+On EVERY signal card, trade idea card, and basket recommendation, add a prominent row:
+
+```
+┌──────────────────────────────────────┐
+│  ⚡ LEVERAGE        ⏱ HOLD TIME     │
+│     5x MAX            4-12 hours    │
+│                                      │
+│  Exit by: 11:30 PM ET tonight       │
+└──────────────────────────────────────┘
+```
+
+Design specs:
+
+- Background: slightly darker panel `rgba(0,0,0,0.3)`
+- Leverage: bold, gold `#c9a84c`, 16px IBM Plex Mono
+- Hold time: bold, white, 16px
+- “Exit by” timestamp: smaller, cyan `#00d4ff`
+- This row is visible in BOTH Simple and Pro display modes
+
+Calculate “Exit by” time:
+
+```javascript
+const exitBy = new Date(Date.now() + killClockHours * 3600000).toLocaleTimeString('en-US', {
+  hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
+});
+```
+
+-----
+
+## SECTION 3 — PERP / SPOT / BOTH SELECTOR
+
+Add market type selector to Trade Ideas, Quant Scanner, and Basket:
+
+```
+[PERP]  [SPOT]  [BOTH]
+```
+
+Default: `BOTH`
+
+### UI: Same pill/chip style as timeframe selector
+
+- PERP: cyan border when selected
+- SPOT: purple border when selected
+- BOTH: gold border when selected (default)
+
+### Pass to AI prompts:
+
+```
+MARKET TYPE: {PERP|SPOT|BOTH}
+- PERP: Only leveraged perpetual futures / derivatives. Include leverage. Use HL perp data.
+- SPOT: Only cash/spot trades. Leverage = 1x. Wider SL allowed (spot holders more patient).
+- BOTH: Mix of perp and spot. Label each trade with marketType in the output.
+For non-crypto assets (equities, commodities, FX): always treat as SPOT unless on Hyperliquid perps.
+```
+
+### Add marketType field to JSON output:
+
+```json
+{ "rank": 1, "asset": "BTC/USDT", "marketType": "PERP", ... }
+```
+
+Show [PERP] or [SPOT] badge on each card.
+
+-----
+
+## SECTION 4 — FULL ASSET COVERAGE (USE ALL ASSETS ON THE PLATFORM)
+
+The AI must be able to analyze and generate signals for EVERY asset available on the platform. Here’s the complete list — update the Trade Ideas prompt to scan across ALL of these:
+
+### Crypto (32 perps + spot via Hyperliquid):
+
+BTC, ETH, SOL, WIF, DOGE, AVAX, LINK, ARB, PEPE, XRP, BNB, ADA, DOT, POL, UNI, AAVE, NEAR, SUI, APT, OP, TIA, SEI, JUP, ONDO, RENDER, INJ, FET, TAO, PENDLE, HBAR, TRUMP, HYPE
+
+### Equities (20 via Finnhub + Hyperliquid perps):
+
+TSLA, NVDA, AAPL, GOOGL, META, MSFT, AMZN, MSTR, AMD, PLTR, COIN, NFLX, HOOD, ORCL, TSM, GME, RIVN, BABA, HIMS, CRCL
+
+### Commodities (via Finnhub + Hyperliquid):
+
+XAU (Gold), XAG (Silver), WTI (Crude Oil), BRENT, NATGAS, COPPER, PLATINUM, PALLADIUM, WHEAT, CORN, SOYBEAN, COFFEE, SUGAR, URANIUM, DUBAI (Crude), LNG
+
+### Forex (via Finnhub):
+
+EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURJPY, GBPJPY, XAUUSD
+
+### Indices (informational — via Finnhub):
+
+SPX, NDX, DJI, VIX, DAX, FTSE, NIKKEI, HSI
+
+### In the Trade Ideas prompt, add:
+
+```
+ASSET UNIVERSE — you may recommend ANY asset from the following list, as long as it has live price data in the market data snapshot below. Diversify across asset classes.
+
+CRYPTO PERPS: BTC, ETH, SOL, DOGE, AVAX, LINK, XRP, BNB, ADA, HYPE, SUI, NEAR, RENDER, INJ, AAVE, UNI, APT, DOT
+CRYPTO (use with caution — only if win rate > 30% in performance context): WIF, ARB, PEPE, POL, OP, TIA, SEI, JUP, ONDO, FET, TAO, PENDLE, HBAR, TRUMP
+
+EQUITIES: TSLA, NVDA, AAPL, GOOGL, META, MSFT, AMZN, AMD, PLTR, COIN, NFLX, MSTR, TSM
+
+COMMODITIES: XAU, XAG, WTI, BRENT, NATGAS, COPPER
+
+FOREX: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, NZDUSD
+
+DO NOT recommend assets that are suppressed in the performance context below.
+DO NOT recommend assets with no live price data in the market snapshot.
+PRIORITIZE assets with >50% historical win rate from the performance context.
+```
+
+-----
+
+## SECTION 5 — MACRO PRE-FLIGHT (Must Run Before Every AI Call)
+
+Before EVERY AI call (Trade Ideas, Quant Scanner, Basket, Ask AI), fetch macro events and inject them.
+
+### 5A. Create Pre-Flight Endpoint (if not already created)
+
+```typescript
+// GET /api/macro/preflight
+app.get("/api/macro/preflight", async (req, res) => {
+  try {
+    // Pull from DataBus (already available)
+    const databus = await fetch(`http://localhost:${PORT}/api/databus/status`).then(r => r.json());
+
+    const macroEvents = databus.macroEvents || [];
+    const killSwitch = databus.killSwitch || { active: false };
+    const now = new Date();
+
+    // Classify events by proximity
+    const next2h = macroEvents.filter(e => {
+      const eventTime = new Date(e.time || e.datetime);
+      const hoursAway = (eventTime - now) / 3600000;
+      return hoursAway > 0 && hoursAway <= 2;
+    });
+
+    const next4h = macroEvents.filter(e => {
+      const eventTime = new Date(e.time || e.datetime);
+      const hoursAway = (eventTime - now) / 3600000;
+      return hoursAway > 2 && hoursAway <= 4;
+    });
+
+    const highImpactKeywords = ['FOMC', 'CPI', 'NFP', 'rate decision', 'nonfarm', 'fed', 'ECB', 'BOJ', 'BOE', 'BOC', 'GDP', 'inflation'];
+    const hasHighImpact2h = next2h.some(e =>
+      highImpactKeywords.some(k => (e.title || e.event || '').toLowerCase().includes(k.toLowerCase()))
+    );
+
+    const status = killSwitch.active ? 'BLOCKED' : hasHighImpact2h ? 'BLOCKED' : next4h.length > 0 ? 'CAUTION' : 'CLEAR';
+
+    res.json({
+      timestamp: now.toISOString(),
+      status,
+      killSwitch: killSwitch.active,
+      eventsNext2H: next2h,
+      eventsNext4H: next4h,
+      summary: status === 'BLOCKED'
+        ? `Macro blocked: ${next2h.map(e => e.title || e.event).join(', ')}`
+        : status === 'CAUTION'
+        ? `Caution: ${next4h.map(e => e.title || e.event).join(', ')} within 4H`
+        : 'Macro clear for next 4H',
+    });
+  } catch (err) {
+    res.json({ timestamp: new Date().toISOString(), status: 'CLEAR', summary: 'Preflight check failed — proceeding with caution' });
+  }
+});
+```
+
+### 5B. Frontend Macro Bar
+
+Display above Trade Ideas and Scan results:
+
+```
+✅ MACRO CLEAR — Checked 4:30 PM ET
+   Next event: Eurozone Current Account at 04:00 2026-04-17
+```
+
+or:
+
+```
+🚫 MACRO BLOCKED — FOMC Rate Decision in 1H 45M
+   Signals paused until 3:00 PM ET
+```
+
+### 5C. Inject Into Every AI Prompt
+
+Before the market data sections, add:
+
+```
+MACRO PRE-FLIGHT (checked {timestamp}):
+Status: {status}
+Events next 2H: {list or "None"}
+Events next 4H: {list or "None"}
+If BLOCKED: Do NOT generate any signals. Return empty trades array with macroStatus.blocked=true.
+If CAUTION: Reduce conviction by 20%, compress TP by 25%, add macro risk to every trade's flags.
+```
+
+-----
+
+## SECTION 6 — MARKET SUMMARY / MORNING BRIEF TRADE IDEAS TIER GATING
+
+Update the Morning Brief trade ideas count by tier:
+
+```javascript
+const briefTradeCount = isElite ? 4 : isPro ? 1 : 0;
+```
+
+- **Free**: 0 trade ideas. Show upgrade prompt: “🔒 Upgrade to Pro to see today’s top trade idea”
+- **Pro**: 1 trade idea (topTrade only, no additionalTrades)
+- **Elite**: 4 trade ideas (topTrade + 3 additionalTrades)
+
+In the Morning Brief system prompt:
+
+```
+Return EXACTLY {briefTradeCount} trade ideas.
+If 0: omit topTrade and additionalTrades fields entirely.
+If 1: return topTrade only, no additionalTrades.
+If 4: return topTrade + 3 additionalTrades.
+```
+
+-----
+
+## SECTION 7 — AI BRIEF “TEMPORARILY UNAVAILABLE” FIX
+
+The daily brief email sometimes shows “AI analysis engine is temporarily unavailable.” Fix with retry logic:
+
+```typescript
+async function generateBriefWithRetry(system, userMessage, maxTokens, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await callClaudeAPI(system, userMessage, maxTokens);
+      if (response && response.text) return response;
+    } catch (err) {
+      console.error(`[Brief] Attempt ${attempt}/${retries} failed:`, err.message);
+      if (err.message?.includes('rate_limit') || err.status === 429) {
+        // Rate limited — wait longer
+        await new Promise(r => setTimeout(r, Math.pow(3, attempt) * 1000));
+      } else {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+      }
+    }
+  }
+  return null; // All retries failed
+}
+```
+
+If all retries fail, use a condensed fallback prompt:
+
+```typescript
+const fallbackPrompt = `Generate a brief market summary as JSON: {"headline":"...", "bias":"RISK ON|OFF|NEUTRAL", "macroRisk":"HIGH|NORMAL", "watchToday":["3 items"], "keyRisk":"one sentence"}. Keep it under 500 tokens.`;
+```
+
+NEVER send “AI Unavailable” unless 3 retry cycles over 15 minutes all fail.
+
+-----
+
+## SECTION 8 — SQUAWK BOX AUTO-PLAY
+
+When sound is ON and user is Pro or Elite, auto-play voice alerts for key events:
+
+```javascript
+function playSquawk(message, priority = 'normal') {
+  if (!soundEnabled || !isPaidUser) return;
+
+  const utterance = new SpeechSynthesisUtterance(message);
+  utterance.rate = 1.1;
+  utterance.pitch = priority === 'urgent' ? 1.2 : 1.0;
+  utterance.volume = priority === 'urgent' ? 1.0 : 0.8;
+
+  const voices = speechSynthesis.getVoices();
+  const preferredVoice = voices.find(v =>
+    v.name.includes('Daniel') || v.name.includes('Alex') || v.lang.startsWith('en')
+  );
+  if (preferredVoice) utterance.voice = preferredVoice;
+
+  speechSynthesis.speak(utterance);
+}
+```
+
+Trigger on:
+
+- New signal generated: `"New ${direction} signal on ${token}. Entry ${entry}, target ${tp1}."`
+- Macro event approaching: `"Warning: ${eventName} in ${minutes} minutes."`
+- Kill switch activated: `"Kill switch activated. All signals paused."`
+- Big price move (>3% in 15 min): `"Alert: ${token} moved ${pct}% in ${minutes} minutes."`
+
+Free users see squawk toggle but it’s locked with upgrade prompt.
+
+-----
+
+## SECTION 9 — JOURNAL TRADE IMPORT FROM SCREENSHOTS
+
+### 9A. Database Table
+
+```sql
+CREATE TABLE IF NOT EXISTS journal_trades (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  asset VARCHAR(20) NOT NULL,
+  direction VARCHAR(10),
+  leverage VARCHAR(10),
+  entry_price DECIMAL(20,8),
+  exit_price DECIMAL(20,8),
+  pnl_pct DECIMAL(10,4),
+  pnl_usd DECIMAL(20,4),
+  platform VARCHAR(30),
+  status VARCHAR(20) DEFAULT 'closed',
+  notes TEXT,
+  imported_at TIMESTAMPTZ DEFAULT NOW(),
+  trade_date TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### 9B. Image Upload API
+
+```typescript
+// POST /api/journal/import-image
+// Accepts multipart form with 'image' field
+// Sends image to Claude Sonnet 4.6 vision for data extraction
+// Returns extracted trade data for user confirmation
+// DELETES uploaded image immediately after extraction — only data stays
+
+const extractionPrompt = `Extract trade data from this screenshot. Return ONLY valid JSON:
+{"asset":"...","direction":"LONG|SHORT","leverage":"...","entry":0.00,"exit":0.00,"pnl_pct":0.00,"platform":"...","status":"closed"}
+Set missing fields to null. Do not guess — only extract what is clearly visible.`;
+```
+
+### 9C. Journal UI
+
+Add to Journal tab:
+
+- Upload Screenshot button + Paste Link button
+- After extraction: show confirmation card with extracted data
+- Save to Journal / Discard buttons
+- PnL Summary (Daily / Weekly / Monthly toggle)
+- Share button → generates branded PNG with CLVRQuant logo
+
+### 9D. Shareable Summary Card
+
+Generate branded image with:
+
+- Navy background #080d18
+- Gold accent border
+- CLVRQuant logo + “TRADE SMARTER WITH AI”
+- Period PnL, Win Rate, Best Trade
+- “Trade smarter at clvrquantai.com” + @clvrquantai
+
+Use `navigator.share()` for mobile (WhatsApp, IG) or download as PNG.
+
+-----
+
+## SECTION 10 — RESPONSIVE DESIGN FIXES
+
+### 10A. Desktop Icons Missing
+
+Find the sidebar navigation. Icons disappear on desktop. Fix:
+
+- Desktop (>1024px): Left sidebar visible with icons + labels
+- Tablet (768-1024px): Left sidebar with icons only
+- Mobile (<768px): Bottom tab bar with icons
+
+### 10B. Responsive Hook
+
+```javascript
+function useBreakpoint() {
+  const [width, setWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1024);
+  useEffect(() => {
+    const handle = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', handle);
+    return () => window.removeEventListener('resize', handle);
+  }, []);
+  return { isMobile: width < 768, isTablet: width >= 768 && width <= 1024, isDesktop: width > 1024 };
+}
+```
+
+### 10C. Key Rules
+
+- All buttons: minimum 44px height on mobile
+- Cards: 1 column on mobile, 2 columns on tablet/desktop
+- Price ticker bar: horizontal scroll on mobile (4-5 visible), full on desktop
+- Font scaling: body 14px mobile, 16px desktop
+
+-----
+
+## SECTION 11 — QUANT SCANNER WRONG ASSETS FIX
+
+The user selects specific assets but the scan returns different ones.
+
+### Fix:
+
+1. Add to the Quant Engine system prompt, at the very top:
+
+```
+ASSET CONSTRAINT (NON-NEGOTIABLE): You are analyzing ONLY the ticker "{TICKER}". Do NOT substitute, recommend, or analyze any other asset. If you cannot produce a signal for {TICKER}, return signal: "NEUTRAL" with a reason.
+```
+
+1. Server-side validation after AI response:
+
+```typescript
+if (result.token && result.token !== ticker) {
+  console.warn(`[Quant] AI returned wrong asset: expected ${ticker}, got ${result.token}`);
+  result.token = ticker; // Force correct
+}
+```
+
+-----
+
+## SECTION 12 — DIRECTION VALIDATION (TP/SL INVERSION FIX)
+
+Ensure TP and SL are NEVER inverted:
+
+```typescript
+// After receiving AI response, validate:
+if (result.signal === 'LONG' || result.direction === 'LONG') {
+  if (result.tp1?.price && result.tp1.price < result.entry?.price) {
+    // INVERTED — flip or reject
+    console.error(`[Quant] INVERTED TP for LONG: TP1 ${result.tp1.price} < Entry ${result.entry.price}`);
+    // Swap TP and SL
+    [result.tp1, result.stopLoss] = [result.stopLoss, result.tp1];
+  }
+}
+if (result.signal === 'SHORT' || result.direction === 'SHORT') {
+  if (result.tp1?.price && result.tp1.price > result.entry?.price) {
+    console.error(`[Quant] INVERTED TP for SHORT: TP1 ${result.tp1.price} > Entry ${result.entry.price}`);
+    [result.tp1, result.stopLoss] = [result.stopLoss, result.tp1];
+  }
+}
+```
+
+Also in the system prompt:
+
+```
+DIRECTION CONSISTENCY CHECK: If 3+ edge factors are bullish, direction MUST be LONG. If 3+ are bearish, MUST be SHORT. Never output SHORT with majority bullish factors.
+```
+
+-----
+
+## SECTION 13 — OUTPUT READABILITY
+
+### Thesis: MAX 2 sentences
+
+### Invalidation: MAX 1 sentence
+
+### No internal logic references (no “ABSOLUTE RULE 1”, no “pre-computed gate yields EV…”)
+
+Add to ALL system prompts:
+
+```
+OUTPUT LENGTH RULES:
+- Thesis: MAX 2 sentences. State the setup and catalyst. Nothing else.
+- Invalidation: MAX 1 sentence. Price level + condition.
+- Do NOT explain scoring methodology, rule overrides, or Kelly calculations in the output.
+- The user needs: direction, levels, and a 1-line reason. Not your internal reasoning.
+```
+
+### Duration: ONLY these values
+
+```
+"2-4 hours" | "12-24 hours" | "2-3 days" | "1-2 weeks"
+```
+
+For Quick mode, also allow: “15-30 minutes” | “30-60 minutes”
+NEVER output “5-6 minutes post-entry” or any minute-level duration for non-Quick modes.
+
+-----
+
+## IMPLEMENTATION ORDER
+
+Execute sections in this exact sequence:
+
+1. **Section 1** — Emergency suppression fix (DO THIS FIRST, deploy immediately)
+1. **Section 5** — Macro pre-flight endpoint
+1. **Section 2** — Timeframe-adapted TP/SL
+1. **Section 3** — PERP/SPOT/BOTH selector
+1. **Section 4** — Full asset coverage in prompts
+1. **Section 11** — Quant Scanner wrong assets fix
+1. **Section 12** — Direction validation
+1. **Section 13** — Output readability
+1. **Section 6** — Morning Brief tier gating
+1. **Section 7** — AI Brief retry logic
+1. **Section 10** — Responsive design
+1. **Section 8** — Squawk auto-play
+1. **Section 9** — Journal trade import
+
+-----
+
+## FINAL VERIFICATION CHECKLIST
+
+- [ ] All assets with <25% win rate are suppressed (no new signals generated)
+- [ ] Signal worker confirmed checking adaptive_thresholds before generating
+- [ ] Signal trigger raised to 1.5% minimum move
+- [ ] Adaptive thresholds recalculate every 15 minutes
+- [ ] “Today” shows Quick/Hours/Full Day sub-options
+- [ ] TP/SL scales correctly per timeframe (Quick TPs 0.3-0.8%, not 5%)
+- [ ] Every card shows Leverage + Hold Time + “Exit by” timestamp
+- [ ] PERP/SPOT/BOTH selector works on Trade Ideas, Scanner, and Basket
+- [ ] Trade Ideas can recommend ANY asset from the full platform universe
+- [ ] Suppressed assets excluded from Trade Ideas recommendations
+- [ ] Macro pre-flight runs before every AI call
+- [ ] BLOCKED macro state prevents signal generation
+- [ ] Morning Brief: Free=0, Pro=1, Elite=4 trade ideas
+- [ ] AI Brief never shows “temporarily unavailable” (retry logic works)
+- [ ] Quant Scanner returns ONLY user-selected assets
+- [ ] No inverted TP/SL (LONG TPs above entry, SHORT TPs below)
+- [ ] Thesis max 2 sentences, invalidation max 1 sentence
+- [ ] Duration values are from the allowed list only
+- [ ] Desktop: sidebar + icons visible
+- [ ] Mobile: bottom nav, single column cards, 44px touch targets
+- [ ] Squawk plays for Pro/Elite when sound is on
+- [ ] Journal: screenshot upload → data extraction → save → image deleted
+- [ ] Journal: shareable branded PNG with CLVRQuant branding
+- [ ] No 429 rate limit errors
+- [ ] No “malformed data” errors
+- [ ] Deployed to Railway and working in production
+
+## WHAT NOT TO DO
+
+❌ Do NOT add a watchlist (permanently removed)
+❌ Do NOT modify vite.config.ts or server/vite.ts
+❌ Do NOT change pricing ($19 Pro / $49 Elite)
+❌ Do NOT create new tabs/pages not specified here
+❌ Do NOT install unnecessary npm packages
+❌ Do NOT break existing features while implementing these
+❌ Do NOT skip the emergency suppression fix (Section 1)
