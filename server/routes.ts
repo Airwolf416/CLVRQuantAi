@@ -3654,6 +3654,21 @@ Every level must be technically defensible. Return JSON only.`;
       const longChase  = isLongSig  && pir >= 80 && range24Pct >= 4 && !(breakoutHigh && volSurge && tfAligned);
       const shortChase = isShortSig && pir <= 20 && range24Pct >= 4 && !(breakoutLow  && volSurge && tfAligned);
 
+      // ── NO-MOMENTUM GATE — block flat-market signals (the "0% move" complaint) ──
+      // Daily range <1.5% AND volume not above average = no edge, just chop. Force NEUTRAL.
+      const noMomentum = (isLongSig || isShortSig) && range24Pct < 1.5 && (ind.volumeRatio || 1) < 1.2;
+      if (noMomentum) {
+        const reason = `No-momentum gate: 24h range only ${range24Pct}%, volume ${(ind.volumeRatio || 1).toFixed(2)}× avg — no actionable setup`;
+        console.warn(`[Quant] ${ticker} ${sigStr} blocked — ${reason}`);
+        parsed.signal = "NEUTRAL";
+        parsed.signal_strength = 0;
+        parsed.no_momentum_blocked = true;
+        parsed.no_momentum_reason = reason;
+        parsed.quant_rationale = `${ticker} has only moved ${range24Pct}% over the last 24 hours on ${(ind.volumeRatio || 1).toFixed(2)}× average volume — there is no real edge here, just chop. Forcing a trade in this environment is the fastest way to give back gains.`;
+        parsed.invalidation = `Wait for daily range to expand above 1.5% or volume to surge above 1.5× average before re-evaluating ${ticker}.`;
+        parsed.thesis = `The market is asleep on ${ticker} right now. The right move is patience — come back when there is a real move to trade.`;
+      }
+
       if (longChase || shortChase) {
         const reason = longChase
           ? `Anti-chase override: posInRange ${pir}% near 24h high, range ${range24Pct}% — buying the top risk`

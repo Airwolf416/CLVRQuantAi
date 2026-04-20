@@ -171,11 +171,11 @@ export const BACKTEST_WIN_RATES: Record<string, number> = {
 // STRICTER thresholds (v2 Apr 2026): require ≥1.5% move + ≥2.0× volume across all sessions
 // to cut fakeout noise that was dragging the win rate below 30%.
 export const SESSION_THRESHOLDS: Record<string, { minMove: number; minVolMult: number; minOI: number }> = {
-  ASIAN:   { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
-  LONDON:  { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
-  NY:      { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
-  POST_NY: { minMove: 1.8, minVolMult: 2.5, minOI: 5_000_000 },
-  DEFAULT: { minMove: 1.5, minVolMult: 2.0, minOI: 5_000_000 },
+  ASIAN:   { minMove: 2.0, minVolMult: 2.0, minOI: 5_000_000 },
+  LONDON:  { minMove: 2.0, minVolMult: 2.0, minOI: 5_000_000 },
+  NY:      { minMove: 2.0, minVolMult: 2.0, minOI: 5_000_000 },
+  POST_NY: { minMove: 2.5, minVolMult: 2.5, minOI: 5_000_000 },
+  DEFAULT: { minMove: 2.0, minVolMult: 2.0, minOI: 5_000_000 },
 };
 
 // Cap auto-signals per hour across the whole system (prevents spam during volatility)
