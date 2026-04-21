@@ -74,31 +74,53 @@ export async function fetchForex(): Promise<Record<string, any>> {
   return fx;
 }
 
-// ── Precious metals (Yahoo commodities → gold-api fallback) ──────────────────
+// ── Precious metals (gold-api.com SPOT primary → Yahoo futures fallback) ─────
+// IMPORTANT: For XAU/XAG/PLATINUM/PALLADIUM we want true SPOT prices ($/oz)
+// to match Bloomberg "Gold Spot" tabs. Yahoo's GC=F/SI=F/PL=F/PA=F are CME
+// front-month FUTURES which trade $5–30 above spot due to contango. gold-api
+// returns the LBMA spot fix in real time. Copper has no free spot feed →
+// HG=F future is the standard quote. Energies stay futures (see fetchEnergyCommodities).
 export async function fetchMetals(_legacyKey = ""): Promise<Record<string, any>> {
-  const metals = await yahooCommodities();
   const DAY_MS = 24 * 60 * 60 * 1000;
+  const SPOT_MAP: Record<string, string> = {
+    XAU: "XAU", XAG: "XAG", PLATINUM: "XPT", PALLADIUM: "XPD",
+  };
+  const out: Record<string, any> = {};
 
-  // gold-api.com fallback for any precious metal FMP missed
-  const FALLBACK_MAP: Record<string, string> = { XAU: "XAU", XAG: "XAG", PLATINUM: "XPT", COPPER: "HG" };
-  for (const [appSym, goldSym] of Object.entries(FALLBACK_MAP)) {
-    if (metals[appSym]?.live) continue;
-    try {
-      const r = await fetch(`https://api.gold-api.com/price/${goldSym}`,
-        { signal: AbortSignal.timeout(5000) });
-      if (!r.ok) continue;
-      const d: any = await r.json();
-      if (d?.price && d.price > 0) {
+  // 1) gold-api.com SPOT (primary) — parallel
+  const spotResults = await Promise.all(
+    Object.entries(SPOT_MAP).map(async ([appSym, goldSym]) => {
+      try {
+        const r = await fetch(`https://api.gold-api.com/price/${goldSym}`,
+          { signal: AbortSignal.timeout(5000) });
+        if (!r.ok) return [appSym, null] as const;
+        const d: any = await r.json();
+        if (!d?.price || d.price <= 0) return [appSym, null] as const;
         const now = Date.now();
         if (!metalsRef[appSym] || now - metalsRef[appSym].ts > DAY_MS) {
           metalsRef[appSym] = { price: d.price, ts: now };
         }
         const ref = metalsRef[appSym].price;
-        metals[appSym] = { price: d.price, chg: ref ? +((d.price - ref) / ref * 100).toFixed(2) : 0, live: true };
-      }
-    } catch {/* ignore */}
+        return [appSym, {
+          price: +d.price.toFixed(4),
+          chg: ref ? +((d.price - ref) / ref * 100).toFixed(2) : 0,
+          live: true,
+        }] as const;
+      } catch { return [appSym, null] as const; }
+    })
+  );
+  for (const [sym, q] of spotResults) if (q) out[sym] = q;
+
+  // 2) Yahoo futures fallback for any spot miss + COPPER (no free spot)
+  const yf = await yahooCommodities();
+  for (const sym of Object.keys(yf)) {
+    if (!out[sym] || !out[sym].live) out[sym] = yf[sym];
   }
-  return metals;
+  // Ensure base price for any still-missing symbol
+  for (const sym of Object.keys(SPOT_MAP)) {
+    if (!out[sym]) out[sym] = { price: METALS_BASE[sym] || 0, chg: 0, live: false };
+  }
+  return out;
 }
 
 // ── Energy commodities (now handled by fmpCommodities; kept for compat) ──────
