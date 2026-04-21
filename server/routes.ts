@@ -4588,34 +4588,84 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         }),
       });
 
-      if (!aiRes.ok) {
-        const e = await aiRes.text();
-        console.error("[/api/kronos]", e);
-        return res.status(502).json({ error: "Kronos AI Engine failed." });
-      }
-
-      const aiData: any = await aiRes.json();
-      if (aiData.error) { console.error("[/api/kronos] API error:", aiData.error.message || aiData.error); return res.status(502).json({ error: "Kronos AI Engine failed." }); }
-      const rawTextK = (aiData.content || []).map((b: any) => b.text || "").join("");
-      if (!rawTextK.trim()) {
-        console.error("[/api/kronos] Empty AI response");
-        return res.status(502).json({ error: "Kronos returned empty response — please retry." });
-      }
-      const repairJsonK = (s: string): any => {
-        let t = s.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
-        if (t.includes("{")) t = t.slice(t.indexOf("{"));
-        if (t.lastIndexOf("}") > 0) t = t.slice(0, t.lastIndexOf("}") + 1);
-        t = t.replace(/,\s*([}\]])/g, "$1");
-        try { return JSON.parse(t); } catch { return null; }
+      // ── Server-computed fallback forecast (used when AI fails or returns malformed data) ──
+      const buildFallbackForecast = (reasonNote: string) => {
+        const trend = closes[closes.length - 1] - closes[0];
+        const trendPct = (trend / closes[0]) * 100;
+        const volBias = histVolAnnualized > 80 ? "EXTREME" : histVolAnnualized > 50 ? "HIGH" : histVolAnnualized > 25 ? "MODERATE" : "LOW";
+        const sig = trendPct > 3 ? "LONG" : trendPct < -3 ? "SHORT" : "NEUTRAL";
+        const conf = Math.min(72, Math.max(45, Math.round(50 + Math.abs(trendPct) * 2)));
+        const stepPct = nextCandleRangePct / 100;
+        const mkTraj = (mult: number) => {
+          const arr: number[] = [];
+          for (let i = 1; i <= 5; i++) arr.push(parseFloat((currentPrice * (1 + mult * stepPct * i)).toFixed(6)));
+          return arr;
+        };
+        const bullPrices = mkTraj(0.7);
+        const basePrices = mkTraj(trendPct > 0 ? 0.15 : trendPct < 0 ? -0.15 : 0);
+        const bearPrices = mkTraj(-0.7);
+        const recentHigh = Math.max(...highs);
+        const recentLow = Math.min(...lows);
+        return {
+          asset: ticker,
+          timeframe,
+          current_price: currentPrice,
+          ensemble_signal: sig === "LONG" ? "LONG" : sig === "SHORT" ? "SHORT" : "NEUTRAL",
+          ensemble_confidence: conf,
+          volatility_forecast: {
+            regime: volBias,
+            annualized_pct: parseFloat(histVolAnnualized.toFixed(1)),
+            next_candle_range_pct: parseFloat(nextCandleRangePct.toFixed(2)),
+            note: "Server-computed fallback (AI engine unavailable). Based on log-return volatility.",
+          },
+          trajectories: {
+            bull: { probability: trendPct > 0 ? 40 : 25, prices: bullPrices, final_pct_change: parseFloat((((bullPrices[4] / currentPrice) - 1) * 100).toFixed(2)), catalyst: "Continuation of recent up-move + supportive momentum", label: "Bullish breakout" },
+            base: { probability: 40, prices: basePrices, final_pct_change: parseFloat((((basePrices[4] / currentPrice) - 1) * 100).toFixed(2)), catalyst: "Range-bound consolidation around current levels", label: "Sideways drift" },
+            bear: { probability: trendPct < 0 ? 40 : 25, prices: bearPrices, final_pct_change: parseFloat((((bearPrices[4] / currentPrice) - 1) * 100).toFixed(2)), catalyst: "Mean-reversion or risk-off rotation", label: "Bearish reversal" },
+          },
+          key_levels: { resistance: parseFloat(recentHigh.toFixed(6)), support: parseFloat(recentLow.toFixed(6)) },
+          sequence_pattern: trendPct > 3 ? "Higher highs / higher lows" : trendPct < -3 ? "Lower highs / lower lows" : "Range-bound chop",
+          trade_plan: { direction: "NO_TRADE", entry: 0, entry_logic: "AI engine unavailable — manual review recommended.", tp1: 0, tp2: 0, sl: 0, rr_tp1: "—", rr_tp2: "—", leverage: suggestedLeverage, invalidation: "—", notes: reasonNote },
+          model_note: `Fallback forecast: ${reasonNote}`,
+          fallback: true,
+        };
       };
-      let parsed: any = repairJsonK(rawTextK);
-      if (!parsed) {
-        const jsonMatch = rawTextK.match(/\{[\s\S]*\}/);
-        if (jsonMatch) parsed = repairJsonK(jsonMatch[0]);
-      }
-      if (!parsed) {
-        console.error("[/api/kronos parse]", rawTextK.slice(0, 500));
-        return res.status(500).json({ error: "Kronos returned malformed data — please retry." });
+
+      let parsed: any = null;
+
+      if (!aiRes.ok) {
+        const errTxt = await aiRes.text().catch(() => "");
+        console.warn("[/api/kronos] AI HTTP", aiRes.status, errTxt.slice(0, 300));
+        parsed = buildFallbackForecast("AI service returned an error — using server-computed forecast.");
+      } else {
+        const aiData: any = await aiRes.json().catch(() => null);
+        if (!aiData || aiData.error) {
+          console.warn("[/api/kronos] AI error:", aiData?.error?.message || "no body");
+          parsed = buildFallbackForecast("AI service error — using server-computed forecast.");
+        } else {
+          const rawTextK = (aiData.content || []).map((b: any) => b.text || "").join("");
+          if (!rawTextK.trim()) {
+            console.warn("[/api/kronos] Empty AI response");
+            parsed = buildFallbackForecast("AI returned empty response — using server-computed forecast.");
+          } else {
+            const repairJsonK = (s: string): any => {
+              let t = s.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+              if (t.includes("{")) t = t.slice(t.indexOf("{"));
+              if (t.lastIndexOf("}") > 0) t = t.slice(0, t.lastIndexOf("}") + 1);
+              t = t.replace(/,\s*([}\]])/g, "$1");
+              try { return JSON.parse(t); } catch { return null; }
+            };
+            parsed = repairJsonK(rawTextK);
+            if (!parsed) {
+              const jsonMatch = rawTextK.match(/\{[\s\S]*\}/);
+              if (jsonMatch) parsed = repairJsonK(jsonMatch[0]);
+            }
+            if (!parsed) {
+              console.warn("[/api/kronos parse]", rawTextK.slice(0, 300));
+              parsed = buildFallbackForecast("AI returned malformed data — using server-computed forecast.");
+            }
+          }
+        }
       }
 
       if (!parsed.volatility_forecast?.annualized_pct) {
