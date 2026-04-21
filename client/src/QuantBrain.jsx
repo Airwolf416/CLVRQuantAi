@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import QuantStatusCard from "./components/QuantStatusCard";
 
 const C = {
   bg:"#050709", panel:"#0c1220", border:"#141e35", border2:"#1c2b4a",
@@ -232,6 +233,9 @@ Tasks:
 
   return (
     <div>
+      <div style={{ marginBottom: 14 }}>
+        <QuantStatusCard />
+      </div>
       <div style={{ background: conviction.bg, border: `1px solid ${conviction.color}33`, borderRadius: 2, padding: "14px 16px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: "0.15em", marginBottom: 3 }}>CURRENT SIGNAL</div>

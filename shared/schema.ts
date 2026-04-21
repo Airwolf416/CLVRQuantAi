@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, serial, integer, decimal, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, serial, integer, decimal, jsonb, doublePrecision, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -228,3 +228,39 @@ export const insertTradeJournalSchema = createInsertSchema(tradeJournal).omit({
   id: true, createdAt: true, closedAt: true,
 });
 export type InsertTradeJournalEntry = z.infer<typeof insertTradeJournalSchema>;
+
+// ── Phase 2A: Quant Service Tables ────────────────────────────────────────────
+export const quantScores = pgTable("quant_scores", {
+  id: serial("id").primaryKey(),
+  symbol: text("symbol").notNull(),
+  composite_z: doublePrecision("composite_z").notNull(),
+  side: text("side"),
+  regime: text("regime").notNull(),
+  passes: boolean("passes").notNull(),
+  gates_failed: text("gates_failed").array().notNull().default(sql`ARRAY[]::text[]`),
+  factors: jsonb("factors").notNull(),
+  ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  bySymbolTs: index("quant_scores_symbol_ts_idx").on(t.symbol, t.ts),
+}));
+
+export type QuantScore = typeof quantScores.$inferSelect;
+
+export const microstructureSnapshots = pgTable("microstructure_snapshots", {
+  id: serial("id").primaryKey(),
+  symbol: text("symbol").notNull(),
+  mid: doublePrecision("mid"),
+  obi: doublePrecision("obi"),
+  wobi: doublePrecision("wobi"),
+  cvd: doublePrecision("cvd"),
+  cvd_z: doublePrecision("cvd_z"),
+  ofi_1m: doublePrecision("ofi_1m"),
+  ofi_z: doublePrecision("ofi_z"),
+  funding: doublePrecision("funding"),
+  oi: doublePrecision("oi"),
+  ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  bySymbolTs: index("micro_snapshots_symbol_ts_idx").on(t.symbol, t.ts),
+}));
+
+export type MicrostructureSnapshot = typeof microstructureSnapshots.$inferSelect;

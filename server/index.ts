@@ -5,6 +5,7 @@ import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { spawn as spawnChild } from "child_process";
 import { WebhookHandlers } from "./webhookHandlers";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
@@ -552,7 +553,33 @@ async function initStripe() {
   }
 }
 
+// ── Phase 2A: spawn Python quant microservice on 127.0.0.1:8081 ──────────────
+function startQuantService() {
+  if (process.env.PHASE2A_DISABLED === "1") {
+    log("Phase2A disabled via PHASE2A_DISABLED=1", "quant");
+    return;
+  }
+  try {
+    const child = spawnChild(
+      "python",
+      ["-m", "uvicorn", "quant.main:app", "--host", "127.0.0.1", "--port", "8081", "--log-level", "info"],
+      { env: { ...process.env, PYTHONUNBUFFERED: "1" }, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    child.stdout?.on("data", (b: Buffer) => process.stdout.write(`[quant] ${b}`));
+    child.stderr?.on("data", (b: Buffer) => process.stderr.write(`[quant] ${b}`));
+    child.on("error", (err: Error) => console.error("[quant] child error:", err.message));
+    child.on("exit", (code: number | null) => log(`quant service exited code=${code}`, "quant"));
+    process.on("exit", () => { try { child.kill("SIGTERM"); } catch {} });
+    process.on("SIGINT", () => { try { child.kill("SIGTERM"); } catch {} });
+    process.on("SIGTERM", () => { try { child.kill("SIGTERM"); } catch {} });
+    log("quant service spawning on 127.0.0.1:8081", "quant");
+  } catch (e: any) {
+    console.error("[quant] spawn failed:", e.message);
+  }
+}
+
 (async () => {
+  startQuantService();
   await initializeDatabase();
   await initStripe();
   await registerRoutes(httpServer, app);

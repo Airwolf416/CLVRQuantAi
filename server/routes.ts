@@ -1323,6 +1323,44 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // ── Phase 2A: quant service status + recent scores ──────────────────────────
+  app.get("/api/quant/health", async (_req, res) => {
+    try {
+      const { quantHealth } = await import("./quantClient");
+      const h = await quantHealth();
+      res.json(h);
+    } catch (e: any) {
+      res.json({ ok: false, error: e.message });
+    }
+  });
+  app.post("/api/quant/test-flow", aiIpLimiter, async (req, res) => {
+    if (process.env.PHASE2A_TEST_TOKEN && req.headers["x-quant-test-token"] !== process.env.PHASE2A_TEST_TOKEN) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    try {
+      const { generateSignalPhase2A } = await import("./quantClient");
+      const { symbol = "BTC", timeframe = "1m" } = req.body || {};
+      const hist = (priceHistory[symbol] || []).slice(-300);
+      if (hist.length < 50) return res.status(400).json({ error: `insufficient history for ${symbol} (${hist.length} bars)` });
+      const ohlcv = hist.map((p: any) => [p.ts, p.price, p.price, p.price, p.price, 1.0]);
+      const out = await generateSignalPhase2A({ symbol, timeframe, ohlcv, equityUsd: 10000, convictionHint: 0.6, assetClass: symbol });
+      res.json(out);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/quant/recent", async (_req, res) => {
+    try {
+      const { quantScores } = await import("@shared/schema");
+      const { desc } = await import("drizzle-orm");
+      const rows = await db.select().from(quantScores).orderBy(desc(quantScores.ts)).limit(20);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   await seedAccessCodes();
   startStockRefreshWorker();
   startHlRefreshWorker(detectMoves);
