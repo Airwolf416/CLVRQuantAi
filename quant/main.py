@@ -49,12 +49,27 @@ def _df_from_ohlcv(ohlcv):
 
 @app.get("/quant/health")
 async def health():
+    """Bulletproof health endpoint for Railway/k8s probes.
+    No DB calls, no network calls — just confirms the FastAPI process is up.
+    Always returns HTTP 200 with {status: "ok"}. For richer state use /quant/ready."""
+    return {"status": "ok"}
+
+
+@app.get("/quant/ready")
+async def ready():
+    """Strict readiness: requires WS task alive. Use for orchestration, not basic liveness."""
     t = getattr(app.state, "task", None)
-    return {"ok": True,
-            "ws_alive": (t is not None and not t.done()),
-            "coins": list(STATE.mids.keys()),
-            "last_update_ts": STATE.last_update_ts,
-            "server_ts": int(time.time() * 1000)}
+    ws_alive = t is not None and not t.done()
+    body = {
+        "ok": ws_alive,
+        "ws_alive": ws_alive,
+        "coins": list(STATE.mids.keys()),
+        "last_update_ts": STATE.last_update_ts,
+        "server_ts": int(time.time() * 1000),
+    }
+    if not ws_alive:
+        raise HTTPException(503, detail=body)
+    return body
 
 
 @app.get("/quant/bars/{coin}")

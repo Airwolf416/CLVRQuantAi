@@ -1357,11 +1357,26 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   // ── Phase 2A: quant service status + recent scores ──────────────────────────
+  // Bulletproof health for Railway. Always 200 — confirms Express is up
+  // and reports quant subprocess status without failing the probe.
   app.get("/api/quant/health", async (_req, res) => {
+    let quant: any = { reachable: false };
+    try {
+      const r = await fetch(`${process.env.QUANT_URL || "http://127.0.0.1:8081"}/quant/health`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      quant = { reachable: r.ok, status: r.status };
+    } catch (e: any) {
+      quant = { reachable: false, error: e.message };
+    }
+    res.status(200).json({ status: "ok", express: true, quant, ts: Date.now() });
+  });
+
+  // Strict readiness — non-2xx if quant subprocess + WS aren't alive
+  app.get("/api/quant/ready", async (_req, res) => {
     try {
       const { quantHealth } = await import("./quantClient");
       const h = await quantHealth();
-      // Return 503 when quant is down so Railway healthcheck actually gates deploy
       res.status(h.ok && h.ws_alive ? 200 : 503).json(h);
     } catch (e: any) {
       res.status(503).json({ ok: false, error: e.message });

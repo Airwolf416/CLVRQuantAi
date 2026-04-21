@@ -6,6 +6,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { spawn as spawnChild } from "child_process";
+import { existsSync as _fsExistsSync } from "fs";
 import { WebhookHandlers } from "./webhookHandlers";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
@@ -560,10 +561,35 @@ function startQuantService() {
     return;
   }
   try {
+    // CRITICAL: use the venv's python directly so we don't accidentally import
+    // numpy from a CWD shadow (Railway's /app contains a `quant/` package which
+    // can confuse Python's path resolution if `python` resolves to system).
+    // Order: explicit env QUANT_PYTHON > /opt/venv/bin/python > "python"
+    const candidates = [
+      process.env.QUANT_PYTHON,
+      "/opt/venv/bin/python",
+      "/opt/venv/bin/python3",
+    ].filter(Boolean) as string[];
+    const pyBin = candidates.find((p) => { try { return _fsExistsSync(p); } catch { return false; } }) || "python";
+
+    // Spawn from project root so `quant.main:app` resolves the local package,
+    // but force PYTHONPATH to project root explicitly to defeat any cwd shadowing.
+    const projectRoot = process.cwd();
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PYTHONUNBUFFERED: "1",
+      PYTHONDONTWRITEBYTECODE: "1",
+      PYTHONPATH: projectRoot,
+      // Defense in depth — make sure site-packages is found even if PATH was reset
+      VIRTUAL_ENV: process.env.VIRTUAL_ENV || "/opt/venv",
+      PATH: `/opt/venv/bin:${process.env.PATH || "/usr/local/bin:/usr/bin:/bin"}`,
+    };
+
+    log(`quant python=${pyBin} cwd=${projectRoot}`, "quant");
     const child = spawnChild(
-      "python",
+      pyBin,
       ["-m", "uvicorn", "quant.main:app", "--host", "127.0.0.1", "--port", "8081", "--log-level", "info"],
-      { env: { ...process.env, PYTHONUNBUFFERED: "1" }, stdio: ["ignore", "pipe", "pipe"] }
+      { cwd: projectRoot, env, stdio: ["ignore", "pipe", "pipe"] }
     );
     child.stdout?.on("data", (b: Buffer) => process.stdout.write(`[quant] ${b}`));
     child.stderr?.on("data", (b: Buffer) => process.stderr.write(`[quant] ${b}`));
@@ -578,7 +604,32 @@ function startQuantService() {
   }
 }
 
+// Print which live data sources will be active at boot. Mask all secret values.
+function logDataSourceStatus() {
+  const has = (k: string) => Boolean(process.env[k] && String(process.env[k]).trim());
+  const sources = {
+    "Hyperliquid WS (32 perps)": "live (no key required)",
+    "Finnhub equities/forex/metals": has("FINNHUB_KEY") ? "live" : "FALLBACK (FINNHUB_KEY missing → cached/static prices)",
+    "CryptoPanic news": has("CRYPTOPANIC_API_KEY") ? "live" : "FALLBACK (no key)",
+    "RapidAPI (Twitter/social)": has("RAPIDAPI_KEY") ? "live" : "FALLBACK (no key)",
+    "Anthropic Claude (sonnet-4-6)": has("ANTHROPIC_API_KEY") ? "live" : "DISABLED (no key)",
+    "Stripe": has("STRIPE_SECRET_KEY") ? "live" : "DISABLED (no key)",
+    "Resend (email)": has("RESEND_API_KEY") ? "live" : "DISABLED (no key)",
+    "PostgreSQL (Drizzle)": has("DATABASE_URL") ? "live" : "MISSING (DATABASE_URL not set)",
+    "Phase 2A quant gate": process.env.PHASE2A_ENABLED === "1" ? "ENABLED" : "off (set PHASE2A_ENABLED=1 to flip)",
+    "Phase 2A fail-closed": process.env.PHASE2A_FAIL_CLOSED === "1" ? "strict (drop on quant error)" : "fail-open (default)",
+  };
+  console.log("┌─────────────────────────────────────────────────────────────");
+  console.log("│ CLVRQuantAI — boot: live data sources");
+  for (const [name, status] of Object.entries(sources)) {
+    const icon = status.startsWith("live") || status.startsWith("ENABLED") || status.startsWith("strict") ? "✓" : status.startsWith("FALLBACK") || status.startsWith("off") ? "○" : "✗";
+    console.log(`│ ${icon} ${name.padEnd(40)} ${status}`);
+  }
+  console.log("└─────────────────────────────────────────────────────────────");
+}
+
 (async () => {
+  logDataSourceStatus();
   startQuantService();
   await initializeDatabase();
   await initStripe();
