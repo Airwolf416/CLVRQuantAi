@@ -606,6 +606,51 @@ function WeeklyUpdateEditor({ onSave }) {
   );
 }
 
+// ── Module-scope helpers for AdminTab2 (keeps components stable across renders) ──
+function AdminSection({ title, color, MONO, children }) {
+  return (
+    <div style={{ background:"#0c1220", border:`1px solid ${color}33`, borderRadius:6, padding:18, marginBottom:16 }}>
+      <div style={{ fontFamily:MONO, fontSize:9, color, letterSpacing:"0.2em", marginBottom:14 }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function AdminStat({ label, value, color = "#c8d4ee", sub, MONO, SERIF }) {
+  return (
+    <div style={{ flex:"1 1 120px", minWidth:110, background:"#080d18", border:"1px solid #1c2b4a", borderRadius:4, padding:"10px 12px" }}>
+      <div style={{ fontFamily:MONO, fontSize:8, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:4 }}>{label}</div>
+      <div style={{ fontFamily:SERIF, fontSize:20, fontWeight:700, color }}>{value}</div>
+      {sub && <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function AdminPill({ ok, label, MONO }) {
+  return (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontFamily:MONO, fontSize:9, padding:"3px 9px", borderRadius:3, background: ok ? "rgba(0,195,100,.12)" : "rgba(255,64,96,.12)", color: ok ? "#00e57a" : "#ff6680", border:`1px solid ${ok ? "rgba(0,195,100,.35)" : "rgba(255,64,96,.3)"}`, letterSpacing:"0.06em" }}>
+      <span style={{ width:6, height:6, borderRadius:"50%", background: ok ? "#00e57a" : "#ff4060" }}/>
+      {label}
+    </span>
+  );
+}
+
+function AdminActionBtn({ actionKey, label, url, body, color = "#c9a84c", onRun, status, msg, MONO }) {
+  return (
+    <div style={{ marginBottom:10 }}>
+      <button
+        type="button"
+        data-testid={`btn-${actionKey}`}
+        onClick={() => onRun(actionKey, url, { body })}
+        disabled={status === "running"}
+        style={{ background:`${color}15`, border:`1px solid ${color}55`, color, borderRadius:4, padding:"8px 14px", fontFamily:MONO, fontSize:10, fontWeight:700, cursor: status === "running" ? "not-allowed" : "pointer", letterSpacing:"0.08em", opacity: status === "running" ? 0.6 : 1, marginRight:8, position:"relative", zIndex:1 }}>
+        {status === "running" ? "Running…" : status === "ok" ? "✓ Done" : label}
+      </button>
+      {msg && <span style={{ fontFamily:MONO, fontSize:9, color: status === "ok" ? "#00e57a" : "#ff6680" }}>{msg}</span>}
+    </div>
+  );
+}
+
 function AdminTab2({ C, MONO, SANS, SERIF }) {
   const [trackRecord, setTrackRecord] = useState(null);
   const [signalHistory, setSignalHistory] = useState(null);
@@ -699,44 +744,29 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
   const signalsHealthy = signalHistory && Array.isArray(signalHistory.signals);
   const workerHealthy = lastSignalAge !== null && lastSignalAge < 240; // signal in last 4h = healthy
 
+  // Bound helper wrappers (use module-scope components so they don't remount every render)
   const Section = ({ title, color, children }) => (
-    <div style={{ background:"#0c1220", border:`1px solid ${color}33`, borderRadius:6, padding:18, marginBottom:16 }}>
-      <div style={{ fontFamily:MONO, fontSize:9, color, letterSpacing:"0.2em", marginBottom:14 }}>{title}</div>
-      {children}
-    </div>
+    <AdminSection title={title} color={color} MONO={MONO}>{children}</AdminSection>
   );
-
-  const Stat = ({ label, value, color = "#c8d4ee", sub }) => (
-    <div style={{ flex:"1 1 120px", minWidth:110, background:"#080d18", border:"1px solid #1c2b4a", borderRadius:4, padding:"10px 12px" }}>
-      <div style={{ fontFamily:MONO, fontSize:8, color:"#4a5d80", letterSpacing:"0.12em", marginBottom:4 }}>{label}</div>
-      <div style={{ fontFamily:SERIF, fontSize:20, fontWeight:700, color }}>{value}</div>
-      {sub && <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:2 }}>{sub}</div>}
-    </div>
+  const Stat = ({ label, value, color, sub }) => (
+    <AdminStat label={label} value={value} color={color} sub={sub} MONO={MONO} SERIF={SERIF} />
   );
-
   const Pill = ({ ok, label }) => (
-    <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontFamily:MONO, fontSize:9, padding:"3px 9px", borderRadius:3, background: ok ? "rgba(0,195,100,.12)" : "rgba(255,64,96,.12)", color: ok ? "#00e57a" : "#ff6680", border:`1px solid ${ok ? "rgba(0,195,100,.35)" : "rgba(255,64,96,.3)"}`, letterSpacing:"0.06em" }}>
-      <span style={{ width:6, height:6, borderRadius:"50%", background: ok ? "#00e57a" : "#ff4060" }}/>
-      {label}
-    </span>
+    <AdminPill ok={ok} label={label} MONO={MONO} />
   );
-
-  const ActionBtn = ({ actionKey, label, url, body, color = "#c9a84c" }) => {
-    const status = actionStatus[actionKey];
-    const msg = actionMsg[actionKey];
-    return (
-      <div style={{ marginBottom:10 }}>
-        <button
-          data-testid={`btn-${actionKey}`}
-          onClick={() => runAction(actionKey, url, { body })}
-          disabled={status === "running"}
-          style={{ background:`${color}15`, border:`1px solid ${color}55`, color, borderRadius:4, padding:"8px 14px", fontFamily:MONO, fontSize:10, fontWeight:700, cursor: status === "running" ? "not-allowed" : "pointer", letterSpacing:"0.08em", opacity: status === "running" ? 0.6 : 1, marginRight:8 }}>
-          {status === "running" ? "Running…" : status === "ok" ? "✓ Done" : label}
-        </button>
-        {msg && <span style={{ fontFamily:MONO, fontSize:9, color: status === "ok" ? "#00e57a" : "#ff6680" }}>{msg}</span>}
-      </div>
-    );
-  };
+  const ActionBtn = ({ actionKey, label, url, body, color }) => (
+    <AdminActionBtn
+      actionKey={actionKey}
+      label={label}
+      url={url}
+      body={body}
+      color={color}
+      onRun={runAction}
+      status={actionStatus[actionKey]}
+      msg={actionMsg[actionKey]}
+      MONO={MONO}
+    />
+  );
 
   if (loading) {
     return <div style={{ textAlign:"center", padding:40, fontFamily:MONO, fontSize:10, color:"#4a5d80", letterSpacing:"0.2em" }}>LOADING DIAGNOSTICS…</div>;
@@ -1263,7 +1293,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       <div style={{ display:"flex", gap:4, marginBottom:18, flexWrap:"wrap" }}>
         {tabs.map(t => {
           const isOwnerTab = t === "owner" || t === "admin" || t === "admin2";
-          const label = t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : t === "owner" ? "⚡ Owner" : t === "admin" ? "🛠 Admin" : "📊 Admin 2";
+          const label = t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : t === "owner" ? "⚡ Owner" : t === "admin" ? "🛠 Admin" : "🔧 Maintenance";
           return (
           <button key={t} data-testid={`tab-${t}`} onClick={() => setTab(t)}
             style={{ background:tab === t ? (isOwnerTab ? C.purple : C.gold) : "transparent", border:`1px solid ${tab === t ? (isOwnerTab ? C.purple : C.gold) : C.border}`, color:tab === t ? C.bg : (isOwnerTab ? C.purple : C.muted2), borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
