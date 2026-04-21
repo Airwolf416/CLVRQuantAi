@@ -1,0 +1,1221 @@
+# CLVRQuantAI — Phase 2A Replit Agent Prompt (copy-paste ready)
+
+Paste the block below verbatim into Replit Agent. It is written directly to Replit Agent, with exact file paths, exact code, and the real table/ORM conventions already in the CLVRQuantAI workspace.
+
+-----
+
+```
+ROLE
+You are modifying the existing CLVRQuantAI Replit workspace. Do NOT scaffold a new project. The workspace already contains:
+- Express.js TypeScript server in server/routes.ts (~5325 lines)
+- React (JSX, inline styles) in client/src/
+- PostgreSQL via Drizzle ORM. Schema in shared/schema.ts. Tables: signal_outcomes, ai_signal_log, adaptive_thresholds (use these exact names).
+- CLAUDE_MODEL = "claude-sonnet-4-6" in server/config.ts
+- OWNER_EMAIL = "mikeclaver@gmail.com" in server/routes.ts
+- Data feeds already wired: Hyperliquid WS (perps+spot), Finnhub, CoinGecko, Stocktwits, DataBus
+- No Redis. Use Postgres rows or in-memory Python dicts.
+- Deploy target: Railway via GitHub
+
+GOAL (Phase 2A)
+Move signal origination from Claude to a deterministic Python quant pre-filter. Claude becomes a VETO-ONLY risk officer. Add microstructure ingestion (OBI/CVD/OFI), GJR-GARCH vol targeting, Almgren-Chriss cost/EV gate, noise-band-aware SL, and ADX+Hurst regime detection. Run a Python FastAPI microservice in the same Replit workspace as Express. All Node-side DB access stays in Drizzle. No raw pg, no raw SQL on the Node side.
+
+================================================================
+SECTION 0 — HARD RULES (WHAT NOT TO DO)
+================================================================
+- DO NOT introduce a `pg` Pool, `node-postgres` raw client, or any raw SQL on the Node side. Use Drizzle ORM only. Import db from the existing Drizzle client used elsewhere in server/routes.ts.
+- DO NOT rename existing tables. The real names are `signal_outcomes`, `ai_signal_log`, `adaptive_thresholds`. Add NEW tables only.
+- DO NOT change CLAUDE_MODEL; leave it as "claude-sonnet-4-6" in server/config.ts.
+- DO NOT introduce Redis, RabbitMQ, Kafka, Celery, or any external broker. In-memory Python dicts + Postgres persistence only.
+- DO NOT call Claude to originate signals anymore. Claude is invoked ONLY after the Python scorer passes AND the cost/EV gate passes, and only with the veto-only prompt defined in Section 7.
+- DO NOT use TA-Lib (Nix build is painful). Use pure numpy/pandas for ADX, ATR, Hurst.
+- DO NOT install a second Python runtime via both `modules` AND `replit.nix`. Pick one path (modules). Mixing causes conflicting .pythonlibs.
+- DO NOT use `localhost` as the proxy target in Node — always use `127.0.0.1` (Node 17+ may resolve `localhost` to ::1 and ECONNREFUSED against uvicorn on 127.0.0.1).
+- DO NOT use `@app.on_event("startup")` — it is deprecated. Use FastAPI `lifespan` context manager.
+- DO NOT run uvicorn with `--workers > 1`. The in-memory state store is per-process; a single worker is required.
+- DO NOT spam-refit GJR-GARCH on every /score call. Cache per symbol; refit if older than 7 days or on startup.
+- DO NOT emit a signal when regime == "chop". Return `passes=false` and log.
+- DO NOT scalp mid-cap alts with SL < 2.0%. Noise-band check must enforce this.
+- DO NOT auto-execute trades. This phase is SIGNAL ONLY. Output is sent to the existing notification path.
+
+================================================================
+SECTION 1 — WORKSPACE SETUP (NIX: PYTHON + NODE SIDE BY SIDE)
+================================================================
+Modify `.replit` at the repo root to:
+
+```toml
+entrypoint = "server/index.ts"
+modules = ["python-3.11", "nodejs-20"]
+hidden = [".pythonlibs", "node_modules", "__pycache__", ".venv"]
+
+run = "bash -c 'trap \"kill 0\" SIGINT SIGTERM EXIT; PYTHONUNBUFFERED=1 python -m uvicorn quant.main:app --host 127.0.0.1 --port 8081 --log-level info & npm run dev & wait'"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["bash", "-c", "PYTHONUNBUFFERED=1 python -m uvicorn quant.main:app --host 127.0.0.1 --port 8081 --log-level info & npm run start & wait"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[[ports]]
+localPort = 5000
+externalPort = 3000
+
+[[ports]]
+localPort = 8081
+# no externalPort — quant service stays internal-only
+
+[env]
+PYTHONUNBUFFERED = "1"
+QUANT_URL = "http://127.0.0.1:8081"
+```
+
+Keep existing `replit.nix` minimal (modules already provide runtimes). If a `replit.nix` exists, do NOT add `pkgs.python311` again. Only keep non-conflicting system deps like `pkgs.gcc`, `pkgs.openssl`, `pkgs.glibcLocales`.
+
+Create `quant/requirements.txt`:
+
+```
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+websockets==13.0.1
+httpx==0.27.2
+numpy==2.0.1
+pandas==2.2.2
+scipy==1.14.1
+arch==7.2.0
+asyncpg==0.29.0
+pydantic==2.9.2
+python-dotenv==1.0.1
+```
+
+Install on first boot. Add a setup script `quant/install.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+python -m pip install --upgrade pip
+pip install -r quant/requirements.txt
+```
+
+Run it once from the shell: `bash quant/install.sh`.
+
+Add `concurrently` on the Node side (optional but cleaner logs):
+```
+npm install --save-dev concurrently http-proxy-middleware
+```
+
+================================================================
+SECTION 2 — PYTHON SERVICE LAYOUT
+================================================================
+Create these files exactly:
+
+```
+quant/
+  __init__.py
+  main.py                # FastAPI app + lifespan + routes
+  config.py              # env, constants, thresholds
+  state.py               # in-memory MarketState singleton
+  hl_ws.py               # Hyperliquid WS consumer (l2Book, trades, activeAssetCtx)
+  indicators.py          # ADX, ATR, Hurst, wick_stats, bollinger_z, rsi
+  microstructure.py      # OBI, wOBI, CVD, CVD_z, OFI
+  regime.py              # classify_regime(df) -> "trend"|"range"|"high_vol"|"chop"
+  scorer.py              # composite score + gates + scorer endpoint payload
+  garch.py               # GJR-GARCH(1,1,1) skew-t caching + sigma forecast
+  sizing.py              # vol-target + Kelly sizing
+  costs.py               # Almgren-Chriss sqrt impact + total cost + EV check
+  sl_placement.py        # noise-band-aware SL + R:R viability
+  db.py                  # asyncpg pool for quant_scores / microstructure_snapshots writes
+  models.py              # Pydantic request/response schemas
+```
+
+================================================================
+SECTION 3 — CONFIG AND CONSTANTS (quant/config.py)
+================================================================
+```python
+import os
+
+HL_WS_URL = "wss://api.hyperliquid.xyz/ws"
+HL_REST = "https://api.hyperliquid.xyz/info"
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # same Postgres as Node
+
+# Universe for WS subscriptions (start narrow; expand via env)
+DEFAULT_COINS = os.getenv("QUANT_COINS", "BTC,ETH,SOL,PENDLE,HYPE").split(",")
+
+# Factor weights
+W_MOMENTUM   = 0.30
+W_MEANREV    = 0.15
+W_CARRY      = 0.15
+W_FLOW       = 0.25
+W_VOLGATE    = 0.10
+W_SENTIMENT  = 0.05
+
+# Gates
+Z_THRESHOLD          = 1.5
+WILSON_LB_THRESHOLD  = 0.50
+OFI_Z_MIN_ABS        = 0.5   # only enforce sign-agreement when |ofi_z| > this
+NOISE_WICK_MULT      = 1.5
+
+# Sizing
+TARGET_ANN_VOL       = 0.15
+KELLY_CLIP           = 0.25
+MIN_SIGMA_ANN        = 0.02
+
+# Costs
+FEE_BPS_TAKER        = 4.5   # Hyperliquid taker
+EV_COST_MULTIPLE     = 2.0
+ASSET_HALF_SPREAD_BPS = {
+    "BTC": 1.0, "ETH": 1.0,
+    "SOL": 2.0, "HYPE": 3.0,
+    "PENDLE": 5.0, "MID_CAP_DEFAULT": 5.0,
+    "SMALL_CAP_DEFAULT": 10.0,
+}
+ASSET_Y_IMPACT = {
+    "BTC": 0.3, "ETH": 0.3, "SOL": 0.6,
+    "HYPE": 0.8, "PENDLE": 1.0,
+    "MID_CAP_DEFAULT": 1.0, "SMALL_CAP_DEFAULT": 1.5,
+}
+
+# SL minima
+MIN_SL_PCT_BTCETH  = 0.008   # 0.8%
+MIN_SL_PCT_MIDCAP  = 0.020   # 2.0%
+MIN_RR             = 1.5
+
+# GARCH
+GARCH_MIN_OBS      = 500
+GARCH_REFIT_SECS   = 7*24*3600
+```
+
+================================================================
+SECTION 4 — IN-MEMORY STATE (quant/state.py)
+================================================================
+```python
+from collections import deque, defaultdict
+from typing import Dict, Deque, Tuple
+import time
+
+class MarketState:
+    def __init__(self, window: int = 4000):
+        self.mids: Dict[str, float] = {}
+        self.books: Dict[str, dict] = {}                         # latest l2Book msg per coin
+        self.trades: Dict[str, Deque[Tuple[int,float,float,str]]] = defaultdict(lambda: deque(maxlen=window))
+        self.cvd: Dict[str, Deque[Tuple[int,float]]] = defaultdict(lambda: deque(maxlen=window))
+        self.ofi_events: Dict[str, Deque[Tuple[int,float]]] = defaultdict(lambda: deque(maxlen=window))
+        self.ofi_prev: Dict[str, Tuple[float,float,float,float]] = {}  # (bid_px,bid_sz,ask_px,ask_sz)
+        self.asset_ctx: Dict[str, dict] = {}
+        self.last_update_ts: float = 0.0
+
+    def snapshot(self, coin: str) -> dict:
+        return {
+            "coin": coin,
+            "mid": self.mids.get(coin),
+            "cvd_last": self.cvd[coin][-1][1] if self.cvd[coin] else 0.0,
+            "n_trades": len(self.trades[coin]),
+            "has_book": coin in self.books,
+            "ctx": self.asset_ctx.get(coin, {}),
+            "ts": self.last_update_ts,
+        }
+
+STATE = MarketState()
+```
+
+================================================================
+SECTION 5 — HYPERLIQUID WS CONSUMER (quant/hl_ws.py)
+================================================================
+Subscribe per coin to l2Book + trades + activeAssetCtx. Use `websockets` lib. Reconnect with exponential full-jitter backoff capped at 60s. Re-subscribe on every reconnect.
+
+```python
+import asyncio, json, logging, random
+import websockets
+from .config import HL_WS_URL, DEFAULT_COINS
+from .state import STATE
+from .microstructure import OFITracker
+from .indicators import update_ofi_from_book
+
+log = logging.getLogger("hl_ws")
+_ofi = {}  # coin -> OFITracker
+
+def _subs_for(coin: str):
+    return [
+        {"type": "l2Book", "coin": coin, "nSigFigs": None, "mantissa": None},
+        {"type": "trades", "coin": coin},
+        {"type": "activeAssetCtx", "coin": coin},
+    ]
+
+async def _subscribe_all(ws):
+    for c in DEFAULT_COINS:
+        for sub in _subs_for(c):
+            await ws.send(json.dumps({"method":"subscribe","subscription":sub}))
+
+async def _handle(msg: dict):
+    ch = msg.get("channel"); data = msg.get("data")
+    if ch == "l2Book" and isinstance(data, dict):
+        coin = data["coin"]
+        STATE.books[coin] = data
+        tracker = _ofi.setdefault(coin, OFITracker())
+        tracker.on_book(data, STATE.ofi_events[coin])
+        bids = data["levels"][0]; asks = data["levels"][1]
+        if bids and asks:
+            best_bid = float(bids[0]["px"]); best_ask = float(asks[0]["px"])
+            STATE.mids[coin] = 0.5*(best_bid+best_ask)
+        STATE.last_update_ts = data.get("time", 0)
+    elif ch == "trades" and isinstance(data, list):
+        for t in data:
+            coin = t["coin"]; sz = float(t["sz"]); px = float(t["px"])
+            side = t["side"]; ts = int(t["time"])
+            STATE.trades[coin].append((ts, px, sz, side))
+            signed = sz if side == "B" else -sz
+            prev = STATE.cvd[coin][-1][1] if STATE.cvd[coin] else 0.0
+            STATE.cvd[coin].append((ts, prev + signed))
+            STATE.last_update_ts = ts
+    elif ch in ("activeAssetCtx", "activeSpotAssetCtx") and isinstance(data, dict):
+        coin = data.get("coin") or data.get("ctx",{}).get("coin")
+        ctx = data.get("ctx", {})
+        # fields come back as strings; parse lazily on demand but cache as-is
+        STATE.asset_ctx[coin] = ctx
+    elif ch == "subscriptionResponse":
+        log.info("subscribed: %s", data)
+    elif ch == "pong":
+        pass
+    elif ch == "error":
+        log.error("ws error: %s", data)
+
+async def ws_consumer(stop: asyncio.Event):
+    backoff = 1.0
+    while not stop.is_set():
+        try:
+            async with websockets.connect(
+                HL_WS_URL, ping_interval=20, ping_timeout=20,
+                close_timeout=5, max_queue=2048,
+            ) as ws:
+                log.info("HL WS connected")
+                await _subscribe_all(ws)
+                backoff = 1.0
+                async for raw in ws:
+                    try:
+                        await _handle(json.loads(raw))
+                    except Exception:
+                        log.exception("handler error")
+                    if stop.is_set():
+                        await ws.close(); return
+        except Exception as e:
+            log.warning("WS dropped: %s; backoff %.1fs", e, backoff)
+        delay = min(60.0, backoff) * (0.5 + random.random())
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay); return
+        except asyncio.TimeoutError:
+            pass
+        backoff = min(60.0, backoff * 2)
+```
+
+================================================================
+SECTION 6 — MICROSTRUCTURE (quant/microstructure.py)
+================================================================
+OBI, wOBI, CVD, cvd_z, OFI per Cont/Kukanov/Stoikov (2014), adapted to snapshot-level l2Book deltas.
+
+```python
+import math
+from collections import deque
+from statistics import fmean, pstdev
+
+def parse_levels(book: dict, N: int = 10):
+    bids = book["levels"][0][:N]
+    asks = book["levels"][1][:N]
+    bids = [(float(l["px"]), float(l["sz"])) for l in bids]
+    asks = [(float(l["px"]), float(l["sz"])) for l in asks]
+    return bids, asks
+
+def obi(bids, asks):
+    bv = sum(s for _, s in bids); av = sum(s for _, s in asks)
+    return (bv - av) / (bv + av) if (bv + av) > 0 else 0.0
+
+def wobi(bids, asks, kappa: float = 10.0):
+    if not bids or not asks: return 0.0
+    mid = 0.5*(bids[0][0] + asks[0][0])
+    num = den = 0.0
+    for px, sz in bids:
+        w = math.exp(-kappa * (mid - px) / mid)
+        num += w*sz; den += w*sz
+    for px, sz in asks:
+        w = math.exp(-kappa * (px - mid) / mid)
+        num -= w*sz; den += w*sz
+    return num/den if den > 0 else 0.0
+
+def cvd_z(cvd_series: deque, lookback: int = 3600_000):
+    # z-score the current CVD level against rolling window samples
+    if not cvd_series: return 0.0
+    now = cvd_series[-1][0]
+    vals = [c for (ts, c) in cvd_series if now - ts <= lookback]
+    if len(vals) < 30: return 0.0
+    mu = fmean(vals); sd = pstdev(vals)
+    return (cvd_series[-1][1] - mu)/sd if sd > 0 else 0.0
+
+class OFITracker:
+    def __init__(self):
+        self.pbp = self.pbs = self.pap = self.pas = None
+    def on_book(self, book: dict, out_deque: deque):
+        bids = book["levels"][0]; asks = book["levels"][1]
+        if not bids or not asks: return
+        bp, bs = float(bids[0]["px"]), float(bids[0]["sz"])
+        ap, as_ = float(asks[0]["px"]), float(asks[0]["sz"])
+        if self.pbp is None:
+            self.pbp, self.pbs, self.pap, self.pas = bp, bs, ap, as_
+            return
+        # bid contribution
+        if   bp >  self.pbp: eB =  bs
+        elif bp == self.pbp: eB =  bs - self.pbs
+        else:                eB = -self.pbs
+        # ask contribution
+        if   ap <  self.pap: eA =  as_
+        elif ap == self.pap: eA =  as_ - self.pas
+        else:                eA = -self.pas
+        e_n = eB - eA
+        ts = book.get("time", 0)
+        out_deque.append((ts, e_n))
+        self.pbp, self.pbs, self.pap, self.pas = bp, bs, ap, as_
+
+def ofi_z(ofi_events: deque, window_ms: int = 60_000):
+    if not ofi_events: return 0.0, 0.0
+    now = ofi_events[-1][0]
+    vals = [e for (ts, e) in ofi_events if now - ts <= window_ms]
+    if len(vals) < 10: return 0.0, 0.0
+    s = sum(vals); mu = fmean(vals); sd = pstdev(vals)
+    z = (vals[-1] - mu)/sd if sd > 0 else 0.0
+    return s, z
+```
+
+================================================================
+SECTION 7 — INDICATORS (quant/indicators.py)
+================================================================
+Wilder RMA, ADX(14), ATR(14), RSI(14), Bollinger z, Hurst R/S, wick stats. Pure pandas/numpy.
+
+```python
+import numpy as np, pandas as pd
+
+def wilder_rma(x: pd.Series, period: int) -> pd.Series:
+    x = x.astype(float)
+    y = x.copy()
+    y.iloc[:period-1] = np.nan
+    y.iloc[period-1] = x.iloc[:period].mean()
+    return y.ewm(alpha=1.0/period, adjust=False).mean()
+
+def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    h,l,c = df["high"], df["low"], df["close"]
+    pc = c.shift(1); ph = h.shift(1); pl = l.shift(1)
+    tr = pd.concat([(h-l).abs(), (h-pc).abs(), (l-pc).abs()], axis=1).max(axis=1)
+    up = h - ph; dn = pl - l
+    pdm = np.where((up>dn)&(up>0), up, 0.0)
+    ndm = np.where((dn>up)&(dn>0), dn, 0.0)
+    pdm = pd.Series(pdm, index=df.index); ndm = pd.Series(ndm, index=df.index)
+    trs = wilder_rma(tr, period)
+    pdi = 100*wilder_rma(pdm, period)/trs.replace(0,np.nan)
+    ndi = 100*wilder_rma(ndm, period)/trs.replace(0,np.nan)
+    dx = 100*(pdi-ndi).abs()/(pdi+ndi).replace(0,np.nan)
+    return wilder_rma(dx, period)
+
+def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    h,l,c = df["high"], df["low"], df["close"]
+    pc = c.shift(1)
+    tr = pd.concat([(h-l).abs(), (h-pc).abs(), (l-pc).abs()], axis=1).max(axis=1)
+    return wilder_rma(tr, period)
+
+def rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    d = close.diff()
+    up = d.clip(lower=0); dn = (-d).clip(lower=0)
+    ru = wilder_rma(up, period); rd = wilder_rma(dn, period)
+    rs = ru/rd.replace(0, np.nan)
+    return 100 - 100/(1+rs)
+
+def bollinger_z(close: pd.Series, period: int = 20) -> pd.Series:
+    mu = close.rolling(period).mean()
+    sd = close.rolling(period).std(ddof=0)
+    return (close - mu)/sd.replace(0, np.nan)
+
+def hurst_rs(ts) -> float:
+    ts = np.asarray(ts, dtype=float)
+    N = len(ts)
+    if N < 40: return 0.5
+    sizes = np.unique(np.logspace(np.log10(8), np.log10(N//2), 16).astype(int))
+    rs = []
+    for n in sizes:
+        k = N//n
+        if k < 1: continue
+        vals = []
+        for i in range(k):
+            ch = ts[i*n:(i+1)*n]
+            y = ch - ch.mean(); z = np.cumsum(y)
+            r = z.max() - z.min(); s = ch.std(ddof=1)
+            if s > 0: vals.append(r/s)
+        if vals: rs.append((n, float(np.mean(vals))))
+    if len(rs) < 4: return 0.5
+    ns, vs = zip(*rs)
+    H,_ = np.polyfit(np.log(ns), np.log(vs), 1)
+    return float(H)
+
+def wick_stats(df: pd.DataFrame, n: int = 50) -> dict:
+    bt = df[["open","close"]].max(axis=1)
+    bb = df[["open","close"]].min(axis=1)
+    uw = df["high"] - bt
+    lw = bb - df["low"]
+    return {
+        "avg_upper_wick": float(uw.rolling(n).mean().iloc[-1]),
+        "avg_lower_wick": float(lw.rolling(n).mean().iloc[-1]),
+        "p90_upper_wick": float(uw.rolling(n).quantile(0.90).iloc[-1]),
+        "p90_lower_wick": float(lw.rolling(n).quantile(0.90).iloc[-1]),
+        "avg_total_wick": float((uw+lw).rolling(n).mean().iloc[-1]),
+    }
+
+def update_ofi_from_book(*args, **kwargs):  # placeholder; hl_ws uses OFITracker directly
+    pass
+```
+
+================================================================
+SECTION 8 — REGIME (quant/regime.py)
+================================================================
+```python
+import pandas as pd
+from .indicators import adx, atr, hurst_rs
+
+def classify_regime(df: pd.DataFrame) -> str:
+    if len(df) < 60: return "chop"
+    a = float(adx(df, 14).iloc[-1])
+    h = hurst_rs(df["close"].tail(150).values)
+    # realized vol check (log returns)
+    lr = df["close"].pct_change().dropna()
+    rv = float(lr.rolling(20).std().iloc[-1] or 0.0)
+    rv20 = float(lr.rolling(20).std().rolling(20).mean().iloc[-1] or 0.0)
+    if a > 25 and h > 0.55: return "trend"
+    if a < 20 and h < 0.45: return "range"
+    if rv20 > 0 and rv > 1.5*rv20: return "high_vol"
+    return "chop"
+```
+
+================================================================
+SECTION 9 — GARCH + SIZING (quant/garch.py, quant/sizing.py)
+================================================================
+GJR-GARCH(1,1,1) with skewed-t. Returns fed in PERCENT (multiply pct_change by 100). Cache fitted results per symbol; refit weekly.
+
+`quant/garch.py`:
+```python
+import time, math, numpy as np, pandas as pd
+from arch import arch_model
+from .config import GARCH_MIN_OBS, GARCH_REFIT_SECS
+
+_CACHE: dict = {}
+
+def _fit(returns_pct: pd.Series):
+    am = arch_model(returns_pct, mean="Constant", vol="GARCH",
+                    p=1, o=1, q=1, dist="skewt", rescale=False)
+    return am.fit(disp="off", show_warning=False)
+
+def sigma_daily_decimal(symbol: str, daily_returns_decimal: pd.Series) -> float:
+    if len(daily_returns_decimal) < GARCH_MIN_OBS:
+        # fallback: realized stdev if not enough history
+        return float(daily_returns_decimal.std() or 0.02)
+    entry = _CACHE.get(symbol)
+    now = time.time()
+    if entry is None or now - entry["ts"] > GARCH_REFIT_SECS:
+        pct = daily_returns_decimal * 100.0
+        res = _fit(pct)
+        _CACHE[symbol] = {"res": res, "ts": now}
+    res = _CACHE[symbol]["res"]
+    fc = res.forecast(horizon=1, reindex=False)
+    var_pct2 = float(fc.variance.values[-1, 0])
+    sigma_pct = math.sqrt(max(var_pct2, 1e-12))
+    return sigma_pct / 100.0
+```
+
+`quant/sizing.py`:
+```python
+import math
+from .config import TARGET_ANN_VOL, KELLY_CLIP, MIN_SIGMA_ANN
+
+def vol_target_size(equity_usd: float, sigma_daily_dec: float,
+                    expected_return_dec: float, conviction: float) -> dict:
+    sigma_ann = sigma_daily_dec * math.sqrt(365.0)
+    sigma_ann = max(sigma_ann, MIN_SIGMA_ANN)
+    vol_scale = TARGET_ANN_VOL / sigma_ann
+    kelly = expected_return_dec / (sigma_ann**2) if sigma_ann > 0 else 0.0
+    kelly = max(-KELLY_CLIP, min(KELLY_CLIP, kelly))
+    size_usd = equity_usd * vol_scale * kelly * max(0.0, min(1.0, conviction))
+    return {
+        "sigma_ann": sigma_ann, "vol_scale": vol_scale,
+        "kelly": kelly, "size_usd": size_usd,
+    }
+```
+
+================================================================
+SECTION 10 — COSTS + EV (quant/costs.py)
+================================================================
+```python
+import math
+from .config import (FEE_BPS_TAKER, EV_COST_MULTIPLE,
+                     ASSET_HALF_SPREAD_BPS, ASSET_Y_IMPACT)
+
+def _lookup(mapping: dict, sym: str, default_key: str):
+    return mapping.get(sym, mapping[default_key])
+
+def total_cost_bps(symbol: str, order_usd: float, adv_usd: float,
+                   sigma_daily_dec: float, asset_class: str = "MID_CAP_DEFAULT") -> dict:
+    half_spread = _lookup(ASSET_HALF_SPREAD_BPS, symbol, asset_class)
+    fee = FEE_BPS_TAKER
+    Y = _lookup(ASSET_Y_IMPACT, symbol, asset_class)
+    impact_bps = 0.0
+    if adv_usd > 0 and order_usd > 0:
+        impact_bps = Y * sigma_daily_dec * math.sqrt(order_usd/adv_usd) * 10_000.0
+    total = half_spread + fee + impact_bps
+    return {"half_spread_bps": half_spread, "fee_bps": fee,
+            "impact_bps": impact_bps, "total_bps": total}
+
+def ev_pass(expected_alpha_bps: float, total_bps: float) -> bool:
+    return expected_alpha_bps >= EV_COST_MULTIPLE * total_bps
+```
+
+================================================================
+SECTION 11 — NOISE-BAND SL (quant/sl_placement.py)
+================================================================
+```python
+import pandas as pd
+from .indicators import atr, wick_stats
+from .config import (NOISE_WICK_MULT, MIN_SL_PCT_BTCETH,
+                     MIN_SL_PCT_MIDCAP, MIN_RR, FEE_BPS_TAKER)
+
+def _min_sl_pct(symbol: str) -> float:
+    if symbol in ("BTC","ETH"): return MIN_SL_PCT_BTCETH
+    return MIN_SL_PCT_MIDCAP
+
+def build_sl_tp(symbol: str, side: str, entry: float, df: pd.DataFrame,
+                planned_rr: float = 2.0) -> dict:
+    a = float(atr(df, 14).iloc[-1])
+    w = wick_stats(df, n=50)
+    p90_wick = w["p90_lower_wick"] if side=="long" else w["p90_upper_wick"]
+    # noise buffer is the larger of 1.5xATR and NOISE_WICK_MULT x p90 wick
+    buf = max(1.5*a, NOISE_WICK_MULT*p90_wick)
+    # enforce asset-class floor
+    floor_buf = _min_sl_pct(symbol) * entry
+    buf = max(buf, floor_buf)
+    sl = entry - buf if side=="long" else entry + buf
+    sl_pct = abs(entry - sl)/entry
+    # R:R viability after fees (taker round-trip, bps -> decimal)
+    f = FEE_BPS_TAKER/10_000
+    rr_min = ((1 - 0.55) + 2*f/sl_pct)/0.55  # assume 55% baseline win rate
+    viable = planned_rr >= max(MIN_RR, 1.25*rr_min)
+    target = entry + planned_rr*(entry - sl) if side=="long" else entry - planned_rr*(sl - entry)
+    return {
+        "sl": sl, "target": target, "sl_pct": sl_pct,
+        "atr": a, "p90_wick": p90_wick,
+        "sl_atr_mult": (buf / a) if a>0 else 0.0,
+        "tp_atr_mult": (abs(target-entry)/a) if a>0 else 0.0,
+        "rr_planned": planned_rr, "rr_breakeven": rr_min,
+        "viable": viable,
+    }
+```
+
+================================================================
+SECTION 12 — SCORER (quant/scorer.py)
+================================================================
+Composite z-score across six buckets. All gates must pass.
+
+```python
+import pandas as pd, numpy as np
+from typing import Optional, List, Tuple
+from .config import (W_MOMENTUM, W_MEANREV, W_CARRY, W_FLOW, W_VOLGATE,
+                     W_SENTIMENT, Z_THRESHOLD, WILSON_LB_THRESHOLD, OFI_Z_MIN_ABS)
+from .indicators import rsi, bollinger_z
+from .microstructure import parse_levels, obi, wobi, cvd_z, ofi_z
+from .state import STATE
+
+def _z(x, mu, sd):
+    return (x - mu)/sd if sd and sd > 0 else 0.0
+
+def _momentum_z(close: pd.Series) -> float:
+    if len(close) < 200: return 0.0
+    ema_fast = close.ewm(span=12, adjust=False).mean().iloc[-1]
+    ema_slow = close.ewm(span=26, adjust=False).mean().iloc[-1]
+    ema_ratio = (ema_fast/ema_slow - 1.0)
+    ret7 = close.iloc[-1]/close.iloc[-min(len(close)-1,168)] - 1.0
+    mom_12_1 = close.iloc[-21]/close.iloc[-min(len(close)-1,252)] - 1.0 if len(close) >= 252 else 0.0
+    rets = close.pct_change().dropna()
+    sd = rets.std()
+    return float(_z(ema_ratio,0,sd) + _z(ret7,0,sd*7**0.5) + _z(mom_12_1,0,sd*21**0.5))/3.0
+
+def _meanrev_z(close: pd.Series) -> float:
+    r = rsi(close, 14).iloc[-1]
+    bz = bollinger_z(close, 20).iloc[-1]
+    # mean-reversion z is NEGATIVE of price z (overbought => short bias)
+    rsi_dev = (50.0 - float(r))/20.0
+    return float(rsi_dev - float(bz))/2.0
+
+def _carry_z(ctx: dict) -> float:
+    try:
+        f = float(ctx.get("funding","0")) * 8 * 365  # annualized
+    except Exception:
+        f = 0.0
+    # negative funding favors LONG, positive favors SHORT in this bucket (contrarian carry)
+    return -f / 0.5  # rough scaling: 50%/yr funding = 1 z
+
+def _flow_z(coin: str, side_hint: str) -> Tuple[float, float]:
+    book = STATE.books.get(coin)
+    if not book: return 0.0, 0.0
+    bids, asks = parse_levels(book, 10)
+    _obi = obi(bids, asks); _wobi = wobi(bids, asks)
+    _cvdz = cvd_z(STATE.cvd[coin])
+    _, _ofiz = ofi_z(STATE.ofi_events[coin])
+    # flow z aggregates book + tape
+    flow = 0.4*_wobi + 0.3*_cvdz + 0.3*_ofiz
+    return float(flow), float(_ofiz)
+
+def _volgate_z(close: pd.Series) -> float:
+    lr = close.pct_change().dropna()
+    if len(lr) < 40: return 0.0
+    rv20 = lr.rolling(20).std().iloc[-1] or 0.0
+    rv100 = lr.rolling(100).std().iloc[-1] or 0.0
+    if rv100 <= 0: return 0.0
+    ratio = rv20/rv100
+    # penalize extreme vol (return negative if way high, or way low)
+    if ratio > 1.8: return -1.0
+    if ratio < 0.5: return -0.5
+    return 0.5
+
+def _sentiment_z(stocktwits_score: Optional[float]) -> float:
+    if stocktwits_score is None: return 0.0
+    return max(-2.0, min(2.0, stocktwits_score))
+
+def compute_composite(coin: str, df: pd.DataFrame, ctx: dict,
+                      wilson_lb: Optional[float],
+                      stocktwits_score: Optional[float]) -> dict:
+    close = df["close"]
+    mom = _momentum_z(close)
+    mr  = _meanrev_z(close)
+    carry = _carry_z(ctx)
+    flow, ofi_z_val = _flow_z(coin, "long")
+    vol = _volgate_z(close)
+    sent = _sentiment_z(stocktwits_score)
+
+    composite = (W_MOMENTUM*mom + W_MEANREV*mr + W_CARRY*carry
+                 + W_FLOW*flow + W_VOLGATE*vol + W_SENTIMENT*sent)
+    side = "long" if composite > 0 else "short" if composite < 0 else None
+
+    gates_failed: List[str] = []
+    if abs(composite) < Z_THRESHOLD: gates_failed.append("z_threshold")
+    if wilson_lb is not None and wilson_lb < WILSON_LB_THRESHOLD:
+        gates_failed.append("wilson_lb")
+    if abs(ofi_z_val) > OFI_Z_MIN_ABS:
+        want_sign = 1 if side == "long" else -1
+        if (ofi_z_val > 0 and want_sign < 0) or (ofi_z_val < 0 and want_sign > 0):
+            gates_failed.append("ofi_sign")
+    return {
+        "composite_z": float(composite),
+        "side": side,
+        "factors": {"momentum": mom, "meanrev": mr, "carry": carry,
+                    "flow": flow, "volgate": vol, "sentiment": sent,
+                    "ofi_z": ofi_z_val},
+        "gates_failed": gates_failed,
+    }
+```
+
+================================================================
+SECTION 13 — DB WRITES FROM PYTHON (quant/db.py)
+================================================================
+Python writes ONLY to the NEW tables we add (`quant_scores`, `microstructure_snapshots`). Everything else stays on the Node/Drizzle side.
+
+```python
+import os, asyncpg, json
+from .config import DATABASE_URL
+
+_pool = None
+
+async def pool():
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4)
+    return _pool
+
+async def log_quant_score(row: dict):
+    p = await pool()
+    async with p.acquire() as c:
+        await c.execute("""
+            insert into quant_scores
+            (symbol, composite_z, side, regime, passes, gates_failed, factors, ts)
+            values ($1,$2,$3,$4,$5,$6,$7, now())
+        """, row["symbol"], row["composite_z"], row["side"], row["regime"],
+             row["passes"], row["gates_failed"], json.dumps(row["factors"]))
+
+async def log_microstructure(row: dict):
+    p = await pool()
+    async with p.acquire() as c:
+        await c.execute("""
+            insert into microstructure_snapshots
+            (symbol, mid, obi, wobi, cvd, cvd_z, ofi_1m, ofi_z, funding, oi, ts)
+            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+        """, row["symbol"], row["mid"], row["obi"], row["wobi"],
+             row["cvd"], row["cvd_z"], row["ofi_1m"], row["ofi_z"],
+             row["funding"], row["oi"])
+```
+
+================================================================
+SECTION 14 — MODELS + MAIN (quant/models.py, quant/main.py)
+================================================================
+`quant/models.py`:
+```python
+from pydantic import BaseModel
+from typing import Optional, List, Any, Dict
+
+class ScoreRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1m"
+    ohlcv: List[List[float]]       # [[ts, o,h,l,c,v], ...] ascending
+    daily_returns: Optional[List[float]] = None  # decimals, for GARCH
+    equity_usd: float = 10_000.0
+    conviction: float = 0.6
+    wilson_lb: Optional[float] = None
+    stocktwits_score: Optional[float] = None
+    asset_class: str = "MID_CAP_DEFAULT"
+    planned_rr: float = 2.0
+
+class ScoreResponse(BaseModel):
+    passes: bool
+    side: Optional[str]
+    composite_z: float
+    regime: str
+    suggested_size_usd: float
+    sl_atr_mult: float
+    tp_atr_mult: float
+    sl_pct: float
+    sigma_ann: float
+    gates_failed: List[str]
+    factors: Dict[str, Any]
+    sl: Optional[float]
+    tp: Optional[float]
+    entry_ref: float
+    ts: int
+
+class CostRequest(BaseModel):
+    symbol: str
+    order_usd: float
+    adv_usd: float
+    sigma_daily_dec: float
+    expected_alpha_bps: float
+    asset_class: str = "MID_CAP_DEFAULT"
+
+class CostResponse(BaseModel):
+    total_bps: float
+    half_spread_bps: float
+    fee_bps: float
+    impact_bps: float
+    ev_pass: bool
+```
+
+`quant/main.py`:
+```python
+import asyncio, time, logging, pandas as pd
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException
+from .models import ScoreRequest, ScoreResponse, CostRequest, CostResponse
+from .state import STATE
+from .hl_ws import ws_consumer
+from .regime import classify_regime
+from .scorer import compute_composite
+from .garch import sigma_daily_decimal
+from .sizing import vol_target_size
+from .costs import total_cost_bps, ev_pass
+from .sl_placement import build_sl_tp
+from .db import log_quant_score
+
+log = logging.getLogger("quant")
+logging.basicConfig(level=logging.INFO)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop = asyncio.Event()
+    task = asyncio.create_task(ws_consumer(stop), name="hl-ws")
+    app.state.stop = stop; app.state.task = task
+    log.info("quant service started")
+    try:
+        yield
+    finally:
+        stop.set()
+        try: await asyncio.wait_for(task, timeout=5)
+        except Exception: task.cancel()
+
+app = FastAPI(lifespan=lifespan)
+
+def _df_from_ohlcv(ohlcv):
+    df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","volume"])
+    df.index = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    return df
+
+@app.get("/quant/health")
+async def health():
+    t = app.state.task
+    return {"ok": True, "ws_alive": not t.done(),
+            "coins": list(STATE.mids.keys()),
+            "last_update_ts": STATE.last_update_ts,
+            "server_ts": int(time.time()*1000)}
+
+@app.post("/quant/score", response_model=ScoreResponse)
+async def score(req: ScoreRequest):
+    if len(req.ohlcv) < 60:
+        raise HTTPException(400, "need >=60 bars")
+    df = _df_from_ohlcv(req.ohlcv)
+    entry_ref = float(df["close"].iloc[-1])
+
+    regime = classify_regime(df)
+
+    ctx = STATE.asset_ctx.get(req.symbol, {})
+    comp = compute_composite(req.symbol, df, ctx, req.wilson_lb, req.stocktwits_score)
+
+    gates_failed = list(comp["gates_failed"])
+    if regime == "chop":
+        gates_failed.append("regime_chop")
+
+    # GARCH sigma (decimal/day); fallback if insufficient daily history
+    dr = pd.Series(req.daily_returns or [], dtype=float)
+    sigma_d = sigma_daily_decimal(req.symbol, dr) if len(dr) > 0 else float(df["close"].pct_change().std() or 0.02)
+
+    # SL/TP noise-band-aware
+    side = comp["side"] or "long"
+    sltp = build_sl_tp(req.symbol, side, entry_ref, df, planned_rr=req.planned_rr)
+    if not sltp["viable"]:
+        gates_failed.append("rr_not_viable")
+    # SL must exceed noise band (implicit in build_sl_tp floor), also explicit check
+    p90_wick = sltp["p90_wick"]
+    if p90_wick > 0 and (sltp["sl_pct"] * entry_ref) < 1.5*p90_wick:
+        gates_failed.append("noise_band")
+
+    # Sizing
+    # expected_return ~ composite_z * sigma_daily (heuristic proxy)
+    exp_ret = float(comp["composite_z"]) * sigma_d
+    sz = vol_target_size(req.equity_usd, sigma_d, exp_ret, req.conviction)
+
+    passes = len(gates_failed) == 0 and comp["side"] is not None
+
+    await log_quant_score({
+        "symbol": req.symbol, "composite_z": comp["composite_z"],
+        "side": comp["side"], "regime": regime, "passes": passes,
+        "gates_failed": gates_failed, "factors": comp["factors"],
+    })
+
+    return ScoreResponse(
+        passes=passes, side=comp["side"], composite_z=comp["composite_z"],
+        regime=regime, suggested_size_usd=sz["size_usd"],
+        sl_atr_mult=sltp["sl_atr_mult"], tp_atr_mult=sltp["tp_atr_mult"],
+        sl_pct=sltp["sl_pct"], sigma_ann=sz["sigma_ann"],
+        gates_failed=gates_failed, factors=comp["factors"],
+        sl=sltp["sl"], tp=sltp["target"],
+        entry_ref=entry_ref, ts=int(time.time()*1000),
+    )
+
+@app.post("/quant/cost", response_model=CostResponse)
+async def cost(req: CostRequest):
+    c = total_cost_bps(req.symbol, req.order_usd, req.adv_usd,
+                       req.sigma_daily_dec, req.asset_class)
+    return CostResponse(**c, ev_pass=ev_pass(req.expected_alpha_bps, c["total_bps"]))
+```
+
+================================================================
+SECTION 15 — DRIZZLE SCHEMA ADDITIONS (shared/schema.ts)
+================================================================
+Append ONLY (do not modify existing tables). Use the same import style already used in shared/schema.ts. Add:
+
+```ts
+import { pgTable, serial, text, doublePrecision, integer, boolean, jsonb, timestamp, index } from "drizzle-orm/pg-core";
+
+export const quantScores = pgTable("quant_scores", {
+  id: serial("id").primaryKey(),
+  symbol: text("symbol").notNull(),
+  composite_z: doublePrecision("composite_z").notNull(),
+  side: text("side"),
+  regime: text("regime").notNull(),
+  passes: boolean("passes").notNull(),
+  gates_failed: text("gates_failed").array().notNull().default([] as any),
+  factors: jsonb("factors").notNull(),
+  ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  bySymbolTs: index("quant_scores_symbol_ts_idx").on(t.symbol, t.ts),
+}));
+
+export const microstructureSnapshots = pgTable("microstructure_snapshots", {
+  id: serial("id").primaryKey(),
+  symbol: text("symbol").notNull(),
+  mid: doublePrecision("mid"),
+  obi: doublePrecision("obi"),
+  wobi: doublePrecision("wobi"),
+  cvd: doublePrecision("cvd"),
+  cvd_z: doublePrecision("cvd_z"),
+  ofi_1m: doublePrecision("ofi_1m"),
+  ofi_z: doublePrecision("ofi_z"),
+  funding: doublePrecision("funding"),
+  oi: doublePrecision("oi"),
+  ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  bySymbolTs: index("micro_snapshots_symbol_ts_idx").on(t.symbol, t.ts),
+}));
+```
+
+Generate + push migrations with whatever drizzle-kit command the project already uses (typically `npm run db:push` or `npx drizzle-kit push`). Do NOT write manual SQL migration files unless the project already follows that pattern.
+
+================================================================
+SECTION 16 — EXPRESS INTEGRATION (server/routes.ts)
+================================================================
+Two changes:
+
+(A) Add a proxy + quant client near the top of server/routes.ts (or create `server/quantClient.ts` and import):
+
+```ts
+// server/quantClient.ts
+const QUANT_URL = process.env.QUANT_URL || "http://127.0.0.1:8081";
+
+export async function quantScore(payload: any) {
+  const r = await fetch(`${QUANT_URL}/quant/score`, {
+    method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`quant/score ${r.status}`);
+  return r.json();
+}
+export async function quantCost(payload: any) {
+  const r = await fetch(`${QUANT_URL}/quant/cost`, {
+    method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`quant/cost ${r.status}`);
+  return r.json();
+}
+export async function quantHealth() {
+  const r = await fetch(`${QUANT_URL}/quant/health`);
+  return r.ok ? r.json() : { ok: false };
+}
+```
+
+Also mount a passthrough proxy in Express so the frontend can hit `/quant/*`:
+
+```ts
+import { createProxyMiddleware } from "http-proxy-middleware";
+app.use("/quant", createProxyMiddleware({
+  target: "http://127.0.0.1:8081", // MUST be 127.0.0.1, not localhost
+  changeOrigin: true,
+}));
+```
+
+(B) Rewrite the signal-generation flow. Locate the function in server/routes.ts that currently fires on the 1.5% price-move threshold and calls Claude to originate a signal. Replace its body with the following pipeline. Keep function name, inputs, and output payload shape identical so the rest of the app (notifications, ai_signal_log writes, UI feed) is unaffected.
+
+```ts
+import { quantScore, quantCost } from "./quantClient";
+import Anthropic from "@anthropic-ai/sdk";
+import { db } from "./db";                     // existing drizzle client
+import { aiSignalLog, adaptiveThresholds } from "../shared/schema"; // existing
+import { eq, desc } from "drizzle-orm";
+
+async function generateSignalPhase2A(ctx: {
+  symbol: string; timeframe: string; ohlcv: number[][];
+  dailyReturns?: number[]; equityUsd: number; convictionHint: number;
+  stocktwitsScore?: number | null; assetClass: string;
+}) {
+  // 1) Wilson LB from adaptive_thresholds (existing table)
+  const rows = await db.select().from(adaptiveThresholds)
+    .where(eq(adaptiveThresholds.symbol, ctx.symbol))
+    .orderBy(desc(adaptiveThresholds.updatedAt)).limit(1);
+  const wilsonLb = rows[0]?.wilsonLb ?? null;
+
+  // 2) Call Python scorer
+  const score = await quantScore({
+    symbol: ctx.symbol, timeframe: ctx.timeframe, ohlcv: ctx.ohlcv,
+    daily_returns: ctx.dailyReturns ?? [],
+    equity_usd: ctx.equityUsd, conviction: ctx.convictionHint,
+    wilson_lb: wilsonLb, stocktwits_score: ctx.stocktwitsScore ?? null,
+    asset_class: ctx.assetClass, planned_rr: 2.0,
+  });
+
+  if (!score.passes) {
+    await db.insert(aiSignalLog).values({
+      symbol: ctx.symbol, status: "suppressed",
+      reason: `scorer_gates:${(score.gates_failed||[]).join(",")}`,
+      payload: score, source: "phase2a_scorer",
+    });
+    return { emitted: false, reason: "scorer_blocked", score };
+  }
+
+  // 3) Cost / EV gate
+  const adv = ctx.ohlcv.slice(-1440).reduce((a,r)=>a + r[5]*r[4], 0); // sum close*vol over ~1d
+  const expectedAlphaBps = Math.abs(score.composite_z) * score.sigma_ann * 10_000 / Math.sqrt(365);
+  const cost = await quantCost({
+    symbol: ctx.symbol, order_usd: score.suggested_size_usd,
+    adv_usd: Math.max(adv, 1), sigma_daily_dec: score.sigma_ann / Math.sqrt(365),
+    expected_alpha_bps: expectedAlphaBps, asset_class: ctx.assetClass,
+  });
+  if (!cost.ev_pass) {
+    await db.insert(aiSignalLog).values({
+      symbol: ctx.symbol, status: "suppressed",
+      reason: `ev_fail:alpha_${expectedAlphaBps.toFixed(1)}_cost_${cost.total_bps.toFixed(1)}`,
+      payload: { score, cost }, source: "phase2a_cost",
+    });
+    return { emitted: false, reason: "ev_blocked", score, cost };
+  }
+
+  // 4) Claude VETO-ONLY
+  const client = new Anthropic();
+  const vetoPrompt =
+    `You are a risk officer. The quant model produced a ${score.side} signal on ${ctx.symbol} ` +
+    `with composite z-score ${score.composite_z.toFixed(2)}, regime "${score.regime}", ` +
+    `entry ~${score.entry_ref}, SL ${score.sl}, TP ${score.tp}. ` +
+    `Veto ONLY if explicit news/macro right now invalidates this thesis. ` +
+    `Return STRICT JSON: {"veto": boolean, "reason": string}. No prose outside JSON.`;
+  const msg = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 200,
+    messages: [{ role: "user", content: vetoPrompt }],
+  });
+  let veto = { veto: false, reason: "" };
+  try {
+    const text = (msg.content[0] as any).text ?? "";
+    veto = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || "{}");
+  } catch { /* if parse fails, do NOT veto */ }
+
+  if (veto.veto) {
+    await db.insert(aiSignalLog).values({
+      symbol: ctx.symbol, status: "suppressed",
+      reason: `claude_veto:${veto.reason}`,
+      payload: { score, cost, veto }, source: "phase2a_veto",
+    });
+    return { emitted: false, reason: "claude_veto", score, cost, veto };
+  }
+
+  // 5) Emit signal through existing notification/log path
+  const signal = {
+    symbol: ctx.symbol, side: score.side, entry: score.entry_ref,
+    sl: score.sl, tp: score.tp, sizeUsd: score.suggested_size_usd,
+    compositeZ: score.composite_z, regime: score.regime,
+    slAtrMult: score.sl_atr_mult, tpAtrMult: score.tp_atr_mult,
+    factors: score.factors,
+  };
+  await db.insert(aiSignalLog).values({
+    symbol: ctx.symbol, status: "emitted",
+    reason: "phase2a_emit", payload: { signal, score, cost, veto },
+    source: "phase2a",
+  });
+  return { emitted: true, signal, score, cost };
+}
+```
+
+Wire this into the existing auto-trigger that currently fires on the 1.5% move. Build the `ctx` object from the existing Hyperliquid OHLCV cache already used by the Express server. Preserve all downstream hooks (owner-email notification to mikeclaver@gmail.com, UI feed push, etc.).
+
+================================================================
+SECTION 17 — FRONTEND (client/src/) MINIMAL
+================================================================
+Do NOT overhaul UI. Add only a small "Quant Status" card that calls `/quant/health` and shows: `ws_alive`, number of coins, last-update timestamp, and displays the last 10 rows from `quant_scores` via an existing Express route (or add one like `/api/quant/recent`). Use inline styles per the existing convention. No CSS framework.
+
+================================================================
+SECTION 18 — ACCEPTANCE TESTS
+================================================================
+Add `quant/tests/` and `server/tests/phase2a.spec.ts`. Run as part of `npm test` / `pytest`.
+
+Python tests (pytest):
+
+1. `test_indicators_adx_matches_reference`
+   - Input: 200 synthetic bars where close = 100 + cumulative sum of +1 noise (strong uptrend).
+   - Assert: `adx(df,14).iloc[-1] > 25`.
+
+2. `test_hurst_trend_vs_noise`
+   - Input A: pure random walk (np.random.randn cumsum, 500 pts) → assert `0.4 < H < 0.6`.
+   - Input B: linear trend + small noise → assert `H > 0.6`.
+
+3. `test_obi_signs`
+   - Fabricate a book with heavy bid side → `obi > 0.5`.
+   - Flip heavy → `obi < -0.5`.
+
+4. `test_ofi_tracker_delta`
+   - Two consecutive snapshots, bid price unchanged, bid size +10 → `e_n > 0`.
+
+5. `test_cvd_accumulates`
+   - 5 buys of size 1, 2 sells of size 1 → `cvd == +3`.
+
+6. `test_sl_placement_noise_band`
+   - mid-cap alt with p90 lower wick 0.7% at entry 1.0 → SL must be ≤ 0.98 (>=2% floor).
+   - Assert `rr_min` computed and `viable` flag correct.
+
+7. `test_cost_ev_gate`
+   - symbol=BTC, order_usd=1e4, adv_usd=1e9, sigma=0.02 → `total_bps < 10`.
+   - expected_alpha_bps=25 → `ev_pass True`; 5 → `False`.
+
+8. `test_garch_forecast_shapes`
+   - 1000 synthetic daily returns with vol clustering (GARCH simulate) → `sigma_daily_decimal > 0` and `< 0.2`.
+
+9. `test_regime_classifier`
+   - Strong trend OHLC → `"trend"`; flat-ish noise → `"chop"` or `"range"`.
+
+Node tests (vitest/jest, whichever project uses):
+
+10. `test_express_proxy_health`
+   - GET `/quant/health` via Express → 200, body has `ws_alive`.
+
+11. `test_signal_flow_suppression`
+   - Stub `quantScore` to return `{passes:false, gates_failed:["z_threshold"]}` → `generateSignalPhase2A` writes row to `ai_signal_log` with `status="suppressed"` and does NOT call Claude.
+
+12. `test_signal_flow_emission`
+   - Stub `quantScore` passes, `quantCost` `ev_pass=true`, Claude mock returns `{"veto":false}` → `ai_signal_log` gets `status="emitted"`.
+
+13. `test_signal_flow_veto`
+   - Same stubs but Claude mock returns `{"veto":true,"reason":"FOMC in 30m"}` → `status="suppressed"`, reason starts with `claude_veto:`.
+
+14. `test_drizzle_schema_push`
+   - After `db:push`, verify tables `quant_scores` and `microstructure_snapshots` exist with expected columns (select from information_schema).
+
+Integration smoke (manual):
+- `curl http://127.0.0.1:8081/quant/health` → `ws_alive:true` within 10s of boot.
+- After ~60s on mainnet, `STATE.mids["BTC"]` populated and `STATE.cvd["BTC"]` has >0 entries.
+- A synthetic POST to `/quant/score` with real BTC OHLCV returns `regime` in {trend,range,high_vol,chop} and `gates_failed` explains any block.
+
+================================================================
+SECTION 19 — RUN ORDER FOR REPLIT AGENT
+================================================================
+1. Apply `.replit` change (Section 1). Do NOT duplicate python in replit.nix.
+2. Create `quant/` tree with all files (Sections 3–14).
+3. `bash quant/install.sh` to install Python deps into `.pythonlibs`.
+4. `npm install http-proxy-middleware concurrently`.
+5. Append Drizzle tables (Section 15). Run the project's existing drizzle push command.
+6. Add `server/quantClient.ts` and proxy middleware; rewrite signal generator body (Section 16).
+7. Start the workspace. Verify both logs: `uvicorn running on 127.0.0.1:8081` AND `Express on 0.0.0.0:3000` (or whatever port the project uses).
+8. Hit `/quant/health` via Express proxy — should return `ok:true, ws_alive:true`.
+9. Run acceptance tests (Section 18). All must pass.
+10. Trigger a real-world scenario on a mid-cap alt (e.g., PENDLE). Observe: scorer output logged in `quant_scores`; if gates fail, row in `ai_signal_log` with `status="suppressed"` and reason. Confirm Claude is not called until scorer and cost gates both pass.
+
+================================================================
+SECTION 20 — DONE DEFINITION
+================================================================
+Phase 2A is complete when ALL of the following are true:
+- Python FastAPI service runs alongside Express in one Replit workspace, Python bound to 127.0.0.1:8081, Express externally exposed.
+- Hyperliquid WS streams l2Book, trades, activeAssetCtx for the configured universe; reconnect with backoff verified.
+- `/quant/score` computes composite z across the six factor buckets, enforces all gates (z≥1.5, regime≠chop, Wilson LB ≥0.5, OFI sign agreement when |z|>0.5, noise-band SL ≥1.5× p90 wick, R:R viable after fees).
+- GJR-GARCH(1,1,1) skew-t fit is cached per symbol and refit ≥ weekly. sigma_ann feeds the vol-targeted, Kelly-clipped sizer.
+- `/quant/cost` returns half-spread+fee+sqrt-impact bps and flips `ev_pass=false` when alpha < 2× total cost.
+- Express no longer calls Claude to originate signals. Claude is only called with the veto-only prompt AFTER scorer+cost gates pass. Veto→suppress, else emit.
+- `quant_scores` and `microstructure_snapshots` tables exist via Drizzle. All Node DB access uses Drizzle — no raw pg.
+- All 14 acceptance tests pass.
+- A scalped mid-cap alt signal like the prior PENDLE case is now BLOCKED by the noise-band gate with a clear `gates_failed` reason, not by Claude.
+
+End of Phase 2A spec. Execute now.
+```
+
+-----
+
+## Notes on the construction of this prompt
+
+**The spec is written to the exact stack that exists in the workspace.** Drizzle is used for every Node DB write, referencing the real tables `signal_outcomes`, `ai_signal_log`, `adaptive_thresholds`. The Python side writes only to two new tables via asyncpg, and all columns match the Drizzle definitions. `CLAUDE_MODEL="claude-sonnet-4-6"` and the owner email are preserved exactly.
+
+**Replit runtime configuration is the source of the most common failures**, so the prompt pins the exact `.replit` TOML, forces `127.0.0.1` (not `localhost`) to avoid the Node 17+ IPv6 proxy trap, sets `PYTHONUNBUFFERED=1` so FastAPI logs are visible, and blocks a common mistake of putting `python311` in both `modules` and `replit.nix`.
+
+**Hyperliquid WS details come from the live API spec**: endpoint `wss://api.hyperliquid.xyz/ws`, subscribe envelope `{method:"subscribe", subscription:{...}}`, l2Book `levels[0]=bids, levels[1]=asks` with `px/sz/n` strings, trades `side ∈ {"B","A"}`, `activeAssetCtx` fields returned as strings (including `funding` as the hourly rate). The spot-coin channel rename to `activeSpotAssetCtx` is handled.
+
+**Microstructure formulas are Cont/Kukanov/Stoikov (2014) exactly**: the `OFITracker` uses the asymmetric `q_n` vs `q_{n-1}` convention when price moves vs holds. OBI is Stoikov’s top-N imbalance; wOBI uses the distance-from-mid exponential weighting. CVD signs with `+sz` for `side="B"` (taker buy).
+
+**GJR-GARCH specification matches arch 7.2.0**: `arch_model(returns_pct, vol='GARCH', p=1, o=1, q=1, dist='skewt')` is the correct invocation — `o=1` is the GJR asymmetry term. Returns must be scaled to **percent** before fitting (the library documents `100 * pct_change()` as the canonical input). Forecast uses `reindex=False` to avoid the upcoming default change.
+
+**Noise-band SL closes the PENDLE loophole.** The `build_sl_tp` function takes the wider of `1.5×ATR` and `1.2×p90_wick`, then floors at a per-asset-class minimum (0.8% BTC/ETH, 2.0% mid-cap alts). The R:R-after-fees breakeven calculation uses `f=0.00045` per side (Hyperliquid taker 4.5 bps) and requires `planned_rr ≥ max(1.5, 1.25×rr_min)`.
+
+**Claude is genuinely veto-only.** The Express flow calls `/quant/score` first, blocks on `passes=false`, calls `/quant/cost` second, blocks on `ev_pass=false`, and only then sends a short veto-only prompt to Claude with a forced JSON response. If Claude’s JSON fails to parse, the system defaults to NOT vetoing — the quant decision stands.
+
+**Every acceptance test maps to a specific component** (ADX, Hurst, OBI, OFI, CVD, SL placement, cost/EV, GARCH, regime, Express proxy, three signal-flow branches, and schema push) so Replit Agent can verify each piece independently before claiming Phase 2A is complete.
