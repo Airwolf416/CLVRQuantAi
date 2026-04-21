@@ -5,6 +5,104 @@ const MONO = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
 const SANS = "'Barlow', system-ui, sans-serif";
 
+// ── Lightweight markdown renderer for AI responses ────────────────────────────
+function renderInline(text) {
+  // Escape HTML, then re-apply **bold**, *italic*, `code`, and color tags for LONG/SHORT/STOP
+  const esc = String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  let html = esc
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#e8c96d;font-weight:700">$1</strong>')
+    .replace(/`([^`]+)`/g, '<code style="background:rgba(201,168,76,0.08);padding:1px 6px;border-radius:3px;font-family:\'IBM Plex Mono\',monospace;font-size:0.9em;color:#e8c96d">$1</code>')
+    .replace(/\b(LONG|BUY|BULLISH)\b/g, '<span style="color:#22c55e;font-weight:700">$1</span>')
+    .replace(/\b(SHORT|SELL|BEARISH)\b/g, '<span style="color:#ef4444;font-weight:700">$1</span>')
+    .replace(/\b(NO[- ]?TRADE|NEUTRAL|WAIT|SKIP)\b/gi, '<span style="color:#94a3b8;font-weight:700">$1</span>')
+    .replace(/\b(SL|STOP[- ]?LOSS|STOP):/gi, '<span style="color:#ef4444;font-weight:700">$1:</span>')
+    .replace(/\b(TP[123]?|TARGET|TAKE[- ]?PROFIT):/gi, '<span style="color:#22c55e;font-weight:700">$1:</span>')
+    .replace(/\b(ENTRY|ENTER):/gi, '<span style="color:#e8c96d;font-weight:700">$1:</span>');
+  return html;
+}
+
+function FormattedAIMessage({ text }) {
+  if (!text) return null;
+  const lines = String(text).split(/\r?\n/);
+  const blocks = [];
+  let listBuffer = [];
+  const flushList = () => {
+    if (listBuffer.length === 0) return;
+    blocks.push(
+      <ul key={"ul-" + blocks.length} style={{ margin: "6px 0 10px 0", paddingLeft: 18, listStyle: "none" }}>
+        {listBuffer.map((item, i) => (
+          <li key={i} style={{ position: "relative", paddingLeft: 14, marginBottom: 4, lineHeight: 1.7 }}>
+            <span style={{ position: "absolute", left: 0, top: 0, color: "#c9a84c" }}>•</span>
+            <span dangerouslySetInnerHTML={{ __html: renderInline(item) }} />
+          </li>
+        ))}
+      </ul>
+    );
+    listBuffer = [];
+  };
+
+  lines.forEach((raw, idx) => {
+    const line = raw.trimEnd();
+    if (!line.trim()) { flushList(); blocks.push(<div key={"sp-" + idx} style={{ height: 6 }} />); return; }
+
+    // Heading: ## or # or ALL-CAPS LINE ending in ":"
+    const h2 = line.match(/^##\s+(.+)$/);
+    const h1 = line.match(/^#\s+(.+)$/);
+    if (h1 || h2) {
+      flushList();
+      const txt = (h1 ? h1[1] : h2[1]).trim();
+      blocks.push(
+        <div key={"h-" + idx} style={{
+          fontFamily: SERIF, fontSize: h1 ? 15 : 13, fontWeight: 700, color: "#e8c96d",
+          marginTop: 10, marginBottom: 6, paddingBottom: 4, borderBottom: "1px solid rgba(201,168,76,0.18)",
+          letterSpacing: "0.02em",
+        }}>{txt}</div>
+      );
+      return;
+    }
+
+    // Bullet line
+    const bullet = line.match(/^\s*[-•*]\s+(.+)$/);
+    if (bullet) { listBuffer.push(bullet[1]); return; }
+
+    // Numbered bullet "1. xxx"
+    const num = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (num) { listBuffer.push(num[1]); return; }
+
+    // Section divider (=== or ---)
+    if (/^[-=─━]{3,}$/.test(line.trim())) {
+      flushList();
+      blocks.push(<div key={"hr-" + idx} style={{ height: 1, background: "rgba(201,168,76,0.15)", margin: "10px 0" }} />);
+      return;
+    }
+
+    // Key: Value line — render with subtle column treatment
+    const kv = line.match(/^([A-Z][A-Za-z0-9 \/()._-]{1,32}):\s*(.+)$/);
+    if (kv) {
+      flushList();
+      blocks.push(
+        <div key={"kv-" + idx} style={{ display: "flex", gap: 10, marginBottom: 4, lineHeight: 1.7 }}>
+          <div style={{ minWidth: 90, color: "#94a3b8", fontFamily: MONO, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", flexShrink: 0 }}>{kv[1]}</div>
+          <div style={{ flex: 1, color: "#e6e9ef" }} dangerouslySetInnerHTML={{ __html: renderInline(kv[2]) }} />
+        </div>
+      );
+      return;
+    }
+
+    // Default paragraph
+    flushList();
+    blocks.push(
+      <p key={"p-" + idx} style={{ margin: "0 0 6px 0", lineHeight: 1.75, color: "#e6e9ef" }}
+         dangerouslySetInnerHTML={{ __html: renderInline(line) }} />
+    );
+  });
+  flushList();
+  return <div style={{ fontFamily: SANS, fontSize: 12.5 }}>{blocks}</div>;
+}
+
 const QUICK_CHIPS = ["BTC", "ETH", "SOL", "TRUMP", "HYPE", "XAU", "WTI", "EURUSD", "TSLA", "NVDA"];
 
 export default function AIChat({
@@ -173,18 +271,26 @@ ${snap.sections}
         }}>
           {messages.map((m, i) => (
             <div key={i} style={{
-              marginBottom: 12, padding: "10px 12px",
-              background: m.role === "user" ? "rgba(201,168,76,0.06)" : "rgba(255,255,255,0.02)",
-              border: `1px solid ${m.role === "user" ? "rgba(201,168,76,0.15)" : "rgba(255,255,255,0.04)"}`,
-              borderRadius: 8,
+              marginBottom: 14, padding: "12px 14px",
+              background: m.role === "user" ? "rgba(201,168,76,0.06)" : "rgba(8,12,24,0.6)",
+              border: `1px solid ${m.role === "user" ? "rgba(201,168,76,0.18)" : "rgba(201,168,76,0.08)"}`,
+              borderRadius: 10,
             }}>
-              <div style={{ fontSize: 7, color: m.role === "user" ? "#c9a84c" : "#22c55e", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>
-                {m.role === "user" ? "YOU" : "CLVR AI"}
-              </div>
               <div style={{
-                fontSize: 11, color: "#e0e0e0", fontFamily: SANS, lineHeight: 1.8,
-                whiteSpace: "pre-wrap", wordBreak: "break-word",
-              }}>{m.content}</div>
+                fontSize: 8, color: m.role === "user" ? "#c9a84c" : "#22c55e",
+                fontFamily: MONO, letterSpacing: "0.14em", marginBottom: 8, fontWeight: 700,
+                display: "flex", alignItems: "center", gap: 6,
+              }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: m.role === "user" ? "#c9a84c" : "#22c55e", display: "inline-block" }} />
+                {m.role === "user" ? "YOU" : "CLVR AI ANALYST"}
+              </div>
+              {m.role === "user" ? (
+                <div style={{ fontSize: 12, color: "#e6e9ef", fontFamily: SANS, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {m.content}
+                </div>
+              ) : (
+                <FormattedAIMessage text={m.content} />
+              )}
             </div>
           ))}
           {loading && (
