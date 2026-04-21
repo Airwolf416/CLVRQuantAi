@@ -22,7 +22,7 @@ import PricingModal from "./components/PricingModal.jsx";
 import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
-import { playMarketBell, unlockAudio, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
+import { playMarketBell, unlockAudio, unlockSpeech, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
 import { DataBusProvider, DataBusCtx, useDataBus, mapRegimeLabel, regimeMultiplier, fearGreedColor } from "./context/DataBusContext.jsx";
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
@@ -2374,13 +2374,29 @@ function Dashboard({user,setUser,onShowAuth}){
   const firedAlerts=useRef(new Set());
   const macroFired=useRef(new Set());
   const soundEnabledRef=useRef(soundEnabled);
-  const toggleSound=useCallback(()=>{setSoundEnabled(v=>{const nv=!v;soundEnabledRef.current=nv;try{localStorage.setItem("clvr_sound",nv?"on":"off");}catch(e){}if(nv){unlockAudio();playBloombergPing();}return nv;});},[]);
-  // Unlock AudioContext on first user interaction so bell works even from timers
+  const toggleSound=useCallback(()=>{setSoundEnabled(v=>{const nv=!v;soundEnabledRef.current=nv;try{localStorage.setItem("clvr_sound",nv?"on":"off");}catch(e){}if(nv){unlockAudio();unlockSpeech();playBloombergPing();}return nv;});},[]);
+  // Unlock AudioContext + speechSynthesis on the user's first interaction.
+  // Required on iOS Safari and most mobile Chrome — without this, the bell
+  // (called from a 1-second timer) and the Squawk Box (called from event
+  // handlers and timers) stay silent forever even when SOUND is toggled ON,
+  // because the user never explicitly tapped the SOUND/SQUAWK button (both
+  // default to ON from localStorage on a brand-new browser).
   useEffect(()=>{
-    const unlock=()=>{unlockAudio();document.removeEventListener("touchstart",unlock,true);document.removeEventListener("mousedown",unlock,true);};
+    const unlock=()=>{
+      unlockAudio();
+      unlockSpeech();
+      document.removeEventListener("touchstart",unlock,true);
+      document.removeEventListener("mousedown",unlock,true);
+      document.removeEventListener("keydown",unlock,true);
+    };
     document.addEventListener("touchstart",unlock,{once:true,capture:true});
     document.addEventListener("mousedown",unlock,{once:true,capture:true});
-    return()=>{document.removeEventListener("touchstart",unlock,true);document.removeEventListener("mousedown",unlock,true);};
+    document.addEventListener("keydown",unlock,{once:true,capture:true});
+    return()=>{
+      document.removeEventListener("touchstart",unlock,true);
+      document.removeEventListener("mousedown",unlock,true);
+      document.removeEventListener("keydown",unlock,true);
+    };
   },[]);
   // Callback for owner test — fires bell + banner immediately
   const triggerTestBell=useCallback((type="open")=>{
