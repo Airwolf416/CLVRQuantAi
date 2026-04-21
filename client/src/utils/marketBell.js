@@ -24,6 +24,9 @@ let _sharedCtx = null;
 /**
  * Call this inside a user gesture (button tap, toggle, etc.) to pre-create
  * and unlock the shared AudioContext so the bell can fire from timer callbacks.
+ * On iOS Safari, simply creating/resuming the context isn't enough — we must
+ * also play a silent buffer in the same gesture for the context to stay
+ * "running" once we're outside the gesture (e.g., from a setInterval timer).
  */
 export function unlockAudio() {
   try {
@@ -33,6 +36,29 @@ export function unlockAudio() {
     if (_sharedCtx.state === "suspended") {
       _sharedCtx.resume().catch(() => {});
     }
+    // iOS unlock dance: play 1 sample of silence so the context is fully primed.
+    const buf = _sharedCtx.createBuffer(1, 1, 22050);
+    const src = _sharedCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(_sharedCtx.destination);
+    if (typeof src.start === "function") src.start(0); else src.noteOn(0);
+  } catch (e) {}
+}
+
+/**
+ * Unlock the browser's speechSynthesis engine. Must be called inside a user
+ * gesture; otherwise iOS Safari and some Chrome versions silently refuse to
+ * speak any utterance triggered later from a timer or remote event.
+ */
+export function unlockSpeech() {
+  try {
+    const ss = window.speechSynthesis;
+    if (!ss) return;
+    ss.cancel();
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    u.rate = 1;
+    ss.speak(u);
   } catch (e) {}
 }
 
