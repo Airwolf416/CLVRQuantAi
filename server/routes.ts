@@ -4002,6 +4002,42 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
+  // Preview what the Saturday AI generator would produce — no DB write, no email.
+  app.post("/api/admin/weekly-update/ai-preview", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const mod = await import("./weeklyUpdate");
+      // Internal helper: call Claude but DON'T persist. We re-implement the lightweight
+      // path here by reading the same internals that the scheduler uses.
+      const commits = (mod as any).getRecentCommitSubjects?.(7) || [];
+      const digest = await (mod as any).synthesizeWeeklyUpdateFromCommits?.(commits);
+      res.json({ ok: true, commitCount: commits.length, commits: commits.slice(0, 30), digest });
+    } catch (e: any) {
+      console.error("weekly-update ai-preview error:", e);
+      res.status(500).json({ error: e?.message || "Failed to preview" });
+    }
+  });
+
+  // Generate via AI and save to DB. Does NOT email — call /send-now after if desired.
+  app.post("/api/admin/weekly-update/ai-generate", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const { generateWeeklyUpdateWithAI } = await import("./weeklyUpdate");
+      const created = await generateWeeklyUpdateWithAI();
+      if (!created) return res.json({ ok: false, message: "AI produced nothing user-visible — no update created." });
+      res.json({ ok: true, update: created });
+    } catch (e: any) {
+      console.error("weekly-update ai-generate error:", e);
+      res.status(500).json({ error: e?.message || "Failed to generate" });
+    }
+  });
+
   app.post("/api/admin/weekly-update/send-now", async (req, res) => {
     try {
       const uid = (req.session as any)?.userId;

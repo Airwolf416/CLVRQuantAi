@@ -8,8 +8,125 @@
 import { pool } from "./db";
 import { getUncachableResendClient } from "./resendClient";
 import type { WeeklyUpdate } from "@shared/schema";
+import { CLAUDE_MODEL } from "./config";
+import { execSync } from "child_process";
 
 const ET_TZ = "America/New_York";
+
+// Read git commit subjects from the last N days. Returns one subject per line,
+// de-duplicated, with checkpoint/auto-merge noise filtered out.
+export function getRecentCommitSubjects(days: number = 7): string[] {
+  try {
+    const raw = execSync(
+      `git log --since="${days} days ago" --no-merges --pretty=format:"%s" -n 200`,
+      { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const line of raw.split("\n")) {
+      const s = line.trim();
+      if (!s) continue;
+      if (/^(checkpoint|wip|chore: bump|merge)/i.test(s)) continue;
+      const k = s.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(s);
+      if (out.length >= 60) break;
+    }
+    return out;
+  } catch (e: any) {
+    console.log("[weekly-update] git log unavailable:", e?.message || e);
+    return [];
+  }
+}
+
+// Ask Claude to turn raw commit subjects into a polished WeeklyUpdate object.
+export async function synthesizeWeeklyUpdateFromCommits(
+  commits: string[]
+): Promise<{ title: string; summary: string; items: { emoji: string; title: string; description: string }[] } | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.log("[weekly-update] ANTHROPIC_API_KEY not set — cannot auto-generate");
+    return null;
+  }
+  if (commits.length === 0) {
+    console.log("[weekly-update] no recent commits to summarize");
+    return null;
+  }
+
+  const weekLabel = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: ET_TZ });
+  const prompt = `You are the product editor for CLVRQuantAI — a luxury mobile-first market intel dashboard for crypto / equities / commodities / forex traders. Tier: Free, Pro ($29.99/mo), Elite ($129/mo).
+
+Below are the raw git commit subjects from the past week (${weekLabel}). Distill them into a polished "What's New This Week" digest for paying subscribers. Drop pure-bug-fix / typo / test / refactor commits. Group related commits. Translate engineer-speak into trader-friendly value (focus on what the user can now SEE or DO).
+
+Voice: confident, concise, premium. No marketing fluff. No emojis except in the leading "emoji" field of each item. Speak directly to the trader ("you can now…", "your dashboard now…").
+
+Return ONLY valid JSON in this exact shape, no markdown fence:
+{
+  "title": "<short headline, max 8 words>",
+  "summary": "<2-sentence overview, max 240 chars>",
+  "items": [
+    { "emoji": "<single emoji>", "title": "<short title, max 60 chars>", "description": "<1-3 sentence value-focused explainer, max 280 chars>" }
+  ]
+}
+
+Rules:
+- 3 to 6 items. Pick only the most user-visible improvements.
+- If commits are mostly internal/refactor, return fewer items rather than padding.
+- If literally nothing user-visible shipped, return: {"title":"","summary":"","items":[]}
+- Suggested emojis: 📊 data, ⚡ performance, 🤖 AI, 🔔 alerts, 📓 journal, 🛡️ reliability, 💎 polish, 📣 squawk, 🪙 commodities, 📈 markets.
+
+Commits:
+${commits.map((c) => "- " + c).join("\n")}`;
+
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 1500,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!r.ok) {
+      console.log("[weekly-update] Claude error", r.status, (await r.text()).slice(0, 200));
+      return null;
+    }
+    const data: any = await r.json();
+    const raw: string = (data.content || []).map((b: any) => b.text || "").join("").trim();
+    let t = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+    if (t.includes("{")) t = t.slice(t.indexOf("{"));
+    if (t.lastIndexOf("}") > 0) t = t.slice(0, t.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(t);
+    if (!parsed?.title || !Array.isArray(parsed?.items) || parsed.items.length === 0) {
+      console.log("[weekly-update] AI returned empty digest — nothing user-visible this week");
+      return null;
+    }
+    return parsed;
+  } catch (e: any) {
+    console.log("[weekly-update] synthesize error:", e?.message || e);
+    return null;
+  }
+}
+
+// Auto-generate this week's update from git commits via Claude, then insert it.
+// Returns the new update id, or null if nothing to ship.
+export async function generateWeeklyUpdateWithAI(): Promise<WeeklyUpdate | null> {
+  const commits = getRecentCommitSubjects(7);
+  console.log(`[weekly-update] AI generation: scanned ${commits.length} commits from last 7 days`);
+  const digest = await synthesizeWeeklyUpdateFromCommits(commits);
+  if (!digest) return null;
+  const created = await createWeeklyUpdate({
+    version: null,
+    title: digest.title,
+    summary: digest.summary,
+    items: digest.items,
+    createdBy: "ai-auto",
+  });
+  console.log(`[weekly-update] AI-generated update id=${created.id}: "${digest.title}" (${digest.items.length} items)`);
+  return created;
+}
 
 function nowInET(): Date {
   return new Date(new Date().toLocaleString("en-US", { timeZone: ET_TZ }));
@@ -196,15 +313,36 @@ export function startWeeklyUpdateScheduler() {
       const key = `${et.getFullYear()}-${et.getMonth() + 1}-${et.getDate()}`;
       if (key === lastFiredKey) return;
       lastFiredKey = key;
-      console.log("[weekly-update] Saturday 10:00 ET — checking for fresh update to send");
+      console.log("[weekly-update] Saturday 10:00 ET — auto-pipeline starting");
+
+      // 1) Check whether a fresh (last 7 days) update already exists.
+      //    If admin posted manually this week, respect that and skip AI generation.
+      const latest = await getLatestWeeklyUpdate();
+      const fresh = latest && (Date.now() - new Date(latest.createdAt).getTime() < 7 * 24 * 60 * 60 * 1000);
+      const alreadyEmailed = latest?.emailSentAt != null;
+
+      if (!fresh || alreadyEmailed) {
+        console.log(
+          `[weekly-update] no fresh unsent update (fresh=${!!fresh}, alreadyEmailed=${!!alreadyEmailed}) — generating with AI`
+        );
+        const created = await generateWeeklyUpdateWithAI();
+        if (!created) {
+          console.log("[weekly-update] AI produced nothing user-visible — skipping send this week");
+          return;
+        }
+      } else {
+        console.log(`[weekly-update] using existing fresh update id=${latest!.id} (admin-posted this week)`);
+      }
+
+      // 2) Send to all active subscribers.
       const result = await sendWeeklyUpdateNow({});
       if (result.alreadySent) console.log("[weekly-update] latest update already emailed earlier — skipping");
-      else if (result.total === 0) console.log("[weekly-update] nothing to send (no fresh update or no subscribers)");
+      else if (result.total === 0) console.log("[weekly-update] nothing to send (no subscribers)");
       else console.log(`[weekly-update] auto-send complete: ${result.sent}/${result.total}`);
     } catch (e: any) {
       console.log("[weekly-update] scheduler error:", e?.message || e);
     }
   };
   setInterval(tick, 60_000);
-  console.log("[weekly-update] Scheduler started — Saturdays at 10:00 AM ET (auto-send only if fresh update exists)");
+  console.log("[weekly-update] Scheduler started — Saturdays at 10:00 AM ET (AI auto-generates from git commits if no fresh manual update, then emails)");
 }
