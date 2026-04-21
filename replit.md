@@ -39,10 +39,26 @@ Goal: replace Claude-as-originator with a deterministic quant scorer; Claude bec
 - Dev: `PHASE2A_ENABLED=1 npm run dev` (or set in Replit Secrets)
 - Prod (Railway): set `PHASE2A_ENABLED=1` env var. Health check on `/api/quant/health` gates deploy.
 
-### Known limitations / honest gaps
-- Equities, metals, forex use Express's `priceHistory` (single-price ticks expanded into fake OHLC bars when piped to scorer). Real candle quality only exists for the 32 HL perps.
-- ATR/regime/GARCH math has only been observed on synthetic data + early WS samples; needs a multi-hour soak before `PHASE2A_ENABLED=1` is recommended in prod.
-- Wilson LB returns `null` until ≥10 closed signals per (token, direction) exist — scorer is configured to handle null gracefully.
+### Real candle adapter (closes the equities/metals/forex gap)
+- `quant/external_bars.py` — real OHLCV from public providers, no API key needed
+  - **Binance** public REST `/api/v3/klines` for any crypto not in HL coverage
+  - **Yahoo** public chart `query1.finance.yahoo.com/v8/finance/chart/{ticker}` for equities, ETFs, metals (GC=F, SI=F, CL=F), forex (EURUSD=X, etc.), indices (DX-Y.NYB)
+  - 60-second TTL cache, in-flight request collapsing, defensive symbol mapping
+- New endpoints:
+  - `GET /quant/external_bars/{symbol}?asset_class=...&interval=1m&limit=300`
+  - `/quant/score` now falls back: caller-supplied → internal HL bars → external provider, before raising 400
+- `server/quantClient.ts` no longer ships fake single-tick OHLC; Express side just passes the symbol+asset_class and lets Python pull real candles
+- Verified live: SPY (Yahoo), GOLD/GC=F, EURUSD=X all return real 1m candles
+
+### Soak-safety guard (closes the "don't flip live too early" gap)
+- `GET /quant/readiness` (Python) and `GET /api/quant/readiness` (Express proxy)
+- Reports: `coverage_pct` (% of 32 coins with ≥120 bars), `closed_signals_30d`, `wilson_lb_armed`, and combined `recommendation: READY|SOAK`
+- `QuantStatusCard` shows a SOAK/READY badge plus bar-coverage % and closed-signal count — visual gate so you only flip `PHASE2A_ENABLED=1` after the badge turns READY
+- Health endpoint already returns HTTP 503 when WS isn't alive, so Railway healthcheck can't deploy a broken quant container
+
+### Known limitations
+- Wilson LB returns `null` until ≥10 closed signals per token exist — scorer handles `null` gracefully
+- Binance public REST may be geo-blocked from some Replit/Railway regions; this only matters for non-HL crypto symbols since the 32 HL perps already have internal WS bars. Yahoo (equities/metals/fx) works from US-region Replit/Railway.
 
 ### Recent guardrails added (pre-Phase 2A)
 - `server/config/assets.ts`: `SESSION_THRESHOLDS.minMove` raised to 2.0% (POST_NY 2.5%) — fewer noise signals
