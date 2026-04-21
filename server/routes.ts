@@ -3953,6 +3953,51 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
+  // ── Weekly Update ("What's New This Week") ────────────────────────────────
+  app.get("/api/weekly-update/latest", async (_req, res) => {
+    try {
+      const { getLatestWeeklyUpdate } = await import("./weeklyUpdate");
+      const u = await getLatestWeeklyUpdate();
+      if (!u) return res.json({ id: null });
+      res.json(u);
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to load update" });
+    }
+  });
+
+  app.post("/api/admin/weekly-update", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const { insertWeeklyUpdateSchema } = await import("@shared/schema");
+      const parsed = insertWeeklyUpdateSchema.safeParse({ ...req.body, createdBy: u.email });
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", details: parsed.error.flatten() });
+      const { createWeeklyUpdate } = await import("./weeklyUpdate");
+      const row = await createWeeklyUpdate(parsed.data as any);
+      res.json({ ok: true, update: row });
+    } catch (e: any) {
+      console.error("weekly-update create error:", e);
+      res.status(500).json({ error: "Failed to save update" });
+    }
+  });
+
+  app.post("/api/admin/weekly-update/send-now", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const u = await storage.getUser(uid);
+      if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
+      const { sendWeeklyUpdateNow } = await import("./weeklyUpdate");
+      const result = await sendWeeklyUpdateNow({ ignoreFreshnessGate: true });
+      res.json({ ok: true, ...result });
+    } catch (e: any) {
+      console.error("weekly-update send-now error:", e);
+      res.status(500).json({ error: e?.message || "Failed to send" });
+    }
+  });
+
   // ── Admin: adaptive thresholds (owner only) ───────────────────────────────
   app.get("/api/admin/thresholds", async (req, res) => {
     try {
