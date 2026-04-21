@@ -1,9 +1,8 @@
 """Real OHLCV candle adapter for assets outside the Hyperliquid WS stream.
 
 Providers (no API key required):
-- Binance public REST  (`/api/v3/klines`) for any crypto
-- Yahoo public chart   (`query1.finance.yahoo.com/v8/finance/chart/...`)
-  for equities, metals, forex
+- CCXT — Binance spot, Binance USDM perps, Bybit (multi-exchange fallback for crypto)
+- Yahoo public chart — equities, metals, forex
 
 Returns rows in the same format as STATE.bars: [ts_ms, o, h, l, c, v]
 
@@ -15,6 +14,7 @@ import asyncio
 import logging
 from typing import List, Optional, Tuple
 import httpx
+import ccxt
 
 log = logging.getLogger("quant.external_bars")
 
@@ -24,12 +24,12 @@ _INFLIGHT: dict[Tuple[str, str, str, int], asyncio.Future] = {}
 
 
 # ── Symbol mapping ──────────────────────────────────────────────────────────
-# CLVR canonical symbol → external provider ticker
-_BINANCE_OVERRIDE = {
-    "kPEPE": "PEPEUSDT",  # HL uses kPEPE (×1000), Binance uses PEPEUSDT
-    "PEPE": "PEPEUSDT",
-    "TRUMP": "TRUMPUSDT",
-    "HYPE": "HYPEUSDT",
+# CLVR canonical symbol → CCXT unified symbol "BASE/USDT"
+_CCXT_OVERRIDE = {
+    "kPEPE": "PEPE/USDT",  # HL uses kPEPE (×1000), exchanges quote as PEPE
+    "PEPE":  "PEPE/USDT",
+    "TRUMP": "TRUMP/USDT",
+    "HYPE":  "HYPE/USDT",
 }
 
 # Yahoo Finance ticker map. Equities/ETFs are usually as-is.
@@ -57,20 +57,19 @@ _YAHOO_MAP = {
 }
 
 
-def map_to_binance(symbol: str) -> str:
-    if symbol in _BINANCE_OVERRIDE:
-        return _BINANCE_OVERRIDE[symbol]
-    return f"{symbol.upper()}USDT"
+def map_to_ccxt(symbol: str) -> str:
+    if symbol in _CCXT_OVERRIDE:
+        return _CCXT_OVERRIDE[symbol]
+    return f"{symbol.upper()}/USDT"
 
 
 def map_to_yahoo(symbol: str) -> str:
     s = symbol.upper()
     if s in _YAHOO_MAP:
         return _YAHOO_MAP[s]
-    # Forex pattern e.g. "EURGBP" → "EURGBP=X"
     if len(s) == 6 and s.isalpha():
         return f"{s}=X"
-    return s  # equities/ETFs as-is
+    return s
 
 
 # ── Cache helpers ───────────────────────────────────────────────────────────
@@ -84,33 +83,64 @@ def _cache_get(key) -> Optional[list]:
 def _cache_put(key, rows: list):
     _CACHE[key] = (time.time(), rows)
     if len(_CACHE) > 500:
-        # purge expired
         cutoff = time.time() - _CACHE_TTL_S
         for k, (ts, _) in list(_CACHE.items()):
             if ts < cutoff:
                 _CACHE.pop(k, None)
 
 
-# ── Binance ─────────────────────────────────────────────────────────────────
-_BINANCE_INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "1d": "1d"}
+# ── CCXT exchange singletons (lazy, thread-safe enough for our use) ─────────
+_CCXT_INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "1d": "1d"}
+
+_ccxt_clients: dict[str, ccxt.Exchange] = {}
 
 
-async def _fetch_binance(ticker: str, interval: str, limit: int) -> list:
-    iv = _BINANCE_INTERVAL.get(interval, "1m")
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": ticker, "interval": iv, "limit": min(limit, 1000)}
-    async with httpx.AsyncClient(timeout=8.0) as c:
-        r = await c.get(url, params=params)
-        r.raise_for_status()
-        data = r.json()
-    # Binance kline: [openTime, open, high, low, close, volume, closeTime, ...]
-    return [
-        [int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])]
-        for k in data
-    ]
+def _get_ccxt(name: str) -> ccxt.Exchange:
+    """Return a cached CCXT exchange instance with rate-limiting enabled.
+    Order of preference for crypto: binance (spot) → binanceusdm (perps) → bybit.
+    """
+    if name in _ccxt_clients:
+        return _ccxt_clients[name]
+    cls = getattr(ccxt, name)
+    inst = cls({"enableRateLimit": True, "timeout": 8000})
+    _ccxt_clients[name] = inst
+    log.info("ccxt: initialised %s (rateLimit=%sms)", name, inst.rateLimit)
+    return inst
 
 
-# ── Yahoo public chart ──────────────────────────────────────────────────────
+# Crypto provider chain — try in order, return first success.
+_CRYPTO_PROVIDERS = ("binance", "binanceusdm", "bybit")
+
+
+def _ccxt_fetch_sync(provider: str, unified: str, iv: str, limit: int) -> list:
+    """Synchronous CCXT fetch_ohlcv. Run via asyncio.to_thread()."""
+    ex = _get_ccxt(provider)
+    raw = ex.fetch_ohlcv(unified, timeframe=iv, limit=min(limit, 1000))
+    # CCXT format: [timestamp_ms, open, high, low, close, volume]
+    return [[int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])]
+            for k in raw]
+
+
+async def _fetch_ccxt(symbol: str, interval: str, limit: int) -> list:
+    """Fetch from preferred crypto exchanges in order until one succeeds."""
+    iv = _CCXT_INTERVAL.get(interval, "1m")
+    unified = map_to_ccxt(symbol)
+    last_err: Optional[Exception] = None
+    for provider in _CRYPTO_PROVIDERS:
+        try:
+            rows = await asyncio.to_thread(_ccxt_fetch_sync, provider, unified, iv, limit)
+            if rows:
+                return rows
+        except Exception as e:
+            last_err = e
+            log.debug("ccxt %s/%s failed: %s", provider, unified, e)
+            continue
+    if last_err:
+        log.warning("ccxt all providers failed for %s: %s", unified, last_err)
+    return []
+
+
+# ── Yahoo public chart (kept as fallback for crypto, primary for equities) ──
 _YAHOO_INTERVAL = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
 _YAHOO_RANGE_FOR = {"1m": "5d", "5m": "1mo", "15m": "1mo", "1h": "3mo", "1d": "2y"}
 
@@ -154,9 +184,6 @@ async def _fetch_yahoo(ticker: str, interval: str, limit: int) -> list:
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
-# Crypto-class names we'll honor as "binance" provider. Anything else
-# (incl. unknown/empty) routes to Yahoo to avoid silently treating SPY
-# as a crypto pair.
 _CRYPTO_CLASSES = {
     "BTC", "ETH", "CRYPTO", "MID_CAP_DEFAULT", "MID_CAP", "PERP", "ALTCOIN",
 }
@@ -168,10 +195,9 @@ _YAHOO_CLASSES = {
 def provider_for(asset_class: Optional[str]) -> str:
     ac = (asset_class or "").upper()
     if ac in _CRYPTO_CLASSES:
-        return "binance"
+        return "ccxt"
     if ac in _YAHOO_CLASSES:
         return "yahoo"
-    # Conservative default: unknown class → Yahoo (won't mis-fetch SPY as BTCUSDT)
     return "yahoo"
 
 
@@ -183,12 +209,11 @@ async def fetch_external_bars(
 ) -> list:
     """Returns OHLCV rows; empty list on hard failure."""
     provider = provider_for(asset_class)
-    ticker = map_to_binance(symbol) if provider == "binance" else map_to_yahoo(symbol)
+    ticker = map_to_ccxt(symbol) if provider == "ccxt" else map_to_yahoo(symbol)
     key = (provider, ticker, interval, limit)
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    # collapse in-flight duplicates
     fut = _INFLIGHT.get(key)
     if fut is not None:
         return await fut
@@ -197,8 +222,14 @@ async def fetch_external_bars(
     rows: list = []
     try:
         try:
-            if provider == "binance":
-                rows = await _fetch_binance(ticker, interval, limit)
+            if provider == "ccxt":
+                rows = await _fetch_ccxt(symbol, interval, limit)
+                # Yahoo last-resort fallback for crypto if every CCXT venue failed.
+                # kPEPE / kSHIB / kBONK are HL ×1000 wrappers — strip 'k' for Yahoo.
+                if not rows:
+                    base = symbol[1:] if (len(symbol) > 1 and symbol[0] == "k" and symbol[1].isupper()) else symbol
+                    yt = f"{base.upper()}-USD"
+                    rows = await _fetch_yahoo(yt, interval, limit)
             else:
                 rows = await _fetch_yahoo(ticker, interval, limit)
         except Exception as e:
@@ -210,9 +241,22 @@ async def fetch_external_bars(
             fut.set_result(rows)
         return rows
     except BaseException as e:
-        # cancellation / KeyboardInterrupt — make sure waiters don't hang forever
         if not fut.done():
             fut.set_exception(e)
         raise
     finally:
         _INFLIGHT.pop(key, None)
+
+
+# ── Startup health probe ────────────────────────────────────────────────────
+def health_probe() -> dict:
+    """Synchronously verify each CCXT exchange is reachable. Used at boot."""
+    out: dict = {}
+    for name in _CRYPTO_PROVIDERS:
+        try:
+            ex = _get_ccxt(name)
+            ex.load_markets()
+            out[name] = f"ok ({len(ex.markets)} markets)"
+        except Exception as e:
+            out[name] = f"FAIL: {type(e).__name__}: {str(e)[:80]}"
+    return out

@@ -610,7 +610,10 @@ function logDataSourceStatus() {
   const has = (k: string) => Boolean(process.env[k] && String(process.env[k]).trim());
   const sources = {
     "Hyperliquid WS (32 perps)": "live (no key required)",
-    "Finnhub equities/forex/metals": has("FINNHUB_KEY") ? "live" : "FALLBACK (FINNHUB_KEY missing → cached/static prices)",
+    "Binance WS (frontend ticker stream)": "live (browser-direct, no key required)",
+    "Yahoo Finance equities/forex/commodities": "live (no key required, primary)",
+    "FMP /stable/quote (single-quote fallback)": has("FMP_API_KEY") ? "live (free-tier — max 5 fallback calls/tick)" : "DISABLED (no key)",
+    "CCXT (Python: binance/binanceusdm/bybit)": "geo-restricted in dev → Yahoo fallback active",
     "CryptoPanic news": has("CRYPTOPANIC_API_KEY") ? "live" : "FALLBACK (no key)",
     "RapidAPI (Twitter/social)": has("RAPIDAPI_KEY") ? "live" : "FALLBACK (no key)",
     "Anthropic Claude (sonnet-4-6)": has("ANTHROPIC_API_KEY") ? "live" : "DISABLED (no key)",

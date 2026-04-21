@@ -73,4 +73,37 @@ Goal: replace Claude-as-originator with a deterministic quant scorer; Claude bec
 - Use `packager_install_tool` for any package install (Python or Node)
 
 ## Secrets in use
-ANTHROPIC_API_KEY, CRYPTOPANIC_API_KEY, RAPIDAPI_KEY, SESSION_SECRET. Missing: RESEND_API_KEY.
+ANTHROPIC_API_KEY, CRYPTOPANIC_API_KEY, FMP_API_KEY (free-tier — single-quote endpoint only), RAPIDAPI_KEY, SESSION_SECRET. Missing: RESEND_API_KEY.
+
+## Apr 2026 — Finnhub → FMP/Yahoo migration (full sweep complete)
+
+### Why
+Finnhub WS hit hard 429 limits and the REST tier rate-capped equity refreshes at ~1.5 s/symbol. Replaced with: Yahoo Finance (primary, no key, parallel /v8/chart) + FMP /stable/quote (single-quote fallback only — free tier rejects every batch endpoint with 402) + browser-direct Binance WS for crypto.
+
+### Live data sources (post-migration)
+- **Crypto perps**: Hyperliquid WS (Python) — 32 coins, unchanged
+- **Crypto spot**: Browser-direct Binance WS (`wss://stream.binance.com:9443/stream`) for sub-second ticker updates on 29 majors — added in `client/src/store/MarketDataStore.jsx::startBinanceStream`
+- **Equities/Forex/Commodities**: Yahoo Finance public `/v8/finance/chart` (parallel Promise.all per symbol, ~3 s wall-clock for 41 tickers per tick) — `server/services/yahoo.ts`
+- **FMP fallback**: only `/stable/quote?symbol=X` works on free tier; `stockRefreshWorker` calls it for ≤5 Yahoo-miss symbols per 30 s tick to preserve 250 req/day quota — `server/services/fmp.ts`
+- **CCXT (Python)**: `quant/external_bars.py` rewired to ccxt 4.5.50 with chain `binance → binanceusdm → bybit`. Geo-blocked (451) from Replit dev — Yahoo last-resort fallback always wins. Will work from Railway US-region.
+- **News**: CryptoPanic (unchanged) + Yahoo RSS (`server/services/yahoo.ts::yahooNews`); FMP /stable/news/* is paid-only.
+- **Forex fallback chain**: Yahoo → ExchangeRate-API; **Metals fallback**: Yahoo → gold-api.com.
+
+### Files touched
+- New: `server/services/fmp.ts`, `server/services/yahoo.ts`, `quant/requirements.txt` (ccxt 4.5.50)
+- Rewritten: `server/services/marketData.ts` (`fhQuoteSafe` now wraps Yahoo + FMP fallback, signature preserved), `server/workers/stockRefreshWorker.ts` (Yahoo primary), `quant/external_bars.py` (ccxt + Yahoo)
+- Edited: `server/routes.ts` — `startFinnhubWebSocket()` no-op'd, `setTimeout(startFinnhubWebSocket,5000)` removed, news fetcher uses `fmpStockNews`, `fetchFinnhubCandlesQuant` rewired to FMP /stable/historical-chart (paid endpoint — returns null for free-tier users, Yahoo path takes over)
+- Edited: `server/index.ts` boot banner shows new sources; `quant/main.py` lifespan logs CCXT health probe
+- Edited: `client/src/App.jsx` — `runTradeIdeas` got 90 s `AbortController` to fix Safari "Load failed" on long Claude calls; FAQ + footer + benefits-strip labels updated to "FMP / Binance / Hyperliquid"
+- Edited: `client/src/store/MarketDataStore.jsx` — `startBinanceStream` opens browser-direct Binance WS; spot source label changed Finnhub→FMP
+- Edited: `client/src/components/MyBasket.jsx` — basket SPOT toggle label now "SPOT · FMP / BINANCE"
+
+### Backward compat preserved
+- `cache["finnhub"]` key kept (every reader still works) plus new `cache["marketdata"]` alias
+- `/api/finnhub` route still serves data (just with FMP/Yahoo content under the hood)
+- `fhQuoteSafe(sym, apiKey)` Finnhub signature kept — second arg ignored
+- `client/src/App.jsx::fetchFinnhub()` function name kept
+
+### Known limitations
+- FMP free-tier batch endpoints all return 402; if you upgrade FMP to Starter ($14/mo), uncomment the batch path in `fmp.ts::fmpQuoteBatch` and `marketData.ts` will pick it up automatically. The current path is robust and free.
+- CCXT exchanges all return 451/403 from Replit dev IPs (binance/binanceusdm/bybit are US-blocked). On Railway production servers (US-East/EU) at least one CCXT venue should succeed; Yahoo fallback always works.
