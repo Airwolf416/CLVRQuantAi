@@ -13,6 +13,10 @@ export default function QuantStatusCard() {
     queryKey: ["/api/quant/stats"],
     refetchInterval: 30000,
   });
+  const { data: readiness } = useQuery({
+    queryKey: ["/api/quant/readiness"],
+    refetchInterval: 60000,
+  });
 
   const ok = health?.ok && health?.ws_alive;
   const coinCount = health?.coins?.length || 0;
@@ -22,6 +26,11 @@ export default function QuantStatusCard() {
   const passed = stats?.passed ?? 0;
   const blocked = (stats?.blocked_scorer ?? 0) + (stats?.blocked_cost ?? 0);
   const vetoed = stats?.vetoed ?? 0;
+
+  const ready = readiness?.recommendation === "READY";
+  const readinessLabel = readiness?.recommendation || "—";
+  const coverage = readiness?.coverage_pct ?? 0;
+  const closed30 = readiness?.closed_signals_30d ?? 0;
 
   return (
     <div
@@ -55,6 +64,19 @@ export default function QuantStatusCard() {
       <div className="text-xs space-y-1 text-slate-300">
         <div>Streaming: <span data-testid="text-quant-coins" className="text-slate-100">{coinCount} coins</span></div>
         <div>Last tick: <span data-testid="text-quant-lastupd" className="text-slate-100">{lastUpd}</span></div>
+        <div className="flex items-center justify-between pt-1">
+          <span>Soak readiness:</span>
+          <span
+            data-testid="badge-quant-readiness"
+            className={`px-2 py-0.5 rounded text-[10px] tracking-wider ${ready ? "bg-emerald-600/30 text-emerald-300" : "bg-amber-600/30 text-amber-300"}`}
+            title={`Bar coverage ${coverage}% · Closed 30d signals ${closed30}`}
+          >
+            {readinessLabel}
+          </span>
+        </div>
+        <div className="text-[10px] text-slate-500">
+          Bars {coverage}% · Closed-signals(30d) {closed30}
+        </div>
       </div>
       {recent.length > 0 && (
         <div className="mt-3 pt-3 border-t border-slate-700/60 text-xs space-y-1">

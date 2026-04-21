@@ -983,25 +983,29 @@ async function detectMoves() {
     // we fail-open (signal still emits) so old flow keeps working.
     if (process.env.PHASE2A_ENABLED === "1") {
       try {
-        const { generateSignalPhase2A } = await import("./quantClient");
-        const histForQuant = (priceHistory[sym] || []).slice(-300);
-        if (histForQuant.length >= 60) {
-          const ohlcv = histForQuant.map((p: any) => [p.ts, p.price, p.price, p.price, p.price, 1.0]);
-          const phase2a = await generateSignalPhase2A({
-            symbol: sym,
-            timeframe: "1m",
-            ohlcv,
-            equityUsd: 10000,
-            convictionHint: Math.max(0.1, Math.min(1.0, confBase / 100)),
-            assetClass: sym === "BTC" || sym === "ETH" ? sym : "MID_CAP_DEFAULT",
-          });
-          if (!phase2a.emitted) {
-            console.log(`[PHASE2A] ${sym} ${dir} BLOCKED — ${phase2a.reason}`);
-            continue;  // skip emit
-          }
-          (signal as any).phase2a = { compositeZ: phase2a.score.composite_z, regime: phase2a.score.regime, sizeUsd: phase2a.score.suggested_size_usd };
+        const { generateSignalPhase2A, normalizeAssetClass } = await import("./quantClient");
+        // Don't ship fake single-tick OHLC anymore — let Python pull real candles
+        // (internal HL bars for the 32 perps; Binance/Yahoo for everything else).
+        const phase2a = await generateSignalPhase2A({
+          symbol: sym,
+          timeframe: "1m",
+          equityUsd: 10000,
+          convictionHint: Math.max(0.1, Math.min(1.0, confBase / 100)),
+          assetClass: normalizeAssetClass(undefined, sym),
+        });
+        if (!phase2a.emitted) {
+          console.log(`[PHASE2A] ${sym} ${dir} BLOCKED — ${phase2a.reason}`);
+          continue;  // skip emit
         }
+        (signal as any).phase2a = { compositeZ: phase2a.score.composite_z, regime: phase2a.score.regime, sizeUsd: phase2a.score.suggested_size_usd };
       } catch (e) {
+        // Default: fail-open so old flow keeps working when quant degrades.
+        // Set PHASE2A_FAIL_CLOSED=1 to instead drop the signal on quant errors
+        // (recommended once Phase 2A has soaked + you trust the gate).
+        if (process.env.PHASE2A_FAIL_CLOSED === "1") {
+          console.warn(`[PHASE2A] ${sym} fail-closed: quant error, signal dropped — ${(e as Error).message}`);
+          continue;
+        }
         console.warn(`[PHASE2A] quant gate error for ${sym}, failing open:`, (e as Error).message);
       }
     }
@@ -1368,12 +1372,15 @@ export async function registerRoutes(
       return res.status(401).json({ error: "unauthorized" });
     }
     try {
-      const { generateSignalPhase2A } = await import("./quantClient");
-      const { symbol = "BTC", timeframe = "1m" } = req.body || {};
-      const hist = (priceHistory[symbol] || []).slice(-300);
-      if (hist.length < 50) return res.status(400).json({ error: `insufficient history for ${symbol} (${hist.length} bars)` });
-      const ohlcv = hist.map((p: any) => [p.ts, p.price, p.price, p.price, p.price, 1.0]);
-      const out = await generateSignalPhase2A({ symbol, timeframe, ohlcv, equityUsd: 10000, convictionHint: 0.6, assetClass: symbol });
+      const { generateSignalPhase2A, normalizeAssetClass } = await import("./quantClient");
+      const { symbol = "BTC", timeframe = "1m", asset_class } = req.body || {};
+      const out = await generateSignalPhase2A({
+        symbol,
+        timeframe,
+        equityUsd: 10000,
+        convictionHint: 0.6,
+        assetClass: normalizeAssetClass(asset_class, symbol),
+      });
       res.json(out);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1388,6 +1395,34 @@ export async function registerRoutes(
       res.json(rows);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Soak/readiness proxy — advisory check before flipping PHASE2A_ENABLED=1
+  app.get("/api/quant/readiness", async (_req, res) => {
+    try {
+      const r = await fetch(`${process.env.QUANT_URL || "http://127.0.0.1:8081"}/quant/readiness`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      const j = await r.json();
+      // Augment with closed-signal count (Wilson LB needs >= 10 per token+direction)
+      try {
+        const { sql } = await import("drizzle-orm");
+        const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const rows: any = await db.execute(sql`
+          SELECT COUNT(*)::int AS n FROM ai_signal_log
+          WHERE created_at >= ${cutoff}
+            AND outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','SL_HIT','EXPIRED_WIN','EXPIRED_LOSS')
+        `);
+        const n = Number((rows.rows ?? rows)[0]?.n ?? 0);
+        j.closed_signals_30d = n;
+        j.wilson_lb_armed = n >= 10;
+        // Final READY/SOAK takes both signals into account (advisory)
+        j.recommendation = (j.ready && j.wilson_lb_armed) ? "READY" : "SOAK";
+      } catch { /* ignore */ }
+      res.json(j);
+    } catch (e: any) {
+      res.status(503).json({ ready: false, recommendation: "SOAK", error: e.message });
     }
   });
 

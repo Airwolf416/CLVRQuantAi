@@ -2,10 +2,36 @@
 // All HTTP calls hit 127.0.0.1 (NOT localhost — Node 17+ may resolve to ::1)
 const QUANT_URL = process.env.QUANT_URL || "http://127.0.0.1:8081";
 
+// Normalize free-form asset class strings → the canonical set the Python
+// scorer expects. Prevents passing a raw symbol (e.g. "SPY") as a class,
+// which would mis-route the external-bar fetch to Binance.
+const _CRYPTO_SET = new Set([
+  "BTC", "ETH", "SOL", "WIF", "DOGE", "AVAX", "LINK", "ARB", "kPEPE", "PEPE",
+  "XRP", "BNB", "ADA", "DOT", "POL", "UNI", "AAVE", "NEAR", "SUI", "APT", "OP",
+  "TIA", "SEI", "JUP", "ONDO", "RENDER", "INJ", "FET", "TAO", "PENDLE", "HBAR",
+  "TRUMP", "HYPE",
+]);
+export function normalizeAssetClass(raw: string | undefined, symbol: string): string {
+  const s = (raw || "").toUpperCase();
+  if (s === "STOCK" || s === "EQUITY" || s === "ETF" || s === "INDEX") return "STOCK";
+  if (s === "METAL" || s === "COMMODITY") return "METAL";
+  if (s === "FOREX" || s === "FX") return "FOREX";
+  if (s === "BTC" || s === "ETH") return s;
+  if (s === "CRYPTO" || s === "MID_CAP_DEFAULT" || s === "MID_CAP") return "MID_CAP_DEFAULT";
+  // Heuristic from symbol when class isn't given
+  if (_CRYPTO_SET.has(symbol)) {
+    return symbol === "BTC" || symbol === "ETH" ? symbol : "MID_CAP_DEFAULT";
+  }
+  // 6-letter alpha pair like EURUSD → forex
+  if (/^[A-Z]{6}$/.test(symbol)) return "FOREX";
+  // Default to STOCK for anything else (SPY, AAPL, etc.) — never mis-route to Binance
+  return "STOCK";
+}
+
 export interface QuantScoreRequest {
   symbol: string;
   timeframe?: string;
-  ohlcv: number[][];
+  ohlcv?: number[][];   // optional — Python falls back to internal HL bars or external provider
   daily_returns?: number[];
   equity_usd?: number;
   conviction?: number;
@@ -99,7 +125,7 @@ import { CLAUDE_MODEL } from "./config";
 export interface Phase2ACtx {
   symbol: string;
   timeframe: string;
-  ohlcv: number[][];           // [[ts,o,h,l,c,v], ...] ascending
+  ohlcv?: number[][];          // [[ts,o,h,l,c,v], ...] ascending; optional — Python will fetch real bars
   dailyReturns?: number[];
   equityUsd: number;
   convictionHint: number;      // 0-1
@@ -247,7 +273,8 @@ export async function generateSignalPhase2A(ctx: Phase2ACtx): Promise<Phase2ARes
   }
 
   // 3) Cost / EV gate
-  const adv = ctx.ohlcv.slice(-1440).reduce((a, r) => a + (r[5] || 0) * (r[4] || 0), 0);
+  const advRows = ctx.ohlcv ?? [];
+  const adv = advRows.slice(-1440).reduce((a, r) => a + (r[5] || 0) * (r[4] || 0), 0);
   const expectedAlphaBps = Math.abs(score.composite_z) * score.sigma_ann * 10_000 / Math.sqrt(365);
   let cost: QuantCostResponse;
   try {
