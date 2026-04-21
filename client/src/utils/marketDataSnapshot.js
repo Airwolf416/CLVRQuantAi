@@ -80,9 +80,9 @@ ${hlSpotSnap}
 
 ━━━ SECTION C — ADDITIONAL MARKET DATA [30-120s delayed — confirmation only] ━━━
 CRYPTO spot (CoinGecko): ${cryptoSnap}
-EQUITIES (Finnhub): ${stockSnap}
+EQUITIES (Yahoo/FMP): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (Finnhub): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap}
+FOREX (Yahoo/FMP): ${fxSnap}${sigSnap}${newsSnap}${storeModeSnap}
 ${macroSnap}`,
   };
 }

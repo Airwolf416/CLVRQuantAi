@@ -3163,9 +3163,9 @@ ${hlSpotSnap}
 
 ━━━ SECTION C — ADDITIONAL MARKET DATA [30-120s delayed — confirmation only] ━━━
 CRYPTO spot (CoinGecko): ${cryptoSnap}
-EQUITIES (Finnhub): ${stockSnap}
+EQUITIES (Yahoo/FMP): ${stockSnap}
 COMMODITIES: ${metalSnap}
-FOREX (Finnhub — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap}${storeModeSnap}${regimeSnap}${liqHeatSnap}
+FOREX (Yahoo/FMP — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap}${storeModeSnap}${regimeSnap}${liqHeatSnap}
 ${macroAiSnap}${polySnap}${twAiContext||""}${conflictSnap}${insiderSnap}
 
 ⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
