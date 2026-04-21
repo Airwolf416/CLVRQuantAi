@@ -463,15 +463,17 @@ function AIWeeklyUpdateControls({ C, MONO }) {
     finally { setBusy(null); }
   };
 
+  const [confirmingGen, setConfirmingGen] = useState(false);
   const runGenerate = async () => {
-    if (!confirm("Generate this week's update with AI and publish it to the About page now?\n\nThis does NOT send the email — use SEND WEEKLY EMAIL NOW after if you want to email it immediately.")) return;
+    if (!confirmingGen) { setConfirmingGen(true); setMsg("Click GENERATE again to confirm publishing this week's AI update."); return; }
+    setConfirmingGen(false);
     setBusy("generate"); setMsg("");
     try {
       const r = await fetch("/api/admin/weekly-update/ai-generate", { method:"POST", credentials:"include" });
-      const j = await r.json();
-      if (!r.ok) { setMsg("✗ " + (j?.error || "Generate failed")); return; }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg("✗ " + (j?.error || `Generate failed (HTTP ${r.status})`)); return; }
       if (!j.ok) { setMsg("⚠ " + (j.message || "AI produced nothing")); return; }
-      setMsg(`✓ Published "${j.update.title}" with ${(j.update.items || []).length} items. Reload to see it on the About page.`);
+      setMsg(`✓ Published "${j.update?.title || ''}" with ${(j.update?.items || []).length} items. Reload to see it on the About page.`);
     } catch (e) { setMsg("✗ " + (e?.message || "Network error")); }
     finally { setBusy(null); }
   };
@@ -490,7 +492,7 @@ function AIWeeklyUpdateControls({ C, MONO }) {
           {busy === "preview" ? "PREVIEWING…" : "🔍 PREVIEW AI DIGEST"}
         </button>
         <button data-testid="btn-wu-ai-generate" disabled={!!busy} onClick={runGenerate} style={btn("232,201,109")}>
-          {busy === "generate" ? "GENERATING…" : "🤖 GENERATE & PUBLISH NOW"}
+          {busy === "generate" ? "GENERATING…" : confirmingGen ? "⚠ CLICK AGAIN TO CONFIRM" : "🤖 GENERATE & PUBLISH NOW"}
         </button>
       </div>
       {msg && <div data-testid="text-wu-ai-msg" style={{ marginTop:10, fontFamily:MONO, fontSize:10, color: msg.startsWith("✓") ? "#00e57a" : msg.startsWith("⚠") ? "#c9a84c" : "#ff6680" }}>{msg}</div>}
@@ -907,7 +909,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
           alert("Weekly update saved. It is now live on the About page.");
         }} />
         <div style={{ marginTop:14 }}>
-          <ActionBtn actionKey="weekly-update-send-now" label="✉ SEND WEEKLY EMAIL NOW (MANUAL)" url="/api/admin/weekly-update/send-now" color="#00e5ff" />
+          <AdminActionBtn actionKey="weekly-update-send-now" label="✉ SEND WEEKLY EMAIL NOW (MANUAL)" url="/api/admin/weekly-update/send-now" color="#00e5ff" onRun={runAction} status={actionStatus["weekly-update-send-now"]} msg={actionMsg["weekly-update-send-now"]} MONO={MONO} />
           <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
             Use only if Saturday automation didn't fire. Sends the latest weekly update to all active subscribers immediately.
           </div>
@@ -919,7 +921,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
         <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:12, lineHeight:1.6 }}>
           Scheduler runs every 30s and triggers at 6:00 AM ET. Catch-up runs 10s after server startup if today's brief hasn't been sent yet.
         </div>
-        <ActionBtn actionKey="test-brief" label="🧪 ENQUEUE TEST BRIEF" url="/api/admin/test-brief" color="#00d4ff" />
+        <AdminActionBtn actionKey="test-brief" label="🧪 ENQUEUE TEST BRIEF" url="/api/admin/test-brief" color="#00d4ff" onRun={runAction} status={actionStatus["test-brief"]} msg={actionMsg["test-brief"]} MONO={MONO} />
         <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
           Enqueues a daily brief send. Check server logs for delivery confirmation.
         </div>
@@ -928,7 +930,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
       {/* Adaptive Thresholds */}
       <Section title="🧠 ADAPTIVE THRESHOLDS (AUTO-TUNING)" color="#00d4ff">
         <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
-          <ActionBtn actionKey="recalc-thresholds" label="↻ RECALCULATE NOW" url="/api/admin/thresholds/recalc" color="#00d4ff" />
+          <AdminActionBtn actionKey="recalc-thresholds" label="↻ RECALCULATE NOW" url="/api/admin/thresholds/recalc" color="#00d4ff" onRun={runAction} status={actionStatus["recalc-thresholds"]} msg={actionMsg["recalc-thresholds"]} MONO={MONO} />
           <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", alignSelf:"center" }}>
             Auto-recalculates hourly. Requires ≥5 resolved signals per (token, direction) combo.
           </div>

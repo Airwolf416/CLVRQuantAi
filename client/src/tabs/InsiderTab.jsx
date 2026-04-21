@@ -81,7 +81,15 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
     setError(null);
     try {
       const r = await fetch("/api/insider", { credentials: "include" });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (r.status === 429) {
+        // Rate-limited upstream — show friendly note, keep prior data, auto-retry in 60s
+        setError(null);
+        setScanLoading(true);
+        setScanStatus({ phase: "rate-limited", done: 0, total: 0 });
+        setTimeout(() => loadInsider(), 60000);
+        return;
+      }
+      if (!r.ok) throw new Error(`Server returned ${r.status}`);
       const data = await r.json();
       setTrades(data.trades || []);
       const stillScanning = data.scanning || (data.loading && (data.trades || []).length === 0);
@@ -89,8 +97,10 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       if (data.scanPhase) setScanStatus({ phase: data.scanPhase, done: data.scanDone || 0, total: data.scanTotal || 0 });
       setLastFetch(data.fetchedAt || Date.now());
       setLastRefresh(new Date());
+      setError(null);
     } catch (e) {
-      setError(e.message);
+      // Don't surface scary HTTP errors — keep any prior data on screen
+      console.warn("[insider] fetch error:", e?.message);
     } finally {
       setLoading(false);
     }
