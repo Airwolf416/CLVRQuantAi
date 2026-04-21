@@ -96,13 +96,34 @@ CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER 
         ? `MARKET TYPE FILTER: SPOT ONLY. Recommend ONLY spot / cash trades. NO leverage — set "leverage":"1x" on every trade. Use Section B (HL spot) and Section C (CoinGecko/Finnhub). Thesis should reference accumulation zones, DCA levels, or portfolio allocation. SL can be wider, kill clock can be longer. Every trade MUST set "marketType":"SPOT".`
         : `MARKET TYPE FILTER: BOTH. Mix of PERP and SPOT opportunities — diversify across both. For each trade, label "marketType":"PERP" or "SPOT" explicitly. PERP trades: include leverage suggestion, tight SL, funding/OI rationale. SPOT trades: "leverage":"1x", wider SL acceptable, accumulation/DCA rationale.`;
 
+      // ── Kronos forecast context (Elite) — pulled from in-memory cache populated by KronosPanel ──
+      let kronosCtx = "";
+      try {
+        const cache = (typeof window !== "undefined" ? window.__clvrKronosCache : null) || {};
+        const FRESH_MS = 60 * 60 * 1000; // 1 hour
+        const now = Date.now();
+        const rows = Object.entries(cache)
+          .filter(([, v]) => v && (now - (v.ts || 0)) < FRESH_MS && v.ensemble_signal)
+          .slice(0, 6)
+          .map(([asset, v]) => {
+            const ts = v.trajectories_summary || {};
+            const traj = [ts.bear, ts.base, ts.bull].filter(x => typeof x === "number");
+            const trajStr = traj.length === 3 ? ` · 5-candle trajectories (bear/base/bull): ${ts.bear.toFixed(2)} / ${ts.base.toFixed(2)} / ${ts.bull.toFixed(2)}` : "";
+            const volStr = v.volatility_regime ? ` · vol ${v.volatility_regime}` : "";
+            return `  ${asset} [${v.timeframe || "4h"}]: ${v.ensemble_signal}${volStr}${trajStr}`;
+          });
+        if (rows.length) {
+          kronosCtx = `\n\nKRONOS FORECAST ENGINE SIGNALS (multi-trajectory K-line forecasts, AAAI 2026 inspired):\n${rows.join("\n")}\n→ For any asset listed above, you MUST align direction with the Kronos ensemble_signal:\n   STRONG_LONG / LONG → prefer LONG trades; STRONG_SHORT / SHORT → prefer SHORT trades; NEUTRAL → skip unless other evidence is overwhelming.\n→ If conviction + Kronos STRONG_LONG/STRONG_SHORT + OI confluence all agree, you MAY set kronos:true (Elite only, max 2 per batch).`;
+        }
+      } catch { /* ignore */ }
+
       const sys = `You are CLVRQuantAI's Trade Idea Generator. Return exactly ${tradeCount} trade ideas as a JSON object. No markdown. No prose. Only valid JSON.
 
 ${marketTypeRule}
 ${todayModeRule}
 
 MANDATORY STEP 1 — MACRO PRE-FLIGHT CHECK:
-${macroCtx || "No macro data available. Proceed with CAUTION flag."}
+${macroCtx || "No macro data available. Proceed with CAUTION flag."}${kronosCtx}
 
 RULES:
 - Return EXACTLY ${tradeCount} trades, ranked by conviction (highest first)

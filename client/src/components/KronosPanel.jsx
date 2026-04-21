@@ -126,6 +126,25 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
       if (!data.trajectories || !data.ensemble_signal) throw new Error("Incomplete Kronos response");
       setResult(data);
       setOpen(true);
+      // ── Publish latest forecast to a window-level cache so TopTradeIdeas can feed it to Claude ──
+      try {
+        if (typeof window !== "undefined") {
+          if (!window.__clvrKronosCache) window.__clvrKronosCache = {};
+          window.__clvrKronosCache[asset] = {
+            ts: Date.now(),
+            timeframe: tf,
+            ensemble_signal: data.ensemble_signal,
+            volatility_regime: data.volatility_forecast?.regime,
+            annualized_vol_pct: data.volatility_forecast?.annualized_pct,
+            next_candle_range_pct: data.volatility_forecast?.next_candle_range_pct,
+            trajectories_summary: {
+              bull: data.trajectories?.bull?.[data.trajectories?.bull?.length - 1]?.close,
+              base: data.trajectories?.base?.[data.trajectories?.base?.length - 1]?.close,
+              bear: data.trajectories?.bear?.[data.trajectories?.bear?.length - 1]?.close,
+            },
+          };
+        }
+      } catch { /* ignore cache errors */ }
     } catch (err) {
       setError(err.message || "Kronos Engine error");
     } finally {

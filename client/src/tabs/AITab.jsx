@@ -3,6 +3,7 @@ import ModeToggle from "../components/ai/ModeToggle.jsx";
 import TopTradeIdeas from "../components/ai/TopTradeIdeas.jsx";
 import QuantScanner from "../components/ai/QuantScanner.jsx";
 import AIChat from "../components/ai/AIChat.jsx";
+import KronosPanel from "../components/KronosPanel.jsx";
 
 const MONO = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
@@ -55,6 +56,36 @@ export default function AITab({
           <div style={{ height: 1, background: "rgba(201,168,76,0.08)", margin: "24px 0" }} />
           <QuantScanner mode={mode} isPro={isPro} isElite={isElite} />
         </>
+      )}
+
+      {/* ── KRONOS FORECAST ENGINE (Elite) — forecasts feed into Trade Ideas above ── */}
+      <div style={{ height: 1, background: "rgba(155,140,255,0.10)", margin: "24px 0" }} />
+      {isElite ? (
+        <KronosPanel />
+      ) : (
+        <div
+          onClick={onUpgrade}
+          style={{
+            background: "rgba(155,140,255,0.04)",
+            border: "1px solid rgba(155,140,255,0.18)",
+            borderRadius: 10, padding: "14px 16px", marginBottom: 12,
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            cursor: "pointer",
+          }}>
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: 10, color: "#9b8cff", fontWeight: 800, letterSpacing: 1.5 }}>
+              ⏱ KRONOS FORECAST ENGINE
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: 8, color: "rgba(255,255,255,0.45)", marginTop: 4, lineHeight: 1.5 }}>
+              Multi-trajectory K-line forecasting · 5-candle BULL/BASE/BEAR trajectories.<br/>
+              Elite signals also feed into the Top Trade Ideas generator above for sharper predictions.
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <div style={{ fontFamily: MONO, fontSize: 9, color: "#9b8cff", background: "rgba(155,140,255,0.1)", border: "1px solid rgba(155,140,255,0.25)", borderRadius: 3, padding: "3px 8px" }}>ELITE</div>
+            <div style={{ fontSize: 15 }}>🔒</div>
+          </div>
+        </div>
       )}
 
       {isPro && (
