@@ -12,6 +12,10 @@ class MarketState:
         self.ofi_prev: Dict[str, Tuple[float, float, float, float]] = {}
         self.asset_ctx: Dict[str, dict] = {}
         self.last_update_ts: float = 0.0
+        # 1m OHLCV bars per coin: deque of [bar_ts_ms, o, h, l, c, v]
+        self.bars: Dict[str, Deque[list]] = defaultdict(lambda: deque(maxlen=2000))
+        # in-progress bar per coin: dict {ts, o, h, l, c, v}
+        self._cur_bar: Dict[str, dict] = {}
 
     def snapshot(self, coin: str) -> dict:
         return {

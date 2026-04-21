@@ -55,11 +55,29 @@ async def health():
             "server_ts": int(time.time() * 1000)}
 
 
+@app.get("/quant/bars/{coin}")
+async def bars(coin: str, limit: int = 300):
+    rows = list(STATE.bars.get(coin, []))[-limit:]
+    cur = STATE._cur_bar.get(coin)
+    if cur is not None:
+        rows = rows + [[cur["ts"], cur["o"], cur["h"], cur["l"], cur["c"], cur["v"]]]
+    return {"coin": coin, "bars": rows, "n": len(rows)}
+
+
 @app.post("/quant/score", response_model=ScoreResponse)
 async def score(req: ScoreRequest):
-    if len(req.ohlcv) < 60:
-        raise HTTPException(400, "need >=60 bars")
-    df = _df_from_ohlcv(req.ohlcv)
+    ohlcv = req.ohlcv
+    if not ohlcv or len(ohlcv) < 60:
+        # Fall back to internal bars when caller didn't supply enough
+        internal = list(STATE.bars.get(req.symbol, []))
+        cur = STATE._cur_bar.get(req.symbol)
+        if cur is not None:
+            internal = internal + [[cur["ts"], cur["o"], cur["h"], cur["l"], cur["c"], cur["v"]]]
+        if len(internal) >= 60:
+            ohlcv = internal
+        else:
+            raise HTTPException(400, f"need >=60 bars (got {len(ohlcv or [])} from caller, {len(internal)} internal)")
+    df = _df_from_ohlcv(ohlcv)
     entry_ref = float(df["close"].iloc[-1])
 
     regime = classify_regime(df)
@@ -72,6 +90,7 @@ async def score(req: ScoreRequest):
         gates_failed.append("regime_chop")
 
     dr = pd.Series(req.daily_returns or [], dtype=float)
+    req.ohlcv = ohlcv  # so downstream code uses fallback path
     sigma_d = sigma_daily_decimal(req.symbol, dr) if len(dr) > 0 else float(df["close"].pct_change().std() or 0.02)
 
     side = comp["side"] or "long"

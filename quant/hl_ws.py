@@ -57,6 +57,18 @@ async def _handle(msg: dict):
             prev = STATE.cvd[coin][-1][1] if STATE.cvd[coin] else 0.0
             STATE.cvd[coin].append((ts, prev + signed))
             STATE.last_update_ts = ts
+            # 1m bar aggregation
+            bar_ts = (ts // 60000) * 60000
+            cur = STATE._cur_bar.get(coin)
+            if cur is None or cur["ts"] != bar_ts:
+                if cur is not None:
+                    STATE.bars[coin].append([cur["ts"], cur["o"], cur["h"], cur["l"], cur["c"], cur["v"]])
+                cur = {"ts": bar_ts, "o": px, "h": px, "l": px, "c": px, "v": 0.0}
+                STATE._cur_bar[coin] = cur
+            cur["h"] = max(cur["h"], px)
+            cur["l"] = min(cur["l"], px)
+            cur["c"] = px
+            cur["v"] += sz
     elif ch in ("activeAssetCtx", "activeSpotAssetCtx") and isinstance(data, dict):
         coin = data.get("coin") or (data.get("ctx", {}) or {}).get("coin")
         ctx = data.get("ctx", {})

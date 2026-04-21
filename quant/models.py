@@ -5,7 +5,7 @@ from typing import Optional, List, Any, Dict
 class ScoreRequest(BaseModel):
     symbol: str
     timeframe: str = "1m"
-    ohlcv: List[List[float]]
+    ohlcv: Optional[List[List[float]]] = None
     daily_returns: Optional[List[float]] = None
     equity_usd: float = 10_000.0
     conviction: float = 0.6

@@ -122,18 +122,92 @@ async function logAi(row: Partial<InsertAiSignalLog> & { source: string; token: 
   }
 }
 
+// Direction-aware Wilson lower bound (95%) computed from aiSignalLog over last 30d
+async function wilsonLbForDirection(token: string, direction: "LONG" | "SHORT"): Promise<number | null> {
+  try {
+    const { sql } = await import("drizzle-orm");
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const rows = await db.execute(sql`
+      SELECT outcome, COUNT(*)::int AS n FROM ai_signal_log
+      WHERE token=${token} AND direction=${direction}
+        AND created_at >= ${cutoff}
+        AND outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','SL_HIT','EXPIRED_WIN','EXPIRED_LOSS')
+      GROUP BY outcome
+    `);
+    let wins = 0, total = 0;
+    for (const r of (rows as any).rows ?? rows) {
+      const n = Number(r.n);
+      total += n;
+      if (String(r.outcome).startsWith("TP") || r.outcome === "EXPIRED_WIN") wins += n;
+    }
+    if (total < 10) return null;
+    const p = wins / total;
+    const z = 1.96;
+    const denom = 1 + (z * z) / total;
+    const center = p + (z * z) / (2 * total);
+    const margin = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * total)) / total);
+    return (center - margin) / denom;
+  } catch {
+    return null;
+  }
+}
+
+// In-memory cooldown to prevent write amplification when detectMoves repeatedly
+// re-evaluates the same symbol every 5s and Phase 2A keeps blocking.
+// Key: `${symbol}:${reasonHead}`, Value: epoch ms. Cooldown window = 90s.
+const _phase2aBlockCooldown = new Map<string, number>();
+const PHASE2A_BLOCK_COOLDOWN_MS = 90_000;
+
+function _cooldownActive(symbol: string, reasonHead: string): boolean {
+  const key = `${symbol}:${reasonHead}`;
+  const last = _phase2aBlockCooldown.get(key);
+  if (last && Date.now() - last < PHASE2A_BLOCK_COOLDOWN_MS) return true;
+  return false;
+}
+function _markCooldown(symbol: string, reasonHead: string) {
+  _phase2aBlockCooldown.set(`${symbol}:${reasonHead}`, Date.now());
+  // bound the map
+  if (_phase2aBlockCooldown.size > 1000) {
+    const cutoff = Date.now() - PHASE2A_BLOCK_COOLDOWN_MS;
+    for (const [k, v] of _phase2aBlockCooldown) if (v < cutoff) _phase2aBlockCooldown.delete(k);
+  }
+}
+
 export async function generateSignalPhase2A(ctx: Phase2ACtx): Promise<Phase2AResult> {
-  // 1) Wilson LB proxy from existing adaptive_thresholds (winRate30d / 100)
+  // 1) Wilson LB (combined long+short for this symbol — direction-faithful, not biased)
+  // Scorer doesn't know side yet, so we use combined history rather than max(long,short).
   let wilsonLb: number | null = null;
   try {
-    const rows = await db.select().from(adaptiveThresholds)
-      .where(eq(adaptiveThresholds.token, ctx.symbol))
-      .orderBy(desc(adaptiveThresholds.updatedAt))
-      .limit(1);
-    if (rows[0]?.winRate30d != null) {
-      wilsonLb = Number(rows[0].winRate30d) / 100;
+    const { sql } = await import("drizzle-orm");
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const rows: any = await db.execute(sql`
+      SELECT outcome, COUNT(*)::int AS n FROM ai_signal_log
+      WHERE token=${ctx.symbol} AND created_at >= ${cutoff}
+        AND outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','SL_HIT','EXPIRED_WIN','EXPIRED_LOSS')
+      GROUP BY outcome
+    `);
+    let wins = 0, total = 0;
+    for (const r of rows.rows ?? rows) {
+      const n = Number(r.n);
+      total += n;
+      if (String(r.outcome).startsWith("TP") || r.outcome === "EXPIRED_WIN") wins += n;
     }
-  } catch { /* table may not have rows yet */ }
+    if (total >= 10) {
+      const p = wins / total;
+      const z = 1.96;
+      const denom = 1 + (z * z) / total;
+      const center = p + (z * z) / (2 * total);
+      const margin = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * total)) / total);
+      wilsonLb = (center - margin) / denom;
+    }
+    if (wilsonLb == null) {
+      const at = await db.select().from(adaptiveThresholds)
+        .where(eq(adaptiveThresholds.token, ctx.symbol))
+        .orderBy(desc(adaptiveThresholds.updatedAt))
+        .limit(1);
+      if (at[0]?.winRate30d != null) wilsonLb = Number(at[0].winRate30d) / 100;
+    }
+  } catch { /* fall through with null */ }
 
   // 2) Python scorer
   let score: QuantScoreResponse;
@@ -155,17 +229,20 @@ export async function generateSignalPhase2A(ctx: Phase2ACtx): Promise<Phase2ARes
   }
 
   if (!score.passes) {
-    await logAi({
-      source: "phase2a_scorer",
-      token: ctx.symbol,
-      direction: (score.side || "long").toUpperCase(),
-      entryPrice: String(score.entry_ref),
-      thesis: `Quant pre-filter blocked: ${score.gates_failed.join(", ")}`,
-      invalidation: `regime=${score.regime}, composite_z=${score.composite_z.toFixed(2)}`,
-      scores: score as any,
-      conviction: 0,
-      outcome: "EXPIRED_LOSS",
-    });
+    if (!_cooldownActive(ctx.symbol, "scorer")) {
+      _markCooldown(ctx.symbol, "scorer");
+      await logAi({
+        source: "phase2a_scorer",
+        token: ctx.symbol,
+        direction: (score.side || "long").toUpperCase(),
+        entryPrice: String(score.entry_ref),
+        thesis: `Quant pre-filter blocked: ${score.gates_failed.join(", ")}`,
+        invalidation: `regime=${score.regime}, composite_z=${score.composite_z.toFixed(2)}`,
+        scores: score as any,
+        conviction: 0,
+        outcome: "EXPIRED_LOSS",
+      });
+    }
     return { emitted: false, reason: `scorer_blocked:${score.gates_failed.join(",")}`, score };
   }
 
@@ -187,17 +264,20 @@ export async function generateSignalPhase2A(ctx: Phase2ACtx): Promise<Phase2ARes
   }
 
   if (!cost.ev_pass) {
-    await logAi({
-      source: "phase2a_cost",
-      token: ctx.symbol,
-      direction: (score.side || "long").toUpperCase(),
-      entryPrice: String(score.entry_ref),
-      thesis: `EV fail: alpha ${expectedAlphaBps.toFixed(1)}bps vs cost ${cost.total_bps.toFixed(1)}bps`,
-      invalidation: `Need alpha >= 2x cost (${(2 * cost.total_bps).toFixed(1)}bps)`,
-      scores: { score, cost } as any,
-      conviction: 0,
-      outcome: "EXPIRED_LOSS",
-    });
+    if (!_cooldownActive(ctx.symbol, "cost")) {
+      _markCooldown(ctx.symbol, "cost");
+      await logAi({
+        source: "phase2a_cost",
+        token: ctx.symbol,
+        direction: (score.side || "long").toUpperCase(),
+        entryPrice: String(score.entry_ref),
+        thesis: `EV fail: alpha ${expectedAlphaBps.toFixed(1)}bps vs cost ${cost.total_bps.toFixed(1)}bps`,
+        invalidation: `Need alpha >= 2x cost (${(2 * cost.total_bps).toFixed(1)}bps)`,
+        scores: { score, cost } as any,
+        conviction: 0,
+        outcome: "EXPIRED_LOSS",
+      });
+    }
     return { emitted: false, reason: "ev_blocked", score, cost };
   }
 
