@@ -446,6 +446,85 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
 // ── Weekly Update editor (admin) ────────────────────────────────────────────
 // Defined at module scope so React doesn't unmount/remount it on parent
 // re-render (which would otherwise wipe input state and lose cursor focus).
+function AIWeeklyUpdateControls({ C, MONO }) {
+  const [busy, setBusy] = useState(null); // 'preview' | 'generate' | null
+  const [preview, setPreview] = useState(null);
+  const [msg, setMsg] = useState("");
+
+  const runPreview = async () => {
+    setBusy("preview"); setMsg(""); setPreview(null);
+    try {
+      const r = await fetch("/api/admin/weekly-update/ai-preview", { method:"POST", credentials:"include" });
+      const j = await r.json();
+      if (!r.ok) { setMsg("✗ " + (j?.error || "Preview failed")); return; }
+      setPreview(j);
+      if (!j.digest) setMsg("AI returned no digest — likely nothing user-visible shipped this week.");
+    } catch (e) { setMsg("✗ " + (e?.message || "Network error")); }
+    finally { setBusy(null); }
+  };
+
+  const runGenerate = async () => {
+    if (!confirm("Generate this week's update with AI and publish it to the About page now?\n\nThis does NOT send the email — use SEND WEEKLY EMAIL NOW after if you want to email it immediately.")) return;
+    setBusy("generate"); setMsg("");
+    try {
+      const r = await fetch("/api/admin/weekly-update/ai-generate", { method:"POST", credentials:"include" });
+      const j = await r.json();
+      if (!r.ok) { setMsg("✗ " + (j?.error || "Generate failed")); return; }
+      if (!j.ok) { setMsg("⚠ " + (j.message || "AI produced nothing")); return; }
+      setMsg(`✓ Published "${j.update.title}" with ${(j.update.items || []).length} items. Reload to see it on the About page.`);
+    } catch (e) { setMsg("✗ " + (e?.message || "Network error")); }
+    finally { setBusy(null); }
+  };
+
+  const btn = (color) => ({
+    background: `rgba(${color},.08)`, border:`1px solid rgba(${color},.4)`, color:`rgb(${color})`,
+    borderRadius:4, padding:"8px 14px", fontFamily:MONO, fontSize:10, fontWeight:700,
+    letterSpacing:"0.08em", cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.5 : 1,
+    marginRight:8,
+  });
+
+  return (
+    <div>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+        <button data-testid="btn-wu-ai-preview" disabled={!!busy} onClick={runPreview} style={btn("0,229,255")}>
+          {busy === "preview" ? "PREVIEWING…" : "🔍 PREVIEW AI DIGEST"}
+        </button>
+        <button data-testid="btn-wu-ai-generate" disabled={!!busy} onClick={runGenerate} style={btn("232,201,109")}>
+          {busy === "generate" ? "GENERATING…" : "🤖 GENERATE & PUBLISH NOW"}
+        </button>
+      </div>
+      {msg && <div data-testid="text-wu-ai-msg" style={{ marginTop:10, fontFamily:MONO, fontSize:10, color: msg.startsWith("✓") ? "#00e57a" : msg.startsWith("⚠") ? "#c9a84c" : "#ff6680" }}>{msg}</div>}
+      {preview && (
+        <div data-testid="panel-wu-ai-preview" style={{ marginTop:12, background:"rgba(0,229,255,.04)", border:"1px solid rgba(0,229,255,.18)", borderRadius:6, padding:"10px 12px" }}>
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#00e5ff", letterSpacing:"0.15em", marginBottom:6 }}>
+            AI PREVIEW · {preview.commitCount} commits scanned
+          </div>
+          {preview.digest ? (
+            <>
+              <div style={{ fontFamily:MONO, fontSize:12, color:"#e8c96d", fontWeight:700 }}>{preview.digest.title}</div>
+              <div style={{ fontFamily:MONO, fontSize:10, color:"#a8b3c8", marginTop:4, marginBottom:8, lineHeight:1.6 }}>{preview.digest.summary}</div>
+              {(preview.digest.items || []).map((it, i) => (
+                <div key={i} style={{ display:"flex", gap:8, padding:"6px 0", borderTop: i > 0 ? "1px solid rgba(140,160,200,.1)" : "none" }}>
+                  <div style={{ fontSize:14, width:22, textAlign:"center", flexShrink:0 }}>{it.emoji}</div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontFamily:MONO, fontSize:10, color:"#e8c96d", fontWeight:700 }}>{it.title}</div>
+                    <div style={{ fontFamily:MONO, fontSize:9, color:"#a8b3c8", marginTop:2, lineHeight:1.5 }}>{it.description}</div>
+                  </div>
+                </div>
+              ))}
+              <div style={{ fontFamily:MONO, fontSize:8, color:"#5a6a8a", marginTop:8, fontStyle:"italic" }}>
+                Preview only — nothing saved. Click GENERATE & PUBLISH to actually post this.
+              </div>
+            </>
+          ) : (
+            <div style={{ fontFamily:MONO, fontSize:10, color:"#a8b3c8" }}>Nothing user-visible to summarize this week.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WeeklyUpdateEditor({ onSave }) {
   const [version, setVersion] = useState("");
   const [title, setTitle] = useState("");
@@ -779,8 +858,14 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
       {/* Weekly Update Controls */}
       <Section title="🆕 WEEKLY UPDATE (WHAT'S NEW)" color="#00e5ff">
         <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
-          Posts a new "What's New This Week" entry. The latest entry replaces all prior ones on the About page.
-          Saturday 10:00 AM ET, the system auto-emails it to subscribers <em>only if</em> it's less than 7 days old and not already sent.
+          Every Saturday 10:00 AM ET the system auto-generates this week's update from the last 7 days of code changes (via Claude),
+          posts it to the About page, and emails it to all active subscribers — fully hands-off. You can also publish manually below
+          (overrides the AI for that week), or preview / trigger the AI on demand.
+        </div>
+        <AIWeeklyUpdateControls C={C} MONO={MONO} />
+        <div style={{ height:1, background:"rgba(140,160,200,.12)", margin:"14px 0" }} />
+        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
+          ✍️ Manual override — fill out the form below to publish a hand-written update instead of letting the AI generate it.
         </div>
         <WeeklyUpdateEditor onSave={async (payload) => {
           const r = await fetch("/api/admin/weekly-update", {
