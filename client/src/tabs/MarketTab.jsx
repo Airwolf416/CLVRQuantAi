@@ -422,8 +422,8 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
   return (
     <div>
       <PanelHeader
-        title="Equities · Finnhub"
-        subtitle="finnhub websocket · real-time trades · NYSE 9:30a–4p ET"
+        title="Equities · Yahoo / FMP"
+        subtitle="yahoo finance + fmp · real-time trades · NYSE 9:30a–4p ET"
         live={live}
       />
 
@@ -470,7 +470,7 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
       </div>
 
       <SubTabs
-        tabs={[{ val: "spot", label: "SPOT · FINNHUB" }, { val: "perp", label: "PERP · HYPERLIQUID" }]}
+        tabs={[{ val: "spot", label: "SPOT · YAHOO/FMP" }, { val: "perp", label: "PERP · HYPERLIQUID" }]}
         value={sub} onChange={setSub}
       />
 
@@ -817,16 +817,16 @@ function ForexTab({ forexPrices, flashes, storePerps }) {
   return (
     <div>
       <PanelHeader
-        title={mode === "spot" ? "Forex · Finnhub" : "Forex · Hyperliquid"}
+        title={mode === "spot" ? "Forex · Yahoo / FMP" : "Forex · Hyperliquid"}
         subtitle={mode === "spot"
-          ? "finnhub websocket · forex spot  |  sun 5pm – fri 5pm ET"
+          ? "yahoo finance + fmp · forex spot  |  sun 5pm – fri 5pm ET"
           : "hyperliquid · fx perps (24/7)  |  usdxxx pairs inverted from xxx/usd"}
         live={mode === "perp" ? true : isOpen()}
       />
       <SubTabs
         value={mode}
         onChange={setMode}
-        tabs={[{ val: "spot", label: "SPOT · FINNHUB" }, { val: "perp", label: "PERP · HYPERLIQUID" }]}
+        tabs={[{ val: "spot", label: "SPOT · YAHOO/FMP" }, { val: "perp", label: "PERP · HYPERLIQUID" }]}
       />
       {mode === "spot" ? (
         FOREX_SYMS.map(sym => {

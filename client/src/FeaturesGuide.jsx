@@ -30,7 +30,7 @@ const SECTIONS = [
       "32 cryptocurrency tokens with live spot prices from Binance (updates every 3 seconds)",
       "Spot/Perp toggle — view perpetual futures prices, funding rates, open interest, and 24h volume from Hyperliquid",
       "OI sparkline charts showing open interest trends",
-      "16 equities from Finnhub (TSLA, NVDA, AAPL, GOOGL, META, MSFT, AMZN, and more)",
+      "16 equities from Yahoo Finance + FMP (TSLA, NVDA, AAPL, GOOGL, META, MSFT, AMZN, and more)",
       "7 commodities including gold (XAU), silver (XAG), platinum, oil (WTI/Brent), natural gas, and copper",
       "14 forex pairs (EUR/USD, GBP/USD, USD/JPY, and more) from ExchangeRate API",
       "24-hour change percentage with green/red color coding",
@@ -180,7 +180,7 @@ export default function FeaturesGuide() {
           {[
             "Binance (crypto spot)",
             "Hyperliquid (perps/funding/OI)",
-            "Finnhub (equities)",
+            "Yahoo Finance + FMP (equities, forex, commodities)",
             "ExchangeRate API (forex)",
             "gold-api.com (metals)",
             "CryptoCompare (news)",

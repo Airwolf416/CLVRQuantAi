@@ -349,7 +349,7 @@ function computeSpreads(spotMap, perpMap, discoveredAssets) {
       signal,
       severity,
       label: spreadPct > 0.5 ? "Futures Premium" : spreadPct < -0.5 ? "Futures Discount" : "Aligned",
-      spotSource: spotMap[ticker]?.source || "Finnhub",
+      spotSource: spotMap[ticker]?.source || "Yahoo/FMP",
     };
   }
   return spreads;
