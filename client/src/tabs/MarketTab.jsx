@@ -502,11 +502,12 @@ function EquitiesTab({ equityPrices, flashes, storePerps }) {
 // the perp as stale/illiquid and substitute the real CME/Yahoo Finance price.
 const MAX_PERP_SPOT_DEVIATION = 0.10; // 10%
 
-// Energy commodities always use CME Yahoo Finance reference in the perp tab.
-// The Hyperliquid flx dex energy contracts (OIL, GAS, BRENTOIL) are relatively
-// illiquid — their prevDayPx often mismatches the real CME prior close, making
-// the change-rate unreliable.  Metals (XAU, XAG, Cu, Pt, Pd) are fine on HL.
-const CME_ALWAYS_SYMS = new Set(["WTI", "BRENT", "NATGAS"]);
+// Apr 2026: Hyperliquid Trade.xyz dex now lists liquid commodity perps for
+// EVERYTHING — GOLD, SILVER, CL (WTI), BRENTOIL, NATGAS, COPPER, PLATINUM,
+// PALLADIUM. We prefer HL/xyz live mids for every commodity. Stale-detection
+// (>10% deviation from CME spot) below still substitutes CME if any perp
+// drifts, so this stays safe.
+const CME_ALWAYS_SYMS = new Set();
 
 // CME futures ticker labels shown when using spot data as perp reference
 const CME_LABEL = {
@@ -622,7 +623,7 @@ function CommodityPerpRow({ sym, label, asset }) {
             color: isCME ? C.orange : C.cyan,
             border: `1px solid ${isCME ? C.orange : C.cyan}`,
             padding: "1px 4px", borderRadius: 2, letterSpacing: "0.06em",
-          }}>{isCME ? (CME_LABEL[sym] || "CME REF") : "HL FLX"}</span>
+          }}>{isCME ? (CME_LABEL[sym] || "CME REF") : "HL · TRADE.XYZ"}</span>
           {isStale && (
             <span style={{
               fontFamily: MONO, fontSize: 7, color: C.red,
@@ -669,8 +670,8 @@ function CommoditiesTab({ metalPrices, flashes }) {
   return (
     <div>
       <PanelHeader
-        title="Commodities · Gold-API & Yahoo Finance"
-        subtitle="gold-api.com · XAU/XAG/Pt/Cu  |  Yahoo Finance CME · WTI/Brent/NatGas"
+        title="Commodities · HL Trade.xyz / Gold-API"
+        subtitle="hyperliquid trade.xyz perps · live mids  |  gold-api.com spot fallback for metals"
         live={anyLive}
       />
       <SubTabs
