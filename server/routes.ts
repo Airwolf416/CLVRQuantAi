@@ -3888,39 +3888,62 @@ Every level must be technically defensible. Return JSON only.`;
         parsed.hold.duration = tfId2 === "long" ? "1-2 weeks" : tfId2 === "mid" ? "2-3 days" : atrPctNum > 1.5 ? "2-4 hours" : "12-24 hours";
       }
       // ── Direction / TP / SL validation (fix inverted levels) ──
-      if (parsed.signal && parsed.entry?.price && parsed.tp1?.price && parsed.stopLoss?.price) {
-        const isLong = parsed.signal.includes("LONG");
-        const isShort = parsed.signal.includes("SHORT");
+      // Coerce everything to numbers FIRST — AI sometimes returns string prices
+      // which break `>=`/`<=` comparisons in subtle ways.
+      if (parsed.signal && parsed.entry && parsed.tp1 && parsed.stopLoss) {
+        parsed.entry.price = parseFloat(parsed.entry.price);
+        parsed.tp1.price = parseFloat(parsed.tp1.price);
+        parsed.stopLoss.price = parseFloat(parsed.stopLoss.price);
+        if (parsed.tp2?.price != null) parsed.tp2.price = parseFloat(parsed.tp2.price);
+        if (parsed.tp3?.price != null) parsed.tp3.price = parseFloat(parsed.tp3.price);
+
+        const sigUpper = String(parsed.signal).toUpperCase();
+        const isLong = sigUpper.includes("LONG");
+        const isShort = sigUpper.includes("SHORT");
         const ep = parsed.entry.price;
-        let slDist = Math.abs(ep - parsed.stopLoss.price);
-        let needsRecalc = false;
-        if (isLong) {
-          if (parsed.stopLoss.price >= ep) { parsed.stopLoss.price = ep - slDist; needsRecalc = true; }
-          slDist = Math.abs(ep - parsed.stopLoss.price);
-          if (parsed.tp1.price <= ep) { parsed.tp1.price = ep + slDist * risk.tpRatios[0]; needsRecalc = true; }
-          if (parsed.tp2?.price && parsed.tp2.price <= ep) { parsed.tp2.price = ep + slDist * risk.tpRatios[1]; needsRecalc = true; }
-          if (parsed.tp3?.price && parsed.tp3.price <= ep) { parsed.tp3.price = ep + slDist * 4.0; needsRecalc = true; }
-        } else if (isShort) {
-          if (parsed.stopLoss.price <= ep) { parsed.stopLoss.price = ep + slDist; needsRecalc = true; }
-          slDist = Math.abs(parsed.stopLoss.price - ep);
-          if (parsed.tp1.price >= ep) { parsed.tp1.price = ep - slDist * risk.tpRatios[0]; needsRecalc = true; }
-          if (parsed.tp2?.price && parsed.tp2.price >= ep) { parsed.tp2.price = ep - slDist * risk.tpRatios[1]; needsRecalc = true; }
-          if (parsed.tp3?.price && parsed.tp3.price >= ep) { parsed.tp3.price = ep - slDist * 4.0; needsRecalc = true; }
-        }
-        if (needsRecalc) {
+        const ratios = risk.tpRatios || [1.5, 3.0];
+
+        if ((isLong || isShort) && Number.isFinite(ep) && Number.isFinite(parsed.tp1.price) && Number.isFinite(parsed.stopLoss.price)) {
+          // Compute the AI-given stop distance (always positive)
+          let slDist = Math.abs(ep - parsed.stopLoss.price);
+          // If AI returned zero/tiny SL, synthesize one from ATR-style 1% baseline
+          if (slDist < ep * 0.0005) slDist = ep * 0.01;
+
+          let fixedSide = false;
+          let fixedTp = false;
+
+          if (isLong) {
+            if (parsed.stopLoss.price >= ep) { parsed.stopLoss.price = ep - slDist; fixedSide = true; }
+            if (parsed.tp1.price <= ep) { parsed.tp1.price = ep + slDist * ratios[0]; fixedTp = true; }
+            if (parsed.tp2?.price != null && parsed.tp2.price <= ep) { parsed.tp2.price = ep + slDist * ratios[1]; fixedTp = true; }
+            if (parsed.tp3?.price != null && parsed.tp3.price <= ep) { parsed.tp3.price = ep + slDist * 4.0; fixedTp = true; }
+          } else {
+            if (parsed.stopLoss.price <= ep) { parsed.stopLoss.price = ep + slDist; fixedSide = true; }
+            if (parsed.tp1.price >= ep) { parsed.tp1.price = ep - slDist * ratios[0]; fixedTp = true; }
+            if (parsed.tp2?.price != null && parsed.tp2.price >= ep) { parsed.tp2.price = ep - slDist * ratios[1]; fixedTp = true; }
+            if (parsed.tp3?.price != null && parsed.tp3.price >= ep) { parsed.tp3.price = ep - slDist * 4.0; fixedTp = true; }
+          }
+
+          if (fixedSide || fixedTp) {
+            console.warn(`[Quant] ${ticker} ${sigUpper}: AI returned inverted levels — auto-corrected (sl=${parsed.stopLoss.price.toFixed(4)}, tp1=${parsed.tp1.price.toFixed(4)})`);
+            parsed.levels_auto_corrected = true;
+          }
+
+          // Always recompute gain_pct, rr_ratio, distance_pct from final coherent prices
           slDist = Math.abs(ep - parsed.stopLoss.price);
           if (slDist > 0.000001) {
             parsed.tp1.gain_pct = parseFloat((Math.abs(parsed.tp1.price - ep) / ep * 100).toFixed(2));
             parsed.tp1.rr_ratio = parseFloat((Math.abs(parsed.tp1.price - ep) / slDist).toFixed(2));
-            if (parsed.tp2?.price) {
+            if (parsed.tp2?.price != null) {
               parsed.tp2.gain_pct = parseFloat((Math.abs(parsed.tp2.price - ep) / ep * 100).toFixed(2));
               parsed.tp2.rr_ratio = parseFloat((Math.abs(parsed.tp2.price - ep) / slDist).toFixed(2));
             }
-            if (parsed.tp3?.price) {
+            if (parsed.tp3?.price != null) {
               parsed.tp3.gain_pct = parseFloat((Math.abs(parsed.tp3.price - ep) / ep * 100).toFixed(2));
               parsed.tp3.rr_ratio = parseFloat((Math.abs(parsed.tp3.price - ep) / slDist).toFixed(2));
             }
             parsed.stopLoss.distance_pct = parseFloat((slDist / ep * 100).toFixed(2));
+            parsed.rr = parsed.tp1.rr_ratio;
           }
         }
       }
