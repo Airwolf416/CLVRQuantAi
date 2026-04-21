@@ -1162,7 +1162,12 @@ async function checkServerAlerts() {
 
 
 let fhWsConnected = false;
+// ── [DEPRECATED Apr 2026] Finnhub WebSocket fully replaced by FMP polling
+// in server/workers/stockRefreshWorker.ts. Kept as a no-op so any stale
+// reference to startFinnhubWebSocket() does not crash the boot.
 function startFinnhubWebSocket() {
+  return; // FMP migration: no-op
+  // eslint-disable-next-line no-unreachable
   if (!FINNHUB_KEY) return;
   let retries = 0;
   let last429At = 0;
@@ -1470,8 +1475,9 @@ export async function registerRoutes(
   startHlRefreshWorker(detectMoves);
   startNotificationWorker();
   startDataBus();
-  // Delay WS startup by 5s to let server settle and avoid 429 on rapid restarts
-  setTimeout(startFinnhubWebSocket, 5000);
+  // [migrated Apr 2026] Finnhub WS removed — equities/forex/commodities now
+  // refresh via FMP every 30s in stockRefreshWorker, which also broadcasts
+  // market_update over Socket.io and SSE just like the WS used to.
   // Start news sentiment background refresh (every 5 minutes)
   refreshTokenSentiment().catch(() => {});
   setInterval(() => refreshTokenSentiment().catch(() => {}), 5 * 60 * 1000);
@@ -2140,34 +2146,28 @@ Output JSON only, no prose, no code fences.`;
       }
 
       let breakingNews: any[] = [];
-      if (FINNHUB_KEY) {
-        try {
-          const fhRes = await fetch(
-            `https://finnhub.io/api/v1/news?category=general&token=${FINNHUB_KEY}`,
-            { signal: AbortSignal.timeout(6000), headers: { "User-Agent": "CLVRQuant/2.0" } }
-          );
-          if (fhRes.ok) {
-            const fhData: any[] = await fhRes.json();
-            const twoHoursAgo = Math.floor((now - TWO_H) / 1000);
-            for (const item of (fhData || []).slice(0, 50)) {
-              if ((item.datetime || 0) < twoHoursAgo) continue;
-              const headline = (item.headline || "").toLowerCase();
-              const isHighImpact = MACRO_HIGH_IMPACT_KW.some(kw => headline.includes(kw));
-              if (!isHighImpact) continue;
-              const TRACKED = [...CRYPTO_SYMS, ...EQUITY_SYMS, "XAU", "XAG", "DXY", "USD", "EUR", "JPY", "GBP", "BTC", "OIL"];
-              const affectedAssets = TRACKED.filter(s => s.length > 2 && headline.includes(s.toLowerCase())).slice(0, 5);
-              breakingNews.push({
-                headline: item.headline,
-                source: item.source || "Finnhub",
-                time: `${Math.round((now - (item.datetime || 0) * 1000) / 60000)}min ago`,
-                impact: "HIGH",
-                affectedAssets,
-              });
-              if (breakingNews.length >= 5) break;
-            }
-          }
-        } catch {}
-      }
+      try {
+        const { fmpStockNews } = await import("./services/fmp");
+        const newsData = await fmpStockNews(50);
+        const twoHoursAgoMs = now - TWO_H;
+        for (const item of newsData) {
+          const pubMs = item.publishedDate ? new Date(item.publishedDate).getTime() : 0;
+          if (!pubMs || pubMs < twoHoursAgoMs) continue;
+          const headline = (item.title || "").toLowerCase();
+          const isHighImpact = MACRO_HIGH_IMPACT_KW.some(kw => headline.includes(kw));
+          if (!isHighImpact) continue;
+          const TRACKED = [...CRYPTO_SYMS, ...EQUITY_SYMS, "XAU", "XAG", "DXY", "USD", "EUR", "JPY", "GBP", "BTC", "OIL"];
+          const affectedAssets = TRACKED.filter(s => s.length > 2 && headline.includes(s.toLowerCase())).slice(0, 5);
+          breakingNews.push({
+            headline: item.title,
+            source: item.site || "FMP",
+            time: `${Math.round((now - pubMs) / 60000)}min ago`,
+            impact: "HIGH",
+            affectedAssets,
+          });
+          if (breakingNews.length >= 5) break;
+        }
+      } catch {}
 
       const killSwitch = busStatus.killSwitch || { active: false };
       const hasHighImpact2H = eventsNext2H.some(e => e.impact === "HIGH" && e.status === "UPCOMING");
@@ -2964,19 +2964,38 @@ Output JSON only, no prose, no code fences.`;
     BRENT:"OANDA:XBR_USD",NATGAS:"OANDA:NATGAS_USD",COPPER:"OANDA:XCU_USD",
     PLATINUM:"OANDA:XPT_USD",
   };
+  // [migrated Apr 2026] Finnhub historical candles replaced by FMP /historical-chart.
+  // FMP intervals: 1min, 5min, 15min, 30min, 1hour, 4hour, 1day.
   async function fetchFinnhubCandlesQuant(ticker: string, interval: string, count: number) {
-    const apiKey = process.env.FINNHUB_KEY || process.env.FINNHUB_API_KEY;
+    const apiKey = process.env.FMP_API_KEY;
     if (!apiKey) return null;
     try {
-      const resMap: Record<string,string> = { "15m":"15","1h":"60","4h":"240","1d":"D" };
-      const res = resMap[interval] || "60";
-      const to = Math.floor(Date.now() / 1000);
-      const from = to - (count * quantIntervalToMs(interval) / 1000);
-      const fhSym = QUANT_FH_FOREX_MAP[ticker] || QUANT_FH_COMMODITY_MAP[ticker] || ticker;
-      const r = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(fhSym)}&resolution=${res}&from=${from}&to=${to}&token=${apiKey}`);
+      const ivMap: Record<string,string> = { "15m":"15min","1h":"1hour","4h":"4hour","1d":"1day" };
+      const fmpIv = ivMap[interval] || "1hour";
+      // FMP forex symbols use no slash, commodities use futures sym (GCUSD, etc.).
+      const FMP_FX_MAP: Record<string,string> = {
+        EURUSD:"EURUSD",GBPUSD:"GBPUSD",USDJPY:"USDJPY",USDCHF:"USDCHF",AUDUSD:"AUDUSD",
+        USDCAD:"USDCAD",NZDUSD:"NZDUSD",EURGBP:"EURGBP",EURJPY:"EURJPY",GBPJPY:"GBPJPY",
+        USDMXN:"USDMXN",USDZAR:"USDZAR",USDTRY:"USDTRY",USDSGD:"USDSGD",
+      };
+      const FMP_COMM_MAP: Record<string,string> = {
+        XAU:"GCUSD",XAG:"SIUSD",WTI:"CLUSD",BRENT:"BZUSD",NATGAS:"NGUSD",
+        COPPER:"HGUSD",PLATINUM:"PLUSD",
+      };
+      const fmpSym = FMP_FX_MAP[ticker] || FMP_COMM_MAP[ticker] || ticker;
+      const url = `https://financialmodelingprep.com/api/v3/historical-chart/${fmpIv}/${encodeURIComponent(fmpSym)}?apikey=${apiKey}`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return null;
       const data: any = await r.json();
-      if (data.s !== "ok" || !data.c?.length) return null;
-      return data.t.map((t: number, i: number) => ({ t:t*1000, o:parseFloat(data.o[i]), h:parseFloat(data.h[i]), l:parseFloat(data.l[i]), c:parseFloat(data.c[i]), v:parseFloat(data.v?.[i]||0) }));
+      if (!Array.isArray(data) || !data.length) return null;
+      // FMP returns newest-first; reverse to chronological then slice
+      const sorted = data.slice().reverse().slice(-count);
+      return sorted.map((row: any) => ({
+        t: new Date(row.date).getTime(),
+        o: parseFloat(row.open), h: parseFloat(row.high),
+        l: parseFloat(row.low),  c: parseFloat(row.close),
+        v: parseFloat(row.volume || 0),
+      }));
     } catch { return null; }
   }
   async function fetchQuantCandles(ticker: string, assetClass: string, interval: string, count: number) {

@@ -14,7 +14,7 @@ from .sizing import vol_target_size
 from .costs import total_cost_bps, ev_pass
 from .sl_placement import build_sl_tp
 from .db import log_quant_score
-from .external_bars import fetch_external_bars, provider_for
+from .external_bars import fetch_external_bars, provider_for, health_probe
 from .config import DEFAULT_COINS
 
 log = logging.getLogger("quant")
@@ -27,6 +27,17 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(ws_consumer(stop), name="hl-ws")
     app.state.stop = stop
     app.state.task = task
+    # ── Boot-time health log: which CCXT exchanges are reachable ─────────
+    try:
+        probe = await asyncio.to_thread(health_probe)
+        log.info("┌─ quant: live data sources ─────────────────────────")
+        log.info("│ Hyperliquid WS         : starting (HL info API)")
+        for name, status in probe.items():
+            log.info("│ ccxt.%-16s: %s", name, status)
+        log.info("│ Yahoo Finance fallback : enabled (no key)")
+        log.info("└────────────────────────────────────────────────────")
+    except Exception as e:
+        log.warning("quant: ccxt health probe failed: %s", e)
     log.info("quant service started")
     try:
         yield

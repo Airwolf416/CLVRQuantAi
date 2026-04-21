@@ -6,7 +6,8 @@
 //
 // DATA STREAMS:
 //   PERPS  → Hyperliquid (dynamic discovery — all dexes)
-//   SPOT   → Backend proxy → Finnhub (primary) / Yahoo Finance (fallback)
+//   CRYPTO → Binance public WebSocket (browser-direct, sub-second updates)
+//   SPOT   → Backend proxy → FMP (primary, was Finnhub) / Yahoo Finance (fallback)
 //
 // ABSOLUTE DATA RULES:
 //   • markPx === 0   → skip asset entirely, never render
@@ -291,7 +292,7 @@ async function fetchSpotViaBackend(symbols) {
         high:      d.h || 0,
         low:       d.l || 0,
         prevClose: d.pc || 0,
-        source:    "Finnhub",
+        source:    "FMP",
         ts: now,
       };
       const key = sym.toUpperCase();
@@ -740,10 +741,74 @@ function startHLStream() {
   } catch {}
 }
 
+// ── Binance public WebSocket — direct browser → exchange (no backend hop) ─────
+// Streams sub-second 24-hr ticker updates for the crypto basket. Updates _state
+// directly, matching the same shape produced by HL/SSE so all consumers benefit.
+const BINANCE_WS_SYMS = [
+  "btcusdt","ethusdt","solusdt","xrpusdt","dogeusdt","avaxusdt","linkusdt","arbusdt",
+  "pepeusdt","bnbusdt","adausdt","dotusdt","uniusdt","aaveusdt","nearusdt","suiusdt",
+  "aptusdt","opusdt","tiausdt","seiusdt","jupusdt","ondousdt","renderusdt","injusdt",
+  "fetusdt","hbarusdt","trumpusdt","hypeusdt","wifusdt",
+];
+const BINANCE_TO_APP = {
+  BTCUSDT:"BTC",ETHUSDT:"ETH",SOLUSDT:"SOL",XRPUSDT:"XRP",DOGEUSDT:"DOGE",AVAXUSDT:"AVAX",
+  LINKUSDT:"LINK",ARBUSDT:"ARB",PEPEUSDT:"PEPE",BNBUSDT:"BNB",ADAUSDT:"ADA",DOTUSDT:"DOT",
+  UNIUSDT:"UNI",AAVEUSDT:"AAVE",NEARUSDT:"NEAR",SUIUSDT:"SUI",APTUSDT:"APT",OPUSDT:"OP",
+  TIAUSDT:"TIA",SEIUSDT:"SEI",JUPUSDT:"JUP",ONDOUSDT:"ONDO",RENDERUSDT:"RENDER",INJUSDT:"INJ",
+  FETUSDT:"FET",HBARUSDT:"HBAR",TRUMPUSDT:"TRUMP",HYPEUSDT:"HYPE",WIFUSDT:"WIF",
+};
+let _binanceWs = null;
+let _binanceRetries = 0;
+function startBinanceStream() {
+  if (_binanceWs) return;
+  const streams = BINANCE_WS_SYMS.map(s => `${s}@ticker`).join("/");
+  const url = `wss://stream.binance.com:9443/stream?streams=${streams}`;
+  try {
+    const ws = new WebSocket(url);
+    _binanceWs = ws;
+    ws.onopen = () => {
+      _binanceRetries = 0;
+      console.log(`[binance-ws] connected — streaming ${BINANCE_WS_SYMS.length} crypto tickers`);
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        const t = msg?.data;
+        if (!t || !t.s) return;
+        const appSym = BINANCE_TO_APP[t.s];
+        if (!appSym) return;
+        const price = parseFloat(t.c);
+        const chg = parseFloat(t.P);
+        if (!price || price <= 0) return;
+        const cur = _state.spot[appSym] || {};
+        _state = {
+          ..._state,
+          spot: {
+            ..._state.spot,
+            [appSym]: { ...cur, price, change24h: chg, source: "Binance WS", ts: Date.now() },
+          },
+          lastUpdate: Date.now(),
+        };
+        notify();
+      } catch {}
+    };
+    ws.onerror = (e) => console.warn("[binance-ws] error:", e?.message || e);
+    ws.onclose = () => {
+      _binanceWs = null;
+      _binanceRetries++;
+      const backoff = Math.min(2000 * _binanceRetries, 30000);
+      console.log(`[binance-ws] disconnected — retrying in ${backoff/1000}s`);
+      setTimeout(startBinanceStream, backoff);
+    };
+  } catch (e) {
+    console.warn("[binance-ws] init failed:", e.message);
+  }
+}
+
 // ── Socket.io client — receives market_update events from the backend ──────────
-// Each event contains a batch of { sym: { price, chg, type } } entries
-// emitted by the Finnhub WebSocket handler whenever new ticks arrive.
-// This supplements (not replaces) the SSE stream and the HL WebSocket.
+// Backend stockRefreshWorker (FMP polling) emits batched price ticks for
+// equities, metals, and forex over Socket.io (and SSE). Crypto comes from
+// the direct Binance WS above; HL perps come from startHLStream().
 let _socket = null;
 
 function startSocketIO() {
@@ -798,8 +863,9 @@ function ensurePolling() {
   if (_intervalId) return;
   doFetch();
   _intervalId = setInterval(doFetch, REFRESH_MS);
-  startHLStream();  // Hyperliquid WebSocket — real-time perp mid prices (~1s)
-  startSocketIO();  // Socket.io — real-time Finnhub equity/metal/forex ticks
+  startHLStream();      // Hyperliquid WebSocket — real-time perp mid prices (~1s)
+  startBinanceStream(); // Binance public WebSocket — direct crypto tickers
+  startSocketIO();      // Socket.io — backend FMP equity/metal/forex broadcasts
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

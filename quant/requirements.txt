@@ -2,6 +2,7 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 websockets==13.0.1
 httpx==0.27.2
+ccxt==4.5.50
 numpy>=1.26,<2.1
 pandas>=2.2,<2.3
 scipy>=1.13,<1.15

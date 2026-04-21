@@ -130,8 +130,9 @@ async function fetchLiveSignals(since=0){
   return await r.json();
 }
 async function fetchFinnhub(){
+  // [migrated Apr 2026] /api/finnhub now serves FMP data; route name kept for compat.
   const r=await fetch("/api/finnhub");
-  if(!r.ok)throw new Error(`Finnhub API ${r.status}`);
+  if(!r.ok)throw new Error(`Market data API ${r.status}`);
   return await r.json();
 }
 async function fetchNews(){
@@ -582,7 +583,7 @@ function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
       {/* Benefits strip */}
       <div style={{background:"#0c1220",border:"1px solid #141e35",borderRadius:5,padding:"14px 16px"}}>
         <div style={{fontFamily:MONO2,fontSize:9,color:C2.gold,letterSpacing:"0.16em",marginBottom:10}}>WHY CLVRQUANT</div>
-        {[["📡","Live data from Binance, Finnhub & Crypto Panic — no delays"],["🤖","CLVR AI uses Claude Sonnet — real market context, not generic answers"],["🏛","SEC Form 4 insider filings updated daily — follow the smart money"],["🔔","Push alerts to your device — never miss a breakout or news event"],["👛","Phantom Wallet integration — track your Solana portfolio in-app"],["🔒","Your data is private and never sold — ever"]].map(([icon,text])=>(
+        {[["📡","Live data from Binance WS, Hyperliquid, FMP & Crypto Panic — no delays"],["🤖","CLVR AI uses Claude Sonnet — real market context, not generic answers"],["🏛","SEC Form 4 insider filings updated daily — follow the smart money"],["🔔","Push alerts to your device — never miss a breakout or news event"],["👛","Phantom Wallet integration — track your Solana portfolio in-app"],["🔒","Your data is private and never sold — ever"]].map(([icon,text])=>(
           <div key={text} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:8}}>
             <span style={{fontSize:12,lineHeight:1.6,flexShrink:0}}>{icon}</span>
             <span style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.6}}>{text}</span>
@@ -3261,8 +3262,20 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
 RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 {"generated":"ISO-DATE","regime":{"score":63,"label":"RISK-ON","bias":"Mean-Reversion"},"macroStatus":{"clear":true,"nextEvent":"FOMC Williams 08:35 ET Apr 16","notes":"No blocks active"},"volRegime":"HIGH","trades":[{"rank":1,"asset":"INJ/USDT","direction":"LONG","tradeType":"DAY TRADE","entry":3.29,"sl":3.07,"tp1":{"price":3.58,"pct":50,"rr":"1.3:1"},"tp2":{"price":3.82,"pct":30,"rr":"2.4:1"},"tp3":{"price":4.10,"pct":20,"trailing":true},"leverage":"3x","killClock":"24H","conviction":72,"edge":"72%","edgeSource":"estimated","thesis":"Short thesis here.","invalidation":"Break below $3.07 with volume","flags":["Small OI","HIGH vol"],"scores":{"trend":75,"momentum":80,"structure":68,"oi":65,"volume":55,"macro":70},"postTp1":"SL to breakeven at $3.29"}]}`;
     const userMsg=`Generate ${tfLabel} TOP 4 TRADE IDEAS. Return ONLY valid JSON matching the structure in your instructions. No markdown, no text before or after. Use live prices provided.`;
+    // 90s client-side timeout: Claude with 4096 max_tokens can take 45-70s,
+    // and Safari aborts fetches with the cryptic "Load failed" after ~60s on
+    // some networks. AbortController gives us a clean error path either way.
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), 90_000);
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:userMsg,maxTokens:4096})});
+      const res=await fetch("/api/ai/analyze",{
+        method:"POST",
+        credentials:"include",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({system:sys,userMessage:userMsg,maxTokens:4096}),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timeoutId);
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403){setAiOutput("✦ PRO FEATURE\n\nAI Trade Ideas are exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• Top 4 trade ideas across all asset classes\n• Entry / Stop Loss / TP1 / TP2 for each trade\n• Confidence levels & Kelly position sizing\n• Bayesian probability estimates\n\nTap UPGRADE in the top bar.");setAiOutputMode("text");}
@@ -3271,7 +3284,14 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         setAiLoading(false);return;
       }
       setAiOutput(data.text||"No response.");
-    }catch(e){setAiOutput(`Error: ${e.message}`);setAiOutputMode("text");}
+    }catch(e){
+      clearTimeout(timeoutId);
+      const msg = e.name === "AbortError"
+        ? "⏱ Trade Ideas timed out (90s).\n\nClaude is taking longer than usual to generate your top 4 trade ideas. This usually clears in a minute — please tap GENERATE TRADE IDEAS again."
+        : `Network error: ${e.message}.\n\nCheck your connection and tap GENERATE TRADE IDEAS to retry.`;
+      setAiOutput(msg);
+      setAiOutputMode("text");
+    }
     setAiLoading(false);
   };
 
@@ -5076,7 +5096,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               {q:"Can I use CLVRQuant on my phone?",a:"Yes — CLVRQuant is designed mobile-first. You can add it to your home screen as a PWA (Progressive Web App) for a native app experience. On iPhone, tap Share → Add to Home Screen. On Android, tap the browser menu → Install App."},
             ]},
             {cat:"Market Data & Signals",color:C.green,items:[
-              {q:"Where does the market data come from?",a:"Live crypto prices come from Binance and Hyperliquid. Equities, metals, and forex come from Finnhub. Macro events come from ForexFactory. All data is real-time — no delayed or simulated prices."},
+              {q:"Where does the market data come from?",a:"Live crypto prices come from Binance (direct WebSocket) and Hyperliquid. Equities, metals, and forex come from Financial Modeling Prep (FMP). Macro events come from ForexFactory. All data is real-time — no delayed or simulated prices."},
               {q:"What does 'AWAITING RESULT' mean on the macro calendar?",a:"This appears when a high-impact economic event (like an FOMC rate decision) has passed its scheduled release time but the actual result hasn't been published yet on ForexFactory. This typically resolves within 30–60 minutes of the announcement. The system refreshes automatically."},
               {q:"What is a QuantBrain Signal?",a:"QuantBrain signals are generated when an asset passes at least 4 out of 5 technical checks — price move magnitude, volume spike, funding rate, open interest shift, and momentum. Each signal shows a conviction score (55–100), suggested entry/target/stop, and Kelly position sizing."},
               {q:"How often do signals refresh?",a:"Signal checks run continuously. The dashboard refreshes market data every 30 seconds. New signals appear as soon as they're detected."},
@@ -5134,7 +5154,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
-          BINANCE · FINNHUB · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT
+          BINANCE · HYPERLIQUID · FMP · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT
         </div>
       </div>
 

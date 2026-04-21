@@ -430,7 +430,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
           {/* ── Price view toggle: SPOT / PERP ── */}
           <div style={{ display:"flex", alignItems:"center", gap:4, marginBottom:8 }}>
             <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, letterSpacing:"0.08em", marginRight:2 }}>PRICE:</span>
-            {[["spot","SPOT · FINNHUB"],["perp","PERP · HYPERLIQUID"]].map(([k,lbl]) => (
+            {[["spot","SPOT · FMP / BINANCE"],["perp","PERP · HYPERLIQUID"]].map(([k,lbl]) => (
               <button
                 key={k}
                 data-testid={`basket-priceview-${k}`}
