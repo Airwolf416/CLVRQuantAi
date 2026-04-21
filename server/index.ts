@@ -11,6 +11,7 @@ import { WebhookHandlers } from "./webhookHandlers";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
 import { startDailyBriefScheduler } from "./dailyBrief";
+import { startWeeklyUpdateScheduler } from "./weeklyUpdate";
 import { initializeDatabase } from "./initDb";
 import { startOutcomeResolver } from "./lib/outcomeResolver";
 import { startAdaptiveThresholds, suppressHistoricalBleeders } from "./lib/adaptiveThresholds";
@@ -636,6 +637,7 @@ function logDataSourceStatus() {
   await registerRoutes(httpServer, app);
   initSocketIO(httpServer);
   startDailyBriefScheduler();
+  startWeeklyUpdateScheduler();
   startOutcomeResolver();
   startAdaptiveThresholds();
   startCircuitBreaker();

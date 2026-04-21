@@ -469,8 +469,7 @@ async function sendDailyBriefEmails() {
         if (emailIdx > 0) await new Promise(r => setTimeout(r, 250));
         const sub = chunk[emailIdx];
         try {
-          const isPro = sub.tier === "pro" || sub.tier === "elite";
-          const html = renderDailyBriefEmail(briefJson, today, marketData, isPro, sub.email);
+          const html = renderDailyBriefEmail(briefJson, today, marketData, sub.tier || "pro", sub.email);
           const plainText = [
             `CLVRQuant Morning Brief — ${today}`,
             ``,
@@ -616,8 +615,7 @@ async function sendApologyBriefEmails() {
       if (i > 0) await new Promise(r => setTimeout(r, 250));
       const sub = subs[i];
       try {
-        const isPro = sub.tier === "pro" || sub.tier === "elite";
-        const briefHtml = renderDailyBriefEmail(briefJson, today, marketData, isPro, sub.email);
+        const briefHtml = renderDailyBriefEmail(briefJson, today, marketData, sub.tier || "pro", sub.email);
         const apologyHtml = briefHtml.replace(
           `<div style="padding:24px 24px 8px">`,
           apologyNote + `<div style="padding:24px 24px 8px">`

@@ -264,3 +264,24 @@ export const microstructureSnapshots = pgTable("microstructure_snapshots", {
 }));
 
 export type MicrostructureSnapshot = typeof microstructureSnapshots.$inferSelect;
+
+// ── Weekly Updates ("What's New This Week" + Saturday digest email) ──────────
+// Admin posts a major update; the latest one displaces the prior on the About
+// page. The Saturday 10am ET scheduler emails it to subscribers if a fresh
+// (created within the last 7 days) update exists and hasn't been emailed yet.
+export const weeklyUpdates = pgTable("weekly_updates", {
+  id: serial("id").primaryKey(),
+  version: text("version"),                                  // e.g. "v2 · Apr 21, 2026"
+  title: text("title").notNull(),                            // headline
+  summary: text("summary").notNull(),                        // 1-2 sentence intro
+  items: jsonb("items").notNull(),                           // [{emoji, title, description}]
+  emailSentAt: timestamp("email_sent_at"),                   // null until Saturday email goes out
+  emailRecipientCount: integer("email_recipient_count").default(0),
+  createdBy: text("created_by"),                             // admin email
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export type WeeklyUpdate = typeof weeklyUpdates.$inferSelect;
+export const insertWeeklyUpdateSchema = createInsertSchema(weeklyUpdates).omit({
+  id: true, createdAt: true, emailSentAt: true, emailRecipientCount: true,
+});
+export type InsertWeeklyUpdate = z.infer<typeof insertWeeklyUpdateSchema>;

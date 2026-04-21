@@ -443,6 +443,90 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN 2 — Diagnostics: Track Record, Signal Logs, Resolver, Daily Brief
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── Weekly Update editor (admin) ────────────────────────────────────────────
+// Defined at module scope so React doesn't unmount/remount it on parent
+// re-render (which would otherwise wipe input state and lose cursor focus).
+function WeeklyUpdateEditor({ onSave }) {
+  const [version, setVersion] = useState("");
+  const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
+  const [items, setItems] = useState([{ emoji: "✨", title: "", description: "" }]);
+  const [latest, setLatest] = useState(null);
+  const [loadingLatest, setLoadingLatest] = useState(true);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/weekly-update/latest");
+        const j = await r.json();
+        if (j && j.id) setLatest(j);
+      } catch {}
+      setLoadingLatest(false);
+    })();
+  }, []);
+  const inp = { width:"100%", background:"#0a1226", border:"1px solid #1c2b4a", color:"#e8e0d0", padding:"7px 10px", fontFamily:MONO, fontSize:11, borderRadius:4, boxSizing:"border-box" };
+  const lbl = { fontFamily:MONO, fontSize:9, color:"#6b7fa8", letterSpacing:"0.12em", marginBottom:4, display:"block" };
+  return (
+    <div>
+      {!loadingLatest && latest && (
+        <div style={{ background:"rgba(0,229,255,.04)", border:"1px solid rgba(0,229,255,.18)", borderRadius:6, padding:"10px 12px", marginBottom:12 }}>
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#00e5ff", letterSpacing:"0.15em", marginBottom:4 }}>CURRENT LIVE UPDATE</div>
+          <div style={{ fontFamily:MONO, fontSize:11, color:"#c8d4ee" }}>{latest.version || "(no version)"} — <strong>{latest.title}</strong></div>
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#6b7fa8", marginTop:4 }}>
+            Posted {new Date(latest.createdAt).toLocaleString()} ·{" "}
+            {latest.emailSentAt
+              ? <span style={{ color:"#00e57a" }}>Emailed {new Date(latest.emailSentAt).toLocaleString()} to {latest.emailRecipientCount}</span>
+              : <span style={{ color:"#c9a84c" }}>Not yet emailed</span>}
+          </div>
+        </div>
+      )}
+      <div style={{ display:"grid", gap:10 }}>
+        <div>
+          <label style={lbl}>VERSION (e.g. "v3 · Apr 21, 2026")</label>
+          <input data-testid="input-wu-version" style={inp} value={version} onChange={e => setVersion(e.target.value)} />
+        </div>
+        <div>
+          <label style={lbl}>HEADLINE</label>
+          <input data-testid="input-wu-title" style={inp} value={title} onChange={e => setTitle(e.target.value)} placeholder="What's New This Week" />
+        </div>
+        <div>
+          <label style={lbl}>SUMMARY (1–2 sentences)</label>
+          <textarea data-testid="input-wu-summary" style={{ ...inp, minHeight:60, fontFamily:"system-ui,sans-serif" }} value={summary} onChange={e => setSummary(e.target.value)} />
+        </div>
+        <div>
+          <label style={lbl}>FEATURE ITEMS</label>
+          {items.map((it, i) => (
+            <div key={i} style={{ display:"grid", gridTemplateColumns:"42px 1fr 28px", gap:6, marginBottom:6 }}>
+              <input data-testid={`input-wu-emoji-${i}`} style={{ ...inp, textAlign:"center" }} value={it.emoji} onChange={e => setItems(items.map((x,j) => j===i ? { ...x, emoji:e.target.value } : x))} />
+              <div style={{ display:"grid", gap:4 }}>
+                <input data-testid={`input-wu-item-title-${i}`} style={inp} placeholder="Feature title" value={it.title} onChange={e => setItems(items.map((x,j) => j===i ? { ...x, title:e.target.value } : x))} />
+                <textarea data-testid={`input-wu-item-desc-${i}`} style={{ ...inp, minHeight:40, fontFamily:"system-ui,sans-serif" }} placeholder="What it does in one sentence" value={it.description} onChange={e => setItems(items.map((x,j) => j===i ? { ...x, description:e.target.value } : x))} />
+              </div>
+              <button data-testid={`btn-wu-remove-${i}`} onClick={() => setItems(items.filter((_,j) => j!==i))} style={{ background:"rgba(255,80,100,.1)", border:"1px solid rgba(255,80,100,.3)", color:"#ff6680", borderRadius:4, cursor:"pointer", fontFamily:MONO, fontSize:14 }}>×</button>
+            </div>
+          ))}
+          <button data-testid="btn-wu-add-item" onClick={() => setItems([...items, { emoji:"✨", title:"", description:"" }])}
+            style={{ background:"rgba(201,168,76,.08)", border:"1px solid rgba(201,168,76,.3)", color:"#c9a84c", borderRadius:4, padding:"6px 12px", fontFamily:MONO, fontSize:10, cursor:"pointer", marginTop:4 }}>
+            + ADD ITEM
+          </button>
+        </div>
+        <button data-testid="btn-wu-save"
+          disabled={saving || !title.trim() || !summary.trim() || items.filter(i => i.title.trim()).length === 0}
+          onClick={async () => {
+            setSaving(true);
+            const cleanItems = items.filter(i => i.title.trim());
+            try { await onSave({ version: version.trim() || null, title: title.trim(), summary: summary.trim(), items: cleanItems }); }
+            finally { setSaving(false); }
+            try { const r = await fetch("/api/weekly-update/latest"); const j = await r.json(); if (j && j.id) setLatest(j); } catch {}
+          }}
+          style={{ background:"linear-gradient(135deg,#00e5ff,#0099cc)", border:"none", color:"#080d18", borderRadius:4, padding:"10px 18px", fontFamily:MONO, fontSize:11, fontWeight:700, cursor:saving?"not-allowed":"pointer", letterSpacing:"0.08em", opacity:saving?0.6:1 }}>
+          {saving ? "SAVING…" : "💾 SAVE & PUBLISH UPDATE"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AdminTab2({ C, MONO, SANS, SERIF }) {
   const [trackRecord, setTrackRecord] = useState(null);
   const [signalHistory, setSignalHistory] = useState(null);
@@ -690,6 +774,29 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
             </table>
           </div>
         )}
+      </Section>
+
+      {/* Weekly Update Controls */}
+      <Section title="🆕 WEEKLY UPDATE (WHAT'S NEW)" color="#00e5ff">
+        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
+          Posts a new "What's New This Week" entry. The latest entry replaces all prior ones on the About page.
+          Saturday 10:00 AM ET, the system auto-emails it to subscribers <em>only if</em> it's less than 7 days old and not already sent.
+        </div>
+        <WeeklyUpdateEditor onSave={async (payload) => {
+          const r = await fetch("/api/admin/weekly-update", {
+            method:"POST", credentials:"include",
+            headers:{ "Content-Type":"application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (!r.ok) { const t = await r.text().catch(()=>""); alert("Save failed: " + t); return; }
+          alert("Weekly update saved. It is now live on the About page.");
+        }} />
+        <div style={{ marginTop:14 }}>
+          <ActionBtn actionKey="weekly-update-send-now" label="✉ SEND WEEKLY EMAIL NOW (MANUAL)" url="/api/admin/weekly-update/send-now" color="#00e5ff" />
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
+            Use only if Saturday automation didn't fire. Sends the latest weekly update to all active subscribers immediately.
+          </div>
+        </div>
       </Section>
 
       {/* Daily Brief Controls */}

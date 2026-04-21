@@ -69,9 +69,10 @@
       {{#if isPro}}⚡ Today's Trade Ideas — Pro (4 Ideas){{else}}⚡ Today's Top Trade Idea{{/if}}
     </div>
 
-    <!-- Top Trade -->
+    <!-- Top Trade — Pro & Elite only; Free sees an upsell teaser -->
+    {{#if isPro}}
     <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
-      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ {{#if isPro}}TRADE IDEA #1{{else}}TODAY'S TOP TRADE IDEA{{/if}}</div>
+      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TRADE IDEA #1 · {{tierLabel}}</div>
       <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{topTrade.riskLabel}} {{topTrade.asset}} {{topTrade.dir}}</div>
       <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
         📍 Entry: {{topTrade.entry}}<br>
@@ -83,12 +84,21 @@
       </div>
       {{#if topTrade.edge}}<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 {{topTrade.edge}}</div>{{/if}}
     </div>
+    {{else}}
+    <div style="background:rgba(20,30,53,.45);border:1px dashed rgba(201,168,76,.35);border-radius:4px;padding:18px 20px;margin-bottom:12px;text-align:center">
+      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:10px;font-weight:700">🔒 TRADE IDEA #1 · LOCKED</div>
+      <div style="font-size:13px;color:#a8b3c8;line-height:1.7;margin-bottom:12px">
+        Today's top trade idea — entry, stop, two targets and edge — is reserved for Pro and Elite members.
+      </div>
+      <a href="https://clvrquantai.com" style="display:inline-block;font-family:monospace;font-size:10px;letter-spacing:.18em;color:#080d18;background:#e8c96d;text-decoration:none;padding:9px 18px;border-radius:4px;font-weight:700">UNLOCK FOR $9.99/mo →</a>
+    </div>
+    {{/if}}
 
-    <!-- Additional Trades (Pro only) -->
-    {{#if isPro}}
+    <!-- Additional Trades (Elite only) -->
+    {{#if isElite}}
     {{#each additionalTrades}}
     <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
-      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TRADE IDEA #{{tradeNum}}</div>
+      <div style="font-family:monospace;font-size:9px;color:#00e5ff;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TRADE IDEA #{{tradeNum}} · ELITE</div>
       <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{riskLabel}} {{asset}} {{dir}}</div>
       <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
         📍 Entry: {{entry}}<br>
@@ -102,9 +112,15 @@
     </div>
     {{/each}}
     {{else}}
-    <div style="margin-top:8px;padding:10px 14px;background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">
-      🔒 <strong style="color:#c9a84c">Pro members get 4 trade ideas daily.</strong> Upgrade at <a href="https://clvrquantai.com" style="color:#e8c96d;text-decoration:none">clvrquantai.com</a>
+    {{#if isPro}}
+    <div style="margin-top:8px;padding:12px 14px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.20);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">
+      🔒 <strong style="color:#00e5ff">Elite members get 3 trade ideas every morning</strong> (you're getting 1 as a Pro member). Upgrade at <a href="https://clvrquantai.com" style="color:#00e5ff;text-decoration:none">clvrquantai.com</a>
     </div>
+    {{else}}
+    <div style="margin-top:8px;padding:12px 14px;background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">
+      🔒 <strong style="color:#c9a84c">Pro members get 1 daily trade idea, Elite members get 3.</strong> Upgrade at <a href="https://clvrquantai.com" style="color:#e8c96d;text-decoration:none">clvrquantai.com</a>
+    </div>
+    {{/if}}
     {{/if}}
   </div>
 

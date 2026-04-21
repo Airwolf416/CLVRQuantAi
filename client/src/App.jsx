@@ -2069,6 +2069,50 @@ function SideNav({items,tab,onTab,C,MONO,SERIF,PRO_TABS_GATE2,isPro,isElite,isPr
 }
 
 // ═══════════════════════════════════════════════════════════
+// "What's New This Week" — admin-driven, fetched from /api/weekly-update/latest.
+// Falls back to a single placeholder card if no update has been posted yet.
+function WhatsNewPanel({ panel, ph, PTitle, Badge, C, SERIF, SANS }){
+  const [u,setU]=useState(null);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{
+    let alive=true;
+    (async()=>{
+      try{
+        const r=await fetch("/api/weekly-update/latest");
+        const j=await r.json();
+        if(alive && j && j.id) setU(j);
+      }catch{}
+      if(alive) setLoading(false);
+    })();
+    return()=>{alive=false;};
+  },[]);
+  if(loading) return null;
+  const items = (u && Array.isArray(u.items) && u.items.length>0) ? u.items : [
+    { emoji:"✨", title:"Stay tuned", description:"Major product updates will appear here weekly." }
+  ];
+  const versionLabel = u?.version || "Latest";
+  const headline = u?.title || "What's New This Week";
+  return (
+    <div style={{...panel,border:`1px solid rgba(0,229,255,.22)`,background:"linear-gradient(180deg,rgba(0,229,255,.04),transparent)"}}>
+      <div style={ph}><PTitle>{headline}</PTitle><Badge label={versionLabel} color="gold"/></div>
+      {u?.summary && (
+        <div style={{padding:"0 16px 8px",fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.7}}>{u.summary}</div>
+      )}
+      <div style={{padding:"4px 16px 16px"}}>
+        {items.map((it,i)=>(
+          <div key={i} data-testid={`whatsnew-item-${i}`} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 0",borderBottom:i<items.length-1?`1px solid ${C.border}`:"none"}}>
+            <div style={{fontSize:16,lineHeight:1.2,flexShrink:0,width:22,textAlign:"center"}}>{it.emoji||"✨"}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:SERIF,fontSize:13,fontWeight:700,color:C.gold2,marginBottom:3}}>{it.title}</div>
+              <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,lineHeight:1.7}}>{it.description}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
@@ -3434,8 +3478,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         select,input,textarea{outline:none;}
         ::-webkit-scrollbar{display:none;}
         button{cursor:pointer;}
-        body{background:${C.bg};margin:0;}
-        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(28,50,100,.4) 1px,transparent 1px),linear-gradient(90deg,rgba(28,50,100,.4) 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;}
+        html,body{background:${C.bg};margin:0;overflow-x:hidden;max-width:100vw;}
+        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(28,50,100,.4) 1px,transparent 1px),linear-gradient(90deg,rgba(28,50,100,.4) 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0;will-change:transform;}
         body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(201,168,76,.07) 0%,transparent 60%);pointer-events:none;z-index:0;}
         @keyframes slideUp{from{transform:translateX(-50%) translateY(16px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
         @keyframes slideDown{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -4826,31 +4870,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             </button>
           </div>
 
-          {/* ── WHAT'S NEW THIS WEEK ── */}
-          <div style={{...panel,border:`1px solid rgba(0,229,255,.22)`,background:"linear-gradient(180deg,rgba(0,229,255,.04),transparent)"}}>
-            <div style={ph}><PTitle>What's New This Week</PTitle><Badge label="v2 · Apr 17, 2026" color="gold"/></div>
-            <div style={{padding:"4px 16px 16px"}}>
-              {[
-                {emoji:"📓",t:"Trade Journal — Import from Screenshot or Link",d:"Snap a photo of any open position (Phantom, Hyperliquid, Binance, IBKR…) or paste a URL — Claude vision reads asset, direction, entry, stop, TP1/TP2 and pre-fills the form."},
-                {emoji:"📤",t:"Luxury Share Cards",d:"Tap Share Card on any closed trade to generate a navy/gold PNG ready for X, Instagram, or Discord. One tap — no editing."},
-                {emoji:"📷",t:"Phone-Friendly Uploads",d:"iPhone & iPad screenshots (often 4–12MB) are now auto-compressed in your browser before upload — uploads land instantly with live status."},
-                {emoji:"📣",t:"Squawk Box Upgrades (Elite)",d:"Pulsing green LIVE dot when active, urgent vs normal voice priorities — high-conviction signals interrupt the queue and are spoken louder/faster."},
-                {emoji:"⏱",t:"Granular Today Timeframes",d:"Today filter now splits into Quick (<1h), Hours (1–8h), and Full Day — instantly see only the signals that match your trading window."},
-                {emoji:"🧠",t:"Aggressive Adaptive Learning",d:"Engine recalculates every 30 minutes (was 4 hours), automatically suppresses any setup with <25% historical win rate, and caps signals per asset per hour."},
-                {emoji:"🚀",t:"Leverage & Hold Time on Every Card",d:"Suggested leverage (1x–10x) and expected hold time are now displayed prominently on each signal — at a glance, you know how big and how long."},
-                {emoji:"✉",t:"Faster, Cleaner Morning Brief",d:"Commentary trimmed to a 4-block summary (BTC, FX, Gold, Oil) for faster, more reliable AI generation. Reply-to switched to no-reply (support stays in the body at Support@CLVRQuantAI.com)."},
-                {emoji:"🎯",t:"AI Brief Reliability",d:"3-attempt retry with exponential backoff and a condensed-prompt fallback ensure the morning brief lands on time even if Claude hits a hiccup."},
-              ].map(({emoji,t,d},i)=>(
-                <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 0",borderBottom:i<8?`1px solid ${C.border}`:"none"}}>
-                  <div style={{fontSize:16,lineHeight:1.2,flexShrink:0,width:22,textAlign:"center"}}>{emoji}</div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontFamily:SERIF,fontSize:13,fontWeight:700,color:C.gold2,marginBottom:3}}>{t}</div>
-                    <div style={{fontFamily:SANS,fontSize:11,color:C.muted2,lineHeight:1.7}}>{d}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          {/* ── WHAT'S NEW THIS WEEK (admin-driven, latest replaces prior) ── */}
+          <WhatsNewPanel panel={panel} ph={ph} PTitle={PTitle} Badge={Badge} C={C} SERIF={SERIF} SANS={SANS}/>
           <div style={panel}>
             <div style={ph}><PTitle>Why CLVRQuant?</PTitle></div>
             <div style={{padding:"8px 16px 16px"}}>
@@ -4903,7 +4924,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             <div style={{padding:"8px 16px 16px"}}>
               {[
                 {feature:"Live market data (crypto, equities, forex, commodities)",free:true,pro:true,elite:true},
-                {feature:"Macro Calendar & Morning Brief",free:"1 idea",pro:"4 ideas",elite:"4 ideas"},
+                {feature:"Macro Calendar & Morning Brief (daily trade ideas)",free:"Locked",pro:"1 idea",elite:"3 ideas"},
                 {feature:"QuantBrain signals & anomaly alerts",free:false,pro:true,elite:true},
                 {feature:"CLVR AI Market Chat (Claude)",free:false,pro:"30/day",elite:"Unlimited"},
                 {feature:"⚡ AI Quant Engine — MasterBrain",free:false,pro:false,elite:true},

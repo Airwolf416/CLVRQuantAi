@@ -67,10 +67,15 @@ export function renderDailyBriefEmail(
   briefJson: any,
   dateStr: string,
   marketData: MarketData,
-  isPro = false,
+  tierOrIsPro: string | boolean = false,
   subscriberEmail = ""
 ): string {
   const template = getTemplate("daily_brief");
+
+  // Tier rules: free=0 ideas (locked), pro=1 idea (topTrade only), elite=3 ideas (top + 2 additional)
+  const tier = typeof tierOrIsPro === "string" ? tierOrIsPro.toLowerCase() : (tierOrIsPro ? "pro" : "free");
+  const isElite = tier === "elite";
+  const isPro = tier === "pro" || isElite; // back-compat for any legacy template branch
 
   const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787"
     : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
@@ -78,12 +83,16 @@ export function renderDailyBriefEmail(
   const { color: macroRegimeColor, border: macroRegimeBorderColor, bg: macroRegimeBg } =
     macroRegimeColors(briefJson.macroRegime || "");
 
-  const additionalTrades = (briefJson.additionalTrades || []).map((t: any, i: number) => ({
-    ...t,
-    tradeNum: i + 2,
-    flags: t.flags || "None",
-    riskLabel: t.riskLabel || "🟡",
-  }));
+  // Pro: 0 additional (1 total). Elite: 2 additional (3 total). Free: locked.
+  const additionalCap = isElite ? 2 : 0;
+  const additionalTrades = (briefJson.additionalTrades || [])
+    .slice(0, additionalCap)
+    .map((t: any, i: number) => ({
+      ...t,
+      tradeNum: i + 2,
+      flags: t.flags || "None",
+      riskLabel: t.riskLabel || "🟡",
+    }));
 
   const data = {
     dateStr,
@@ -101,6 +110,8 @@ export function renderDailyBriefEmail(
     topTrade:        briefJson.topTrade ? { ...briefJson.topTrade, flags: briefJson.topTrade.flags || "None" } : null,
     additionalTrades,
     isPro,
+    isElite,
+    tierLabel: isElite ? "ELITE" : isPro ? "PRO" : "FREE",
     watchItems:     briefJson.watchItems || [],
     riskNote:       briefJson.riskNote || "",
     riskLevelUpper: (briefJson.riskLevel || "MEDIUM").toUpperCase(),
