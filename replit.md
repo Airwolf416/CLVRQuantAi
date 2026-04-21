@@ -25,13 +25,24 @@ Goal: replace Claude-as-originator with a deterministic quant scorer; Claude bec
 - `client/src/components/QuantStatusCard.jsx` — frontend status widget rendered in `QuantBrain.jsx`
 - DB tables: `quant_scores`, `microstructure_snapshots` (created via `executeSql` since `db:push` had interactive prompt)
 
-### Wiring status
-- ✅ Python service boots, Hyperliquid WS connected for BTC/ETH/SOL/PENDLE/HYPE
-- ✅ Scorer math verified (synthetic random walk correctly blocked by `z_threshold` + `regime_chop` gates)
-- ✅ DB logging verified (`quant_scores` row #1 written)
-- ✅ Frontend status card live in QuantBrain tab
-- ⏸ NOT auto-wired into `detectMoves` scanner. Existing 5/5 check pipeline (anti-chase, no-momentum gate, macro risk, session, MAX_SIGNALS caps) still owns emission. Call `generateSignalPhase2A` manually via `/api/quant/test-flow` or wire it into `detectMoves` behind `PHASE2A_ENABLED=1` env when ready. Spec section 16(B).
-- ⏸ Railway production needs Python in build (Procfile / railway.json TBD). `startQuantService` swallows spawn errors so Express keeps working if Python unavailable.
+### Wiring status (full sweep complete)
+- ✅ Python service boots, Hyperliquid WS connected for **all 32 perps** (BTC, ETH, SOL, WIF, DOGE, AVAX, LINK, ARB, kPEPE, XRP, BNB, ADA, DOT, POL, UNI, AAVE, NEAR, SUI, APT, OP, TIA, SEI, JUP, ONDO, RENDER, INJ, FET, TAO, PENDLE, HBAR, TRUMP, HYPE)
+- ✅ Real 1m OHLCV bar aggregation from HL trades (`STATE.bars` deque of 2000 per coin)
+- ✅ `/quant/score` falls back to internal bars when caller passes none (`GET /quant/bars/{coin}` exposes them)
+- ✅ Direction-aware Wilson lower bound from `ai_signal_log` (long/short separately, 30d, min n=10) with adaptive_thresholds fallback
+- ✅ Phase 2A **auto-wired into `detectMoves`** at `server/routes.ts ~983` — opt-in via `PHASE2A_ENABLED=1`, fail-open if quant down (won't block existing flow)
+- ✅ Railway production config: `nixpacks.toml` (installs Node 20 + Python 3.11 + `quant/requirements.txt` into `/opt/venv`), `Procfile`, `railway.json` with health check on `/api/quant/health`
+- ✅ Frontend `QuantStatusCard` shows ONLINE/OFFLINE, PASSED/BLOCKED/VETOED counters from `/api/quant/recent`, last 5 scores
+- ✅ Architect review fixes applied: `child.on("error")`, `aiIpLimiter` + `PHASE2A_TEST_TOKEN` on test-flow, snake_case in UI
+
+### How to flip Phase 2A live
+- Dev: `PHASE2A_ENABLED=1 npm run dev` (or set in Replit Secrets)
+- Prod (Railway): set `PHASE2A_ENABLED=1` env var. Health check on `/api/quant/health` gates deploy.
+
+### Known limitations / honest gaps
+- Equities, metals, forex use Express's `priceHistory` (single-price ticks expanded into fake OHLC bars when piped to scorer). Real candle quality only exists for the 32 HL perps.
+- ATR/regime/GARCH math has only been observed on synthetic data + early WS samples; needs a multi-hour soak before `PHASE2A_ENABLED=1` is recommended in prod.
+- Wilson LB returns `null` until ≥10 closed signals per (token, direction) exist — scorer is configured to handle null gracefully.
 
 ### Recent guardrails added (pre-Phase 2A)
 - `server/config/assets.ts`: `SESSION_THRESHOLDS.minMove` raised to 2.0% (POST_NY 2.5%) — fewer noise signals

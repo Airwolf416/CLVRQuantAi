@@ -977,6 +977,35 @@ async function detectMoves() {
       detectedPatterns,
     };
 
+    // ── PHASE 2A GATE (opt-in via env) ────────────────────────────────────
+    // When PHASE2A_ENABLED=1, every signal must additionally pass the Python
+    // quant scorer + cost/EV gate + Claude veto. If quant is unreachable,
+    // we fail-open (signal still emits) so old flow keeps working.
+    if (process.env.PHASE2A_ENABLED === "1") {
+      try {
+        const { generateSignalPhase2A } = await import("./quantClient");
+        const histForQuant = (priceHistory[sym] || []).slice(-300);
+        if (histForQuant.length >= 60) {
+          const ohlcv = histForQuant.map((p: any) => [p.ts, p.price, p.price, p.price, p.price, 1.0]);
+          const phase2a = await generateSignalPhase2A({
+            symbol: sym,
+            timeframe: "1m",
+            ohlcv,
+            equityUsd: 10000,
+            convictionHint: Math.max(0.1, Math.min(1.0, confBase / 100)),
+            assetClass: sym === "BTC" || sym === "ETH" ? sym : "MID_CAP_DEFAULT",
+          });
+          if (!phase2a.emitted) {
+            console.log(`[PHASE2A] ${sym} ${dir} BLOCKED — ${phase2a.reason}`);
+            continue;  // skip emit
+          }
+          (signal as any).phase2a = { compositeZ: phase2a.score.composite_z, regime: phase2a.score.regime, sizeUsd: phase2a.score.suggested_size_usd };
+        }
+      } catch (e) {
+        console.warn(`[PHASE2A] quant gate error for ${sym}, failing open:`, (e as Error).message);
+      }
+    }
+
     liveSignals.unshift(signal);
     if (liveSignals.length > 50) liveSignals.length = 50;
     lastSignalTime[sym] = now;
@@ -1328,9 +1357,10 @@ export async function registerRoutes(
     try {
       const { quantHealth } = await import("./quantClient");
       const h = await quantHealth();
-      res.json(h);
+      // Return 503 when quant is down so Railway healthcheck actually gates deploy
+      res.status(h.ok && h.ws_alive ? 200 : 503).json(h);
     } catch (e: any) {
-      res.json({ ok: false, error: e.message });
+      res.status(503).json({ ok: false, error: e.message });
     }
   });
   app.post("/api/quant/test-flow", aiIpLimiter, async (req, res) => {
@@ -1356,6 +1386,30 @@ export async function registerRoutes(
       const { desc } = await import("drizzle-orm");
       const rows = await db.select().from(quantScores).orderBy(desc(quantScores.ts)).limit(20);
       res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Phase 2A counters from ai_signal_log (last 24h) — UI shows passed/blocked/vetoed
+  app.get("/api/quant/stats", async (_req, res) => {
+    try {
+      const { sql } = await import("drizzle-orm");
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const rows: any = await db.execute(sql`
+        SELECT source, COUNT(*)::int AS n FROM ai_signal_log
+        WHERE created_at >= ${cutoff} AND source LIKE 'phase2a%'
+        GROUP BY source
+      `);
+      const counts: Record<string, number> = {};
+      for (const r of rows.rows ?? rows) counts[r.source] = Number(r.n);
+      res.json({
+        passed: counts["phase2a"] || 0,
+        blocked_scorer: counts["phase2a_scorer"] || 0,
+        blocked_cost: counts["phase2a_cost"] || 0,
+        vetoed: counts["phase2a_veto"] || 0,
+        window_hours: 24,
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

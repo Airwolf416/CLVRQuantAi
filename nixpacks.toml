@@ -1,0 +1,19 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "python311", "python311Packages.pip"]
+
+[phases.install]
+cmds = [
+  "npm ci --include=dev",
+  "python -m venv /opt/venv",
+  ". /opt/venv/bin/activate && pip install --upgrade pip && pip install -r quant/requirements.txt",
+]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "PATH=/opt/venv/bin:$PATH npm start"
+
+[variables]
+NODE_ENV = "production"
+PYTHONUNBUFFERED = "1"
