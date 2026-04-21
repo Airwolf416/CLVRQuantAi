@@ -1,0 +1,128 @@
+2026-04-21T11:02:54.879281613Z [inf]  Starting Container
+2026-04-21T11:02:55.252115871Z [err]  [quant]          ^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.252131016Z [err]    File "/opt/venv/lib/python3.11/site-packages/click/core.py", line 1269, in invoke
+2026-04-21T11:02:55.252138695Z [err]  [quant]     return ctx.invoke(self.callback, **ctx.params)
+2026-04-21T11:02:55.252145452Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.252153532Z [err]  [quant]   File "/opt/venv/lib/python3.11/site-packages/click/core.py", line 824, in invoke
+2026-04-21T11:02:55.252154685Z [err]  npm warn config production Use `--omit=dev` instead.
+2026-04-21T11:02:55.252160606Z [inf]  
+2026-04-21T11:02:55.252165686Z [err]  [quant]     return callback(*args, **kwargs)
+2026-04-21T11:02:55.252166837Z [inf]  > rest-express@1.0.0 start
+2026-04-21T11:02:55.252171946Z [inf]  > NODE_ENV=production node dist/index.cjs
+2026-04-21T11:02:55.252175443Z [inf]  
+2026-04-21T11:02:55.252179309Z [inf]  11:02:54 AM [quant] quant service spawning on 127.0.0.1:8081
+2026-04-21T11:02:55.252182956Z [err]  [quant] Traceback (most recent call last):
+2026-04-21T11:02:55.252186665Z [err]    File "<frozen runpy>", line 198, in _run_module_as_main
+2026-04-21T11:02:55.252190094Z [err]    File "<frozen runpy>", line 88, in _run_code
+2026-04-21T11:02:55.252193811Z [err]    File "/opt/venv/lib/python3.11/site-packages/uvicorn/__main__.py", line 4, in <module>
+2026-04-21T11:02:55.252197111Z [err]  [quant]     uvicorn.main()
+2026-04-21T11:02:55.252201706Z [err]    File "/opt/venv/lib/python3.11/site-packages/click/core.py", line 1485, in __call__
+2026-04-21T11:02:55.252205477Z [err]  [quant]     return self.main(*args, **kwargs)
+2026-04-21T11:02:55.252208855Z [err]  [quant]            ^[quant] ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.252212702Z [err]    File "/opt/venv/lib/python3.11/site-packages/click/core.py", line 1406, in main
+2026-04-21T11:02:55.252216296Z [err]  [quant]     rv = self.invoke(ctx)
+2026-04-21T11:02:55.253106806Z [err]  [quant]            ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.253111462Z [err]  [quant]   File "/opt/venv/lib/python3.11/site-packages/uvicorn/main.py", line 410, in main
+2026-04-21T11:02:55.253117903Z [err]  [quant]     run(
+2026-04-21T11:02:55.253122998Z [err]  [quant]   File "/opt/venv/lib/python3.11/site-packages/uvicorn/main.py", line 577, in run
+2026-04-21T11:02:55.253127437Z [err]  [quant]     server.run()
+2026-04-21T11:02:55.253131285Z [err]  [quant]   File "/opt/venv/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-04-21T11:02:55.253134844Z [err]  [quant]     return asyncio.run(self.serve(sockets=sockets))
+2026-04-21T11:02:55.253139586Z [err]  [quant]            ^^^^^^^^[quant] ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[quant] ^
+2026-04-21T11:02:55.253143490Z [err]    File "/root/.nix-profile/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-04-21T11:02:55.253147554Z [err]  [quant]     return runner.run(main)
+2026-04-21T11:02:55.253151680Z [err]  [quant]            ^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.253157032Z [err]    File "/root/.nix-profile/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-04-21T11:02:55.253161443Z [err]  [quant]     return self._loop.run_until_complete(task)
+2026-04-21T11:02:55.253166210Z [err]  [quant]            ^^^^^^^^^^^^^^^^^[quant] ^^^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.253171141Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-04-21T11:02:55.253176706Z [err]  [quant]   File "/opt/venv/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-04-21T11:02:55.253183293Z [err]  [quant]     await self._serve(sockets)
+2026-04-21T11:02:55.253188648Z [err]    File "/opt/venv/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-04-21T11:02:55.254661429Z [err]  [quant]     config.load()
+2026-04-21T11:02:55.254668368Z [err]    File "/opt/venv/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-04-21T11:02:55.254673907Z [err]  [quant]     self.loaded_app = import_from_string(self.app)
+2026-04-21T11:02:55.254679823Z [err]  [quant]                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.254689558Z [err]  [quant]   File "/opt/venv/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-04-21T11:02:55.254694449Z [err]  [quant]     module = importlib.import_module(module_str)
+2026-04-21T11:02:55.254700181Z [err]         [quant]       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.254706501Z [err]    File "/root/.nix-profile/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-04-21T11:02:55.254711838Z [err]  [quant]     return _bootstrap._gcd_import(name[level:], package, level)
+2026-04-21T11:02:55.254720954Z [err]  [quant]            ^^^^^^^^^^[quant] ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-04-21T11:02:55.254727450Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-04-21T11:02:55.254736015Z [err]  [quant]   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-04-21T11:02:55.254742491Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-04-21T11:02:55.254751938Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-04-21T11:02:55.254760363Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-04-21T11:02:55.254766174Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-04-21T11:02:55.254777920Z [err]    File "/app/quant/main.py", line 4, in <module>
+2026-04-21T11:02:55.254783135Z [err]  [quant]     import pandas as pd
+2026-04-21T11:02:55.256351422Z [err]  [quant]   File "/opt/venv/lib/python3.11/site-packages/pandas/__init__.py", line 19, in <module>
+2026-04-21T11:02:55.256363166Z [err]  [quant]     raise ImportError(
+2026-04-21T11:02:55.256367541Z [err]  [quant] ImportError: Unable to import required dependencies:
+2026-04-21T11:02:55.256371316Z [err]  numpy: Error importing numpy: you should not try to import numpy from
+2026-04-21T11:02:55.256375729Z [err]          its source directory; please exit the numpy source tree, and relaunch
+2026-04-21T11:02:55.256380071Z [err]          your python interpreter from there.
+2026-04-21T11:02:55.256384299Z [inf]  [db] All tables verified / created successfully
+2026-04-21T11:02:55.256387754Z [inf]  11:02:55 AM [quant] quant service exited code=1
+2026-04-21T11:02:55.256391860Z [inf]  11:02:55 AM [stripe] Stripe migrations complete
+2026-04-21T11:02:55.256396994Z [inf]  { autoExpandLists: undefined, stripeApiVersion: undefined } StripeSync initialized
+2026-04-21T11:02:55.400151028Z [inf]  11:02:55 AM [stripe] Stripe webhook configured
+2026-04-21T11:02:55.554922523Z [inf]  11:02:55 AM [stripe] Stripe prices OK: found pro_monthly1 + pro_yearly1 by lookup_key
+2026-04-21T11:02:55.554929745Z [inf]  11:02:55 AM [stripe] Stripe sync complete
+2026-04-21T11:02:55.597856768Z [inf]  [seed] Access codes seeded (22 codes + group VIP + trial)
+2026-04-21T11:02:55.597866933Z [inf]  [stock-worker] No Redis — running stock refresh via setInterval fallback
+2026-04-21T11:02:55.603774941Z [inf]  [hl-worker] No Redis — running HL refresh via setInterval fallback
+2026-04-21T11:02:55.603858870Z [inf]  [notifications] No Redis — push notifications run in-process (direct mode)
+2026-04-21T11:02:55.604915535Z [inf]  [databus] started — 30s refresh interval
+2026-04-21T11:02:55.610859736Z [inf]  [insider] starting background EDGAR company scan...
+2026-04-21T11:02:55.626792668Z [inf]  [socket.io] server attached to HTTP server
+2026-04-21T11:02:55.626804413Z [inf]  [daily-brief] Scheduler started — briefs will be sent at 6:00 AM ET daily
+2026-04-21T11:02:55.626812838Z [inf]  [outcomeResolver] started (60s interval)
+2026-04-21T11:02:55.626818339Z [inf]  [AdaptiveThresholds] Started — recalculating every 15 min
+2026-04-21T11:02:55.626823206Z [inf]  [CircuitBreaker] Started — global halt at 1h WR<30% (n≥20), auto-resume ≥45%
+2026-04-21T11:02:55.629678049Z [inf]  11:02:55 AM [express] serving on port 5000
+2026-04-21T11:02:55.681003537Z [inf]  [AdaptiveThresholds] ⛔ Suppressed 32 historical bleeders:
+2026-04-21T11:02:55.681012542Z [inf]    • ARB LONG: 13.04% over 23 signals
+2026-04-21T11:02:55.681018008Z [inf]    • BNB SHORT: 0.00% over 11 signals
+2026-04-21T11:02:55.681023925Z [inf]    • APT SHORT: 28.00% over 25 signals
+2026-04-21T11:02:55.681028752Z [inf]    • DOGE SHORT: 16.67% over 12 signals
+2026-04-21T11:02:55.681033707Z [inf]    • APT LONG: 0.00% over 18 signals
+2026-04-21T11:02:55.681038902Z [inf]    • BTC SHORT: 0.00% over 15 signals
+2026-04-21T11:02:55.681043574Z [inf]    • JUP LONG: 27.27% over 88 signals
+2026-04-21T11:02:55.681048312Z [inf]    • SOL SHORT: 19.05% over 21 signals
+2026-04-21T11:02:55.681053340Z [inf]    • UNI LONG: 8.57% over 35 signals
+2026-04-21T11:02:55.681058980Z [inf]    • DOT LONG: 9.09% over 11 signals
+2026-04-21T11:02:55.681063133Z [inf]    • SOL LONG: 25.00% over 12 signals
+2026-04-21T11:02:55.681067079Z [inf]    • TRUMP LONG: 4.55% over 22 signals
+2026-04-21T11:02:55.681071431Z [inf]    • ETH SHORT: 0.00% over 19 signals
+2026-04-21T11:02:55.681076017Z [inf]    • HYPE SHORT: 23.08% over 13 signals
+2026-04-21T11:02:55.681080209Z [inf]    • OP LONG: 7.14% over 14 signals
+2026-04-21T11:02:55.681083908Z [inf]    • SEI LONG: 0.00% over 12 signals
+2026-04-21T11:02:55.681088220Z [inf]    • ARB SHORT: 19.05% over 21 signals
+2026-04-21T11:02:55.681091927Z [inf]    • XRP SHORT: 0.00% over 12 signals
+2026-04-21T11:02:55.681097997Z [inf]    • AAVE LONG: 15.79% over 19 signals
+2026-04-21T11:02:55.681102035Z [inf]    • NEAR LONG: 7.69% over 13 signals
+2026-04-21T11:02:55.681105543Z [inf]    • TIA SHORT: 4.17% over 24 signals
+2026-04-21T11:02:55.681125138Z [inf]    • JUP SHORT: 10.53% over 19 signals
+2026-04-21T11:02:55.681136473Z [inf]    • WIF LONG: 0.00% over 20 signals
+2026-04-21T11:02:55.681142433Z [inf]    • LINK LONG: 0.00% over 10 signals
+2026-04-21T11:02:55.681951683Z [inf]    • PENDLE SHORT: 7.14% over 14 signals
+2026-04-21T11:02:55.681962570Z [inf]    • TAO SHORT: 15.38% over 13 signals
+2026-04-21T11:02:55.681967790Z [inf]    • TAO LONG: 27.27% over 11 signals
+2026-04-21T11:02:55.681973103Z [inf]    • ONDO LONG: 2.33% over 43 signals
+2026-04-21T11:02:55.681978531Z [inf]    • SUI LONG: 10.00% over 10 signals
+2026-04-21T11:02:55.681984153Z [inf]    • LINK SHORT: 10.00% over 10 signals
+2026-04-21T11:02:55.681989210Z [inf]    • DOGE LONG: 21.43% over 14 signals
+2026-04-21T11:02:55.681995018Z [inf]    • HBAR SHORT: 7.14% over 14 signals
+2026-04-21T11:02:56.283936664Z [inf]  11:02:56 AM [express] GET /api/quant/health 503 in 5ms
+2026-04-21T11:02:57.384540761Z [inf]  11:02:57 AM [express] GET /api/quant/health 503 in 2ms
+2026-04-21T11:02:59.455621005Z [inf]  11:02:59 AM [express] GET /api/quant/health 503 in 2ms
+2026-04-21T11:02:59.793838446Z [inf]  [insider] 97 recent Form 4s found for watchlist companies; fetching XMLs...
+2026-04-21T11:03:00.748587244Z [inf]  [finnhub-ws] connected, subscribing to 32 equities/ETFs + 14 forex + 3 energy CFDs
+2026-04-21T11:03:03.532927766Z [inf]  11:03:03 AM [express] GET /api/quant/health 503 in 3ms
+2026-04-21T11:03:03.839196946Z [inf]  [alerts] Server-side alert checker started
+2026-04-21T11:03:05.659394424Z [inf]  [daily-brief] Today's brief already sent — skipping catch-up
+2026-04-21T11:03:05.850762169Z [inf]  [basket-prices] refresh complete: 83 symbols, 18 live
+2026-04-21T11:03:09.075451155Z [inf]  [finnhub-ws] disconnected (code=1006), retrying in 10s
+2026-04-21T11:03:11.565945115Z [inf]  11:03:11 AM [express] GET /api/quant/health 503 in 2ms
