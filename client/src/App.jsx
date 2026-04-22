@@ -9,7 +9,8 @@
 import { useState, useEffect, useRef, useCallback, memo, createContext, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SiInstagram, SiTiktok } from "react-icons/si";
-import { Menu, X, LogOut, Languages, QrCode } from "lucide-react";
+import { Menu, X, LogOut, Languages, QrCode, ScanLine } from "lucide-react";
+import ChartAITab from "./tabs/ChartAITab.jsx";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
@@ -470,11 +471,11 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 // Tabs that require Pro (fully locked for free users)
 const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 // Tabs that require Elite (locked for both free AND pro users)
-const ELITE_TABS_GATE=["insider","basket"];
+const ELITE_TABS_GATE=["insider","basket","chartai"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
-  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",chartai:"Chart AI",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
+  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",chartai:"Upload any chart · AI returns direction, entry, SL & TP1/TP2/TP3 with live news context · 5 analyses/day",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
       {/* Icon + heading */}
@@ -3506,6 +3507,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
+    {k:"chartai",icon:<ScanLine size={14}/>,label:"CHART AI"},
     {k:"basket",icon:"🧺",label:"BASKET"},
     {k:"journal",icon:"📓",label:"JOURNAL"},
     {k:"about",icon:"📖",label:i18n.about},
@@ -3760,7 +3762,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                 </>}
                 {upgTab==="elite"&&<>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:14,textAlign:"left"}}>
-                    {["All Pro features +","Unlimited QuantBrain AI","SEC Insider Flow","Basket Analysis","Forex & Commodities","Whale tracking","Political Alpha","Custom SMS alerts"].map((f,i)=>(
+                    {["All Pro features +","Chart AI · 5/day","Unlimited QuantBrain AI","SEC Insider Flow","Basket Analysis","Forex & Commodities","Whale tracking","Political Alpha"].map((f,i)=>(
                       <div key={f} style={{fontFamily:MONO,fontSize:8,color:i===0?C.muted:C.text,display:"flex",alignItems:"center",gap:5}}>
                         <span style={{color:"#00e5ff",fontSize:9}}>✦</span>{f}
                       </div>
@@ -4774,6 +4776,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
         {/* ══ JOURNAL ══ */}
         {tab==="journal"&&<TradeJournalTab isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {tab==="chartai"&&isElite&&<ChartAITab C={C} MONO={MONO} SERIF={SERIF} SANS={SANS} isMobile={isMobile}/>}
 
         {/* ══ ALERTS ══ */}
         {tab==="alerts"&&isPro&&<>

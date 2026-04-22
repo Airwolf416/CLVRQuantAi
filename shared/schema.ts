@@ -311,6 +311,37 @@ export const microstructureSnapshots = pgTable("microstructure_snapshots", {
 
 export type MicrostructureSnapshot = typeof microstructureSnapshots.$inferSelect;
 
+// ── Chart AI (Elite) — uploaded chart analysis with daily limits ─────────────
+export const chartAiUsage = pgTable("chart_ai_usage", {
+  userId: text("user_id").notNull(),
+  date: text("date").notNull(), // YYYY-MM-DD (UTC)
+  count: integer("count").notNull().default(0),
+}, (t) => ({
+  pk: index("chart_ai_usage_pk").on(t.userId, t.date),
+}));
+
+export const chartAiAnalyses = pgTable("chart_ai_analyses", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  horizon: text("horizon").notNull(),
+  asset: text("asset"),
+  imageHash: text("image_hash"),
+  responseJson: jsonb("response_json").notNull(),
+  costEstimate: decimal("cost_estimate", { precision: 10, scale: 4 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  byUser: index("idx_chart_ai_analyses_user").on(t.userId, t.createdAt),
+}));
+
+export const chartAiMonthlySpend = pgTable("chart_ai_monthly_spend", {
+  month: text("month").primaryKey(), // YYYY-MM (UTC)
+  totalSpend: decimal("total_spend", { precision: 10, scale: 4 }).notNull().default("0"),
+  alertSentAt: timestamp("alert_sent_at", { withTimezone: true }),
+});
+
+export type ChartAiAnalysis = typeof chartAiAnalyses.$inferSelect;
+export type InsertChartAiAnalysis = typeof chartAiAnalyses.$inferInsert;
+
 // ── Weekly Updates ("What's New This Week" + Saturday digest email) ──────────
 // Admin posts a major update; the latest one displaces the prior on the About
 // page. The Saturday 10am ET scheduler emails it to subscribers if a fresh
