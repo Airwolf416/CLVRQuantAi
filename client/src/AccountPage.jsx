@@ -1411,7 +1411,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
             <div style={S.card}>
               <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, letterSpacing:"0.2em", marginBottom:8 }}>SWITCH PLAN</div>
               <div style={{ fontSize:11, color:C.muted2, lineHeight:1.6, marginBottom:12, fontFamily:MONO }}>
-                Your Pro access is active via a promo code. Switching to Free will remove your Pro features immediately.
+                Your {acct.tier === "elite" ? "Elite" : "Pro"} access is active via a promo code. Switching to Free will remove your {acct.tier === "elite" ? "Elite" : "Pro"} features immediately.
               </div>
               <button data-testid="btn-downgrade-free" onClick={() => setModal("downgrade")} disabled={actionLoading}
                 style={{ ...S.ghostBtn, width:"100%", borderColor:"rgba(255,64,96,.25)", color:C.red }}>
