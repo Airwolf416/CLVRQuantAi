@@ -166,11 +166,57 @@ export const aiSignalLog = pgTable("ai_signal_log", {
   thesis: text("thesis"),
   invalidation: text("invalidation"),
   scores: jsonb("scores"),
+  // ── Visibility scope ──
+  // 'global'   = default 47-asset scanner output, visible to every user
+  // 'promoted' = generated for a single Elite user's promoted asset; visible
+  //              only to that user via targetUserId
+  scope: varchar("scope", { length: 16 }).default("global").notNull(),
+  targetUserId: varchar("target_user_id", { length: 64 }),
+  // News context snapshot at signal-generation time — used for later
+  // outcome ↔ news-conflict correlation analysis. Shape:
+  // { hasConflict, severity, bearishCount, bullishCount, neutralCount,
+  //   confidenceAdjustment, topHeadlines:[...] }
+  newsContext: jsonb("news_context"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 export type AiSignalLogRecord = typeof aiSignalLog.$inferSelect;
 export type InsertAiSignalLog = typeof aiSignalLog.$inferInsert;
+
+// ── News Items (persisted CryptoPanic feed for analytics + correlation) ──────
+// Live signal gating reads from the in-memory cache for speed; this table is
+// the historical record. Dedupe on externalId. Nightly cleanup drops > 90d.
+export const newsItems = pgTable("news_items", {
+  id: serial("id").primaryKey(),
+  externalId: text("external_id").notNull().unique(),
+  title: text("title").notNull(),
+  source: text("source"),
+  tickers: text("tickers"),                                  // comma-joined symbols
+  sentiment: varchar("sentiment", { length: 16 }),           // bullish | bearish | neutral
+  severity: varchar("severity", { length: 16 }),             // low | medium | high
+  url: text("url"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  byCreatedAt: index("news_items_created_at_idx").on(t.createdAt),
+}));
+export type NewsItem = typeof newsItems.$inferSelect;
+export type InsertNewsItem = typeof newsItems.$inferInsert;
+
+// ── User Promoted Assets (Elite-only Promote-to-Scanner) ─────────────────────
+// Each Elite user can promote up to 5 basket assets to receive personalised
+// signals scoped to them only. Default 47-asset global scanner is untouched.
+export const userPromotedAssets = pgTable("user_promoted_assets", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id", { length: 64 }).notNull(),
+  assetSymbol: varchar("asset_symbol", { length: 32 }).notNull(),  // display label, e.g. "TSM", "0700.HK"
+  assetClass: varchar("asset_class", { length: 16 }).notNull(),    // crypto | equity | commodity | forex
+  yahooSymbol: varchar("yahoo_symbol", { length: 32 }).notNull(),  // resolved yfinance symbol
+  promotedAt: timestamp("promoted_at").defaultNow().notNull(),
+}, (t) => ({
+  byUser: index("user_promoted_assets_user_idx").on(t.userId),
+}));
+export type UserPromotedAsset = typeof userPromotedAssets.$inferSelect;
+export type InsertUserPromotedAsset = typeof userPromotedAssets.$inferInsert;
 
 // ── Adaptive Thresholds (auto-tuning min conviction per token + direction) ──
 export const adaptiveThresholds = pgTable("adaptive_thresholds", {
