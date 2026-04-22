@@ -11,6 +11,8 @@ import { useQuery } from "@tanstack/react-query";
 import { SiInstagram, SiTiktok } from "react-icons/si";
 import { Menu, X, LogOut, Languages, QrCode, ScanLine } from "lucide-react";
 import ChartAITab from "./tabs/ChartAITab.jsx";
+import CheckoutPage from "./pages/Checkout.jsx";
+import PaymentSuccessPage from "./pages/PaymentSuccess.jsx";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
@@ -2118,6 +2120,11 @@ function WhatsNewPanel({ panel, ph, PTitle, Badge, C, SERIF, SANS }){
 }
 
 export default function App(){
+  // ── Path-based routing for embedded Stripe Checkout (no router dependency) ──
+  const _path = typeof window !== "undefined" ? window.location.pathname : "/";
+  if (_path === "/checkout" || _path.startsWith("/checkout?")) return <CheckoutPage/>;
+  if (_path === "/payment-success" || _path.startsWith("/payment-success?")) return <PaymentSuccessPage/>;
+
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
   const [sessionChecked,setSessionChecked]=useState(false);
@@ -2843,15 +2850,10 @@ function Dashboard({user,setUser,onShowAuth}){
     }finally{setBiometricRegistering(false);setShowBiometricSetup(false);}
   },[user]);
 
-  const handleCheckout=async(priceId)=>{
-    setCheckoutLoading(true);
-    try{
-      const r=await fetch("/api/stripe/checkout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({priceId})});
-      const data=await r.json();
-      if(data.url)window.location.href=data.url;
-      else setToast("Checkout failed");
-    }catch{setToast("Checkout error");}
-    setCheckoutLoading(false);
+  const handleCheckout=(priceId)=>{
+    if(!priceId){setToast("Plan unavailable");return;}
+    // Embedded checkout: navigate to in-app /checkout page (URL stays on our domain)
+    window.location.href=`/checkout?priceId=${encodeURIComponent(priceId)}`;
   };
 
   // ── Macro calendar (30s refresh — fast enough to catch 8:30 AM ET releases) ─
