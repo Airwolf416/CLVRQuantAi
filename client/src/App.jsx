@@ -468,7 +468,9 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 }
 
 // Tabs that require Pro (fully locked for free users)
-const PRO_TABS_GATE=["brief","alerts","wallet","ai","basket"];
+const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
+// Tabs that require Elite (locked for both free AND pro users)
+const ELITE_TABS_GATE=["insider","basket"];
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
@@ -2049,7 +2051,7 @@ function SideNav({items,tab,onTab,C,MONO,SERIF,PRO_TABS_GATE2,isPro,isElite,isPr
           const active=tab===item.k;
           const macroAlert=item.k==="macro"&&upcomingCount>0;
           const previewFreeTab=["about","help","account"].includes(item.k);
-          const eliteGated=!isPreview&&["insider"].includes(item.k)&&!isElite;
+          const eliteGated=!isPreview&&ELITE_TABS_GATE.includes(item.k)&&!isElite;
           const proGated=!isPreview&&PRO_TABS_GATE2.includes(item.k)&&!isPro;
           const locked=(isPreview&&!previewFreeTab)||eliteGated||proGated;
           return(
@@ -3961,10 +3963,10 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         )}
 
         {/* ── Free-user tab gates ── */}
-        {/* Basket is Elite-only — show Elite gate to non-Elite users (skip the Pro gate below) */}
-        {!isPreview&&!isElite&&tab==="basket"&&<TabUpgradeGate tab="basket" tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
-        {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&tab!=="basket"&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
-        {!isPreview&&!isElite&&tab==="insider"&&<TabUpgradeGate tab="insider" tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {/* Pro-tier gate for Pro-only tabs (free users) */}
+        {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
+        {/* Elite-tier gate for Elite-only tabs (free AND pro users) */}
+        {!isPreview&&!isElite&&ELITE_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
@@ -5205,7 +5207,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {NAV.map(item=>{
           const active=tab===item.k;const macroAlert=item.k==="macro"&&upcomingCount>0;
           const previewFreeTab=["about","help","account"].includes(item.k);
-          const eliteGatedTab=!isPreview&&["insider"].includes(item.k)&&!isElite;
+          const eliteGatedTab=!isPreview&&ELITE_TABS_GATE.includes(item.k)&&!isElite;
           const proGatedTab=!isPreview&&PRO_TABS_GATE.includes(item.k)&&!isPro;
           const isTabLocked=(isPreview&&!previewFreeTab)||eliteGatedTab||proGatedTab;
           return(
