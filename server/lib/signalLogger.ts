@@ -22,6 +22,11 @@ export interface LogSignalInput {
   thesis?: string | null;
   invalidation?: string | null;
   scores?: any;
+  // ── Visibility / promotion ──
+  scope?: "global" | "promoted";
+  targetUserId?: string | null;
+  // ── News snapshot at signal time (for outcome ↔ news correlation) ──
+  newsContext?: any;
 }
 
 const toDec = (v: any): string | null => {
@@ -63,6 +68,9 @@ export async function logSignal(input: LogSignalInput): Promise<number | null> {
       thesis: input.thesis ?? null,
       invalidation: input.invalidation ?? null,
       scores: input.scores ?? null,
+      scope: input.scope ?? "global",
+      targetUserId: input.targetUserId ?? null,
+      newsContext: input.newsContext ?? null,
     };
 
     const [inserted] = await db.insert(aiSignalLog).values(row).returning({ id: aiSignalLog.id });

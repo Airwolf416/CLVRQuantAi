@@ -155,6 +155,47 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   const [showHalalOnly, setShowHalalOnly] = useState(false);
   const [marketType, setMarketType] = useState("BOTH"); // PERP | SPOT | BOTH
 
+  // ── Promote-to-Scanner (Elite-only) ───────────────────────────────────────
+  const [promoted, setPromoted] = useState([]);                  // list of {id, assetSymbol, assetClass, yahooSymbol}
+  const [promotedTier, setPromotedTier] = useState("free");
+  const [promoteBusy, setPromoteBusy] = useState(false);
+  const [promoteError, setPromoteError] = useState("");
+  const reloadPromoted = useCallback(async () => {
+    try {
+      const r = await fetch("/api/basket/promoted", { credentials: "include" });
+      if (r.status === 401) { setPromoted([]); setPromotedTier("anon"); return; }
+      const data = await r.json();
+      setPromoted(data.assets || []);
+      setPromotedTier(data.tier || "free");
+    } catch {}
+  }, []);
+  useEffect(() => { reloadPromoted(); }, [reloadPromoted]);
+  const promoteAsset = useCallback(async (sym) => {
+    setPromoteError(""); setPromoteBusy(true);
+    try {
+      const asset = ALL_ASSETS.find(a => a.sym === sym);
+      const assetClass = asset?.cat === "crypto" ? "crypto"
+        : asset?.cat === "equities" ? "equity"
+        : asset?.cat === "commodities" ? "commodity"
+        : "forex";
+      const r = await fetch("/api/basket/promoted", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetSymbol: sym, assetClass, yahooSymbol: sym }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setPromoteError(data.error || "Failed"); return; }
+      await reloadPromoted();
+    } catch (e) { setPromoteError(e.message || "Failed"); }
+    finally { setPromoteBusy(false); }
+  }, [reloadPromoted]);
+  const unpromoteAsset = useCallback(async (id) => {
+    try {
+      await fetch(`/api/basket/promoted/${id}`, { method: "DELETE", credentials: "include" });
+      await reloadPromoted();
+    } catch {}
+  }, [reloadPromoted]);
+
   // ── Live prices for ALL 140+ basket assets ──────────────────────────────────
   const [bPrices, setBPrices]       = useState({});  // { sym: { price, chg, currency, live } }
   const [pricesLoading, setPricesLoading] = useState(false);
@@ -538,6 +579,69 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
               )}
             </div>
           )}
+
+          {/* ── Promote-to-Scanner (Elite-only) ─────────────────────────── */}
+          <div data-testid="promote-to-scanner" style={{ marginBottom:10, padding:"10px 12px", background:"rgba(201,168,76,.04)", border:`1px solid rgba(201,168,76,.2)`, borderRadius:3 }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+              <span style={{ fontFamily:MONO, fontSize:8, color:C.gold2, letterSpacing:"0.12em" }}>
+                ⚡ PROMOTE TO SCANNER {promotedTier === "elite" ? `(${promoted.length}/5)` : "· ELITE"}
+              </span>
+              {promotedTier !== "elite" && (
+                <span style={{ fontFamily:SANS, fontStyle:"italic", fontSize:8, color:C.muted2 }}>
+                  Get personalised signals on your basket assets
+                </span>
+              )}
+            </div>
+
+            {/* current promoted list */}
+            {promoted.length > 0 && (
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:6 }}>
+                {promoted.map(p => (
+                  <span key={p.id} data-testid={`promoted-asset-${p.assetSymbol}`}
+                    onClick={() => unpromoteAsset(p.id)}
+                    title="Click to unpromote"
+                    style={{ fontFamily:MONO, fontSize:8, color:C.gold, background:"rgba(201,168,76,.12)", border:`1px solid rgba(201,168,76,.4)`, borderRadius:2, padding:"2px 8px", cursor:"pointer" }}>
+                    {p.assetSymbol} ×
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* promote buttons for each currently selected basket asset that isn't yet promoted */}
+            {promotedTier === "elite" && selList.length > 0 && (
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                {selList
+                  .filter(sym => !promoted.some(p => p.assetSymbol === sym))
+                  .map(sym => (
+                    <button key={sym} data-testid={`btn-promote-${sym}`}
+                      disabled={promoteBusy || promoted.length >= 5}
+                      onClick={() => promoteAsset(sym)}
+                      style={{
+                        fontFamily:MONO, fontSize:8, color: (promoteBusy || promoted.length >= 5) ? C.muted : C.gold2,
+                        background:"transparent",
+                        border:`1px dashed ${(promoteBusy || promoted.length >= 5) ? C.border : 'rgba(201,168,76,.5)'}`,
+                        borderRadius:2, padding:"2px 8px",
+                        cursor:(promoteBusy || promoted.length >= 5) ? "not-allowed" : "pointer",
+                      }}>
+                      ＋ {sym}
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            {promotedTier !== "elite" && (
+              <button data-testid="btn-upgrade-promote" onClick={onUpgrade}
+                style={{ marginTop:4, padding:"5px 10px", borderRadius:2, border:`1px solid rgba(201,168,76,.55)`, background:"rgba(201,168,76,.1)", color:C.gold2, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.08em" }}>
+                UPGRADE TO ELITE ⚡
+              </button>
+            )}
+
+            {promoteError && (
+              <div data-testid="text-promote-error" style={{ marginTop:6, fontFamily:MONO, fontSize:8, color:C.red }}>
+                {promoteError}
+              </div>
+            )}
+          </div>
 
           {/* ── Style selector ── */}
           <div style={{ marginBottom:10 }}>

@@ -644,6 +644,8 @@ function logDataSourceStatus() {
   startOutcomeResolver();
   startAdaptiveThresholds();
   startCircuitBreaker();
+  const { startNewsCleanupScheduler } = await import("./lib/newsPersist");
+  startNewsCleanupScheduler();
   // Catch up the system to historical reality on every startup (idempotent).
   // Suppresses any token+direction with <30% WR over 10+ resolved signals.
   suppressHistoricalBleeders().catch(e => console.error("[startup] suppressHistoricalBleeders failed:", e));

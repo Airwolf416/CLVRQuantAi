@@ -11,7 +11,11 @@ import { getCircuitState, isHalted, manualHalt, manualResume, checkCircuitBreake
 import { logRejection, getRecentRejections, getRejectionStats } from "./lib/rejectionLog";
 import { isInCooldown, COOLDOWN_WINDOW_MINUTES } from "./lib/cooldown";
 import { isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
-import { eq, and, lte, gt, desc } from "drizzle-orm";
+import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
+import { persistRecentNews } from "./lib/newsPersist";
+import { getUserTier } from "./lib/userTier";
+import { userPromotedAssets, newsItems } from "@shared/schema";
+import { eq, and, lte, gt, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import { CLAUDE_MODEL } from "./config";
@@ -825,6 +829,21 @@ async function detectMoves() {
         }
       } catch {}
     }
+
+    // ── NEWS-CONFLICT GATE (CryptoPanic, last 4h, high-severity contradicts) ──
+    let detectNewsImpact: Awaited<ReturnType<typeof getNewsImpact>> | null = null;
+    try {
+      detectNewsImpact = await getNewsImpact(sym, dir as "LONG" | "SHORT", 240);
+      if (detectNewsImpact.shouldBlock) {
+        console.log(`[SIGNAL GATE] ${sym} ${dir} — news_conflict_high (${detectNewsImpact.bearishCount}↓ ${detectNewsImpact.bullishCount}↑ severity=${detectNewsImpact.severity})`);
+        logRejection({
+          source: "auto_scanner", token: sym, direction: dir,
+          reason: "NEWS_CONFLICT_HIGH",
+          detail: `${detectNewsImpact.severity} severity contradicts ${dir} — top: ${(detectNewsImpact.topHeadlines[0] || "").slice(0, 80)}`,
+        });
+        continue;
+      }
+    } catch {}
 
     // Unified per-attempt audit log — useful for tracing why signals fired or didn't
     console.log(`[SIGNAL GATE] ${sym} ${dir} — suppressed=${!!adaptCheck?.suppressed}, threshold=${adaptCheck?.threshold ?? "default"}, cooldown=ok, macroHalt=${dir === "LONG" ? "checked-ok" : "n/a"}`);
@@ -1664,6 +1683,77 @@ export async function registerRoutes(
     await Promise.allSettled(fetches);
     cache["polymarket"] = { data: results, ts: Date.now() };
     res.json(results);
+  });
+
+  // ── Promote-to-Scanner (Elite-only) ──────────────────────────────────────
+  // GET    /api/basket/promoted          → list user's promoted assets
+  // POST   /api/basket/promoted          → add (max 5)  body: { assetSymbol, assetClass, yahooSymbol }
+  // DELETE /api/basket/promoted/:id      → remove
+  app.get("/api/basket/promoted", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      const tier = await getUserTier(userId);
+      const rows = await db.select().from(userPromotedAssets).where(eq(userPromotedAssets.userId, userId)).orderBy(desc(userPromotedAssets.promotedAt));
+      res.json({ tier, max: 5, assets: rows });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "failed to load promoted assets" });
+    }
+  });
+
+  app.post("/api/basket/promoted", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      const tier = await getUserTier(userId);
+      if (tier !== "elite") return res.status(403).json({ error: "Promote-to-Scanner is an Elite feature. Upgrade to Elite to receive personalised signals on your basket assets." });
+      const { assetSymbol, assetClass, yahooSymbol } = req.body || {};
+      const sym = String(assetSymbol || "").trim().toUpperCase().slice(0, 32);
+      const ac = String(assetClass || "").trim().toLowerCase().slice(0, 16);
+      const ys = String(yahooSymbol || assetSymbol || "").trim().slice(0, 32);
+      if (!sym || !ac || !ys) return res.status(400).json({ error: "assetSymbol, assetClass, yahooSymbol required" });
+      if (!["crypto", "equity", "commodity", "forex"].includes(ac)) return res.status(400).json({ error: "assetClass must be crypto|equity|commodity|forex" });
+      const existing = await db.select().from(userPromotedAssets).where(eq(userPromotedAssets.userId, userId));
+      if (existing.length >= 5) return res.status(400).json({ error: "Limit reached — maximum 5 promoted assets per Elite user. Remove one to add another." });
+      if (existing.some(r => r.assetSymbol === sym)) return res.status(409).json({ error: `${sym} is already promoted` });
+      const [row] = await db.insert(userPromotedAssets).values({ userId, assetSymbol: sym, assetClass: ac, yahooSymbol: ys }).returning();
+      console.log(`[promote] ${userId} promoted ${sym} (${ac})`);
+      res.status(201).json(row);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "failed to promote" });
+    }
+  });
+
+  app.delete("/api/basket/promoted/:id", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+      const r = await db.delete(userPromotedAssets).where(and(eq(userPromotedAssets.id, id), eq(userPromotedAssets.userId, userId))).returning();
+      if (r.length === 0) return res.status(404).json({ error: "not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "failed" });
+    }
+  });
+
+  // ── /api/signals/feed — global signals + (for Elite) promoted-asset signals ──
+  // Mirrors /api/signals shape but reads from ai_signal_log so it can scope by
+  // targetUserId. Returns the most recent 50 signals visible to this user.
+  app.get("/api/signals/feed", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit || "50"), 10) || 50, 200);
+      // Visible if scope='global' OR (scope='promoted' AND target_user_id=user)
+      const visible = userId
+        ? or(eq(aiSignalLog.scope, "global"), and(eq(aiSignalLog.scope, "promoted"), eq(aiSignalLog.targetUserId, userId)))
+        : eq(aiSignalLog.scope, "global");
+      const rows = await db.select().from(aiSignalLog).where(visible).orderBy(desc(aiSignalLog.createdAt)).limit(limit);
+      res.json({ count: rows.length, signals: rows });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "failed" });
+    }
   });
 
   app.post("/api/solana-rpc", async (req, res) => {
@@ -3687,7 +3777,29 @@ ${mtfStr}`;
       // Multi-asset universe note — let the AI know it's not just looking at crypto.
       adaptiveNotes.push(`UNIVERSE: crypto perps, major forex (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD), commodities (GOLD, SILVER, WTI, NATGAS), and large-cap US equities (SPY, QQQ, NVDA, AAPL, MSFT, TSLA). When the user asks for trade ideas without specifying an asset class, consider all four markets and pick the strongest technical setup across them — do not default to crypto.`);
 
-      const adaptiveBlock = adaptiveNotes.length ? `\n\nADAPTIVE LEARNING NOTES FOR ${ticker}:\n${adaptiveNotes.join("\n")}\n` : "";
+      // ── NEWS CONTEXT — give Claude a snapshot of recent high/medium severity headlines ──
+      let newsImpactLong: Awaited<ReturnType<typeof getNewsImpact>> | null = null;
+      let newsImpactShort: Awaited<ReturnType<typeof getNewsImpact>> | null = null;
+      let newsBlock = "";
+      try {
+        [newsImpactLong, newsImpactShort] = await Promise.all([
+          getNewsImpact(ticker, "LONG", 240),
+          getNewsImpact(ticker, "SHORT", 240),
+        ]);
+        const critical = await getRecentCriticalHeadlines(5, 4);
+        const lines: string[] = [];
+        if (critical.length) {
+          lines.push("CURRENT MARKET NEWS (last 4h, high/medium severity):");
+          for (const h of critical) lines.push(`• [${h.sentiment.toUpperCase()}/${h.severity}] ${h.title}`);
+        }
+        if (newsImpactLong?.shouldBlock) lines.push(`⛔ ${ticker} LONG is BLOCKED by news conflict — ${newsImpactLong.severity} severity bearish news contradicts. DO NOT issue a LONG.`);
+        if (newsImpactShort?.shouldBlock) lines.push(`⛔ ${ticker} SHORT is BLOCKED by news conflict — ${newsImpactShort.severity} severity bullish news contradicts. DO NOT issue a SHORT.`);
+        if (newsImpactLong && newsImpactLong.confidenceAdjustment < 0 && !newsImpactLong.shouldBlock) lines.push(`⚠ ${ticker} LONG faces news headwinds (${newsImpactLong.bearishCount} bearish vs ${newsImpactLong.bullishCount} bullish, ${newsImpactLong.severity} severity). Lower conviction by ${Math.abs(newsImpactLong.confidenceAdjustment)}%.`);
+        if (newsImpactShort && newsImpactShort.confidenceAdjustment < 0 && !newsImpactShort.shouldBlock) lines.push(`⚠ ${ticker} SHORT faces news headwinds (${newsImpactShort.bullishCount} bullish vs ${newsImpactShort.bearishCount} bearish, ${newsImpactShort.severity} severity). Lower conviction by ${Math.abs(newsImpactShort.confidenceAdjustment)}%.`);
+        newsBlock = lines.length ? `\n\n${lines.join("\n")}\n` : "";
+      } catch {}
+
+      const adaptiveBlock = adaptiveNotes.length ? `\n\nADAPTIVE LEARNING NOTES FOR ${ticker}:\n${adaptiveNotes.join("\n")}\n${newsBlock}` : newsBlock;
 
       const system = `${perfCtx}
 ${adaptiveBlock}
@@ -4057,6 +4169,24 @@ Every level must be technically defensible. Return JSON only.`;
           parsed.suppressed = true;
           parsed.suppression_message = `LONG suppressed — ${macroRisk.reason || "macro risk-off"}. SHORTs still permitted.`;
           parsed.suppression_rules = ["MACRO_HALT"];
+        } else {
+          // News-conflict post-AI guard — Claude may still propose against major news
+          const newsHit = aiDir === "LONG" ? newsImpactLong : newsImpactShort;
+          if (newsHit?.shouldBlock) {
+            logRejection({
+              source: "ai_signal", token: ticker, direction: aiDir,
+              reason: "NEWS_CONFLICT_HIGH",
+              detail: `${newsHit.severity} severity contradicts ${aiDir} — ${(newsHit.topHeadlines[0] || "").slice(0, 80)}`,
+            });
+            parsed.signal = "NEUTRAL";
+            parsed.suppressed = true;
+            parsed.suppression_message = `${aiDir} suppressed — high-severity news conflict (${newsHit.bearishCount}↓/${newsHit.bullishCount}↑). ${(newsHit.topHeadlines[0] || "").slice(0, 100)}`;
+            parsed.suppression_rules = ["NEWS_CONFLICT_HIGH"];
+          } else if (newsHit && newsHit.confidenceAdjustment !== 0 && typeof parsed.conviction === "number") {
+            // Apply confidence adjustment for medium/low news conflict (or tailwinds)
+            parsed.conviction = Math.max(0, Math.min(100, parsed.conviction + newsHit.confidenceAdjustment));
+            parsed.news_confidence_adjustment = newsHit.confidenceAdjustment;
+          }
         }
       }
       // Unified gate audit log — one line per signal attempt summarising every gate
@@ -4090,6 +4220,20 @@ Every level must be technically defensible. Return JSON only.`;
           thesis: parsed.thesis || null,
           invalidation: parsed.invalidation || null,
           scores: { bayesian: bayesian?.score, advanced: adjScore, confluence: confluence?.score },
+          newsContext: (() => {
+            const dir = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
+            const ni = dir === "LONG" ? newsImpactLong : newsImpactShort;
+            if (!ni) return null;
+            return {
+              hasConflict: ni.hasConflict,
+              severity: ni.severity,
+              bearishCount: ni.bearishCount,
+              bullishCount: ni.bullishCount,
+              neutralCount: ni.neutralCount,
+              confidenceAdjustment: ni.confidenceAdjustment,
+              topHeadlines: ni.topHeadlines,
+            };
+          })(),
         }).catch(() => {});
       }
       res.json(parsed);

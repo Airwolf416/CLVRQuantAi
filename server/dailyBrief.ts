@@ -488,11 +488,17 @@ async function sendDailyBriefEmails() {
             `To unsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}`,
           ].join("\n");
 
+          // Tier-aware subject: Elite → 3 ideas badge; Pro → 1 idea; Free → upgrade nudge
+          const subTier = (sub.tier || "free").toLowerCase();
+          const tierSubject =
+            subTier === "elite" ? `🏆 CLVRQuant Elite Brief — ${today} · 3 trade ideas inside`
+            : subTier === "pro" ? `📊 CLVRQuant Pro Brief — ${today} · today's top trade`
+            : `☕ CLVRQuant Daily Brief — ${today} · upgrade for trade ideas`;
           const resp = await client.emails.send({
             from: "CLVRQuant <hello@clvrquantai.com>",
             to: sub.email,
             replyTo: "noreply@clvrquantai.com",
-            subject: `CLVRQuant Morning Brief — ${today}`,
+            subject: tierSubject,
             headers: {
               "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}>`,
               "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -624,7 +630,11 @@ async function sendApologyBriefEmails() {
           from: "CLVRQuant <noreply@clvrquantai.com>",
           to: sub.email,
           replyTo: "noreply@clvrquantai.com",
-          subject: `📊 CLVRQuant Morning Brief — ${today}`,
+          subject: ((sub.tier || "free").toLowerCase() === "elite"
+            ? `🏆 CLVRQuant Elite Brief — ${today} · 3 trade ideas inside`
+            : (sub.tier || "free").toLowerCase() === "pro"
+            ? `📊 CLVRQuant Pro Brief — ${today} · today's top trade`
+            : `☕ CLVRQuant Daily Brief — ${today} · upgrade for trade ideas`),
           html: apologyHtml,
         });
         if ((resp as any).error) throw new Error(JSON.stringify((resp as any).error));
