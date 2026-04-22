@@ -487,37 +487,57 @@ async function checkAndGrantReferralReward(userId: string) {
   }
 }
 
-async function checkPromoExpiryReminders() {
+async function sendPromoReminder(u: any, daysOut: number) {
   try {
-    const users14 = await storage.getUsersWithExpiringPromos(14);
-    for (const u of users14) {
-      try {
-        const { client: resend, fromEmail } = await getUncachableResendClient();
-        const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
-        await resend.emails.send({
-          from: fromEmail, to: u.email,
-          replyTo: "Support@clvrquantai.com",
-          subject: "CLVRQuant — Your Pro access expires in 2 weeks",
-          headers: {
-            "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}>`,
-            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-          },
-          text: `Hey ${u.name},\n\nYour CLVRQuant Pro access (promo code: ${u.promoCode}) expires on ${expiryDate}.\n\nTo keep uninterrupted access to AI analysis, signals, and all Pro features, subscribe before it expires at https://clvrquantai.com\n\n© 2026 CLVRQuant · Support@clvrquantai.com\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}`,
-          html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
-            <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
-            <div style="border-top:1px solid #141e35;padding-top:20px">
-              <p style="font-size:14px;color:#f0f4ff">Hey ${u.name},</p>
-              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your CLVRQuant Pro access via promotion code <strong style="color:#e8c96d">${u.promoCode}</strong> expires on <strong style="color:#f0f4ff">${expiryDate}</strong>.</p>
-              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">To keep uninterrupted access to AI analysis, signals, and all Pro features, consider subscribing before it expires.</p>
-              <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
-              <p style="font-size:9px;color:#2a3650;text-align:center;line-height:2">You are receiving this email because you have a CLVRQuant account. <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a></p>
-            </div></div>`,
-        });
-        console.log(`[promo-reminder] Sent expiry reminder to ${u.email}`);
-      } catch {}
-    }
+    const { client: resend, fromEmail } = await getUncachableResendClient();
+    const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
+    const isSameDay = daysOut === 0;
+    const subject = isSameDay
+      ? "CLVRQuant — Your Elite access expires today · upgrade to keep your edge"
+      : daysOut <= 3
+        ? `CLVRQuant — Your Elite access expires in ${daysOut} day${daysOut===1?"":"s"}`
+        : "CLVRQuant — Your Elite access expires in 2 weeks";
+    const headline = isSameDay
+      ? `Your Elite access ends today.`
+      : `Your Elite access expires on ${expiryDate} (${daysOut} day${daysOut===1?"":"s"} away).`;
+    const cta = isSameDay
+      ? `Upgrade now to Pro ($29.99/mo) or Elite ($129/mo) to avoid losing access to AI signals, the Quant Engine, and the Squawk Box. After today, your account will revert to the Free tier.`
+      : `To keep uninterrupted access to AI analysis, signals, the Quant Engine, and all premium features, subscribe before your code expires.`;
+    await resend.emails.send({
+      from: fromEmail, to: u.email,
+      replyTo: "Support@clvrquantai.com",
+      headers: {
+        "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
+      text: `Hey ${u.name},\n\n${headline}\n\n${cta}\n\nVisit https://clvrquantai.com to upgrade.\n\n© 2026 CLVRQuant · Support@clvrquantai.com\nUnsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}`,
+      html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:24px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+        <div style="border-top:1px solid #141e35;padding-top:20px">
+          <p style="font-size:14px;color:#f0f4ff">Hey ${u.name},</p>
+          <p style="font-size:13px;color:${isSameDay?"#ff6b6b":"#6b7fa8"};line-height:1.8">${headline}${u.promoCode ? ` (promo code: <strong style="color:#e8c96d">${u.promoCode}</strong>)` : ""}.</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.8">${cta}</p>
+          <p style="text-align:center;margin:24px 0"><a href="https://clvrquantai.com" style="display:inline-block;padding:12px 28px;background:rgba(232,201,109,.12);border:1px solid rgba(232,201,109,.5);border-radius:4px;color:#e8c96d;text-decoration:none;font-weight:700">${isSameDay ? "Upgrade now →" : "View plans →"}</a></p>
+          <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
+          <p style="font-size:9px;color:#2a3650;text-align:center;line-height:2">You are receiving this email because you have a CLVRQuant account. <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a></p>
+        </div></div>`,
+    });
+    console.log(`[promo-reminder] Sent ${isSameDay ? "same-day expiry" : daysOut+"-day"} reminder to ${u.email}`);
   } catch (e: any) {
-    console.error("[promo-reminder] Error:", e.message);
+    console.error(`[promo-reminder] send failed for ${u.email}:`, e.message);
+  }
+}
+
+async function checkPromoExpiryReminders() {
+  // 14d-warning, 3d-warning, same-day (expires in next 24h) reminder.
+  for (const days of [14, 3, 1]) {
+    try {
+      const users = await storage.getUsersWithExpiringPromos(days);
+      const dayLabel = days === 1 ? 0 : days; // surface 0 in template for same-day copy
+      for (const u of users) await sendPromoReminder(u, dayLabel);
+    } catch (e: any) {
+      console.error(`[promo-reminder] window=${days}d error:`, e.message);
+    }
   }
 }
 

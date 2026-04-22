@@ -3961,7 +3961,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         )}
 
         {/* ── Free-user tab gates ── */}
-        {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
+        {/* Basket is Elite-only — show Elite gate to non-Elite users (skip the Pro gate below) */}
+        {!isPreview&&!isElite&&tab==="basket"&&<TabUpgradeGate tab="basket" tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&tab!=="basket"&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
         {!isPreview&&!isElite&&tab==="insider"&&<TabUpgradeGate tab="insider" tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ RADAR ══ */}
