@@ -1,0 +1,189 @@
+# CLVRQuantAI — Multi-Asset Expansion + Risk Gates
+
+Implement the following 5 changes. Work through them in order. Show me a summary of what you changed after each section.
+
+---
+
+## 1. EXPAND ASSET UNIVERSE (forex, commodities, equities via yfinance)
+
+**File: `server/services/yahoo.ts`**
+
+Ensure it uses `yahoo-finance2` npm package (install if missing: `npm i yahoo-finance2`). Add/verify these helper functions:
+
+```typescript
+// Fetch intraday candles for non-crypto assets
+// Intervals supported: "15m", "30m", "1h", "1d"
+export async function getYahooCandles(
+  symbol: string,
+  interval: "15m" | "30m" | "1h" | "1d" = "1h",
+  lookbackDays: number = 5
+): Promise<Candle[]>
+
+// Check if market is currently open for this symbol type
+export function isMarketOpen(assetClass: "forex" | "equity" | "commodity"): boolean
+```
+
+**Session logic (use user's UTC now, convert to ET):**
+- Forex: closed Fri 5pm ET → Sun 5pm ET
+- Equities: open Mon–Fri 9:30am–4:00pm ET
+- Commodities (futures): open Sun 6pm ET → Fri 5pm ET (ignore the 1hr daily break for simplicity)
+
+**File: `server/routes.ts`**
+
+In the signal generation loop (`/api/signals`), add a new asset registry alongside the existing crypto list:
+
+```typescript
+const NON_CRYPTO_ASSETS = {
+  forex: [
+    { symbol: "EURUSD=X", display: "EURUSD", class: "forex" },
+    { symbol: "GBPUSD=X", display: "GBPUSD", class: "forex" },
+    { symbol: "USDJPY=X", display: "USDJPY", class: "forex" },
+    { symbol: "AUDUSD=X", display: "AUDUSD", class: "forex" },
+    { symbol: "USDCAD=X", display: "USDCAD", class: "forex" },
+  ],
+  commodities: [
+    { symbol: "GC=F", display: "GOLD", class: "commodity" },
+    { symbol: "SI=F", display: "SILVER", class: "commodity" },
+    { symbol: "CL=F", display: "WTI", class: "commodity" },
+    { symbol: "NG=F", display: "NATGAS", class: "commodity" },
+  ],
+  equities: [
+    { symbol: "SPY", display: "SPY", class: "equity" },
+    { symbol: "QQQ", display: "QQQ", class: "equity" },
+    { symbol: "NVDA", display: "NVDA", class: "equity" },
+    { symbol: "AAPL", display: "AAPL", class: "equity" },
+    { symbol: "MSFT", display: "MSFT", class: "equity" },
+    { symbol: "TSLA", display: "TSLA", class: "equity" },
+  ],
+};
+```
+
+Route non-crypto assets through `getYahooCandles()` instead of Hyperliquid/Binance fetchers. Skip signal generation for any asset where `isMarketOpen()` returns false (don't generate stale forex signals at 3am Sunday).
+
+**AI prompt update (inside `/api/quant`):**
+
+Find where the asset context is injected into the Claude prompt. Add:
+
+> "The asset universe includes crypto perps, major forex pairs (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD), commodities (GOLD, SILVER, WTI, NATGAS), and large-cap US equities (SPY, QQQ, NVDA, AAPL, MSFT, TSLA). When the user asks for trade ideas without specifying an asset class, consider all four markets and pick the strongest technical setup across them — do not default to crypto."
+
+---
+
+## 2. MACRO KILL SWITCH (halt longs on BTC flush)
+
+**File: `server/lib/circuitBreaker.ts`**
+
+Add a new global gate:
+
+```typescript
+// Returns true if we should halt ALL long signals globally
+export async function isMacroRiskOff(): Promise<{
+  halted: boolean;
+  reason?: string;
+}> {
+  // Get BTC price 4 hours ago vs now
+  const btcCandles = await getBTC4hCandles(); // use existing HL/Binance fetcher
+  if (!btcCandles || btcCandles.length < 2) return { halted: false };
+  
+  const priceNow = btcCandles[btcCandles.length - 1].close;
+  const price4hAgo = btcCandles[0].close;
+  const pctChange = ((priceNow - price4hAgo) / price4hAgo) * 100;
+  
+  if (pctChange <= -3.0) {
+    return {
+      halted: true,
+      reason: `Macro risk-off: BTC ${pctChange.toFixed(2)}% in 4h`,
+    };
+  }
+  return { halted: false };
+}
+```
+
+**File: `server/routes.ts`**
+
+In `/api/quant` and the background signal loop, call this BEFORE generating any LONG signal. If `halted=true`, skip LONG generation entirely and log the rejection to `rejectionLog.ts` with the reason. SHORTs still allowed.
+
+---
+
+## 3. PER-ASSET COOLDOWN (2h min between signals on same token+direction)
+
+**File: `server/lib/adaptiveThresholds.ts`** (or new file `server/lib/cooldown.ts`)
+
+```typescript
+// Query ai_signal_log for last signal on this (token, direction)
+export async function isInCooldown(
+  token: string,
+  direction: "LONG" | "SHORT"
+): Promise<{ inCooldown: boolean; minutesLeft?: number }> {
+  const COOLDOWN_MINUTES = 120;
+  const lastSignal = await db
+    .select()
+    .from(aiSignalLog)
+    .where(and(eq(aiSignalLog.token, token), eq(aiSignalLog.direction, direction)))
+    .orderBy(desc(aiSignalLog.createdAt))
+    .limit(1);
+  
+  if (!lastSignal.length) return { inCooldown: false };
+  
+  const minutesSince = (Date.now() - new Date(lastSignal[0].createdAt).getTime()) / 60000;
+  if (minutesSince < COOLDOWN_MINUTES) {
+    return { inCooldown: true, minutesLeft: Math.ceil(COOLDOWN_MINUTES - minutesSince) };
+  }
+  return { inCooldown: false };
+}
+```
+
+**File: `server/routes.ts`**
+
+Call `isInCooldown()` at the start of signal generation per (token, direction). If in cooldown, skip that combo and log rejection with "cooldown active, {X} min left".
+
+This fixes the ONDO-spam issue (4 signals in 3 hours).
+
+---
+
+## 4. AUDIT + FIX SUPPRESSION LOGIC
+
+**File: `server/lib/adaptiveThresholds.ts`**
+
+Find the function that determines whether an asset is suppressed. **Verify** the check is actually applied at signal generation time, not just stored in the DB.
+
+Expected behavior:
+- If `suppressed=true` in the adaptive thresholds table → NO signals generated for that (token, direction) combo
+- If `threshold=100%` → require 100% AI confidence to fire (effectively blocked)
+
+**Bug to look for:** the UI checkbox updates a flag, but the signal loop reads thresholds from a cached config that doesn't include the `suppressed` field. Trace the data flow from DB → signal route and confirm the gate fires.
+
+Add this log line at the start of every signal attempt:
+
+```typescript
+console.log(`[SIGNAL GATE] ${token} ${direction} — suppressed=${thresh.suppressed}, threshold=${thresh.threshold}, cooldown=${cd.inCooldown}, macroHalt=${macro.halted}`);
+```
+
+Run for 1 hour and confirm that any (token, direction) combos showing `suppressed=true` in the UI produce zero signals in that window.
+
+---
+
+## 5. REJECTION LOG DASHBOARD (quick win)
+
+**File: `server/lib/rejectionLog.ts`**
+
+Ensure every rejection path calls `logRejection({ token, direction, reason, timestamp })`. Reasons should include:
+- `"suppressed"` (from adaptive thresholds)
+- `"cooldown"` (per-asset 2h)
+- `"macro_halt"` (BTC -3%/4h)
+- `"low_confidence"` (below threshold)
+- `"market_closed"` (non-crypto outside session)
+- `"anti_chase"` (existing gate)
+
+Add a new endpoint `/api/rejections/recent` returning the last 100 rejections for a future Account tab debug widget.
+
+---
+
+## DONE CRITERIA
+
+After implementation, I should be able to see in server logs:
+- Non-crypto signals firing during market hours (e.g. EURUSD during London session)
+- Zero LONG signals during a macro halt event
+- No duplicate signals on same (token, direction) within 2h
+- Suppressed assets generate zero signals
+
+Do NOT touch the UI/frontend in this pass. Backend only.

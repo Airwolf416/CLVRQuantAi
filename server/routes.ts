@@ -7,8 +7,10 @@ import { signalHistory, aiSignalLog, adaptiveThresholds } from "@shared/schema";
 import { logSignal } from "./lib/signalLogger";
 import { buildPerformanceContext, invalidatePerformanceContextCache } from "./lib/performanceContext";
 import { getThresholdFor, recalculateThresholds } from "./lib/adaptiveThresholds";
-import { getCircuitState, isHalted, manualHalt, manualResume, checkCircuitBreaker } from "./lib/circuitBreaker";
+import { getCircuitState, isHalted, manualHalt, manualResume, checkCircuitBreaker, isMacroRiskOff } from "./lib/circuitBreaker";
 import { logRejection, getRecentRejections, getRejectionStats } from "./lib/rejectionLog";
+import { isInCooldown, COOLDOWN_WINDOW_MINUTES } from "./lib/cooldown";
+import { isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
 import { eq, and, lte, gt, desc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
@@ -782,11 +784,12 @@ async function detectMoves() {
     // If this token+direction has been historically suppressed (Wilson lower
     // bound < 30% with 10+ resolved signals), block at source. Skip Claude
     // entirely — saves tokens and avoids LLM negation-failure mode.
+    let adaptCheck: Awaited<ReturnType<typeof getThresholdFor>> = null;
     try {
-      const adapt = await getThresholdFor(sym, dir);
-      if (adapt?.suppressed) {
-        const detail = `${adapt.winRate ?? "?"}% WR over ${adapt.sampleSize} signals`;
-        console.log(`[SIGNAL] ${sym} ${dir} SUPPRESSED — ${detail} (adaptive)`);
+      adaptCheck = await getThresholdFor(sym, dir);
+      if (adaptCheck?.suppressed) {
+        const detail = `${adaptCheck.winRate ?? "?"}% WR over ${adaptCheck.sampleSize} signals`;
+        console.log(`[SIGNAL GATE] ${sym} ${dir} — suppressed=true, threshold=${adaptCheck.threshold} (adaptive)`);
         logRejection({
           source: "auto_scanner", token: sym, direction: dir,
           reason: "ADAPTIVE_SUPPRESSED", detail,
@@ -794,6 +797,37 @@ async function detectMoves() {
         continue;
       }
     } catch {}
+
+    // ── PER-DIRECTION COOLDOWN GATE (2h floor on same token+direction) ─────
+    try {
+      const cd = await isInCooldown(sym, dir as "LONG" | "SHORT");
+      if (cd.inCooldown) {
+        console.log(`[SIGNAL GATE] ${sym} ${dir} — cooldown=${cd.minutesLeft}m left`);
+        logRejection({
+          source: "auto_scanner", token: sym, direction: dir,
+          reason: "COOLDOWN", detail: `${cd.minutesLeft}m left in ${COOLDOWN_WINDOW_MINUTES}m window`,
+        });
+        continue;
+      }
+    } catch {}
+
+    // ── MACRO RISK-OFF GATE (BTC -3%/4h) — block LONGs only ────────────────
+    if (dir === "LONG") {
+      try {
+        const macro = await isMacroRiskOff();
+        if (macro.halted) {
+          console.log(`[SIGNAL GATE] ${sym} LONG — macroHalt=true (${macro.reason})`);
+          logRejection({
+            source: "auto_scanner", token: sym, direction: "LONG",
+            reason: "MACRO_HALT", detail: macro.reason || "BTC -3%/4h",
+          });
+          continue;
+        }
+      } catch {}
+    }
+
+    // Unified per-attempt audit log — useful for tracing why signals fired or didn't
+    console.log(`[SIGNAL GATE] ${sym} ${dir} — suppressed=${!!adaptCheck?.suppressed}, threshold=${adaptCheck?.threshold ?? "default"}, cooldown=ok, macroHalt=${dir === "LONG" ? "checked-ok" : "n/a"}`);
 
     // ── PER-HOUR GLOBAL CAP ───────────────────────────────────────────────
     // Prevent signal spam during volatile periods.
@@ -3363,6 +3397,49 @@ Output JSON only, no prose, no code fences.`;
       const QUANT_FOREX = ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD","EURGBP","EURJPY","GBPJPY","USDMXN","USDZAR","USDTRY","USDSGD"];
       const cls: string = assetClass || (QUANT_EQUITIES.includes(ticker) ? "equity" : QUANT_COMMODITIES.includes(ticker) ? "commodity" : QUANT_FOREX.includes(ticker) ? "fx" : "crypto");
 
+      // ── MARKET-OPEN GATE (non-crypto only) ────────────────────────────────
+      // Skip generation entirely when the asset's session is closed — no point
+      // producing a forex signal at 3am Sunday.
+      const marketCheckClass = cls === "fx" ? "forex" : (cls as "equity" | "commodity" | "crypto");
+      if (cls !== "crypto" && !isAssetMarketOpen(marketCheckClass)) {
+        logRejection({
+          source: "ai_signal", token: ticker, direction: null,
+          reason: "MARKET_CLOSED",
+          detail: `${cls.toUpperCase()} session closed`,
+        });
+        return res.json({
+          signal: "SUPPRESSED",
+          suppressed: true,
+          suppression_message: `${ticker} ${cls.toUpperCase()} market is closed — no signal generated.`,
+          suppression_rules: ["MARKET_CLOSED"],
+        });
+      }
+
+      // ── COOLDOWN PRE-CHECK (both directions) ──────────────────────────────
+      // If both LONG and SHORT are in 2h cooldown, skip Claude entirely.
+      // Otherwise, surface the in-cooldown side(s) to the prompt so the AI
+      // doesn't propose a direction we'd just have to reject post-hoc.
+      const [cdLong, cdShort] = await Promise.all([
+        isInCooldown(ticker, "LONG"),
+        isInCooldown(ticker, "SHORT"),
+      ]);
+      if (cdLong.inCooldown && cdShort.inCooldown) {
+        const detail = `LONG ${cdLong.minutesLeft}m, SHORT ${cdShort.minutesLeft}m left`;
+        logRejection({
+          source: "ai_signal", token: ticker, direction: "BOTH",
+          reason: "COOLDOWN", detail,
+        });
+        return res.json({
+          signal: "SUPPRESSED",
+          suppressed: true,
+          suppression_message: `${ticker} cooldown active (${COOLDOWN_WINDOW_MINUTES}m floor) — ${detail}.`,
+          suppression_rules: ["COOLDOWN"],
+        });
+      }
+
+      // ── MACRO RISK-OFF (BTC -3%/4h) — block LONGs only ────────────────────
+      const macroRisk = await isMacroRiskOff();
+
       const [candles, candles15m, candles4h, candles1d, candles1h, fng] = await Promise.all([
         fetchQuantCandles(ticker, cls, tf.interval, tf.count),
         fetchQuantCandles(ticker, cls, "15m",  50),
@@ -3602,6 +3679,14 @@ ${mtfStr}`;
       else if (adaptLong && adaptLong.threshold !== 75) adaptiveNotes.push(`${ticker} LONG threshold is ${adaptLong.threshold}% (win rate ${adaptLong.winRate}% / ${adaptLong.sampleSize}). ${adaptLong.threshold > 75 ? "Require HIGHER conviction." : "Slightly lower bar OK."}`);
       if (adaptShort?.suppressed) adaptiveNotes.push(`⛔ ${ticker} SHORT is SUPPRESSED (30d win rate ${adaptShort.winRate}% / ${adaptShort.sampleSize} signals). DO NOT issue a SHORT.`);
       else if (adaptShort && adaptShort.threshold !== 75) adaptiveNotes.push(`${ticker} SHORT threshold is ${adaptShort.threshold}% (win rate ${adaptShort.winRate}% / ${adaptShort.sampleSize}). ${adaptShort.threshold > 75 ? "Require HIGHER conviction." : "Slightly lower bar OK."}`);
+      // Surface in-cooldown directions to the AI so it doesn't propose them.
+      if (cdLong.inCooldown) adaptiveNotes.push(`⏱ ${ticker} LONG is in 2h COOLDOWN (${cdLong.minutesLeft}m left). DO NOT issue a LONG.`);
+      if (cdShort.inCooldown) adaptiveNotes.push(`⏱ ${ticker} SHORT is in 2h COOLDOWN (${cdShort.minutesLeft}m left). DO NOT issue a SHORT.`);
+      if (macroRisk.halted) adaptiveNotes.push(`🛑 MACRO RISK-OFF active — ${macroRisk.reason}. DO NOT issue a LONG. SHORTs still permitted if setup is clean.`);
+
+      // Multi-asset universe note — let the AI know it's not just looking at crypto.
+      adaptiveNotes.push(`UNIVERSE: crypto perps, major forex (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD), commodities (GOLD, SILVER, WTI, NATGAS), and large-cap US equities (SPY, QQQ, NVDA, AAPL, MSFT, TSLA). When the user asks for trade ideas without specifying an asset class, consider all four markets and pick the strongest technical setup across them — do not default to crypto.`);
+
       const adaptiveBlock = adaptiveNotes.length ? `\n\nADAPTIVE LEARNING NOTES FOR ${ticker}:\n${adaptiveNotes.join("\n")}\n` : "";
 
       const system = `${perfCtx}
@@ -3947,6 +4032,35 @@ Every level must be technically defensible. Return JSON only.`;
           }
         }
       }
+      // ── POST-AI: COOLDOWN + MACRO-HALT ENFORCEMENT ────────────────────────
+      // The AI may still propose a direction we already gated; double-check
+      // here and force-suppress to NEUTRAL rather than emit a duplicate or a
+      // long into a macro flush.
+      if (parsed.signal && (parsed.signal.includes("LONG") || parsed.signal.includes("SHORT"))) {
+        const aiDir: "LONG" | "SHORT" = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
+        const cdHit = aiDir === "LONG" ? cdLong : cdShort;
+        if (cdHit.inCooldown) {
+          logRejection({
+            source: "ai_signal", token: ticker, direction: aiDir,
+            reason: "COOLDOWN", detail: `${cdHit.minutesLeft}m left in 2h cooldown`,
+          });
+          parsed.signal = "NEUTRAL";
+          parsed.suppressed = true;
+          parsed.suppression_message = `${ticker} ${aiDir} cooldown active — ${cdHit.minutesLeft}m remaining (${COOLDOWN_WINDOW_MINUTES}m floor between same-direction signals).`;
+          parsed.suppression_rules = ["COOLDOWN"];
+        } else if (aiDir === "LONG" && macroRisk.halted) {
+          logRejection({
+            source: "ai_signal", token: ticker, direction: "LONG",
+            reason: "MACRO_HALT", detail: macroRisk.reason || "BTC -3%/4h",
+          });
+          parsed.signal = "NEUTRAL";
+          parsed.suppressed = true;
+          parsed.suppression_message = `LONG suppressed — ${macroRisk.reason || "macro risk-off"}. SHORTs still permitted.`;
+          parsed.suppression_rules = ["MACRO_HALT"];
+        }
+      }
+      // Unified gate audit log — one line per signal attempt summarising every gate
+      console.log(`[SIGNAL GATE] ${ticker} ${parsed.signal || "NONE"} — adaptL.suppressed=${!!adaptLong?.suppressed}, adaptS.suppressed=${!!adaptShort?.suppressed}, cdL=${cdLong.inCooldown ? cdLong.minutesLeft + "m" : "ok"}, cdS=${cdShort.inCooldown ? cdShort.minutesLeft + "m" : "ok"}, macroHalt=${macroRisk.halted}, circuit=${isHalted()}`);
       // Remove tp3 if AI hallucinated it when conditions not met
       if (!(adjScore >= 85 && oiM > 100)) delete parsed.tp3;
       if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
@@ -4148,6 +4262,24 @@ Every level must be technically defensible. Return JSON only.`;
       });
     } catch (e: any) {
       res.status(500).json({ error: "status fetch failed", detail: e?.message });
+    }
+  });
+
+  // ── PUBLIC (auth-required): recent rejections for in-app debug widget ─────
+  // Returns last N rejection log entries + 1h/24h reason counts. Any signed-in
+  // user can read; the future Account-tab debug widget consumes this.
+  app.get("/api/rejections/recent", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Sign in required." });
+      const limit = Math.min(100, Math.max(10, parseInt(String(req.query.limit ?? "100"), 10) || 100));
+      res.json({
+        rejections: getRecentRejections(limit),
+        stats_1h: getRejectionStats(60 * 60 * 1000),
+        stats_24h: getRejectionStats(24 * 60 * 60 * 1000),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: "Failed to load rejections" });
     }
   });
 

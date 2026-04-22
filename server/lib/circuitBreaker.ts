@@ -117,6 +117,58 @@ export async function checkCircuitBreaker(): Promise<CircuitState> {
   return getCircuitState();
 }
 
+// ── Macro risk-off (BTC flush) ────────────────────────────────────────────────
+// Distinct from the win-rate circuit breaker above. Returns {halted:true} when
+// BTC has dumped ≥3% in the last 4h — a strong leading indicator that ANY long
+// (crypto or risk-on equity) is fighting the macro tape. We block LONG signals
+// only; SHORTs are still permitted.
+//
+// Cached for 60s — this is checked on every signal generation and BTC candles
+// move slowly enough that re-fetching every call is wasteful.
+type MacroRiskState = { halted: boolean; reason?: string; pctChange?: number };
+let _macroCache: { ts: number; state: MacroRiskState } | null = null;
+const MACRO_CACHE_MS = 60 * 1000;
+const MACRO_FLUSH_THRESHOLD = -3.0;
+
+export async function isMacroRiskOff(): Promise<MacroRiskState> {
+  if (_macroCache && Date.now() - _macroCache.ts < MACRO_CACHE_MS) {
+    return _macroCache.state;
+  }
+  let state: MacroRiskState = { halted: false };
+  try {
+    // Fetch BTC 1h candles for the last ~5h. Try Binance first (no auth, deep
+    // history); fall back to Hyperliquid via the live state cache if available.
+    const r = await fetch(
+      "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=6",
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (r.ok) {
+      const arr: any[] = await r.json();
+      if (Array.isArray(arr) && arr.length >= 2) {
+        const priceNow = parseFloat(arr[arr.length - 1][4]);     // last close
+        const price4hAgo = parseFloat(arr[Math.max(0, arr.length - 5)][4]);
+        if (Number.isFinite(priceNow) && Number.isFinite(price4hAgo) && price4hAgo > 0) {
+          const pctChange = ((priceNow - price4hAgo) / price4hAgo) * 100;
+          if (pctChange <= MACRO_FLUSH_THRESHOLD) {
+            state = {
+              halted: true,
+              reason: `Macro risk-off: BTC ${pctChange.toFixed(2)}% in 4h`,
+              pctChange,
+            };
+          } else {
+            state = { halted: false, pctChange };
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    // On fetch failure, fail-open (don't halt trading because we couldn't read BTC)
+    console.warn("[MacroRiskOff] BTC fetch failed:", e?.message || e);
+  }
+  _macroCache = { ts: Date.now(), state };
+  return state;
+}
+
 export function startCircuitBreaker(): void {
   if (started) return;
   started = true;

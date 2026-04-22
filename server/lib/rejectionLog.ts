@@ -6,6 +6,10 @@ export type RejectionReason =
   | "COOLDOWN"
   | "LOW_OI"
   | "NEGATIVE_EV"
+  | "MACRO_HALT"
+  | "MARKET_CLOSED"
+  | "LOW_CONFIDENCE"
+  | "ANTI_CHASE"
   | "OTHER";
 
 export interface RejectionEntry {
