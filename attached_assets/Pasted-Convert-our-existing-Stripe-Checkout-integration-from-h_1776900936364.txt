@@ -1,0 +1,124 @@
+Convert our existing Stripe Checkout integration from hosted mode (redirects to checkout.stripe.com) to embedded mode (renders inside clvrquantai.com). Do NOT rebuild the payment flow — we already have working Stripe products, price IDs, and subscription logic. Only change how Checkout is displayed.
+
+=== BACKEND CHANGE ===
+Find the existing endpoint that calls stripe.checkout.sessions.create() (likely /api/create-checkout-session or similar).
+
+Change these two parameters:
+- ui_mode: 'embedded'  (was default 'hosted')
+- return_url: 'https://clvrquantai.com/payment-success?session_id={CHECKOUT_SESSION_ID}'  (replace success_url and cancel_url with this single return_url)
+
+Remove: success_url, cancel_url (not used in embedded mode)
+
+Return clientSecret from the session:
+res.json({ clientSecret: session.client_secret });
+
+Full example of the updated endpoint:
+const session = await stripe.checkout.sessions.create({
+  ui_mode: 'embedded',
+  mode: 'subscription',
+  line_items: [{ price: priceId, quantity: 1 }],
+  customer_email: req.user.email,
+  return_url: 'https://clvrquantai.com/payment-success?session_id={CHECKOUT_SESSION_ID}',
+  metadata: { userId: req.user.id, priceId },
+});
+res.json({ clientSecret: session.client_secret });
+
+=== FRONTEND CHANGE ===
+Install if not already: npm i @stripe/react-stripe-js @stripe/stripe-js
+
+Replace the current checkout page (which redirects to Stripe) with an embedded version:
+
+import { loadStripe } from '@stripe/stripe-js';
+import { EmbeddedCheckoutProvider, EmbeddedCheckout } from '@stripe/react-stripe-js';
+import { useEffect, useState, useCallback } from 'react';
+
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY);
+
+export default function Checkout() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const priceId = urlParams.get('priceId');
+
+  const fetchClientSecret = useCallback(async () => {
+    const res = await fetch('/api/create-checkout-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ priceId }),
+    });
+    const data = await res.json();
+    return data.clientSecret;
+  }, [priceId]);
+
+  return (
+    <div className="min-h-screen bg-[#0a0e1a] py-8">
+      <div className="max-w-3xl mx-auto px-4">
+        <h1 className="text-2xl font-serif text-white mb-6 text-center">Complete your subscription</h1>
+        <div id="checkout" className="rounded-lg overflow-hidden">
+          <EmbeddedCheckoutProvider stripe={stripePromise} options={{ fetchClientSecret }}>
+            <EmbeddedCheckout />
+          </EmbeddedCheckoutProvider>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+=== PAYMENT SUCCESS PAGE ===
+Create/update /payment-success page to read session_id from URL and verify:
+
+import { useEffect, useState } from 'react';
+
+export default function PaymentSuccess() {
+  const [status, setStatus] = useState('loading');
+  const [plan, setPlan] = useState(null);
+
+  useEffect(() => {
+    const sessionId = new URLSearchParams(window.location.search).get('session_id');
+    fetch(`/api/checkout-session-status?session_id=${sessionId}`)
+      .then(r => r.json())
+      .then(data => {
+        setStatus(data.status);
+        setPlan(data.plan);
+      });
+  }, []);
+
+  if (status === 'loading') return <div className="text-white p-8">Confirming payment...</div>;
+  if (status === 'complete') return (
+    <div className="text-white p-8 text-center">
+      <h1 className="text-3xl font-serif mb-4">Welcome to CLVR {plan}</h1>
+      <p className="text-gray-400 mb-6">Your account has been upgraded. You now have full access.</p>
+      <a href="/dashboard" className="inline-block px-6 py-3 bg-amber-500 text-black rounded">Go to Dashboard</a>
+    </div>
+  );
+  return <div className="text-white p-8">Something went wrong. Contact support.</div>;
+}
+
+=== ADD SESSION STATUS ENDPOINT ===
+app.get('/api/checkout-session-status', async (req, res) => {
+  const session = await stripe.checkout.sessions.retrieve(req.query.session_id);
+  res.json({
+    status: session.status,
+    customer_email: session.customer_details?.email,
+    plan: session.metadata?.priceId?.includes('elite') ? 'Elite' : 'Pro',
+  });
+});
+
+=== ROUTING ===
+Update the "Upgrade to CLVR Pro" / "Upgrade to CLVR Elite" buttons in the pricing modal to navigate to /checkout?priceId={STRIPE_PRICE_ID} instead of directly calling Stripe.
+
+=== KEEP EVERYTHING ELSE ===
+- Webhooks: no change, already working
+- Tier gating: no change
+- Stripe products and price IDs: no change
+- DB schema: no change
+
+=== TEST ===
+1. Click Upgrade to CLVR Pro Yearly on pricing page
+2. Should navigate to /checkout?priceId=price_xxx
+3. Stripe Checkout iframe should render INSIDE clvrquantai.com (URL stays on clvrquantai.com, not checkout.stripe.com)
+4. Enter 4242 4242 4242 4242, any future expiry, any CVC
+5. On success, redirects to /payment-success?session_id=cs_xxx (still on clvrquantai.com)
+6. Confirm webhook fires and user tier updates in DB
+7. Confirm /payment-success displays "Welcome to CLVR Pro"
+
+That's the entire change. Deploy and verify the URL bar stays on clvrquantai.com throughout checkout.

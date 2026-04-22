@@ -6053,6 +6053,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
+  // Embedded Stripe Checkout: returns clientSecret for <EmbeddedCheckout/>
   app.post("/api/stripe/checkout", async (req, res) => {
     const { priceId, email } = req.body;
     if (!priceId) return res.status(400).json({ error: "priceId required" });
@@ -6062,24 +6063,68 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const baseUrl = process.env.APP_URL
         || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : 'http://localhost:5000');
 
-      const sessionParams: any = {
-        mode: 'subscription',
-        line_items: [{ price: priceId, quantity: 1 }],
-        success_url: `${baseUrl}?session_id={CHECKOUT_SESSION_ID}&status=success`,
-        cancel_url: `${baseUrl}?status=cancel`,
-        payment_method_types: ['card'],
-      };
-
-      if (email) {
-        sessionParams.customer_email = email;
+      const sessionUserId = (req.session as any)?.userId;
+      let sessionEmail = email;
+      if (!sessionEmail && sessionUserId) {
+        try {
+          const r = await pool.query("SELECT email FROM users WHERE id = $1", [sessionUserId]);
+          sessionEmail = r.rows[0]?.email;
+        } catch {}
       }
 
+      const sessionParams: any = {
+        ui_mode: 'embedded',
+        mode: 'subscription',
+        line_items: [{ price: priceId, quantity: 1 }],
+        return_url: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        payment_method_types: ['card'],
+        metadata: {
+          userId: sessionUserId ? String(sessionUserId) : '',
+          priceId,
+        },
+      };
+      if (sessionEmail) sessionParams.customer_email = sessionEmail;
+
       const session = await stripe.checkout.sessions.create(sessionParams);
-      res.json({ url: session.url, sessionId: session.id });
+      res.json({ clientSecret: session.client_secret, sessionId: session.id });
     } catch (e: any) {
       console.error('[stripe] Checkout error:', e.message, e.type, e.code);
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // Status check for /payment-success page
+  app.get("/api/stripe/checkout-session-status", async (req, res) => {
+    const sessionId = req.query.session_id as string;
+    if (!sessionId) return res.status(400).json({ error: "session_id required" });
+    try {
+      const stripe = await getUncachableStripeClient();
+      const session = await stripe.checkout.sessions.retrieve(sessionId, {
+        expand: ["line_items", "subscription"],
+      });
+      const priceItem: any = (session as any).line_items?.data?.[0]?.price
+        || (session as any).subscription?.items?.data?.[0]?.price;
+      const lookupKey = priceItem?.lookup_key || "";
+      const unitAmount = priceItem?.unit_amount || 0;
+      const isElitePlan = lookupKey.startsWith("elite") || unitAmount >= 11900;
+      const planLabel = isElitePlan ? "Elite" : "Pro";
+      res.json({
+        status: session.status,
+        payment_status: session.payment_status,
+        customer_email: session.customer_details?.email || null,
+        plan: planLabel,
+      });
+    } catch (e: any) {
+      console.error('[stripe] session-status error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Expose publishable key to the frontend (no need for VITE_ env var)
+  app.get("/api/stripe/publishable-key", (_req, res) => {
+    const key = process.env.STRIPE_PUBLISHABLE_KEY;
+    if (!key) return res.status(503).json({ error: "Stripe not configured" });
+    res.json({ publishableKey: key });
   });
 
   app.get("/api/stripe/subscription", async (req, res) => {
