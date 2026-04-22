@@ -8,6 +8,33 @@ export const CRYPTO_SYMS = [
   "TIA","SEI","JUP","ONDO","RENDER","INJ","FET","TAO","PENDLE","HBAR","TRUMP","HYPE",
 ];
 
+// Non-crypto asset registry for the Yahoo-fed signal pipeline.
+// Symbol = Yahoo ticker, display = the label CLVR uses internally and in the UI,
+// class drives which session-hours check (`isMarketOpen`) gets applied.
+export const NON_CRYPTO_ASSETS = {
+  forex: [
+    { symbol: "EURUSD=X", display: "EURUSD", class: "forex" as const },
+    { symbol: "GBPUSD=X", display: "GBPUSD", class: "forex" as const },
+    { symbol: "USDJPY=X", display: "USDJPY", class: "forex" as const },
+    { symbol: "AUDUSD=X", display: "AUDUSD", class: "forex" as const },
+    { symbol: "USDCAD=X", display: "USDCAD", class: "forex" as const },
+  ],
+  commodities: [
+    { symbol: "GC=F", display: "GOLD",   class: "commodity" as const },
+    { symbol: "SI=F", display: "SILVER", class: "commodity" as const },
+    { symbol: "CL=F", display: "WTI",    class: "commodity" as const },
+    { symbol: "NG=F", display: "NATGAS", class: "commodity" as const },
+  ],
+  equities: [
+    { symbol: "SPY",  display: "SPY",  class: "equity" as const },
+    { symbol: "QQQ",  display: "QQQ",  class: "equity" as const },
+    { symbol: "NVDA", display: "NVDA", class: "equity" as const },
+    { symbol: "AAPL", display: "AAPL", class: "equity" as const },
+    { symbol: "MSFT", display: "MSFT", class: "equity" as const },
+    { symbol: "TSLA", display: "TSLA", class: "equity" as const },
+  ],
+};
+
 export const CRYPTO_BASE: Record<string, number> = {
   BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,
   PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,POL:0.55,UNI:9.5,AAVE:220,
