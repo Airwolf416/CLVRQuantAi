@@ -2325,34 +2325,81 @@ Output JSON only, no prose, no code fences.`;
           const newsCacheKey = `chart_ai_news:${asset || "_"}:${cacheBucket}`;
           const cachedNews = chartAiNewsCache.get(newsCacheKey);
 
+          // Pull recent in-app news headlines (CLVRQuant feed) for the model
+          let inAppNewsBlock = "";
+          try {
+            const newsCached = (cache as any)?.["news"];
+            const items: any[] = Array.isArray(newsCached?.data?.items) ? newsCached.data.items
+                              : Array.isArray(newsCached?.data) ? newsCached.data : [];
+            if (items.length) {
+              const upperAsset = (asset || "").toUpperCase();
+              const matchA = (h: any) => {
+                if (!upperAsset) return true;
+                const t = String(h.title || "").toUpperCase();
+                if (t.includes(upperAsset)) return true;
+                const arr = Array.isArray(h.assets) ? h.assets.map((s: any) => String(s).toUpperCase()) : [];
+                return arr.includes(upperAsset);
+              };
+              const picked = items.filter(matchA).slice(0, 8);
+              const finalList = (picked.length ? picked : items.slice(0, 6))
+                .map((h: any) => `• ${String(h.title || "").slice(0, 160)}${h.source ? `  (${h.source})` : ""}`)
+                .join("\n");
+              if (finalList) {
+                inAppNewsBlock = `\n\nIN-APP NEWS FEED (CLVRQuant aggregated, freshest first${asset ? ` — filtered for ${asset}` : ""}):\n${finalList}\n`;
+              }
+            }
+          } catch (e: any) {
+            console.error("[chart-ai] in-app news inject failed:", e?.message);
+          }
+
           // Build system prompt
           const nowIso = new Date().toISOString();
-          const assetLabel = asset || "infer from chart";
-          const newsBlock = cachedNews
-            ? `\n\nFRESH NEWS CONTEXT (cached, last 15 min — do NOT re-search):\n${cachedNews.newsContext}\n`
+          const assetLabel = asset || "DETECT FROM CHART (look at title bar, ticker label, exchange watermark, axis annotations)";
+          const cachedNewsBlock = cachedNews
+            ? `\n\nFRESH WEB NEWS CONTEXT (cached, last 15 min — do NOT re-search):\n${cachedNews.newsContext}\n`
             : "";
 
-          const system = `You are an elite technical analyst for CLVRQuantAI. Analyze the attached chart and return ONLY a JSON object — no prose, no markdown fences, no explanation outside the JSON.
+          const system = `You are an elite quantitative technical analyst for CLVRQuantAI. Analyze the attached chart and return ONLY a JSON object — no prose, no markdown fences, no explanation outside the JSON.
 
 Context:
 - Trading horizon: ${horizon}
-- Asset: ${assetLabel}
-- Current UTC time: ${nowIso}${newsBlock}
+- Asset (user-provided): ${assetLabel}
+- Current UTC time: ${nowIso}${cachedNewsBlock}${inAppNewsBlock}
 
-Step 1: Read the chart carefully. Identify visible price axis values, candlestick structure, support/resistance, volume anomalies, and any visible indicators or annotations (existing TP/SL/Entry markers).
+═══ MANDATORY ANALYSIS CHECKLIST — complete EVERY step before deciding ═══
 
-Step 2: ${cachedNews ? "Use the FRESH NEWS CONTEXT above instead of searching." : "Use web search to check for relevant news, macro events, or catalysts affecting this asset in the last 24 hours. Search 1–2 times maximum."}
+Step 1 — IDENTIFY THE ASSET. Look at the chart for ticker text, exchange logo (Binance/Bybit/TradingView/MT4/etc.), watermarks, pair labels (e.g. "BTCUSDT", "EUR/USD", "AAPL", "XAUUSD"), and the price axis magnitude. Set "detected_asset" to what you see (ticker symbol). If the user provided an asset above and the chart agrees, use the user's value. If you genuinely cannot tell, set "detected_asset": "unknown".
 
-Step 3: Calibrate stop/target distances to the horizon:
-- scalp (1–15min): stops 0.3–0.8%, TPs at 1R, 2R, 3R
-- intraday (hours): stops 0.8–2%, targets at prior day H/L or intraday key levels
-- swing (days–weeks): stops 3–8%, targets at weekly S/R
-- position (weeks–months): stops 8–20%, targets at monthly/quarterly structure
+Step 2 — READ PRICE STRUCTURE. Identify: current price, recent swing highs/lows, trend direction (HH/HL or LH/LL), key horizontal support & resistance, any visible trendlines, breakouts, fakeouts, liquidity sweeps, and the timeframe shown (e.g. 1m/5m/1h/4h/1D).
 
-Step 4: If the chart is unreadable, ambiguous, or shows no clean setup, return "direction": "no_trade". DO NOT force a trade. A "no_trade" call is better than a bad one.
+Step 3 — TECHNICAL INDICATORS. From what is visible on the chart, evaluate ALL of:
+  • Moving averages (EMA/SMA crossovers, slope, price-to-MA distance)
+  • RSI (overbought >70, oversold <30, divergence with price)
+  • MACD (histogram direction, signal-line cross, zero-line position)
+  • Volume (climactic, fading, divergence with price)
+  • Bollinger Bands / volatility (squeeze, expansion, band ride)
+  • Any other indicators visible (Stoch RSI, ATR, OBV, VWAP, Ichimoku, etc.)
+If an indicator is NOT visible on the chart, infer the likely state from price action alone — do not invent a reading.
 
-Return this schema EXACTLY:
+Step 4 — NEWS + CATALYST CHECK.
+  ${cachedNews ? "Use the FRESH WEB NEWS CONTEXT above (already cached) and the IN-APP NEWS FEED above. DO NOT re-run web search."
+              : "Use web search 1–2 times to check headlines, macro events, earnings, regulatory news, or on-chain catalysts in the last 24h for this asset. ALSO incorporate the IN-APP NEWS FEED above."}
+Cross-reference: does news flow agree with the technical setup? Is there an event-risk window (FOMC, CPI, earnings) inside the trade horizon?
+
+Step 5 — CONFLUENCE SCORING. A high-confidence (>70) call requires confluence across: structure + at least 2 indicators + news/catalyst alignment. If conflicting signals dominate, return "no_trade".
+
+Step 6 — RISK CALIBRATION (use the actual price level visible — never invent levels):
+  • scalp (1–15min): stops 0.3–0.8%, TPs at 1R, 2R, 3R
+  • intraday (hours): stops 0.8–2%, targets at prior day H/L or intraday key levels
+  • swing (days–weeks): stops 3–8%, targets at weekly S/R
+  • position (weeks–months): stops 8–20%, targets at monthly/quarterly structure
+
+Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop, or fights the news flow, return "direction": "no_trade". A "no_trade" is better than a forced trade.
+
+═══ RETURN THIS SCHEMA EXACTLY (JSON ONLY, no prose) ═══
 {
+  "detected_asset": "<ticker as seen on chart, e.g. BTCUSDT | EURUSD | AAPL | XAUUSD | unknown>",
+  "timeframe": "<e.g. 5m | 1h | 4h | 1D | unknown>",
   "direction": "long" | "short" | "no_trade",
   "confidence": <0-100>,
   "entry": { "price": <number>, "type": "market" | "limit" | "breakout" },
@@ -2363,11 +2410,19 @@ Return this schema EXACTLY:
     { "level": 3, "price": <number> }
   ],
   "risk_reward": <number>,
-  "reasoning": "<=2 sentences, plain English",
+  "indicators": {
+    "trend": "<bullish|bearish|sideways + brief structure note>",
+    "rsi": "<reading or 'not visible — inferred X from price action'>",
+    "macd": "<reading or inference>",
+    "moving_averages": "<EMA/SMA observation>",
+    "volume": "<observation>",
+    "other": "<any other visible indicator notes, or empty string>"
+  },
+  "reasoning": "<=3 sentences tying structure + indicators + news into the call",
   "key_levels": { "support": [<numbers>], "resistance": [<numbers>] },
   "invalidation": "what price action would void this setup",
   "news_context": "<=1 sentence summarizing relevant news found, or 'no material catalysts'",
-  "warnings": ["low volume" | "news risk" | "choppy" | "overextended" | etc.]
+  "warnings": ["low volume" | "news risk" | "choppy" | "overextended" | "event window" | etc.]
 }`;
 
           const messages = [{
@@ -2380,7 +2435,7 @@ Return this schema EXACTLY:
 
           const body: any = {
             model: CLAUDE_MODEL,
-            max_tokens: 1500,
+            max_tokens: 2000,
             system,
             messages,
           };

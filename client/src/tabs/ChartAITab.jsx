@@ -406,11 +406,29 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
           {/* direction + confidence */}
           <div style={{ padding: "16px 18px", borderBottom: `1px solid ${C.border}` }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-              <div data-testid="badge-direction" style={{
-                fontFamily: SERIF, fontWeight: 900, fontSize: 26,
-                color: dirColor, letterSpacing: "0.04em",
-              }}>
-                {dirLabel}
+              <div>
+                <div data-testid="badge-direction" style={{
+                  fontFamily: SERIF, fontWeight: 900, fontSize: 26,
+                  color: dirColor, letterSpacing: "0.04em",
+                }}>
+                  {dirLabel}
+                </div>
+                {(result.detected_asset || result.timeframe) && (
+                  <div data-testid="text-detected-asset" style={{ fontFamily: MONO, fontSize: 10, color: C.muted2, marginTop: 4, letterSpacing: "0.08em" }}>
+                    {result.detected_asset && result.detected_asset !== "unknown" && (
+                      <span style={{ color: ACCENT, fontWeight: 700 }}>{String(result.detected_asset).toUpperCase()}</span>
+                    )}
+                    {result.detected_asset && result.detected_asset !== "unknown" && result.timeframe && result.timeframe !== "unknown" && (
+                      <span style={{ color: C.muted }}> · </span>
+                    )}
+                    {result.timeframe && result.timeframe !== "unknown" && (
+                      <span>{result.timeframe}</span>
+                    )}
+                    {(!result.detected_asset || result.detected_asset === "unknown") && (
+                      <span style={{ color: C.muted }}>asset not detected on chart</span>
+                    )}
+                  </div>
+                )}
               </div>
               <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, letterSpacing: "0.12em" }}>
                 CONFIDENCE
@@ -473,6 +491,28 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
                   </tr>
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* indicators */}
+          {result.indicators && typeof result.indicators === "object" && (
+            <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ ...labelMono, marginBottom: 8 }}>Technical Read</div>
+              <div data-testid="grid-indicators" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8 }}>
+                {[
+                  ["Trend",     result.indicators.trend],
+                  ["RSI",       result.indicators.rsi],
+                  ["MACD",      result.indicators.macd],
+                  ["MAs",       result.indicators.moving_averages],
+                  ["Volume",    result.indicators.volume],
+                  ["Other",     result.indicators.other],
+                ].filter(([, v]) => v && String(v).trim()).map(([k, v]) => (
+                  <div key={k} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 4, padding: "8px 10px" }}>
+                    <div style={{ fontFamily: MONO, fontSize: 9, color: ACCENT, letterSpacing: "0.12em", fontWeight: 600, marginBottom: 3 }}>{k.toUpperCase()}</div>
+                    <div data-testid={`text-indicator-${k.toLowerCase()}`} style={{ fontFamily: MONO, fontSize: 11, color: C.text, lineHeight: 1.4 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
