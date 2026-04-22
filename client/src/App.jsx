@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, useCallback, memo, createContext, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SiInstagram, SiTiktok } from "react-icons/si";
+import { Menu, X, LogOut, Languages, QrCode } from "lucide-react";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
@@ -2438,6 +2439,13 @@ function Dashboard({user,setUser,onShowAuth}){
   const [accessCodeInput,setAccessCodeInput]=useState("");
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
   const [showQRScanner,setShowQRScanner]=useState(false);
+  const [drawerOpen,setDrawerOpen]=useState(false);
+  useEffect(()=>{
+    if(!drawerOpen) return;
+    const onKey=(e)=>{ if(e.key==="Escape") setDrawerOpen(false); };
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[drawerOpen]);
   const [showUpgrade,setShowUpgrade]=useState(false);
   const [upgradePlanTab,setUpgradePlanTab]=useState("pro");
   const [showPricingModal,setShowPricingModal]=useState(false);
@@ -3529,6 +3537,88 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
       {/* QR Scanner overlay */}
       {showQRScanner&&<QRScanner onScan={async(raw)=>{setShowQRScanner(false);const code=raw.trim().toUpperCase();await verifyAccessCode(code);}} onClose={()=>setShowQRScanner(false)}/>}
 
+      {/* ── Slide-out Menu Drawer ─────────────────────────────────────── */}
+      <div
+        data-testid="drawer-overlay"
+        onClick={()=>setDrawerOpen(false)}
+        aria-hidden={!drawerOpen}
+        style={{
+          position:"fixed", inset:0, zIndex:90,
+          background:"rgba(0,0,0,0.55)",
+          backdropFilter:"blur(2px)",
+          opacity: drawerOpen ? 1 : 0,
+          pointerEvents: drawerOpen ? "auto" : "none",
+          transition:"opacity 220ms ease",
+        }}
+      />
+      <aside
+        data-testid="drawer-panel"
+        role="dialog"
+        aria-label="Menu"
+        aria-hidden={!drawerOpen}
+        onClick={(e)=>e.stopPropagation()}
+        style={{
+          position:"fixed", top:0, right:0, bottom:0, zIndex:91,
+          width:"min(320px, 86vw)",
+          background:"rgba(8,10,14,0.98)",
+          borderLeft:`1px solid ${C.border}`,
+          boxShadow:"-12px 0 40px rgba(0,0,0,0.5)",
+          transform: drawerOpen ? "translateX(0)" : "translateX(100%)",
+          transition:"transform 260ms cubic-bezier(.2,.8,.2,1)",
+          display:"flex", flexDirection:"column",
+        }}
+      >
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderBottom:`1px solid ${C.border}`}}>
+          <span style={{fontFamily:MONO,fontSize:9,color:C.gold2,letterSpacing:"0.18em"}}>MENU</span>
+          <button data-testid="btn-close-drawer" onClick={()=>setDrawerOpen(false)} aria-label="Close menu"
+            style={{background:"none",border:"none",color:C.muted2,cursor:"pointer",padding:4,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <X size={18}/>
+          </button>
+        </div>
+
+        <nav style={{display:"flex",flexDirection:"column",padding:"10px 8px",gap:2,flex:1,overflowY:"auto"}}>
+          {/* QR scanner */}
+          <button data-testid="drawer-btn-qr" onClick={()=>{setDrawerOpen(false);setShowQRScanner(true);}}
+            style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"none",border:"none",borderRadius:4,color:C.muted2,fontFamily:MONO,fontSize:11,cursor:"pointer",textAlign:"left",letterSpacing:"0.06em"}}
+            onMouseEnter={(e)=>e.currentTarget.style.background="rgba(255,255,255,.04)"}
+            onMouseLeave={(e)=>e.currentTarget.style.background="none"}>
+            <QrCode size={16} color={C.gold}/>
+            <span style={{flex:1}}>SCAN QR CODE</span>
+          </button>
+
+          {/* Language switch */}
+          <button data-testid="drawer-btn-lang" onClick={()=>{toggleLang();}}
+            style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"none",border:"none",borderRadius:4,color:C.muted2,fontFamily:MONO,fontSize:11,cursor:"pointer",textAlign:"left",letterSpacing:"0.06em"}}
+            onMouseEnter={(e)=>e.currentTarget.style.background="rgba(255,255,255,.04)"}
+            onMouseLeave={(e)=>e.currentTarget.style.background="none"}>
+            <Languages size={16} color={C.gold}/>
+            <span style={{flex:1}}>LANGUAGE · {lang}</span>
+            <span style={{fontFamily:MONO,fontSize:9,color:C.gold,padding:"2px 8px",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,letterSpacing:"0.1em"}}>{lang==="EN"?"→ FR":"→ EN"}</span>
+          </button>
+
+          <div style={{height:1,background:C.border,margin:"8px 6px"}}/>
+
+          {/* Sign out */}
+          <button data-testid="drawer-btn-signout"
+            onClick={async()=>{
+              setDrawerOpen(false);
+              try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}
+              try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}
+              setUser(null);
+            }}
+            style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"none",border:"none",borderRadius:4,color:C.red,fontFamily:MONO,fontSize:11,cursor:"pointer",textAlign:"left",letterSpacing:"0.06em"}}
+            onMouseEnter={(e)=>e.currentTarget.style.background="rgba(255,64,96,.08)"}
+            onMouseLeave={(e)=>e.currentTarget.style.background="none"}>
+            <LogOut size={16}/>
+            <span style={{flex:1}}>SIGN OUT</span>
+          </button>
+        </nav>
+
+        <div style={{padding:"10px 16px",borderTop:`1px solid ${C.border}`,fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.18em",textAlign:"center"}}>
+          CLVRQUANT · v2
+        </div>
+      </aside>
+
       {/* ── EMAIL VERIFICATION BANNER ── */}
       {user?.pendingVerification&&!verifyBannerDismissed&&(
         <div style={{background:"rgba(201,168,76,.08)",borderBottom:`1px solid rgba(201,168,76,.2)`,padding:"10px 16px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",position:"relative",zIndex:50}}>
@@ -3712,11 +3802,6 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.25em",marginTop:2}}>TRADE SMARTER WITH AI · v2</div>
           </div>
           <div style={{display:"flex",alignItems:"flex-end",gap:6}}>
-            {/* ── QR Code ── */}
-            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>QR CODE</span>
-              <button data-testid="btn-qr-scanner" onClick={()=>setShowQRScanner(true)} title="Scan access code QR" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:C.muted2,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>📷</button>
-            </div>
             {/* ── Sound ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
               <span style={{fontFamily:MONO,fontSize:6,color:soundEnabled?C.cyan:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>SOUND</span>
@@ -3797,15 +3882,13 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               :isPro?<button data-testid="badge-pro" onClick={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}} title="Click to upgrade to Elite" style={{background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.15em",fontWeight:700,height:26,display:"flex",alignItems:"center",cursor:"pointer"}}>PRO</button>
               :<button data-testid="btn-upgrade-header" onClick={()=>{setUpgradeDefaultTier(null);setShowPricingModal(true);}} style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,padding:"0 8px",fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.1em",cursor:"pointer",fontWeight:600,height:26,display:"flex",alignItems:"center"}}>UPGRADE</button>}
             </div>
-            {/* ── Language toggle ── */}
+            {/* ── Hamburger menu (opens drawer with QR / LANG / SIGN-OUT) ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>LANG</span>
-              <button data-testid="btn-lang-toggle" onClick={toggleLang} style={{background:"rgba(201,168,76,.06)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"4px 7px",fontFamily:MONO,fontSize:8,color:C.gold,cursor:"pointer",letterSpacing:"0.1em",fontWeight:700,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>{lang==="EN"?"FR":"EN"}</button>
-            </div>
-            {/* ── Sign out ── */}
-            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>EXIT</span>
-              <button data-testid="btn-signout" onClick={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 7px",fontFamily:MONO,fontSize:8,color:C.muted,cursor:"pointer",letterSpacing:"0.08em",height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>OUT</button>
+              <span style={{fontFamily:MONO,fontSize:6,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>MENU</span>
+              <button data-testid="btn-open-drawer" onClick={()=>setDrawerOpen(true)} title="Open menu" aria-label="Open menu"
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",color:C.muted2,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <Menu size={14}/>
+              </button>
             </div>
             <div style={{textAlign:"right"}}>
               <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:3}}>
