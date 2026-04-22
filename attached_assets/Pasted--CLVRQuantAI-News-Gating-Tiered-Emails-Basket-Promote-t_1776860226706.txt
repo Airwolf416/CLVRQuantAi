@@ -1,0 +1,603 @@
+# CLVRQuantAI — News Gating + Tiered Emails + Basket Promote-to-Scanner
+
+Implement three feature sets. Work through sections in order. Show me a summary after each section.
+
+---
+
+## PART 1: NEWS FEED GATING FOR SIGNALS
+
+Currently signals fire without consulting the Radar/News Intelligence feed. This causes contradictions (e.g. AI says "risk-on gold long" while BEARISH geopolitical news is tagged HIGH severity). Fix by feeding news context into the signal gate.
+
+### 1A. Create news context service
+
+**File: `server/lib/newsContext.ts`** (new file)
+
+```typescript
+import { db } from "../db";
+import { newsItems } from "../../shared/schema"; // adjust import to match your schema
+import { and, gte, desc, sql } from "drizzle-orm";
+
+export interface NewsImpact {
+  hasConflict: boolean;
+  severity: "low" | "medium" | "high" | null;
+  bearishCount: number;
+  bullishCount: number;
+  neutralCount: number;
+  topHeadlines: string[];
+  confidenceAdjustment: number; // -100 to +5
+  shouldBlock: boolean;
+}
+
+// Map each tradeable asset to news keywords
+const ASSET_NEWS_MAP: Record<string, string[]> = {
+  // Crypto (majors get broad CRYPTO tag, alts get their ticker only)
+  BTC: ["BTC", "BITCOIN", "CRYPTO"],
+  ETH: ["ETH", "ETHEREUM", "CRYPTO"],
+  SOL: ["SOL", "SOLANA", "CRYPTO"],
+  XRP: ["XRP", "RIPPLE", "CRYPTO"],
+  BNB: ["BNB", "BINANCE", "CRYPTO"],
+  DOGE: ["DOGE", "DOGECOIN", "CRYPTO"],
+  ADA: ["ADA", "CARDANO", "CRYPTO"],
+  AVAX: ["AVAX", "AVALANCHE"],
+  LINK: ["LINK", "CHAINLINK"],
+  DOT: ["DOT", "POLKADOT"],
+  ARB: ["ARB", "ARBITRUM"],
+  OP: ["OP", "OPTIMISM"],
+  NEAR: ["NEAR"],
+  SUI: ["SUI"],
+  APT: ["APT", "APTOS"],
+  TIA: ["TIA", "CELESTIA"],
+  SEI: ["SEI"],
+  HYPE: ["HYPE", "HYPERLIQUID"],
+  AAVE: ["AAVE", "DEFI"],
+  UNI: ["UNI", "UNISWAP", "DEFI"],
+  PEPE: ["PEPE"],
+  WIF: ["WIF"],
+  TRUMP: ["TRUMP"],
+  JUP: ["JUP", "JUPITER"],
+  ONDO: ["ONDO", "RWA"],
+  RENDER: ["RENDER", "RNDR"],
+  INJ: ["INJ", "INJECTIVE"],
+  FET: ["FET", "AI CRYPTO"],
+  TAO: ["TAO", "BITTENSOR"],
+  PENDLE: ["PENDLE", "DEFI"],
+  HBAR: ["HBAR", "HEDERA"],
+  POL: ["POL", "POLYGON", "MATIC"],
+
+  // Forex
+  EURUSD: ["EUR", "ECB", "LAGARDE", "EUROZONE", "DXY"],
+  GBPUSD: ["GBP", "BOE", "UK", "POUND", "DXY"],
+  USDJPY: ["JPY", "BOJ", "YEN", "JAPAN", "DXY"],
+  AUDUSD: ["AUD", "RBA", "AUSTRALIA", "DXY"],
+  USDCAD: ["CAD", "BOC", "CANADA", "OIL", "DXY"],
+
+  // Commodities
+  GOLD: ["GOLD", "XAU", "METALS", "DXY", "FED"],
+  SILVER: ["SILVER", "XAG", "METALS"],
+  WTI: ["WTI", "OIL", "CRUDE", "OPEC", "BRENT", "ENERGY", "IRAN"],
+  NATGAS: ["NATGAS", "NATURAL GAS", "HENRY HUB", "TTF", "ENERGY"],
+
+  // Equities
+  SPY: ["SPY", "SP500", "S&P", "FED", "EARNINGS"],
+  QQQ: ["QQQ", "NASDAQ", "TECH", "FED"],
+  NVDA: ["NVDA", "NVIDIA", "AI", "CHIPS", "SEMICONDUCTOR"],
+  AAPL: ["AAPL", "APPLE"],
+  MSFT: ["MSFT", "MICROSOFT"],
+  TSLA: ["TSLA", "TESLA", "EV"],
+};
+
+export async function getNewsImpact(
+  token: string,
+  direction: "LONG" | "SHORT",
+  lookbackMinutes: number = 240
+): Promise<NewsImpact> {
+  const keywords = ASSET_NEWS_MAP[token.toUpperCase()] || [token.toUpperCase()];
+  const cutoff = new Date(Date.now() - lookbackMinutes * 60 * 1000);
+
+  const recent = await db
+    .select()
+    .from(newsItems)
+    .where(gte(newsItems.createdAt, cutoff))
+    .orderBy(desc(newsItems.createdAt))
+    .limit(50);
+
+  const relevant = recent.filter((item) => {
+    const text = `${item.title} ${item.tickers || ""}`.toUpperCase();
+    return keywords.some((kw) => text.includes(kw));
+  });
+
+  let bearish = 0, bullish = 0, neutral = 0;
+  let maxSeverity: "low" | "medium" | "high" | null = null;
+  const headlines: string[] = [];
+
+  for (const item of relevant) {
+    const sentiment = (item.sentiment || "").toLowerCase();
+    const severity = (item.severity || "").toLowerCase();
+
+    if (sentiment === "bearish") bearish++;
+    else if (sentiment === "bullish") bullish++;
+    else neutral++;
+
+    if (severity === "high") maxSeverity = "high";
+    else if (severity === "medium" && maxSeverity !== "high") maxSeverity = "medium";
+    else if (severity === "low" && !maxSeverity) maxSeverity = "low";
+
+    if (headlines.length < 3) headlines.push(item.title);
+  }
+
+  const contradicts =
+    (direction === "LONG" && bearish > bullish) ||
+    (direction === "SHORT" && bullish > bearish);
+
+  let confidenceAdjustment = 0;
+  let shouldBlock = false;
+
+  if (contradicts && maxSeverity === "high") {
+    shouldBlock = true;
+    confidenceAdjustment = -100;
+  } else if (contradicts && maxSeverity === "medium") {
+    confidenceAdjustment = -20;
+  } else if (contradicts) {
+    confidenceAdjustment = -10;
+  } else if (!contradicts && maxSeverity === "high") {
+    confidenceAdjustment = +5;
+  }
+
+  return {
+    hasConflict: contradicts,
+    severity: maxSeverity,
+    bearishCount: bearish,
+    bullishCount: bullish,
+    neutralCount: neutral,
+    topHeadlines: headlines,
+    confidenceAdjustment,
+    shouldBlock,
+  };
+}
+```
+
+### 1B. Wire news gate into signal generation
+
+**File: `server/routes.ts`**
+
+In `/api/quant` and the `/api/signals` background loop, call `getNewsImpact()` AFTER cooldown/suppression gates but BEFORE finalizing the signal:
+
+```typescript
+import { getNewsImpact } from "./lib/newsContext";
+
+// Inside signal generation for each (token, direction):
+const newsImpact = await getNewsImpact(token, direction, 240);
+
+if (newsImpact.shouldBlock) {
+  await logRejection({
+    token,
+    direction,
+    reason: `news_conflict_high: ${newsImpact.topHeadlines[0] || "contra-news"}`,
+    timestamp: new Date(),
+  });
+  continue;
+}
+
+adjustedConfidence = baseConfidence + newsImpact.confidenceAdjustment;
+
+if (adjustedConfidence < thresholds.minConfidence) {
+  await logRejection({
+    token,
+    direction,
+    reason: `news_penalty_below_threshold: adj=${newsImpact.confidenceAdjustment}, final=${adjustedConfidence}`,
+    timestamp: new Date(),
+  });
+  continue;
+}
+```
+
+### 1C. Inject news context into AI prompt
+
+**File: `server/routes.ts`** — inside `/api/quant` where the Claude prompt is built.
+
+```typescript
+const recentCriticalNews = await db
+  .select()
+  .from(newsItems)
+  .where(
+    and(
+      gte(newsItems.createdAt, new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      sql`LOWER(${newsItems.severity}) IN ('high', 'medium')`
+    )
+  )
+  .orderBy(desc(newsItems.createdAt))
+  .limit(5);
+
+const newsBlock = recentCriticalNews.length
+  ? `\n\n## CURRENT MARKET NEWS (last 4h, high/medium severity)\n` +
+    recentCriticalNews
+      .map(
+        (n) =>
+          `- [${(n.severity || "").toUpperCase()}\] \[${(n.sentiment || "NEUTRAL").toUpperCase()}] ${n.title} (${n.tickers || "macro"})`
+      )
+      .join("\n") +
+    `\n\nFactor this news into your trade idea selection. Do NOT recommend a trade that contradicts high-severity news. If the news creates uncertainty, reduce confidence or skip the asset.`
+  : "";
+
+// Append newsBlock to existing prompt string before sending to Claude
+```
+
+### 1D. Log news context on every signal
+
+When a signal is saved to `ai_signal_log`, include a `news_context` JSON field with:
+- `bearish_count`, `bullish_count`, `severity`, `confidence_adjustment`
+
+Add the column via Drizzle migration if it doesn't exist.
+
+---
+
+## PART 2: TIERED EMAIL DELIVERY (FREE / PRO / ELITE) VIA RESEND
+
+Current issue: emails don't differentiate by tier. Fix so:
+- **Free:** 0 trade ideas, strong upgrade CTA
+- **Pro:** 1 trade idea, soft CTA to upgrade to Elite
+- **Elite:** 3 trade ideas, no upgrade CTA
+
+### 2A. Tier resolver
+
+**File: `server/lib/userTier.ts`** (new file)
+
+```typescript
+import { db } from "../db";
+import { users } from "../../shared/schema";
+import { eq } from "drizzle-orm";
+
+export type Tier = "free" | "pro" | "elite";
+
+export async function getUserTier(userId: string): Promise<Tier> {
+  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  if (!user) return "free";
+
+  // Adjust field name to match your schema (subscriptionTier, tier, plan, etc.)
+  const tier = (user.subscriptionTier || user.tier || "free").toLowerCase();
+
+  if (tier === "elite" || tier === "premium") return "elite";
+  if (tier === "pro" || tier === "standard") return "pro";
+  return "free";
+}
+
+export function getMaxIdeasForTier(tier: Tier): number {
+  return tier === "elite" ? 3 : tier === "pro" ? 1 : 0;
+}
+```
+
+### 2B. Email template builder
+
+**File: `server/lib/emailTemplates.ts`** (new file)
+
+```typescript
+import type { Tier } from "./userTier";
+
+interface TradeIdea {
+  asset: string;
+  direction: "LONG" | "SHORT";
+  entry: number;
+  stop: number;
+  tp1: number;
+  tp2: number;
+  confidence: number;
+  rationale: string;
+  flags?: string;
+}
+
+interface MorningBriefData {
+  tier: Tier;
+  userName?: string;
+  ideas: TradeIdea[]; // always pass 3; template trims
+  marketContext: string;
+}
+
+export function buildMorningBriefEmail(data: MorningBriefData): {
+  subject: string;
+  html: string;
+  text: string;
+} {
+  const { tier, userName, ideas, marketContext } = data;
+  const maxIdeas = tier === "elite" ? 3 : tier === "pro" ? 1 : 0;
+  const shownIdeas = ideas.slice(0, maxIdeas);
+
+  const subject =
+    tier === "elite"
+      ? `⚡ Today's 3 Trade Ideas — Elite`
+      : tier === "pro"
+      ? `⚡ Today's Trade Idea — Pro`
+      : `⚡ Market Brief — Upgrade for Trade Ideas`;
+
+  const greeting = userName ? `Hi ${userName},` : `Good morning,`;
+
+  const ideasHtml = shownIdeas
+    .map(
+      (idea, i) => `
+      <div style="background:#0a1628;border:1px solid #c9a94b;border-radius:8px;padding:20px;margin-bottom:16px;">
+        <p style="color:#c9a94b;font-family:monospace;font-size:12px;letter-spacing:2px;margin:0 0 12px;">
+          ⚡ TRADE IDEA #${i + 1} · ${tier.toUpperCase()}
+        </p>
+        <h2 style="color:#fff;margin:0 0 16px;font-size:22px;">
+          ${idea.direction === "LONG" ? "🟢" : "🔴"} ${idea.asset} ${idea.direction}
+        </h2>
+        <table style="color:#e0e0e0;font-family:monospace;font-size:14px;line-height:1.8;">
+          <tr><td>📍 Entry:</td><td><strong>${idea.entry}</strong></td></tr>
+          <tr><td>🛑 Stop:</td><td><strong>${idea.stop}</strong></td></tr>
+          <tr><td>🎯 TP1:</td><td><strong>${idea.tp1}</strong></td></tr>
+          <tr><td>🎯 TP2:</td><td><strong>${idea.tp2}</strong></td></tr>
+          <tr><td>📊 Confidence:</td><td><strong>${idea.confidence}%</strong></td></tr>
+        </table>
+        ${idea.flags ? `<p style="color:#ffa500;font-size:13px;margin-top:12px;">⚠️ ${idea.flags}</p>` : ""}
+        <p style="color:#aaa;font-size:13px;margin-top:12px;font-style:italic;">💡 ${idea.rationale}</p>
+      </div>`
+    )
+    .join("");
+
+  const upgradeCta =
+    tier === "free"
+      ? `
+      <div style="background:linear-gradient(135deg,#c9a94b,#8b7635);padding:24px;border-radius:8px;text-align:center;margin:24px 0;">
+        <h3 style="color:#0a1628;margin:0 0 8px;">Unlock Daily Trade Ideas</h3>
+        <p style="color:#0a1628;margin:0 0 16px;">Upgrade to <strong>Pro</strong> for 1 daily trade idea, or <strong>Elite</strong> for 3.</p>
+        <a href="https://clvrquantai.com/upgrade" style="background:#0a1628;color:#c9a94b;padding:12px 32px;text-decoration:none;border-radius:4px;font-weight:bold;">UPGRADE NOW →</a>
+      </div>`
+      : tier === "pro"
+      ? `
+      <div style="background:#1a2942;border:1px solid #c9a94b;padding:20px;border-radius:8px;text-align:center;margin:24px 0;">
+        <p style="color:#c9a94b;margin:0 0 8px;font-size:14px;">Want <strong>2 more trade ideas daily</strong>?</p>
+        <a href="https://clvrquantai.com/upgrade" style="color:#c9a94b;text-decoration:underline;font-size:14px;">Upgrade to Elite →</a>
+      </div>`
+      : "";
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<body style="background:#050b14;color:#e0e0e0;font-family:'Helvetica Neue',Arial,sans-serif;margin:0;padding:20px;">
+  <div style="max-width:600px;margin:0 auto;">
+    <h1 style="color:#c9a94b;font-family:Georgia,serif;">CLVRQuantAI Morning Brief</h1>
+    <p style="color:#aaa;">${greeting}</p>
+    <div style="background:#0a1628;padding:16px;border-radius:8px;margin:20px 0;">
+      <p style="color:#e0e0e0;margin:0;line-height:1.6;">${marketContext}</p>
+    </div>
+    ${shownIdeas.length > 0 ? `<h2 style="color:#c9a94b;">⚡ Today's Trade Ideas — ${tier === "elite" ? "Elite (3 Ideas)" : "Pro (1 Idea)"}</h2>${ideasHtml}` : ""}
+    ${upgradeCta}
+    <p style="color:#666;font-size:11px;text-align:center;margin-top:32px;">
+      Not financial advice. Trade at your own risk.<br>
+      <a href="https://clvrquantai.com/unsubscribe" style="color:#666;">Unsubscribe</a>
+    </p>
+  </div>
+</body>
+</html>`;
+
+  const text = `${greeting}\n\n${marketContext}\n\n${
+    shownIdeas.length
+      ? shownIdeas
+          .map((i, idx) => `TRADE IDEA #${idx + 1}: ${i.asset} ${i.direction}\nEntry: ${i.entry} | Stop: ${i.stop} | TP1: ${i.tp1} | TP2: ${i.tp2}\nConfidence: ${i.confidence}%\n${i.rationale}\n`)
+          .join("\n---\n")
+      : "Upgrade to Pro or Elite to unlock daily trade ideas: https://clvrquantai.com/upgrade"
+  }`;
+
+  return { subject, html, text };
+}
+```
+
+### 2C. Send via Resend
+
+**File: `server/workers/notifications.ts`**
+
+```typescript
+import { Resend } from "resend";
+import { buildMorningBriefEmail } from "../lib/emailTemplates";
+import { getUserTier } from "../lib/userTier";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+export async function sendMorningBrief(
+  userId: string,
+  email: string,
+  userName: string | undefined
+) {
+  const tier = await getUserTier(userId);
+  const ideas = await getTopTradeIdeas(3); // always fetch 3, template trims
+  const marketContext = await getMarketContextSummary();
+
+  const { subject, html, text } = buildMorningBriefEmail({
+    tier,
+    userName,
+    ideas,
+    marketContext,
+  });
+
+  try {
+    await resend.emails.send({
+      from: "CLVRQuantAI <brief@clvrquantai.com>", // use your verified Resend domain
+      to: email,
+      subject,
+      html,
+      text,
+    });
+    console.log(`[EMAIL] Sent ${tier} brief to ${email}`);
+  } catch (err) {
+    console.error(`[EMAIL] Failed for ${email}:`, err);
+  }
+}
+```
+
+Verify `RESEND_API_KEY` is in Replit secrets and sender domain is verified in Resend. In the morning brief cron, loop over subscribers and call `sendMorningBrief()` per user.
+
+---
+
+## PART 3: BASKET PROMOTE-TO-SCANNER (ELITE-ONLY)
+
+Let Elite users pin up to 5 basket assets that get added to *their personal* signal scanner queue. Keeps the default 47-asset scanner lean while giving Elite users personalization.
+
+### 3A. Schema addition
+
+**File: `shared/schema.ts`**
+
+Add a new table:
+
+```typescript
+export const userPromotedAssets = pgTable("user_promoted_assets", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  assetSymbol: varchar("asset_symbol").notNull(), // matches basket symbol format
+  assetClass: varchar("asset_class").notNull(), // 'crypto' | 'equity' | 'commodity' | 'forex'
+  yahooSymbol: varchar("yahoo_symbol").notNull(), // resolved yfinance symbol
+  promotedAt: timestamp("promoted_at").defaultNow().notNull(),
+});
+```
+
+Run migration to add the table.
+
+### 3B. Endpoints
+
+**File: `server/routes.ts`**
+
+```typescript
+import { getUserTier } from "./lib/userTier";
+import { userPromotedAssets } from "../shared/schema";
+
+const MAX_PROMOTED_ASSETS = 5;
+
+// GET user's promoted assets
+app.get("/api/basket/promoted", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const promoted = await db
+    .select()
+    .from(userPromotedAssets)
+    .where(eq(userPromotedAssets.userId, userId));
+  res.json(promoted);
+});
+
+// POST promote an asset
+app.post("/api/basket/promote", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const tier = await getUserTier(userId);
+
+  if (tier !== "elite") {
+    return res.status(403).json({ error: "Promote-to-scanner is Elite-only" });
+  }
+
+  const { assetSymbol, assetClass, yahooSymbol } = req.body;
+  if (!assetSymbol || !assetClass || !yahooSymbol) {
+    return res.status(400).json({ error: "Missing fields" });
+  }
+
+  const existing = await db
+    .select()
+    .from(userPromotedAssets)
+    .where(eq(userPromotedAssets.userId, userId));
+
+  if (existing.length >= MAX_PROMOTED_ASSETS) {
+    return res.status(400).json({ error: `Max ${MAX_PROMOTED_ASSETS} promoted assets. Remove one first.` });
+  }
+  if (existing.some((e) => e.assetSymbol === assetSymbol)) {
+    return res.status(400).json({ error: "Already promoted" });
+  }
+
+  const [inserted] = await db
+    .insert(userPromotedAssets)
+    .values({ userId, assetSymbol, assetClass, yahooSymbol })
+    .returning();
+
+  res.json(inserted);
+});
+
+// DELETE demote an asset
+app.delete("/api/basket/promote/:id", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const id = parseInt(req.params.id);
+
+  await db
+    .delete(userPromotedAssets)
+    .where(and(eq(userPromotedAssets.id, id), eq(userPromotedAssets.userId, userId)));
+
+  res.json({ ok: true });
+});
+```
+
+### 3C. Extend signal generator to include promoted assets per-user
+
+**File: `server/routes.ts`**
+
+In the background signal loop, after processing the default 47-asset list, add a per-user promoted pass:
+
+```typescript
+// After default scanner pass completes:
+const elitePromotions = await db
+  .select({
+    userId: userPromotedAssets.userId,
+    assetSymbol: userPromotedAssets.assetSymbol,
+    assetClass: userPromotedAssets.assetClass,
+    yahooSymbol: userPromotedAssets.yahooSymbol,
+  })
+  .from(userPromotedAssets);
+
+// Group by asset to avoid fetching same candles multiple times
+const promotedByAsset = new Map<string, { symbols: typeof elitePromotions; candles: any }>();
+
+for (const p of elitePromotions) {
+  const key = p.yahooSymbol;
+  if (!promotedByAsset.has(key)) {
+    const candles = await getYahooCandles(p.yahooSymbol, "1h", 5);
+    promotedByAsset.set(key, { symbols: [p], candles });
+  } else {
+    promotedByAsset.get(key)!.symbols.push(p);
+  }
+}
+
+for (const [yahooSymbol, { symbols, candles }] of promotedByAsset) {
+  if (!candles || candles.length < 20) continue;
+  if (!isMarketOpen(symbols[0].assetClass as any)) continue;
+
+  // Run full signal pipeline (same gates: suppression, cooldown, macro, news, confidence)
+  const signal = await generateSignalForAsset({
+    token: symbols[0].assetSymbol,
+    yahooSymbol,
+    assetClass: symbols[0].assetClass,
+    candles,
+    isPromoted: true, // tag so signal saves with scope
+  });
+
+  if (signal) {
+    // Save with per-user scope — each user who promoted this asset gets the signal
+    for (const s of symbols) {
+      await saveSignalForUser({
+        userId: s.userId,
+        ...signal,
+        scope: "promoted",
+      });
+    }
+  }
+}
+```
+
+Add `scope` column to `ai_signal_log` if not present: `'global' | 'promoted'`. Default global for the existing 47-asset pass.
+
+### 3D. Frontend wiring (minimal)
+
+**File: `client/src/components/MyBasket.jsx`**
+
+Add a small "📡 Promote to Scanner" button on each basket asset card. On click, POST `/api/basket/promote`. Show success toast or error (including "Elite-only" and "max 5 reached"). For non-Elite users, button should show a lock icon and link to upgrade page instead of being disabled silently.
+
+Add a "Promoted Assets" section at the top of the basket page showing currently promoted assets with a remove button.
+
+No major UI overhaul — just the button + list section.
+
+---
+
+## DONE CRITERIA
+
+After deploy:
+
+1. **Part 1:** `[SIGNAL GATE]` logs show `news_conflict_high` rejections when contra-news exists. `/api/quant` console log shows "CURRENT MARKET NEWS" block appended to Claude prompt.
+
+2. **Part 2:** Three test emails sent to Free/Pro/Elite accounts match:
+   - Free: subject "⚡ Market Brief — Upgrade for Trade Ideas", 0 ideas, gold upgrade button
+   - Pro: subject "⚡ Today's Trade Idea — Pro", 1 idea, small "Upgrade to Elite" link
+   - Elite: subject "⚡ Today's 3 Trade Ideas — Elite", 3 ideas, no upgrade CTA
+
+3. **Part 3:** As an Elite test user, I can promote up to 5 basket assets. Signals for those assets appear in the user's signals feed tagged `scope=promoted`. Non-Elite users hitting promote get 403 with upgrade CTA.
+
+Do not touch unrelated UI. Backend + minimal basket UI only.
