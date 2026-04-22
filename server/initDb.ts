@@ -259,6 +259,43 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── chart_ai_usage ────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chart_ai_usage (
+        user_id  TEXT NOT NULL,
+        date     DATE NOT NULL,
+        count    INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, date)
+      )
+    `);
+
+    // ── chart_ai_analyses ─────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chart_ai_analyses (
+        id            SERIAL PRIMARY KEY,
+        user_id       TEXT NOT NULL,
+        horizon       TEXT NOT NULL,
+        asset         TEXT,
+        image_hash    TEXT,
+        response_json JSONB NOT NULL,
+        cost_estimate NUMERIC(10,4),
+        created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_chart_ai_analyses_user
+      ON chart_ai_analyses (user_id, created_at DESC)
+    `);
+
+    // ── chart_ai_monthly_spend ────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chart_ai_monthly_spend (
+        month         TEXT PRIMARY KEY,
+        total_spend   NUMERIC(10,4) NOT NULL DEFAULT 0,
+        alert_sent_at TIMESTAMPTZ
+      )
+    `);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
   } catch (err) {

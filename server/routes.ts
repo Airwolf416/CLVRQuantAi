@@ -18,6 +18,9 @@ import { userPromotedAssets, newsItems } from "@shared/schema";
 import { eq, and, lte, gt, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
+import multerLib from "multer";
+import sharpLib from "sharp";
+import { createHash as cryptoCreateHash } from "crypto";
 import { CLAUDE_MODEL } from "./config";
 import WebSocket from "ws";
 import webpush from "web-push";
@@ -2219,6 +2222,303 @@ Output JSON only, no prose, no code fences.`;
       res.status(500).json({ error: "Extraction failed — please enter manually." });
     }
   });
+
+  // ── Chart AI (Elite) — POST /api/chart-ai/analyze ──────────────────────────
+  // Upload a chart image; Claude returns a structured trade plan.
+  // 5 analyses/day per user (UTC), 15-min news cache per asset, $300/mo kill switch.
+  {
+    const chartAiUpload = multerLib({
+      storage: multerLib.memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+    }).single("image");
+
+    const CHART_AI_DAILY_LIMIT = 5;
+    const CHART_AI_MONTHLY_BUDGET = 300; // USD
+    const CHART_AI_ALERT_THRESHOLD = 200; // USD
+    const CHART_AI_COST_PER_CALL = 0.03; // ~$0.03 estimate per Sonnet vision call
+    const CHART_AI_NEWS_TTL_MS = 15 * 60 * 1000;
+    const chartAiNewsCache = new Map<string, { newsContext: string; ts: number }>();
+
+    const utcDateStr = (d = new Date()) => d.toISOString().slice(0, 10);
+    const utcMonthStr = (d = new Date()) => d.toISOString().slice(0, 7);
+    const nextUtcMidnight = () => {
+      const d = new Date();
+      d.setUTCHours(24, 0, 0, 0);
+      return d.toISOString();
+    };
+
+    app.post("/api/chart-ai/analyze", (req: any, res: any) => {
+      chartAiUpload(req, res, async (uploadErr: any) => {
+        try {
+          if (uploadErr) {
+            const msg = uploadErr.code === "LIMIT_FILE_SIZE"
+              ? "Image must be ≤ 5 MB"
+              : "Image upload failed";
+            return res.status(400).json({ error: msg });
+          }
+
+          // Auth + Elite gate (matches existing requireElite pattern)
+          const userId = await requireElite(req, res);
+          if (!userId) return;
+
+          // Monthly kill switch
+          const month = utcMonthStr();
+          const spendRow = await pool.query(
+            "SELECT total_spend, alert_sent_at FROM chart_ai_monthly_spend WHERE month = $1",
+            [month],
+          );
+          const totalSpend = parseFloat(spendRow.rows[0]?.total_spend ?? "0");
+          if (totalSpend >= CHART_AI_MONTHLY_BUDGET) {
+            return res.status(503).json({ error: "service_temporarily_paused" });
+          }
+
+          // Validate inputs
+          const horizon = String(req.body.horizon || "").toLowerCase();
+          if (!["scalp", "intraday", "swing", "position"].includes(horizon)) {
+            return res.status(400).json({ error: "Invalid horizon. Use scalp | intraday | swing | position." });
+          }
+          const asset = req.body.asset ? String(req.body.asset).slice(0, 32).trim() : null;
+          const file = req.file;
+          if (!file) return res.status(400).json({ error: "image is required" });
+          const allowedMime = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+          const mime = (file.mimetype || "").toLowerCase();
+          if (!allowedMime.includes(mime)) {
+            return res.status(400).json({ error: "image must be PNG, JPG, or WebP" });
+          }
+
+          // Daily limit (UTC)
+          const today = utcDateStr();
+          const usageRow = await pool.query(
+            "SELECT count FROM chart_ai_usage WHERE user_id = $1 AND date = $2",
+            [userId, today],
+          );
+          const usedToday = usageRow.rows[0]?.count ?? 0;
+          if (usedToday >= CHART_AI_DAILY_LIMIT) {
+            return res.status(429).json({
+              error: "daily_limit_reached",
+              remaining: 0,
+              resets_at: nextUtcMidnight(),
+            });
+          }
+
+          // Resize image to max 1600px wide using sharp
+          let resized: Buffer;
+          let resizedMime = "image/jpeg";
+          try {
+            resized = await sharpLib(file.buffer)
+              .rotate()
+              .resize({ width: 1600, withoutEnlargement: true })
+              .jpeg({ quality: 88 })
+              .toBuffer();
+          } catch (e: any) {
+            console.error("[chart-ai] sharp resize failed:", e?.message);
+            return res.status(400).json({ error: "Could not process image. Try a different file." });
+          }
+          const imageHash = cryptoCreateHash("sha256").update(resized).digest("hex");
+          const imageBase64 = resized.toString("base64");
+
+          // News cache per asset (15 min)
+          const apiKey = process.env.ANTHROPIC_API_KEY;
+          if (!apiKey) return res.status(503).json({ error: "AI temporarily unavailable" });
+
+          const cacheBucket = Math.floor(Date.now() / CHART_AI_NEWS_TTL_MS);
+          const newsCacheKey = `chart_ai_news:${asset || "_"}:${cacheBucket}`;
+          const cachedNews = chartAiNewsCache.get(newsCacheKey);
+
+          // Build system prompt
+          const nowIso = new Date().toISOString();
+          const assetLabel = asset || "infer from chart";
+          const newsBlock = cachedNews
+            ? `\n\nFRESH NEWS CONTEXT (cached, last 15 min — do NOT re-search):\n${cachedNews.newsContext}\n`
+            : "";
+
+          const system = `You are an elite technical analyst for CLVRQuantAI. Analyze the attached chart and return ONLY a JSON object — no prose, no markdown fences, no explanation outside the JSON.
+
+Context:
+- Trading horizon: ${horizon}
+- Asset: ${assetLabel}
+- Current UTC time: ${nowIso}${newsBlock}
+
+Step 1: Read the chart carefully. Identify visible price axis values, candlestick structure, support/resistance, volume anomalies, and any visible indicators or annotations (existing TP/SL/Entry markers).
+
+Step 2: ${cachedNews ? "Use the FRESH NEWS CONTEXT above instead of searching." : "Use web search to check for relevant news, macro events, or catalysts affecting this asset in the last 24 hours. Search 1–2 times maximum."}
+
+Step 3: Calibrate stop/target distances to the horizon:
+- scalp (1–15min): stops 0.3–0.8%, TPs at 1R, 2R, 3R
+- intraday (hours): stops 0.8–2%, targets at prior day H/L or intraday key levels
+- swing (days–weeks): stops 3–8%, targets at weekly S/R
+- position (weeks–months): stops 8–20%, targets at monthly/quarterly structure
+
+Step 4: If the chart is unreadable, ambiguous, or shows no clean setup, return "direction": "no_trade". DO NOT force a trade. A "no_trade" call is better than a bad one.
+
+Return this schema EXACTLY:
+{
+  "direction": "long" | "short" | "no_trade",
+  "confidence": <0-100>,
+  "entry": { "price": <number>, "type": "market" | "limit" | "breakout" },
+  "stop_loss": <number>,
+  "take_profits": [
+    { "level": 1, "price": <number> },
+    { "level": 2, "price": <number> },
+    { "level": 3, "price": <number> }
+  ],
+  "risk_reward": <number>,
+  "reasoning": "<=2 sentences, plain English",
+  "key_levels": { "support": [<numbers>], "resistance": [<numbers>] },
+  "invalidation": "what price action would void this setup",
+  "news_context": "<=1 sentence summarizing relevant news found, or 'no material catalysts'",
+  "warnings": ["low volume" | "news risk" | "choppy" | "overextended" | etc.]
+}`;
+
+          const messages = [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: resizedMime, data: imageBase64 } },
+              { type: "text", text: `Analyze this chart for a ${horizon} trade${asset ? ` on ${asset}` : ""}. Return JSON only.` },
+            ],
+          }];
+
+          const body: any = {
+            model: CLAUDE_MODEL,
+            max_tokens: 1500,
+            system,
+            messages,
+          };
+          if (!cachedNews) {
+            body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }];
+          }
+
+          const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "anthropic-version": "2023-06-01",
+              "x-api-key": apiKey,
+            },
+            body: JSON.stringify(body),
+          });
+
+          if (!aiRes.ok) {
+            const errText = await aiRes.text().catch(() => "");
+            if (errText.includes("credit_balance") || aiRes.status === 529) {
+              return res.status(503).json({ error: "service_temporarily_paused" });
+            }
+            console.error("[chart-ai] anthropic err:", aiRes.status, errText.slice(0, 300));
+            return res.status(502).json({ error: "AI analysis failed. Try again." });
+          }
+          const data: any = await aiRes.json();
+
+          // Extract text content (skip tool_use / web_search_tool_result blocks)
+          let raw = "";
+          if (Array.isArray(data.content)) {
+            for (const block of data.content) {
+              if (block.type === "text" && typeof block.text === "string") raw += block.text;
+            }
+          }
+          // Strip optional fences
+          raw = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+
+          let analysis: any;
+          try {
+            analysis = JSON.parse(raw);
+          } catch {
+            // Try to extract first {...} block
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (!m) {
+              console.error("[chart-ai] parse fail, raw:", raw.slice(0, 500));
+              return res.status(502).json({ error: "AI returned malformed response. Try again." });
+            }
+            try { analysis = JSON.parse(m[0]); }
+            catch { return res.status(502).json({ error: "AI returned malformed response. Try again." }); }
+          }
+
+          // Schema sanity
+          const validDirs = ["long", "short", "no_trade"];
+          if (!analysis || typeof analysis !== "object" || !validDirs.includes(analysis.direction)) {
+            return res.status(502).json({ error: "AI response failed validation. Try again." });
+          }
+
+          // Cache the news_context for this asset (only if we ran a search this call)
+          if (!cachedNews && analysis.news_context && asset) {
+            chartAiNewsCache.set(newsCacheKey, { newsContext: String(analysis.news_context), ts: Date.now() });
+          }
+
+          // Persist analysis + bump counters (best-effort, don't fail the response on log errors)
+          try {
+            await pool.query(
+              `INSERT INTO chart_ai_analyses (user_id, horizon, asset, image_hash, response_json, cost_estimate)
+               VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+              [userId, horizon, asset, imageHash, JSON.stringify(analysis), CHART_AI_COST_PER_CALL],
+            );
+            await pool.query(
+              `INSERT INTO chart_ai_usage (user_id, date, count)
+               VALUES ($1, $2, 1)
+               ON CONFLICT (user_id, date) DO UPDATE SET count = chart_ai_usage.count + 1`,
+              [userId, today],
+            );
+            const updSpend = await pool.query(
+              `INSERT INTO chart_ai_monthly_spend (month, total_spend) VALUES ($1, $2)
+               ON CONFLICT (month) DO UPDATE SET total_spend = chart_ai_monthly_spend.total_spend + EXCLUDED.total_spend
+               RETURNING total_spend, alert_sent_at`,
+              [month, CHART_AI_COST_PER_CALL],
+            );
+            const newSpend = parseFloat(updSpend.rows[0]?.total_spend ?? "0");
+            const alertSent = updSpend.rows[0]?.alert_sent_at;
+            if (newSpend >= CHART_AI_ALERT_THRESHOLD && !alertSent) {
+              await pool.query(
+                "UPDATE chart_ai_monthly_spend SET alert_sent_at = NOW() WHERE month = $1",
+                [month],
+              );
+              try {
+                const resend = await getUncachableResendClient().catch(() => null);
+                if (resend) {
+                  await resend.emails.send({
+                    from: "CLVRQuantAI Alerts <alerts@clvrquantai.com>",
+                    to: OWNER_EMAIL,
+                    subject: `[Chart AI] Spend $${newSpend.toFixed(2)} crossed $${CHART_AI_ALERT_THRESHOLD} threshold`,
+                    text: `Chart AI monthly spend for ${month} has crossed the $${CHART_AI_ALERT_THRESHOLD} alert threshold.\n\nCurrent: $${newSpend.toFixed(2)} / $${CHART_AI_MONTHLY_BUDGET} kill switch.\n\nThe service will auto-pause when spend reaches $${CHART_AI_MONTHLY_BUDGET}.`,
+                  });
+                  console.log(`[chart-ai] sent owner alert at $${newSpend.toFixed(2)} spend`);
+                }
+              } catch (e: any) {
+                console.error("[chart-ai] alert email failed:", e?.message);
+              }
+            }
+          } catch (e: any) {
+            console.error("[chart-ai] persist failed:", e?.message);
+          }
+
+          const newCount = usedToday + 1;
+          return res.json({
+            analysis,
+            remaining_today: Math.max(0, CHART_AI_DAILY_LIMIT - newCount),
+            resets_at: nextUtcMidnight(),
+          });
+        } catch (e: any) {
+          console.error("[chart-ai] unexpected:", e?.message, e?.stack?.slice(0, 300));
+          return res.status(500).json({ error: "Chart analysis failed. Please try again." });
+        }
+      });
+    });
+
+    // GET /api/chart-ai/usage — for the counter UI on the tab
+    app.get("/api/chart-ai/usage", async (req: any, res: any) => {
+      const userId = await requireElite(req, res);
+      if (!userId) return;
+      const today = utcDateStr();
+      const r = await pool.query(
+        "SELECT count FROM chart_ai_usage WHERE user_id = $1 AND date = $2",
+        [userId, today],
+      );
+      const used = r.rows[0]?.count ?? 0;
+      res.json({
+        used_today: used,
+        remaining_today: Math.max(0, CHART_AI_DAILY_LIMIT - used),
+        daily_limit: CHART_AI_DAILY_LIMIT,
+        resets_at: nextUtcMidnight(),
+      });
+    });
+  }
 
   app.get("/api/regime", (_req, res) => {
     if (regimeCache && Date.now() - regimeCache.ts < 30000) {
