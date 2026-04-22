@@ -1,0 +1,374 @@
+### 2B continued — rest of email template builder
+
+```typescript
+  const text = `${greeting}\n\n${marketContext}\n\n${
+    shownIdeas.length
+      ? shownIdeas
+          .map((i, idx) => `TRADE IDEA #${idx + 1}: ${i.asset} ${i.direction}\nEntry: ${i.entry} | Stop: ${i.stop} | TP1: ${i.tp1} | TP2: ${i.tp2}\nConfidence: ${i.confidence}%\n${i.rationale}\n`)
+          .join("\n---\n")
+      : "Upgrade to Pro or Elite to unlock daily trade ideas: https://clvrquantai.com/upgrade"
+  }`;
+
+  return { subject, html, text };
+}
+```
+
+### 2C. Send via Resend + hook into existing daily-brief scheduler
+
+**File: `server/workers/notifications.ts`**
+
+```typescript
+import { Resend } from "resend";
+import { buildMorningBriefEmail } from "../lib/emailTemplates";
+import { getUserTier } from "../lib/userTier";
+import { db } from "../db";
+import { users } from "../../shared/schema";
+import { eq } from "drizzle-orm";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+export async function sendMorningBrief(
+  userId: string,
+  email: string,
+  userName: string | undefined
+) {
+  const tier = await getUserTier(userId);
+  const ideas = await getTopTradeIdeas(3); // always fetch 3, template trims
+  const marketContext = await getMarketContextSummary();
+
+  const { subject, html, text } = buildMorningBriefEmail({
+    tier,
+    userName,
+    ideas,
+    marketContext,
+  });
+
+  try {
+    await resend.emails.send({
+      from: "CLVRQuantAI <brief@clvrquantai.com>", // use your verified Resend domain
+      to: email,
+      subject,
+      html,
+      text,
+    });
+    console.log(`[EMAIL] Sent ${tier} brief to ${email}`);
+  } catch (err) {
+    console.error(`[EMAIL] Failed for ${email}:`, err);
+  }
+}
+```
+
+**Hook into the existing `[daily-brief] Scheduler`:**
+
+Find the existing daily brief scheduler (likely in `server/scheduler.ts`, `server/cron.ts`, or wherever you see `[daily-brief]` logs firing). Replace whatever single-send or blast logic exists with a per-user loop:
+
+```typescript
+import { sendMorningBrief } from "./workers/notifications";
+
+export async function runDailyBriefJob() {
+  console.log("[daily-brief] Starting tier-aware send job");
+
+  // Fetch all active users who haven't opted out
+  const activeUsers = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name, // or firstName, whatever your schema has
+      unsubscribed: users.unsubscribed, // if you have this flag
+    })
+    .from(users)
+    .where(eq(users.unsubscribed, false)); // adjust to your opt-out column; remove if none
+
+  console.log(`[daily-brief] Sending to ${activeUsers.length} users`);
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const user of activeUsers) {
+    if (!user.email) continue;
+    try {
+      await sendMorningBrief(user.id, user.email, user.name || undefined);
+      sent++;
+      // Small delay to avoid Resend rate limits (default 10 req/sec)
+      await new Promise((r) => setTimeout(r, 150));
+    } catch (err) {
+      failed++;
+      console.error(`[daily-brief] Failed for ${user.email}:`, err);
+    }
+  }
+
+  console.log(`[daily-brief] Complete: ${sent} sent, ${failed} failed`);
+}
+```
+
+**Important:** the existing scheduler cron expression stays the same (e.g. whatever time it already runs). You're only replacing the *inner logic* that builds and sends the email, not the trigger itself.
+
+**Helper stubs to implement if they don't already exist** in the notifications file:
+
+```typescript
+async function getTopTradeIdeas(limit: number): Promise<TradeIdea[]> {
+  // Pull latest N signals from ai_signal_log, ordered by confidence desc,
+  // filtered to last 24h, only scope='global' (not user-promoted ones).
+  // Map each row to the TradeIdea shape used by buildMorningBriefEmail.
+  // Return at most `limit` ideas.
+  // ... implement per your existing signal log shape
+}
+
+async function getMarketContextSummary(): Promise<string> {
+  // Reuse your existing macro summary generator. If it's a Claude call,
+  // cache the result once per morning so all users get the same summary
+  // without hammering the API.
+  // Return a short paragraph string.
+}
+```
+
+---
+
+## PART 3: BASKET PROMOTE-TO-SCANNER (ELITE-ONLY)
+
+**Structural answer to the Replit agent's question:** this is a **new per-user table**, NOT runtime mutation of `CRYPTO_SYMS`. The default 47-asset scanner stays untouched. Elite users get a separate per-user pass that generates signals scoped only to them.
+
+### 3A. Schema addition
+
+**File: `shared/schema.ts`**
+
+```typescript
+import { pgTable, serial, varchar, timestamp } from "drizzle-orm/pg-core";
+
+export const userPromotedAssets = pgTable("user_promoted_assets", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  assetSymbol: varchar("asset_symbol").notNull(), // display symbol (e.g. "TSM", "0700.HK")
+  assetClass: varchar("asset_class").notNull(),   // 'crypto' | 'equity' | 'commodity' | 'forex'
+  yahooSymbol: varchar("yahoo_symbol").notNull(), // resolved yfinance symbol
+  promotedAt: timestamp("promoted_at").defaultNow().notNull(),
+});
+```
+
+Also add a `scope` column to `ai_signal_log` if not already present:
+
+```typescript
+// In the existing aiSignalLog table definition, add:
+scope: varchar("scope").default("global").notNull(), // 'global' | 'promoted'
+targetUserId: varchar("target_user_id"), // nullable; set only when scope='promoted'
+```
+
+Run Drizzle migration: `npm run db:push` (or your project's migration command).
+
+### 3B. Endpoints
+
+**File: `server/routes.ts`**
+
+```typescript
+import { getUserTier } from "./lib/userTier";
+import { userPromotedAssets } from "../shared/schema";
+import { and, eq } from "drizzle-orm";
+
+const MAX_PROMOTED_ASSETS = 5;
+
+// GET user's promoted assets
+app.get("/api/basket/promoted", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const promoted = await db
+    .select()
+    .from(userPromotedAssets)
+    .where(eq(userPromotedAssets.userId, userId));
+  res.json(promoted);
+});
+
+// POST promote an asset
+app.post("/api/basket/promote", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const tier = await getUserTier(userId);
+
+  if (tier !== "elite") {
+    return res.status(403).json({ error: "Promote-to-scanner is Elite-only", upgradeRequired: true });
+  }
+
+  const { assetSymbol, assetClass, yahooSymbol } = req.body;
+  if (!assetSymbol || !assetClass || !yahooSymbol) {
+    return res.status(400).json({ error: "Missing fields" });
+  }
+
+  const existing = await db
+    .select()
+    .from(userPromotedAssets)
+    .where(eq(userPromotedAssets.userId, userId));
+
+  if (existing.length >= MAX_PROMOTED_ASSETS) {
+    return res.status(400).json({
+      error: `Max ${MAX_PROMOTED_ASSETS} promoted assets. Remove one first.`,
+    });
+  }
+  if (existing.some((e) => e.assetSymbol === assetSymbol)) {
+    return res.status(400).json({ error: "Already promoted" });
+  }
+
+  const [inserted] = await db
+    .insert(userPromotedAssets)
+    .values({ userId, assetSymbol, assetClass, yahooSymbol })
+    .returning();
+
+  res.json(inserted);
+});
+
+// DELETE demote an asset
+app.delete("/api/basket/promote/:id", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const id = parseInt(req.params.id);
+
+  await db
+    .delete(userPromotedAssets)
+    .where(and(eq(userPromotedAssets.id, id), eq(userPromotedAssets.userId, userId)));
+
+  res.json({ ok: true });
+});
+```
+
+### 3C. Per-user promoted signal pass
+
+**File: `server/routes.ts`** — in the `/api/signals` background generation loop.
+
+After the default 47-asset pass completes, add a second pass for promoted assets:
+
+```typescript
+// ----- PROMOTED ASSETS PASS (Elite users only) -----
+console.log("[signals] Starting promoted-assets pass");
+
+const elitePromotions = await db
+  .select({
+    userId: userPromotedAssets.userId,
+    assetSymbol: userPromotedAssets.assetSymbol,
+    assetClass: userPromotedAssets.assetClass,
+    yahooSymbol: userPromotedAssets.yahooSymbol,
+  })
+  .from(userPromotedAssets);
+
+// Group by yahoo symbol so we only fetch candles once per unique asset
+const promotedByAsset = new Map<
+  string,
+  { users: typeof elitePromotions; assetClass: string; displaySymbol: string }
+>();
+
+for (const p of elitePromotions) {
+  if (!promotedByAsset.has(p.yahooSymbol)) {
+    promotedByAsset.set(p.yahooSymbol, {
+      users: [p],
+      assetClass: p.assetClass,
+      displaySymbol: p.assetSymbol,
+    });
+  } else {
+    promotedByAsset.get(p.yahooSymbol)!.users.push(p);
+  }
+}
+
+for (const [yahooSymbol, { users: promotedUsers, assetClass, displaySymbol }] of promotedByAsset) {
+  // Session check for non-crypto
+  if (assetClass !== "crypto" && !isMarketOpen(assetClass as any)) {
+    continue;
+  }
+
+  const candles = await getYahooCandles(yahooSymbol, "1h", 5);
+  if (!candles || candles.length < 20) continue;
+
+  // Run the same full signal pipeline: suppression, cooldown, macro halt, news gate, confidence floor
+  // Reuse whatever function you already use for the default pass (e.g. generateSignalForAsset)
+  const signal = await generateSignalForAsset({
+    token: displaySymbol,
+    yahooSymbol,
+    assetClass,
+    candles,
+    isPromoted: true,
+  });
+
+  if (!signal) continue;
+
+  // Fan-out: save one signal row per user who promoted this asset
+  for (const u of promotedUsers) {
+    await db.insert(aiSignalLog).values({
+      ...signal,
+      token: displaySymbol,
+      scope: "promoted",
+      targetUserId: u.userId,
+    });
+  }
+
+  console.log(`[signals] Promoted signal for ${displaySymbol} fanned out to ${promotedUsers.length} Elite user(s)`);
+}
+```
+
+**Note:** `generateSignalForAsset` is a placeholder for whatever internal helper already produces a signal object from candles in the default pass. If no such helper exists and the logic is inline, extract it into a function first so both passes can share it.
+
+### 3D. Signals feed: include promoted signals for the requesting user
+
+**File: `server/routes.ts`** — in the endpoint that returns signals to the UI (e.g. `/api/signals/feed` or wherever the Signals tab reads from).
+
+```typescript
+app.get("/api/signals/feed", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+
+  const feed = await db
+    .select()
+    .from(aiSignalLog)
+    .where(
+      or(
+        eq(aiSignalLog.scope, "global"),
+        and(eq(aiSignalLog.scope, "promoted"), eq(aiSignalLog.targetUserId, userId))
+      )
+    )
+    .orderBy(desc(aiSignalLog.createdAt))
+    .limit(100);
+
+  res.json(feed);
+});
+```
+
+Global signals show to everyone; promoted signals only show to the user who promoted them.
+
+### 3E. Minimal frontend wiring
+
+**File: `client/src/components/MyBasket.jsx`**
+
+On each basket asset card, add a small promote button:
+
+```jsx
+<button
+  onClick={() => handlePromote(asset)}
+  className={`px-2 py-1 text-xs rounded ${
+    userTier === "elite"
+      ? "bg-amber-600/20 border border-amber-500 text-amber-400 hover:bg-amber-600/40"
+      : "bg-gray-700/40 border border-gray-600 text-gray-400"
+  }`}
+  title={userTier === "elite" ? "Promote to Scanner" : "Elite feature"}
+>
+  {userTier === "elite" ? "📡 Promote" : "🔒 Elite"}
+</button>
+```
+
+`handlePromote` behavior:
+- If non-Elite: route to `/upgrade` page with a toast "Promote-to-Scanner is an Elite feature"
+- If Elite: POST to `/api/basket/promote` with `{ assetSymbol, assetClass, yahooSymbol }`, show toast on success/error
+
+Add a "📡 Promoted to Scanner" section at the top of the basket page that:
+- Fetches `/api/basket/promoted` on mount
+- Renders each promoted asset with a small ❌ remove button (DELETE `/api/basket/promote/:id`)
+- Shows `{count}/5 promoted` indicator
+
+Keep the UI change minimal — just the button per card and the top section. No full redesign.
+
+---
+
+## DONE CRITERIA
+
+After all three parts are deployed:
+
+1. **Part 1 (News Gating):** Server logs show `[SIGNAL GATE]` rejections tagged `news_conflict_high` when a BEARISH HIGH-severity headline matches a LONG candidate (or reverse). Claude prompt in `/api/quant` console log contains a "CURRENT MARKET NEWS" block listing 0–5 headlines.
+
+2. **Part 2 (Tiered Emails):** Three test users (one per tier) receive distinct emails on the next `[daily-brief]` run:
+   - Free: subject "⚡ Market Brief — Upgrade for Trade Ideas", 0 trade ideas, gold CTA button
+   - Pro: subject "⚡ Today's Trade Idea — Pro", exactly 1 idea, small "Upgrade to Elite" link
+   - Elite: subject "⚡ Today's 3 Trade Ideas — Elite", exactly 3 ideas, no upgrade CTA
+
+3. **Part 3 (Promote-to-Scanner):** An Elite test user can promote up to 5 basket assets via the UI button. Those assets produce signals in the user's feed tagged `scope=promoted`. Non-Elite users hitting the endpoint directly get HTTP 403 with `upgradeRequired: true`. The default 47-asset global scanner is untouched.
+
+Backend + minimal basket UI only. No other frontend changes.
