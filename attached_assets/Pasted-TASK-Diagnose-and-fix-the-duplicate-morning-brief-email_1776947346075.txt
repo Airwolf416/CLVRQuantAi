@@ -1,0 +1,26 @@
+TASK: Diagnose and fix the duplicate morning brief email bug. The daily brief is being sent twice per day. Previous fix attempts have not worked, which suggests the scheduler itself is the issue, not the send function.
+
+INVESTIGATE in this order and report findings BEFORE patching:
+
+1. List every place in the codebase that triggers the morning brief send. Grep for the send function name, the email template name, and any cron/schedule registration. Report ALL call sites.
+
+2. Check Railway service configuration: is the scheduled job defined in railway.toml / railway.json AND also registered via a node-cron/BullMQ/agenda call inside the app? If both exist, you have two schedulers racing.
+
+3. Check the replica/worker count on Railway. If replicas >= 2 and the cron runs inside the app process (not as a separate scheduled job), every replica fires the cron independently. This is the #1 cause of duplicate sends.
+
+4. Check the cron expression timezone. If the schedule string is in UTC but a wrapping library interprets it as local time (or vice versa), the job can fire twice near DST boundaries or simply be registered twice with different TZ contexts.
+
+5. Check for an idempotency key / send lock. Every daily brief should have a unique key like `brief:YYYY-MM-DD` that is written to the DB (or Redis) BEFORE the send. If the key already exists, abort. This is defense-in-depth regardless of which of the above is the real cause.
+
+REPORT BACK:
+- All scheduler registrations found.
+- Railway replica count for the service running the cron.
+- The actual cron expression and its timezone.
+- Whether any idempotency check exists.
+
+THEN FIX:
+- Move the cron to a single-instance scheduled job (Railway's built-in scheduler or a dedicated worker service with replicas=1). Remove any in-app cron registration that runs on every replica.
+- Add idempotency: before sending, INSERT a row into `email_send_log` with a unique constraint on (template_name, send_date). If the insert fails, abort. This prevents dupes even if two processes race.
+- Log every send attempt with process ID / replica ID so we can confirm in Railway logs that only one instance fires.
+
+Do NOT patch the send function. The bug is in orchestration, not in send logic.

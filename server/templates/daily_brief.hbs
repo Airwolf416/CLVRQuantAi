@@ -62,64 +62,63 @@
     {{/each}}
   </div>
 
-  <!-- Trade Ideas -->
-  {{#if topTrade}}
+  <!-- Trade Ideas (tiered) -->
   <div style="padding:0 24px 24px">
     <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:12px">
-      {{#if isPro}}⚡ Today's Trade Ideas — Pro (4 Ideas){{else}}⚡ Today's Top Trade Idea{{/if}}
+      ⚡ Today's Trade Ideas — {{tierLabel}} ({{ideaCount}} {{ideaCountLabel}})
+      {{#if heldSlotNote}}<div style="font-family:monospace;font-size:10px;color:#c9a84c;font-weight:400;margin-top:4px">{{heldSlotNote}}</div>{{/if}}
     </div>
 
-    <!-- Top Trade — Pro & Elite only; Free sees an upsell teaser -->
-    {{#if isPro}}
-    <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
-      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TRADE IDEA #1 · {{tierLabel}}</div>
-      <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{topTrade.riskLabel}} {{topTrade.asset}} {{topTrade.dir}}</div>
-      <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
-        📍 Entry: {{topTrade.entry}}<br>
-        🛑 Stop: {{topTrade.stop}}<br>
-        🎯 TP1: {{topTrade.tp1}}<br>
-        🎯 TP2: {{topTrade.tp2}}<br>
-        📊 Confidence: {{topTrade.confidence}}<br>
-        ⚠️ Flags: {{topTrade.flags}}
+    {{#if isFreeTier}}
+    <!-- FREE tier: clean lock-state, no blurred preview ─────────────────────-->
+    <div style="background:rgba(20,30,53,.45);border:1px dashed rgba(201,168,76,.35);border-radius:4px;padding:22px 20px;margin-bottom:12px;text-align:center">
+      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:14px;font-weight:700">🔒 TRADE IDEAS · MEMBERS-ONLY</div>
+      <div style="font-size:14px;color:#e8e0d0;line-height:1.7;margin-bottom:8px;font-weight:600">
+        Upgrade to unlock daily, algorithmically-ranked trade ideas
       </div>
-      {{#if topTrade.edge}}<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 {{topTrade.edge}}</div>{{/if}}
+      <div style="font-size:12px;color:#a8b3c8;line-height:1.7;margin-bottom:18px">
+        Selected from the full universe of crypto, FX, commodities, and equities.<br>
+        Ranked by 30-day historical win rate, R:R, and macro alignment — not narrative.
+      </div>
+      <table style="width:100%;border-collapse:separate;border-spacing:8px 0;margin:0 auto 14px">
+        <tr>
+          <td style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.30);border-radius:4px;padding:14px 12px;text-align:center;width:50%">
+            <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:.18em;font-weight:700">PRO</div>
+            <div style="font-size:18px;color:#e8e0d0;font-weight:700;margin-top:6px">$29.99/mo</div>
+            <div style="font-family:monospace;font-size:10px;color:#a8b3c8;margin-top:6px;line-height:1.5">2 daily<br>trade ideas</div>
+          </td>
+          <td style="background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.30);border-radius:4px;padding:14px 12px;text-align:center;width:50%">
+            <div style="font-family:monospace;font-size:9px;color:#00e5ff;letter-spacing:.18em;font-weight:700">ELITE</div>
+            <div style="font-size:18px;color:#e8e0d0;font-weight:700;margin-top:6px">$129/mo</div>
+            <div style="font-family:monospace;font-size:10px;color:#a8b3c8;margin-top:6px;line-height:1.5">3 daily ideas + Chart AI<br>+ Track Record</div>
+          </td>
+        </tr>
+      </table>
+      <a href="https://clvrquantai.com" style="display:inline-block;font-family:monospace;font-size:10px;letter-spacing:.18em;color:#080d18;background:#e8c96d;text-decoration:none;padding:10px 22px;border-radius:4px;font-weight:700">UNLOCK TRADE IDEAS →</a>
     </div>
     {{else}}
-    <div style="background:rgba(20,30,53,.45);border:1px dashed rgba(201,168,76,.35);border-radius:4px;padding:18px 20px;margin-bottom:12px;text-align:center">
-      <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:10px;font-weight:700">🔒 TRADE IDEA #1 · LOCKED</div>
-      <div style="font-size:13px;color:#a8b3c8;line-height:1.7;margin-bottom:12px">
-        Today's top trade idea — entry, stop, two targets and edge — is reserved for Pro and Elite members.
-      </div>
-      <a href="https://clvrquantai.com" style="display:inline-block;font-family:monospace;font-size:10px;letter-spacing:.18em;color:#080d18;background:#e8c96d;text-decoration:none;padding:9px 18px;border-radius:4px;font-weight:700">UNLOCK PRO — $29.99/mo →</a>
-      <div style="margin-top:8px;font-family:monospace;font-size:9px;color:#6b7fa8;letter-spacing:.08em">Or go Elite for 3 ideas daily — $129/mo</div>
-    </div>
-    {{/if}}
 
-    <!-- Additional Trades (Elite only) -->
-    {{#if isElite}}
-    {{#each additionalTrades}}
+    <!-- PRO + ELITE: render the trade list -->
+    {{#each tradeIdeas}}
     <div style="background:rgba(20,30,53,.6);border:1px solid rgba(201,168,76,.2);border-radius:4px;padding:16px 20px;margin-bottom:12px">
-      <div style="font-family:monospace;font-size:9px;color:#00e5ff;letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TRADE IDEA #{{tradeNum}} · ELITE</div>
-      <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{riskLabel}} {{asset}} {{dir}}</div>
+      <div style="font-family:monospace;font-size:9px;color:{{accent}};letter-spacing:0.18em;margin-bottom:12px;font-weight:700">⚡ TRADE IDEA #{{idx}} · {{../tierLabel}}</div>
+      <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{instrument}} {{direction}}</div>
       <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
         📍 Entry: {{entry}}<br>
         🛑 Stop: {{stop}}<br>
         🎯 TP1: {{tp1}}<br>
         🎯 TP2: {{tp2}}<br>
-        📊 Confidence: {{confidence}}<br>
-        ⚠️ Flags: {{flags}}
+        📐 R:R: {{rrDisplay}}<br>
+        📊 30d win rate: {{winRateDisplay}}{{#if sessionFlag}}<br>🌍 {{sessionFlag}}{{/if}}
       </div>
-      {{#if edge}}<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 {{edge}}</div>{{/if}}
+      {{#if thesis}}<div style="margin-top:10px;font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">💡 {{thesis}}</div>{{/if}}
     </div>
     {{/each}}
-    {{else}}
+
     {{#if isPro}}
+    <!-- Footer CTA: Pro → Elite upsell -->
     <div style="margin-top:8px;padding:12px 14px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.20);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">
-      🔒 <strong style="color:#00e5ff">Elite members get 3 trade ideas every morning</strong> (you're getting 1 as a Pro member). Upgrade at <a href="https://clvrquantai.com" style="color:#00e5ff;text-decoration:none">clvrquantai.com</a>
-    </div>
-    {{else}}
-    <div style="margin-top:8px;padding:12px 14px;background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.15);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">
-      🔒 <strong style="color:#c9a84c">Pro members get 1 daily trade idea, Elite members get 3.</strong> Upgrade at <a href="https://clvrquantai.com" style="color:#e8c96d;text-decoration:none">clvrquantai.com</a>
+      🔒 <strong style="color:#00e5ff">Upgrade to Elite for a 3rd daily idea + Chart AI + Track Record access.</strong> <a href="https://clvrquantai.com" style="color:#00e5ff;text-decoration:none">clvrquantai.com</a>
     </div>
     {{/if}}
     {{/if}}

@@ -1,9 +1,11 @@
 import { pool } from "./db";
 import { getUncachableResendClient } from "./resendClient";
-import { renderDailyBriefEmail, renderServiceApologyEmail, renderPromoEmail } from "./services/emailTemplates";
+import { renderDailyBriefEmail, renderServiceApologyEmail, renderPromoEmail, type TieredTradeIdea } from "./services/emailTemplates";
 import { chunkArray } from "./services/ta";
 import { enqueueDailyBrief } from "./workers/notifications";
 import { CLAUDE_MODEL } from "./config";
+import { selectDailyTrades, sliceForTier, hydrateCalibration, logTierDistribution, getTieredBriefMode, type CandidatePlan, type AssetClass } from "./lib/selectDailyTrades";
+import { runIntegrityCheck, filterDropList, type PriceRow } from "./lib/dataIntegrity";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -14,6 +16,11 @@ const APP_URL = "https://clvrquantai.com";
 
 let lastBriefDate = "";
 let lastApologySentAt = 0; // Unix ms — prevents double-send within 6 hours
+
+// Boot ID for traceability — log alongside PID so we can confirm in production
+// logs that exactly one process+boot fired the brief on any given date.
+const BRIEF_BOOT_ID = Math.random().toString(36).slice(2, 10);
+const briefTag = () => `pid=${process.pid} boot=${BRIEF_BOOT_ID}`;
 
 async function getTodayBriefKey(): Promise<string | null> {
   try {
@@ -28,12 +35,34 @@ async function getTodayBriefKey(): Promise<string | null> {
   } catch { return null; }
 }
 
+// ── ATOMIC CLAIM — single race-safe gate for the daily brief ─────────────────
+// Replaces the old SELECT-then-INSERT pattern (TOCTOU race). Returns true ONLY
+// for the process that successfully inserts the row; every other caller (other
+// scheduler tick, server replica, restart catch-up) sees rowCount=0 and aborts.
+async function claimBriefSlot(dateKey: string): Promise<boolean> {
+  try {
+    const res = await pool.query(
+      `INSERT INTO daily_briefs_log (date_key, sent_at, recipient_count)
+       VALUES ($1, NOW(), 0)
+       ON CONFLICT (date_key) DO NOTHING
+       RETURNING date_key`,
+      [dateKey]
+    );
+    const claimed = (res.rowCount || 0) > 0;
+    console.log(`[daily-brief] claim ${dateKey} ${briefTag()} → ${claimed ? "WON" : "lost (already claimed)"}`);
+    return claimed;
+  } catch (e: any) {
+    console.log(`[daily-brief] claimBriefSlot failed: ${e.message}`);
+    return false;
+  }
+}
+
 async function markBriefSent(dateKey: string, count: number) {
   try {
     await pool.query(
       `INSERT INTO daily_briefs_log (date_key, sent_at, recipient_count)
        VALUES ($1, NOW(), $2)
-       ON CONFLICT (date_key) DO NOTHING`,
+       ON CONFLICT (date_key) DO UPDATE SET recipient_count = EXCLUDED.recipient_count`,
       [dateKey, count]
     );
   } catch (e: any) { console.log("[daily-brief] Failed to mark brief sent:", e.message); }
@@ -323,7 +352,7 @@ async function generateCondensedBrief(marketData: MarketData): Promise<string | 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
   const cryptoStr = marketData.crypto.slice(0, 5).map(c => `${c.symbol}: ${c.price} (${c.change})`).join(", ");
-  const fxStr = marketData.forex.slice(0, 3).map(f => `${f.symbol}: ${f.price} (${f.change})`).join(", ");
+  const fxStr = marketData.forex.slice(0, 3).map(f => `${f.pair}: ${f.price} (${f.change})`).join(", ");
   const metalStr = marketData.metals.slice(0, 2).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(", ");
   const prompt = `Generate a concise market brief as JSON. Return ONLY valid JSON, no markdown.
 
@@ -383,19 +412,54 @@ async function sendDailyBriefEmails() {
   const dateKey = etTime.toISOString().split("T")[0];
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
 
-  // ── Double-send guard: mark as sent BEFORE generating/sending ──────────────
-  // If server restarts mid-send, the DB record already exists so catch-up
-  // scheduler won't fire again. (Idempotency via INSERT … ON CONFLICT DO NOTHING)
-  const alreadySent = await getTodayBriefKey();
-  if (alreadySent) {
-    console.log(`[daily-brief] Already sent for ${dateKey}, skipping.`);
+  // ── ATOMIC double-send guard ──────────────────────────────────────────────
+  // Single INSERT … ON CONFLICT DO NOTHING RETURNING. If another tick / process
+  // already claimed the slot, RETURNING is empty and we abort. This eliminates
+  // the previous SELECT-then-INSERT TOCTOU race that allowed two concurrent
+  // invocations to both pass the gate and double-send.
+  const claimed = await claimBriefSlot(dateKey);
+  if (!claimed) {
+    console.log(`[daily-brief] Slot for ${dateKey} already claimed elsewhere — ${briefTag()} aborting.`);
     return;
   }
-  await markBriefSent(dateKey, 0); // reserve the slot; update count at end
-  console.log(`[daily-brief] Reserved brief slot for ${dateKey}, generating...`);
+  console.log(`[daily-brief] Slot ${dateKey} claimed by ${briefTag()} — generating...`);
 
   const marketData = await fetchMarketData();
   console.log(`[daily-brief] Market data: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
+
+  // ── DATA INTEGRITY GATE ────────────────────────────────────────────────────
+  // Run on the flat price feed before generating the brief. Drops stale rows
+  // (0.00% prints), warns on Brent/WTI / Gold/Silver / BTC/ETH divergences, and
+  // — if >20% of instruments are stale — aborts the send entirely.
+  try {
+    const flatRows: PriceRow[] = [
+      ...marketData.crypto.map((r: any)   => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
+      ...marketData.forex.map((r: any)    => ({ symbol: r.pair,   price: r.price, change: r.change, changeNum: r.changeNum })),
+      ...marketData.metals.map((r: any)   => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
+      ...marketData.equities.map((r: any) => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
+    ];
+    const integrity = runIntegrityCheck(flatRows, []);
+    if (integrity.warnings.length) {
+      console.log(`[daily-brief] integrity warnings — ${integrity.warnings.join(" | ")}`);
+    }
+    if (integrity.criticalFailure) {
+      console.log(`[daily-brief] 🛑 CRITICAL DATA INTEGRITY FAILURE — ${integrity.staleCount}/${integrity.totalInstruments} stale. Aborting send. ${briefTag()}`);
+      // Release the slot so a subsequent retry (manual or next tick) can attempt the send.
+      try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
+      return;
+    }
+    if (integrity.dropList.length) {
+      console.log(`[daily-brief] dropping stale rows from feed: ${integrity.dropList.join(", ")}`);
+      marketData.crypto   = filterDropList(marketData.crypto.map((r: any) => ({ ...r, symbol: r.symbol })),   integrity.dropList) as any;
+      marketData.metals   = filterDropList(marketData.metals.map((r: any) => ({ ...r, symbol: r.symbol })),   integrity.dropList) as any;
+      marketData.equities = filterDropList(marketData.equities.map((r: any) => ({ ...r, symbol: r.symbol })), integrity.dropList) as any;
+      // FX pairs use `.pair` not `.symbol` — handle separately
+      const dropSet = new Set(integrity.dropList.map(s => s.toUpperCase()));
+      marketData.forex = marketData.forex.filter((r: any) => !dropSet.has(String(r.pair).toUpperCase()));
+    }
+  } catch (e: any) {
+    console.log(`[daily-brief] integrity check error (non-fatal):`, e.message);
+  }
 
   // Try full brief with 3 retries → condensed fallback prompt → minimal placeholder
   let briefText: string | null = await generateBriefContentWithRetry(marketData, 3);
@@ -449,12 +513,102 @@ async function sendDailyBriefEmails() {
   const subs = subsResult.rows;
 
   if (subs.length === 0) {
-    console.log("[daily-brief] No active subscribers");
+    console.log("[daily-brief] No active subscribers — releasing slot for retry");
+    // Release the claimed slot so a manual/scheduled retry can attempt the
+    // send once subscribers exist. Without this, recipient_count=0 blocks
+    // the day permanently.
+    try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
     return;
   }
 
   console.log(`[daily-brief] Sending to ${subs.length} subscribers in parallel batches of 50...`);
   let sentCount = 0;
+
+  // ── TIERED BRIEF V1: build the canonical Elite list of up to 3 trades ───
+  // Source candidates from Claude's brief (topTrade + additionalTrades), map
+  // them into CandidatePlan, hydrate calibration from real per-combo stats,
+  // then run through the deterministic selection pipeline. Pro gets best 2,
+  // Elite gets all 3, Free is locked.
+  const tieredMode = getTieredBriefMode();
+  let eliteTrades: CandidatePlan[] = [];
+  let heldSlotNote = "";
+  if (tieredMode !== "off") {
+    try {
+      const rawCandidates: CandidatePlan[] = [];
+      const pushClaudeTrade = (t: any) => {
+        if (!t || !t.asset) return;
+        const dir: "LONG" | "SHORT" = String(t.dir || t.direction || "LONG").toUpperCase().includes("SHORT") ? "SHORT" : "LONG";
+        const entryN = parseFloat(String(t.entry).replace(/[^0-9.\-]/g, "")) || 0;
+        const stopN  = parseFloat(String(t.stop).replace(/[^0-9.\-]/g, ""))  || 0;
+        const tp1N   = parseFloat(String(t.tp1).replace(/[^0-9.\-]/g, ""))   || 0;
+        const tp2N   = parseFloat(String(t.tp2).replace(/[^0-9.\-]/g, ""))   || 0;
+        const risk   = Math.abs(entryN - stopN);
+        const reward = Math.abs(tp2N - entryN);
+        const rr     = risk > 0 ? reward / risk : 0;
+        const symU   = String(t.asset).toUpperCase();
+        const cls: AssetClass =
+          /BTC|ETH|SOL|DOGE|XRP|ADA|AVAX|LINK|MATIC/.test(symU) ? "crypto" :
+          /USD|EUR|GBP|JPY|CHF|AUD|CAD|NZD/.test(symU)            ? "fx" :
+          /GOLD|SILVER|XAU|XAG|OIL|BRENT|WTI|GAS|COPPER/.test(symU) ? "commodity" :
+          "equity";
+        rawCandidates.push({
+          instrument:       symU,
+          assetClass:       cls,
+          direction:        dir,
+          entry:            entryN,
+          stop:             stopN,
+          tp1:              tp1N,
+          tp2:              tp2N,
+          riskReward:       rr,
+          winRate30d:       0.50,    // default until calibration hydrate overwrites
+          sampleSize:       0,
+          kronosConfidence: 0.50,
+          macroAlignment:   0,
+          flowScore:        0,
+          thesis:           t.edge || t.thesis || "",
+          fundingCrowded:   false,
+          killSwitchActive: false,
+          liquidityOK:      true,
+        });
+      };
+      pushClaudeTrade(briefJson.topTrade);
+      for (const t of (briefJson.additionalTrades || [])) pushClaudeTrade(t);
+
+      const hydrated = await hydrateCalibration(rawCandidates);
+      const selection = await selectDailyTrades(hydrated);
+      eliteTrades = selection.trades;
+      console.log(`[daily-brief] tiered v1 (${tieredMode}): ${selection.candidateCount} candidates → ${eliteTrades.length} winners` +
+        (selection.filteredOut.length ? ` | filtered: ${selection.filteredOut.map(f => `${f.instrument}/${f.direction}=${f.reason}`).join(", ")}` : ""));
+      if (eliteTrades.length < 3) {
+        const held = 3 - eliteTrades.length;
+        heldSlotNote = `${held} slot${held === 1 ? "" : "s"} held — no qualifying setup met our threshold today.`;
+      }
+      try { await logTierDistribution(dateKey, eliteTrades); } catch {}
+    } catch (e: any) {
+      console.log(`[daily-brief] tiered v1 selection error (non-fatal):`, e.message);
+      eliteTrades = [];
+    }
+  }
+  if (tieredMode === "shadow") {
+    console.log(`[daily-brief] tiered v1 SHADOW MODE — would have shipped ${eliteTrades.length} ideas to Elite, ${sliceForTier(eliteTrades, "pro").length} to Pro. Shipping legacy template.`);
+  }
+  // Helper: build the per-tier TieredTradeIdea[] from the Elite list
+  const buildTierTrades = (tier: string): TieredTradeIdea[] | undefined => {
+    if (tieredMode !== "on") return undefined;
+    const slice = sliceForTier(eliteTrades, tier);
+    return slice.map(t => ({
+      instrument:     t.instrument,
+      direction:      t.direction,
+      entry:          t.entry.toString(),
+      stop:           t.stop.toString(),
+      tp1:            t.tp1.toString(),
+      tp2:            t.tp2.toString(),
+      rrDisplay:      t.riskReward.toFixed(2),
+      winRateDisplay: `${Math.round(t.winRate30d * 100)}% (n=${t.sampleSize})`,
+      thesis:         t.thesis,
+      sessionFlag:    t.sessionFlag,
+    }));
+  };
 
   try {
     const { client } = await getUncachableResendClient();
@@ -469,7 +623,13 @@ async function sendDailyBriefEmails() {
         if (emailIdx > 0) await new Promise(r => setTimeout(r, 250));
         const sub = chunk[emailIdx];
         try {
-          const html = renderDailyBriefEmail(briefJson, today, marketData, sub.tier || "pro", sub.email);
+          const subTierForRender = (sub.tier || "free").toLowerCase();
+          const tieredTrades = buildTierTrades(subTierForRender);
+          const html = renderDailyBriefEmail(
+            briefJson, today, marketData, subTierForRender, sub.email,
+            tieredTrades,
+            tieredTrades && tieredTrades.length < (subTierForRender === "elite" ? 3 : 2) ? heldSlotNote : "",
+          );
           const plainText = [
             `CLVRQuant Morning Brief — ${today}`,
             ``,
@@ -488,11 +648,13 @@ async function sendDailyBriefEmails() {
             `To unsubscribe: https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(sub.email)}`,
           ].join("\n");
 
-          // Tier-aware subject: Elite → 3 ideas badge; Pro → 1 idea; Free → upgrade nudge
-          const subTier = (sub.tier || "free").toLowerCase();
+          // Tier-aware subject — counts reflect the actual tier slice we ship
+          const subTier = subTierForRender;
+          const eliteCt = (tieredTrades?.length ?? eliteTrades.length) || 3;
+          const proCt   = Math.min(eliteCt, 2);
           const tierSubject =
-            subTier === "elite" ? `🏆 CLVRQuant Elite Brief — ${today} · 3 trade ideas inside`
-            : subTier === "pro" ? `📊 CLVRQuant Pro Brief — ${today} · today's top trade`
+            subTier === "elite" ? `🏆 CLVRQuant Elite Brief — ${today} · ${eliteCt} trade idea${eliteCt === 1 ? "" : "s"} inside`
+            : subTier === "pro" ? `📊 CLVRQuant Pro Brief — ${today} · ${proCt} trade idea${proCt === 1 ? "" : "s"} today`
             : `☕ CLVRQuant Daily Brief — ${today} · upgrade for trade ideas`;
           const resp = await client.emails.send({
             from: "CLVRQuant <hello@clvrquantai.com>",
@@ -781,37 +943,43 @@ function getETComponents(): { hour: number; minute: number; dateKey: string } {
 }
 
 export function startDailyBriefScheduler() {
-  console.log("[daily-brief] Scheduler started — briefs will be sent at 6:00 AM ET daily");
+  console.log(`[daily-brief] Scheduler started — briefs at 6:00 AM ET daily — ${briefTag()}`);
 
-  // On startup: check if today's brief was missed (server was down at 6 AM)
+  // ── Startup catch-up ────────────────────────────────────────────────────────
+  // If the server boots after 6 AM ET and today's brief was never claimed,
+  // attempt the brief NOW. The atomic claimBriefSlot() inside
+  // sendDailyBriefEmails() guarantees that only one of (catch-up, scheduled
+  // tick, parallel replica restart) actually sends.
   setTimeout(async () => {
     try {
       const { hour, dateKey } = getETComponents();
-      // If it's after 6 AM ET and today's brief wasn't sent, send now (no upper bound)
       if (hour >= BRIEF_HOUR_ET) {
         const alreadySent = await getTodayBriefKey();
         if (!alreadySent) {
-          console.log(`[daily-brief] Missed 6 AM brief detected on startup (now ${hour}:xx ET) — sending catch-up brief now`);
-          lastBriefDate = dateKey;
+          console.log(`[daily-brief] Missed 6 AM brief on boot (now ${hour}:xx ET) — running catch-up — ${briefTag()}`);
+          lastBriefDate = dateKey; // pre-stamp so scheduled tick won't also enqueue
           await enqueueDailyBrief();
         } else {
           lastBriefDate = dateKey;
-          console.log("[daily-brief] Today's brief already sent — skipping catch-up");
+          console.log(`[daily-brief] Today's brief already claimed — skipping catch-up — ${briefTag()}`);
         }
       } else {
-        console.log(`[daily-brief] It's ${hour}:xx ET — brief scheduled for ${BRIEF_HOUR_ET}:00 ET`);
+        console.log(`[daily-brief] It's ${hour}:xx ET — next brief at ${BRIEF_HOUR_ET}:00 ET — ${briefTag()}`);
       }
     } catch (e: any) {
       console.log("[daily-brief] Startup catch-up check error:", e.message);
     }
   }, 10_000);
 
+  // ── Daily tick ──────────────────────────────────────────────────────────────
+  // Polls every 30s; fires at 6:00 ET. The in-memory `lastBriefDate` blocks
+  // re-fire within the same process; the DB-backed atomic claim blocks
+  // re-fire across processes / restarts. Defense in depth.
   setInterval(async () => {
     const { hour, minute, dateKey } = getETComponents();
-
     if (hour === BRIEF_HOUR_ET && minute <= 1 && dateKey !== lastBriefDate) {
       lastBriefDate = dateKey;
-      console.log(`[daily-brief] Triggering scheduled brief for ${dateKey}`);
+      console.log(`[daily-brief] Scheduled tick → enqueue ${dateKey} — ${briefTag()}`);
       enqueueDailyBrief().catch(e => console.log("[daily-brief] Enqueue error:", e.message));
     }
   }, 30_000);
