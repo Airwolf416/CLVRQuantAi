@@ -1201,6 +1201,125 @@ function PerformanceHighlights(){
   );
 }
 
+// ── ADMIN: Rejection tuning dashboard (admin-only via /api/admin/rejections) ──
+// Surfaces why the auto-scanner is killing setups so we can tune thresholds
+// without flying blind. Backed by signal_rejections table (30d retention).
+function AdminRejectionsTab(){
+  const{C}=useContext(ThemeCtx);
+  const[data,setData]=useState(null);
+  const[loading,setLoading]=useState(true);
+  const[err,setErr]=useState(null);
+  const[windowParam,setWindowParam]=useState("24h");
+  const[asset,setAsset]=useState("");
+  const fetchData=async()=>{
+    setLoading(true);setErr(null);
+    try{
+      const qs=new URLSearchParams({window:windowParam,limit:"100"});
+      if(asset.trim())qs.set("asset",asset.trim().toUpperCase());
+      const r=await fetch(`/api/admin/rejections?${qs}`,{credentials:"include"});
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const j=await r.json();setData(j);
+    }catch(e){setErr(e.message||"Failed to load");}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{fetchData();},[windowParam]);
+  const reasonColor=(reason)=>{
+    if(reason?.startsWith("SL_"))return"#ef4444";
+    if(reason?.includes("CROWDED"))return"#f59e0b";
+    if(reason==="COUNTER_TREND_MICRO")return"#a855f7";
+    if(reason?.startsWith("RR_"))return"#06b6d4";
+    return"#888";
+  };
+  const fmtTs=(ts)=>{const d=new Date(ts);return`${d.toLocaleDateString()} ${d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}`;};
+  return(<div data-testid="page-admin-rejections" style={{padding:"16px",color:C.text,maxWidth:1200,margin:"0 auto"}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:12}}>
+      <div>
+        <div style={{fontSize:18,fontWeight:800,letterSpacing:"0.04em"}}>SIGNAL REJECTIONS</div>
+        <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>Mechanical-gate kill log · admin only · 30d retention</div>
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <input data-testid="input-asset-filter" placeholder="Asset (e.g. BTC)" value={asset} onChange={(e)=>setAsset(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&fetchData()} style={{padding:"6px 10px",fontSize:11,background:"rgba(255,255,255,0.05)",border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontFamily:"monospace",width:120}}/>
+        <select data-testid="select-window" value={windowParam} onChange={(e)=>setWindowParam(e.target.value)} style={{padding:"6px 10px",fontSize:11,background:"rgba(255,255,255,0.05)",border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontFamily:"monospace"}}>
+          <option value="1h">1h</option><option value="24h">24h</option><option value="7d">7d</option><option value="30d">30d</option><option value="all">all</option>
+        </select>
+        <button data-testid="button-refresh-rejections" onClick={fetchData} disabled={loading} style={{padding:"6px 14px",fontSize:11,fontWeight:700,background:C.accent,color:"#000",border:"none",borderRadius:4,cursor:loading?"wait":"pointer",fontFamily:"monospace",letterSpacing:"0.04em"}}>{loading?"…":"REFRESH"}</button>
+      </div>
+    </div>
+    {err&&<div data-testid="text-error" style={{padding:12,background:"rgba(239,68,68,0.1)",border:"1px solid #ef444455",borderRadius:4,color:"#ef4444",fontSize:12,marginBottom:12}}>Error: {err}</div>}
+    {loading&&!data&&<div style={{padding:24,textAlign:"center",color:C.textMuted,fontSize:12}}>Loading…</div>}
+    {data&&<>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))",gap:8,marginBottom:16}}>
+        <div style={{padding:12,background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:4}}>
+          <div style={{fontSize:9,color:C.textMuted,letterSpacing:"0.06em",marginBottom:4}}>TOTAL</div>
+          <div data-testid="text-total-rejections" style={{fontSize:22,fontWeight:800,fontFamily:"monospace"}}>{data.totalRejections??data.recent?.length??0}</div>
+        </div>
+        <div style={{padding:12,background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:4}}>
+          <div style={{fontSize:9,color:C.textMuted,letterSpacing:"0.06em",marginBottom:4}}>WINDOW</div>
+          <div style={{fontSize:14,fontWeight:700,fontFamily:"monospace",color:C.accent}}>{data.window||windowParam}</div>
+        </div>
+        <div style={{padding:12,background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:4}}>
+          <div style={{fontSize:9,color:C.textMuted,letterSpacing:"0.06em",marginBottom:4}}>SOURCE</div>
+          <div style={{fontSize:11,fontWeight:700,fontFamily:"monospace",color:data.source==="db"?"#22c55e":"#f59e0b"}}>{data.source||"memory"}</div>
+        </div>
+      </div>
+
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",marginBottom:8,color:C.textMuted}}>BY REASON</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))",gap:8}}>
+          {(data.byReason||[]).length===0&&<div style={{fontSize:11,color:C.textMuted,fontStyle:"italic",padding:8}}>No rejections in window</div>}
+          {(data.byReason||[]).map(r=>(
+            <div key={r.reason} data-testid={`row-reason-${r.reason}`} style={{padding:10,background:"rgba(255,255,255,0.03)",border:`1px solid ${reasonColor(r.reason)}55`,borderRadius:4}}>
+              <div style={{fontSize:10,fontWeight:800,color:reasonColor(r.reason),fontFamily:"monospace",marginBottom:4}}>{r.reason}</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                <div style={{fontSize:18,fontWeight:800,fontFamily:"monospace"}}>{r.count}</div>
+                <div style={{fontSize:10,color:C.textMuted,fontFamily:"monospace"}}>{r.pct}%</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {(data.byAsset||[]).length>0&&<div style={{marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",marginBottom:8,color:C.textMuted}}>TOP ASSETS</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {data.byAsset.map(a=>(
+            <span key={a.token} data-testid={`badge-asset-${a.token}`} onClick={()=>{setAsset(a.token);setTimeout(fetchData,0);}} style={{padding:"4px 10px",fontSize:10,fontWeight:700,fontFamily:"monospace",background:"rgba(255,255,255,0.05)",border:`1px solid ${C.border}`,borderRadius:3,cursor:"pointer"}}>{a.token} <span style={{color:C.textMuted,marginLeft:4}}>{a.count}</span></span>
+          ))}
+        </div>
+      </div>}
+
+      <div>
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",marginBottom:8,color:C.textMuted}}>RECENT ({data.recent?.length||0})</div>
+        <div style={{maxHeight:500,overflow:"auto",border:`1px solid ${C.border}`,borderRadius:4}}>
+          <table data-testid="table-rejections" style={{width:"100%",fontSize:11,fontFamily:"monospace",borderCollapse:"collapse"}}>
+            <thead style={{position:"sticky",top:0,background:"rgba(0,0,0,0.6)",backdropFilter:"blur(4px)"}}>
+              <tr style={{textAlign:"left",color:C.textMuted}}>
+                <th style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}`}}>Time</th>
+                <th style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}`}}>Asset</th>
+                <th style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}`}}>Dir</th>
+                <th style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}`}}>Reason</th>
+                <th style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}`}}>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data.recent||[]).map((row,i)=>(
+                <tr key={row.id||i} data-testid={`row-rejection-${i}`} style={{borderBottom:`1px solid ${C.border}33`}}>
+                  <td style={{padding:"6px 10px",color:C.textMuted,whiteSpace:"nowrap"}}>{fmtTs(row.ts)}</td>
+                  <td style={{padding:"6px 10px",fontWeight:700}}>{row.token}</td>
+                  <td style={{padding:"6px 10px",color:row.direction==="LONG"?"#22c55e":row.direction==="SHORT"?"#ef4444":C.textMuted}}>{row.direction||"—"}</td>
+                  <td style={{padding:"6px 10px",color:reasonColor(row.reason),fontWeight:700,whiteSpace:"nowrap"}}>{row.reason}</td>
+                  <td style={{padding:"6px 10px",color:C.textMuted,wordBreak:"break-word"}}>{row.detail}</td>
+                </tr>
+              ))}
+              {(!data.recent||data.recent.length===0)&&<tr><td colSpan={5} style={{padding:24,textAlign:"center",color:C.textMuted,fontStyle:"italic"}}>No rejections recorded</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>}
+  </div>);
+}
+
 function TrackRecordTab({isPro,onUpgrade}){
   const{C}=useContext(ThemeCtx);
   const[stats,setStats]=useState(null);
@@ -3563,6 +3682,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
     ...(isAdmin?[{k:"track",icon:"📈",label:"RECORD"}]:[]),
+    ...(isAdmin?[{k:"rejections",icon:"🚫",label:"REJECTS"}]:[]),
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -4854,6 +4974,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
 
         {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
+
+        {tab==="rejections"&&isAdmin&&<AdminRejectionsTab/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>

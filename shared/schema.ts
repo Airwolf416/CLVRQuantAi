@@ -312,6 +312,28 @@ export const microstructureSnapshots = pgTable("microstructure_snapshots", {
 
 export type MicrostructureSnapshot = typeof microstructureSnapshots.$inferSelect;
 
+// ── Persistent rejection log for the admin tuning dashboard ─────────────────
+// Mirrors the in-memory ring buffer in server/lib/rejectionLog.ts but durable
+// across restarts so /admin/rejections can show 30d trends.
+export const signalRejections = pgTable("signal_rejections", {
+  id: serial("id").primaryKey(),
+  ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+  source: text("source").notNull(),                    // auto_scanner | ai_signal | manual
+  token: text("token").notNull(),
+  direction: text("direction"),                        // LONG | SHORT | null
+  reason: text("reason").notNull(),                    // RejectionReason union
+  detail: text("detail").notNull(),
+  proposedEntry: doublePrecision("proposed_entry"),
+  proposedSl: doublePrecision("proposed_sl"),
+  proposedTp1: doublePrecision("proposed_tp1"),
+  conviction: integer("conviction"),
+}, (t) => ({
+  byTs: index("signal_rejections_ts_idx").on(t.ts),
+  byReason: index("signal_rejections_reason_idx").on(t.reason),
+  byToken: index("signal_rejections_token_idx").on(t.token),
+}));
+export type SignalRejection = typeof signalRejections.$inferSelect;
+
 // ── Chart AI (Elite) — uploaded chart analysis with daily limits ─────────────
 export const chartAiUsage = pgTable("chart_ai_usage", {
   userId: text("user_id").notNull(),
