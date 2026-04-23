@@ -3778,7 +3778,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     return { "15m": t15m, "4h": t4h, "1d": t1d, confluent, direction, strength };
   }
 
-  function computeBayesianScore(ind: any, confluence: any, patternSignals: string[] = [], fngSignal: string | null = null) {
+  function computeBayesianScore(ind: any, confluence: any, patternSignals: string[] = [], fngSignal: string | null = null, comboPrior: number | null = null) {
     const WEIGHTS: Record<string, number> = {
       rsi_bullish: 0.65, rsi_oversold: 0.72, macd_bull_cross: 0.72,
       ema_bull_stack: 0.68, volume_surge: 0.60, mtf_confluence_bull: 0.75,
@@ -3815,7 +3815,11 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       if (patternSignals.includes("pattern_double_top"))    signals.push("pattern_double_top");
       if (fngSignal === "sentiment_extreme_greed")           signals.push("sentiment_extreme_greed");
     }
-    const PRIOR = 0.50;
+    // Bayesian prior: per-(token,direction) recency-weighted posterior when
+    // the calibration cache has enough data, else flat 0.50. This stops the
+    // scorer from acting like every combo is a coin flip and lets known-bad
+    // combos carry their realized losing prior into the next decision.
+    const PRIOR = (typeof comboPrior === "number" && Number.isFinite(comboPrior) && comboPrior > 0 && comboPrior < 1) ? comboPrior : 0.50;
     let pS = PRIOR, pF = 1 - PRIOR;
     for (const sig of signals) { const w = WEIGHTS[sig] || 0.55; pS *= w; pF *= (1 - w); }
     const prob = signals.length > 0 ? pS / (pS + pF) : PRIOR;
@@ -4073,7 +4077,18 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
 
       const confluence      = computeMultiTFConfluence(candles15m, candles4h, candles1d);
       const patternResult   = taDetectPatterns(candles);
-      const bayesian        = computeBayesianScore(ind, confluence, patternResult.patterns, fng.signal);
+      // Pull per-(token,direction) recency-weighted prior from the calibration
+      // cache. Direction is provisional here — derived from indicator trend —
+      // because the AI hasn't yet declared LONG/SHORT. Using the trend-implied
+      // direction matches what the bayesian scorer itself uses internally and
+      // gives the prior a chance to bias the score toward historical reality.
+      const _calib            = await import("./lib/calibration");
+      const _trendDir: "LONG" | "SHORT" | null = ind.trend?.includes("UP") ? "LONG" : ind.trend?.includes("DOWN") ? "SHORT" : null;
+      const _comboPrior       = _trendDir ? _calib.getComboPrior(ticker, _trendDir) : null;
+      const bayesian        = computeBayesianScore(ind, confluence, patternResult.patterns, fng.signal, _comboPrior);
+      if (_comboPrior !== null) {
+        console.log(`[Calibration] ${ticker} ${_trendDir} prior=${(_comboPrior*100).toFixed(1)}% → bayesian=${bayesian.probability}`);
+      }
       const macroKillSwitch = checkMacroKillSwitch(macroCache.data || []);
 
       // Get live funding rate from HL data (crypto only)
@@ -4176,8 +4191,17 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       const signalTier = adjScore < 55 ? "BLOCKED" : adjScore < 65 ? "WATCH_ONLY"
                        : adjScore < 75 ? "MED" : adjScore < 85 ? "HIGH" : "STRONG";
 
-      const pWin  = adjScore < 65 ? 0.45 : adjScore < 75 ? 0.52 : adjScore < 85 ? 0.60 : 0.68;
+      // Empirical pWin: ask the calibration cache what signals in this score
+      // bucket actually win at. Falls back to the legacy hardcoded curve
+      // (which was a best-guess, never validated against outcomes) when the
+      // cache is cold or the bucket is too small to trust.
+      const _empiricalPWin = _calib.getEmpiricalPWin(adjScore);
+      const _legacyPWin    = adjScore < 65 ? 0.45 : adjScore < 75 ? 0.52 : adjScore < 85 ? 0.60 : 0.68;
+      const pWin  = (_empiricalPWin !== null) ? _empiricalPWin : _legacyPWin;
       const pLoss = 1 - pWin;
+      if (_empiricalPWin !== null) {
+        console.log(`[Calibration] ${ticker} adjScore=${adjScore} → pWin empirical=${(_empiricalPWin*100).toFixed(1)}% (legacy would be ${(_legacyPWin*100).toFixed(0)}%)`);
+      }
 
       const slDistPct  = risk.slMultiplier * atrPctNum;
       const tp1DistPct = slDistPct * risk.tpRatios[0];

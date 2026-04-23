@@ -15,6 +15,7 @@ import { startWeeklyUpdateScheduler } from "./weeklyUpdate";
 import { initializeDatabase } from "./initDb";
 import { startOutcomeResolver } from "./lib/outcomeResolver";
 import { startAdaptiveThresholds, suppressHistoricalBleeders } from "./lib/adaptiveThresholds";
+import { startCalibration } from "./lib/calibration";
 import { startCircuitBreaker } from "./lib/circuitBreaker";
 import { initSocketIO } from "./socketServer";
 
@@ -643,6 +644,7 @@ function logDataSourceStatus() {
   startWeeklyUpdateScheduler();
   startOutcomeResolver();
   startAdaptiveThresholds();
+  startCalibration();
   startCircuitBreaker();
   const { startNewsCleanupScheduler } = await import("./lib/newsPersist");
   startNewsCleanupScheduler();

@@ -1,6 +1,7 @@
 import { and, gte, ne, sql } from "drizzle-orm";
 import { db } from "../db";
 import { aiSignalLog } from "@shared/schema";
+import { getRecencyWeightedCombos } from "./calibration";
 
 const WIN_OUTCOMES = new Set(["TP1_HIT", "TP2_HIT", "TP3_HIT", "EXPIRED_WIN"]);
 const LOSS_OUTCOMES = new Set(["SL_HIT", "EXPIRED_LOSS"]);
@@ -123,18 +124,32 @@ export async function buildPerformanceContextStructured(): Promise<PerformanceCo
       agg.types.add(c.tradeType);
     }
 
-    text += `BY (TOKEN, DIRECTION) — sample size ≥${MIN_COMBO_SAMPLE} required for full weight:\n`;
+    // Recency-weighted view (half-life 7d) — overlay onto the raw table so
+    // the AI sees both the long-window WR and what it actually looks like
+    // after weighting recent outcomes more heavily. Empty when calibration
+    // cache hasn't warmed yet.
+    const recencyMap = new Map<string, number>();
+    for (const c of getRecencyWeightedCombos()) {
+      recencyMap.set(`${c.token}|${c.direction}`, c.recencyWinRate);
+    }
+    text += `BY (TOKEN, DIRECTION) — sample size ≥${MIN_COMBO_SAMPLE} required for full weight. "wr7d" = recency-weighted (7d half-life):\n`;
     const sorted = Array.from(byTokenDir.values()).sort((a,b)=> b.total - a.total);
     for (const a of sorted) {
       const wr = a.total > 0 ? Math.round((a.wins/a.total)*100) : 0;
+      const wrRecent = recencyMap.get(`${a.token}|${a.direction}`);
+      const wrRecentPct = wrRecent != null ? Math.round(wrRecent * 100) : null;
+      // Decision uses the recency-weighted WR if available — same data, just
+      // weighted to reflect the most recent regime.
+      const wrForGate = wrRecentPct ?? wr;
       const note = a.total < MIN_COMBO_SAMPLE
         ? ` — INSUFFICIENT SAMPLE for ${a.token} ${a.direction} (n=${a.total}<${MIN_COMBO_SAMPLE}); use standard parameters for THIS combo only`
-        : wr < 35
+        : wrForGate < 35
           ? ` — SUPPRESS THIS COMBO (n=${a.total}, wr<35%)`
-          : wr >= 60
+          : wrForGate >= 60
             ? ` — strong edge (n=${a.total})`
             : ` — neutral (n=${a.total})`;
-      text += `  ${a.token} ${a.direction}: ${wr}% win rate${note}\n`;
+      const recentTag = wrRecentPct != null ? `, wr7d=${wrRecentPct}%` : "";
+      text += `  ${a.token} ${a.direction}: ${wr}% win rate${recentTag}${note}\n`;
     }
     text += `\nINSTRUCTIONS: Use this performance data to gate new signals. For any (token, direction) combo above with sample size ≥${MIN_COMBO_SAMPLE} AND win rate <35%, output NO_TRADE. For combos with insufficient sample, fall back to standard parameters and cap kelly_fraction at 0.05.\n`;
   }
