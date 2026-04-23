@@ -216,9 +216,9 @@ async function getEffectiveTier(user: any): Promise<string> {
 // Cleanup stale AI cache entries every 10 minutes
 setInterval(() => {
   const now = Date.now();
-  for (const [k, v] of aiCache) {
+  aiCache.forEach((v, k) => {
     if (now - v.ts > AI_CACHE_TTL) aiCache.delete(k);
-  }
+  });
 }, 600000);
 
 
@@ -509,6 +509,7 @@ async function sendPromoReminder(u: any, daysOut: number) {
       : `To keep uninterrupted access to AI analysis, signals, the Quant Engine, and all premium features, subscribe before your code expires.`;
     await resend.emails.send({
       from: fromEmail, to: u.email,
+      subject,
       replyTo: "Support@clvrquantai.com",
       headers: {
         "List-Unsubscribe": `<https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}>`,
@@ -2677,7 +2678,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
               try {
                 const resend = await getUncachableResendClient().catch(() => null);
                 if (resend) {
-                  await resend.emails.send({
+                  await resend.client.emails.send({
                     from: "CLVRQuantAI Alerts <alerts@clvrquantai.com>",
                     to: OWNER_EMAIL,
                     subject: `[Chart AI] Spend $${newSpend.toFixed(2)} crossed $${CHART_AI_ALERT_THRESHOLD} threshold`,
@@ -4163,7 +4164,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         : (etDec >= 21.0 || etDec < 3.0)  ? 0.85   // Asia / off-hours
         : 1.00;
 
-      const atrPctNum     = parseFloat(ind.atrPct);
+      const atrPctNum     = parseFloat(String(ind.atrPct));
       const momentumFactor = atrPctNum > 1.5 ? 0.70   // spike too fast (noise)
                            : atrPctNum >= 0.5 ? 1.00   // normal 3–8 min formation
                            : 1.10;                      // slow, sustained build
@@ -4508,13 +4509,13 @@ Every level must be technically defensible. Return JSON only.`;
               kronosOutput: "",
               quantScore: adjScore,
               oiAdjustedScore: adjScore,
-              killSwitches: macroKillSwitch?.active ? [String(macroKillSwitch.reason || "macro")] : [],
+              killSwitches: !macroKillSwitch.safe ? [String(macroKillSwitch.warning || "macro")] : [],
               calibration: { winRate: (pWin || 0), avgWinPct: tp1DistPct, avgLossPct: slDistPct, sampleSize: 25, suppressionStatus: "active" },
               hardening: {
-                candles: syntheticCandles,
-                currentPrice: Number(hl?.price) || Number((parsed as any)?.entry) || undefined,
-                fundingRate: hl?.funding,
-                volume24hUsd: Number(hl?.volume) || 0,
+                candles: candles1h || [],
+                currentPrice: Number(hlData[ticker]?.perpPrice) || Number((parsed as any)?.entry) || undefined,
+                fundingRate: hlData[ticker]?.funding,
+                volume24hUsd: Number(hlData[ticker]?.volume) || 0,
                 holdHorizon: "scalp",
               },
             }, apiKey, JSON.stringify({ signal: parsed?.signal, ev: evPct }).slice(0, 500));
@@ -4567,7 +4568,7 @@ Every level must be technically defensible. Return JSON only.`;
       const volSurge   = (ind.volumeRatio || 1) >= 2.0;
       const breakoutHigh = ind.high7d && ind.currentPrice >= ind.high7d * 0.999;
       const breakoutLow  = ind.low7d  && ind.currentPrice <= ind.low7d  * 1.001;
-      const tfAligned    = confluence?.aligned === true;
+      const tfAligned    = confluence?.confluent === true;
 
       const longChase  = isLongSig  && pir >= 80 && range24Pct >= 4 && !(breakoutHigh && volSurge && tfAligned);
       const shortChase = isShortSig && pir <= 20 && range24Pct >= 4 && !(breakoutLow  && volSurge && tfAligned);
@@ -4872,14 +4873,14 @@ Every level must be technically defensible. Return JSON only.`;
           tp3Price: parsed.tp3?.price ?? null,
           stopLoss: parsed.stopLoss?.price ?? null,
           leverage: parsed.leverage ? String(parsed.leverage) : null,
-          conviction: typeof parsed.conviction === "number" ? parsed.conviction : (bayesian?.score ?? null),
+          conviction: typeof parsed.conviction === "number" ? parsed.conviction : (bayesian?.probability ?? null),
           edgeScore: parsed.edge || null,
           edgeSource: parsed.edge_source || null,
           kronos: !!parsed.kronos,
           killClockHours: killHours,
           thesis: parsed.thesis || null,
           invalidation: parsed.invalidation || null,
-          scores: { bayesian: bayesian?.score, advanced: adjScore, confluence: confluence?.score },
+          scores: { bayesian: bayesian?.probability, advanced: adjScore, confluence: confluence?.direction },
           newsContext: (() => {
             const dir = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
             const ni = dir === "LONG" ? newsImpactLong : newsImpactShort;
@@ -7053,7 +7054,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     const { name, email, tier = "free", emailVerified = true } = req.body;
     if (!email || !name) return res.status(400).json({ error: "name and email required" });
     try {
-      const bcrypt = await import("bcrypt");
+      const bcrypt: any = await import("bcrypt" as any);
       const tempPwd = Math.random().toString(36).slice(2, 10);
       const hashed = await bcrypt.hash(tempPwd, 12);
       const crypto = await import("crypto");
@@ -7147,7 +7148,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
               </div>
             </div>`,
           });
-          const id = emailResult?.data?.id || emailResult?.id || "ok";
+          const id = emailResult?.data?.id || (emailResult as any)?.id || "ok";
           const err = emailResult?.error;
           results.push({ email: u.email, status: err ? "error" : "sent", id, error: err || null });
           console.log(`[welcome-blast] ${err ? "FAILED" : "SENT"}: ${u.email} id=${id}`);
@@ -7254,7 +7255,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         if (emailResult?.error) {
           console.error(`[signup] Resend returned error for ${email.toLowerCase().trim()}:`, JSON.stringify(emailResult.error));
         } else {
-          console.log(`[signup] Welcome email delivered to ${email.toLowerCase().trim()}, id=${emailResult?.data?.id || emailResult?.id || "ok"}`);
+          console.log(`[signup] Welcome email delivered to ${email.toLowerCase().trim()}, id=${emailResult?.data?.id || (emailResult as any)?.id || "ok"}`);
         }
       } catch (emailErr: any) {
         console.error(`[signup] Welcome email FAILED for ${email.toLowerCase().trim()}:`, JSON.stringify(emailErr));
@@ -7730,7 +7731,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             sanitized = sanitized.replace(/<script\b[\s\S]*?<\/script>/gi, "");
 
             // Replace QR placeholder divs with real QR images (or fallback link)
-            sanitized = sanitized.replace(/<div\s+id=["']([^"']+)["'][^>]*>[\s\S]*?<\/div>/gi, (match, id) => {
+            sanitized = sanitized.replace(/<div\s+id=["']([^"']+)["'][^>]*>[\s\S]*?<\/div>/gi, (match: string, id: string) => {
               if (qrCodeMap[id]) {
                 return `<img src="${qrCodeMap[id]}" alt="QR Code" width="120" height="120" style="border-radius:6px;display:block;background:#fff;padding:4px;" />`;
               }
@@ -7740,7 +7741,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
               return match; // leave non-QR divs alone
             });
             // Also handle unclosed qrcode divs
-            sanitized = sanitized.replace(/<div\s+id=["']qrcode["'][^>]*>/gi, (match) => {
+            sanitized = sanitized.replace(/<div\s+id=["']qrcode["'][^>]*>/gi, (match: string) => {
               const fallback = qrCodeMap["qrcode"];
               return fallback
                 ? `<img src="${fallback}" alt="QR Code" width="120" height="120" style="border-radius:6px;display:block;background:#fff;padding:4px;" /><div style="display:none">`
@@ -7752,7 +7753,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             // narrow-squished-card rendering bug seen on iPhone Mail & Gmail.
             sanitized = sanitized.replace(
               /(<style[\s\S]*?>)([\s\S]*?)(<\/style>)/gi,
-              (_m, open: string, css: string, close: string) => {
+              (_m: string, open: string, css: string, close: string) => {
                 const clean = css
                   // Body: remove viewport-layout props
                   .replace(/display\s*:\s*flex\s*;?/gi, "")
