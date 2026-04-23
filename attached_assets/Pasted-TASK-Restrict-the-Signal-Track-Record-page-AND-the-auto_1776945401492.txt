@@ -1,0 +1,32 @@
+TASK: Restrict the Signal Track Record page AND the auto-calibration suppression table (currently visible under Account) to admin users only. Non-admin users should not see the nav link, cannot hit the route, and cannot call the underlying API endpoints.
+
+REQUIREMENTS:
+
+1. Backend (server-side, non-bypassable):
+   - Add an `isAdmin` flag on the user model (boolean, default false). Set my account to true via a migration or one-off script.
+   - Create a middleware `requireAdmin` that checks the authenticated session and returns 403 if !user.isAdmin.
+   - Apply `requireAdmin` to:
+     * GET /api/track-record (aggregate stats, weekly win/loss, per-asset breakdown)
+     * GET /api/calibration (the token/direction/win-rate/threshold/suppression table)
+     * POST /api/calibration/override (if this exists — any manual suppression toggle)
+     * Any endpoint returning raw resolved-signal outcomes.
+   - Return 403 with JSON { error: "Forbidden" } — do NOT leak existence via 404.
+
+2. Frontend:
+   - Hide the Signal Track Record nav entry and the calibration section under Account unless user.isAdmin === true.
+   - If a non-admin hits /track-record or /account/calibration directly via URL, redirect to /dashboard with no error message.
+   - Do NOT rely on client-side hiding alone — backend must enforce.
+
+3. Replace the public-facing signal credibility display with a curated, admin-controlled "Performance Highlights" component that shows only:
+   - Overall win rate for SUPPRESSED-EXCLUDED signals (i.e. the signals users actually receive)
+   - Top 3 performing asset/direction combos by win rate with n >= 25
+   - Do not show negative PnL headline figures or losing combos.
+
+4. Do not break existing user sessions. Preserve all current auth flows.
+
+CONSTRAINTS:
+- No new dependencies unless strictly necessary.
+- Use the existing session/auth pattern already in the codebase (do not introduce a second auth system).
+- Log all 403s to a simple admin_access_denied log for monitoring.
+
+Output: the full set of file changes needed, ready to apply. Show me the diff or the new/modified files in full.

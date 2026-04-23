@@ -1,0 +1,33 @@
+BUG: The AI Performance Context block that is supposed to be injected into every Claude prompt is currently showing: "HISTORICAL PERFORMANCE: Error loading performance data. Use standard parameters."
+
+This means the fetch that populates the per-token/per-direction calibration context is failing silently and falling back to a generic string. The AI Analyst and signal-generation prompts are therefore running WITHOUT the historical performance data they're designed to use.
+
+TASK:
+
+1. Diagnose: find the function that builds the "AI Performance Context" string injected into Claude API calls (likely named something like buildPerformanceContext, getAIContext, or injectHistoricalPerf). Log the actual error being caught — right now it's swallowed into the fallback string.
+
+2. Add structured logging:
+   - Log the raw error object (message + stack) to the server console.
+   - Log the SQL/query or fetch URL that failed.
+   - Return the error in the response (dev mode only) so I can see it in the Replit logs immediately.
+
+3. Likely root causes to check in this order:
+   a) The calibration aggregation query is reading from a table/view that was renamed or schema-changed.
+   b) A recent migration added a NOT NULL column and old rows are breaking the aggregation.
+   c) The endpoint hits a timeout because the resolved-signals table now has ~4000 rows and the query isn't indexed.
+   d) The function is called before DB connection is ready (race condition on cold start).
+
+4. Fix:
+   - Once the root cause is identified, fix it.
+   - Add an index on resolved_signals(token, direction, resolved_at) if missing.
+   - Ensure the context string is built from: 30d win rate per (token, direction), sample size n, and current suppression status.
+   - If n < 25 for a combo, explicitly state "INSUFFICIENT SAMPLE — use standard parameters" for THAT combo only, not for the entire context block.
+
+5. Verify: after the fix, a fresh signal generation call should include a fully-populated performance context. Print the final injected context string to the server log for the next 10 Claude API calls so I can confirm.
+
+CONSTRAINTS:
+- Do not change the Claude model (keep claude-sonnet-4-6).
+- Do not change the prompt structure outside the HISTORICAL PERFORMANCE section.
+- Keep backward compatibility — if the context fetch genuinely fails, fall back gracefully but LOG IT LOUDLY.
+
+Output: show me the failing function, the fix, and any new indexes or migrations needed.
