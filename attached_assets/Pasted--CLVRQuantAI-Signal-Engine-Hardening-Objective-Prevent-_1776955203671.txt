@@ -1,0 +1,104 @@
+# CLVRQuantAI Signal Engine Hardening
+
+## Objective
+
+Prevent tight-stop liquidations on volatile alt perps. Apply volatility-adjusted stops, penalize counter-trend entries, enforce liquidity-aware SL placement, and gate on funding/OI positioning.
+
+## Context
+
+Recent ONDO short signal was stopped out due to SL (~0.31% above entry) sitting inside one-candle noise range AND directly above a visible liquidity cluster. Signal also ignored higher-low microstructure forming into entry. Need systemic fixes so this failure mode stops recurring across all signals.
+
+-----
+
+## Changes
+
+### 1. ATR-Gated Stop Loss (HIGH PRIORITY)
+
+Compute ATR(14) on the signal’s primary timeframe and enforce:
+
+```
+min_sl_distance = 1.5 * ATR(14)
+```
+
+Logic:
+
+- If proposed SL distance < `min_sl_distance`:
+  - **Scalps (hold < 4h):** widen SL to `entry ± 1.5 * ATR(14)`, then reduce position size proportionally to preserve original max $ risk
+  - **Swings (hold ≥ 4h):** reject signal, log reason `SL_TOO_TIGHT_VS_ATR`
+- Display on signal card: `"ATR-adjusted SL"` badge when this triggers
+
+### 2. Counter-Trend Microstructure Penalty (HIGH PRIORITY)
+
+Analyze last 6 candles on signal timeframe:
+
+```
+micro_up   = (count of HL + HH in last 6 candles) >= 4
+micro_down = (count of LH + LL in last 6 candles) >= 4
+```
+
+Penalty:
+
+- SHORT signal + `micro_up` → confidence -15
+- LONG signal + `micro_down` → confidence -15
+
+After penalty, re-check `MIN_CONFIDENCE_THRESHOLD` (55). Reject if below, log reason `COUNTER_TREND_MICRO`.
+
+### 3. Liquidity-Aware SL Placement
+
+Use existing Coinglass liquidation heatmap ingestion. For each signal:
+
+- Identify liquidation clusters within ±1% of proposed SL
+- If SL sits within 0.2% of a cluster on the sweep side:
+  - Shift SL beyond the cluster with 0.15% buffer
+  - If shift would break R:R minimum → reject, log `SL_IN_LIQUIDITY_POCKET`
+- Also scan last 24 candles for obvious swing highs/lows — same rule applies
+
+### 4. Funding + OI Positioning Gate
+
+Reject crowded trades:
+
+```
+SHORT reject if funding_rate < -0.01% AND OI_change_6h > +3%   # shorts crowded, squeeze risk
+LONG  reject if funding_rate > +0.03% AND OI_change_6h > +3%   # longs crowded, flush risk
+```
+
+Log reasons: `SHORTS_CROWDED` / `LONGS_CROWDED`.
+
+### 5. Friction-Adjusted R:R
+
+Adjust displayed R:R for real execution cost:
+
+- Subtract 2 bps slippage on entry + 2 bps on exit
+- Subtract expected funding cost: `funding_rate * expected_hold_hours / 8`
+
+Require post-friction R:R ≥ 1.8 to display signal. Below → reject, log `RR_TOO_LOW_AFTER_FRICTION`.
+
+-----
+
+## Acceptance Criteria
+
+- All rejections logged with reason codes to signal history table
+- Backtest last 90 days of signal history with new filters applied; report:
+  - Signals retained vs filtered
+  - Win rate delta
+  - PnL delta (assume 1% account risk per trade, 8x leverage)
+- Signal card UI shows applied adjustments (`ATR-adjusted SL`, `Liquidity-shifted SL`, etc.)
+- Signal Track Record dashboard surfaces rejection reason breakdown for tuning
+
+## Files likely touched
+
+- `signal_engine.py` (confidence scoring)
+- `risk_manager.py` (SL/TP calculation)
+- `coinglass_client.py` (extend heatmap pull + OI delta)
+- Frontend signal card component
+- Signal history schema (add `rejection_reason`, `adjustments_applied` fields)
+
+## Styling
+
+Keep dark terminal aesthetic: black background, gold/green accents, IBM Plex Mono. New badges on signal cards should use the existing color tokens (green for positive adjustments, amber for warnings, red for rejections in the debug log).
+
+## Out of scope for this pass
+
+- Retraining Kronos model weights
+- Changing TP ladder logic
+- New asset coverage

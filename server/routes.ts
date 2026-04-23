@@ -1087,6 +1087,65 @@ async function detectMoves() {
       }
     }
 
+    // ── SIGNAL ENGINE HARDENING (mechanical post-build gates) ──────────────
+    // Applies ATR(14) Wilder SL floor, counter-trend microstructure penalty,
+    // funding/OI crowding gate, and friction-adjusted R:R. Liquidity-cluster
+    // gate is a no-op until Coinglass heatmap data is wired in.
+    try {
+      const { applySignalHardening, getLiquidityClusters, recordOiSample, getOiChangePct } = await import("./lib/signalHardening");
+      // Sample OI every signal-build tick so the 6h delta gate has data to work with.
+      if (hl?.oi) recordOiSample(sym, hl.oi);
+      const clusters = await getLiquidityClusters(sym);
+      const hard = applySignalHardening({
+        token: sym,
+        direction: dir as "LONG" | "SHORT",
+        entry: signal.entry,
+        stopLoss: signal.stopLoss,
+        tp1: signal.tp1,
+        tp2: signal.tp2,
+        conviction: signal.conf,
+        candles: syntheticCandles,
+        fundingRate: hl?.funding,
+        oiChange6hPct: getOiChangePct(sym),  // undefined until ≥4.5h of samples have accumulated
+        holdHorizon: "scalp",      // auto-scanner emits intraday signals
+        liquidityClusters: clusters,
+        source: "auto_scanner",
+      });
+      if (hard.action === "REJECT") {
+        console.log(`[HARDENING] ${sym} ${dir} REJECTED — ${hard.reason}: ${hard.detail}`);
+        continue;
+      }
+      // ACCEPT or ADJUST — apply any mutations and surface badges to the UI
+      signal.entry = hard.signal.entry;
+      signal.stopLoss = hard.signal.stopLoss;
+      signal.tp1 = hard.signal.tp1;
+      signal.tp2 = hard.signal.tp2;
+      signal.conf = hard.signal.conviction;
+      // Recompute SL/TP percentage and R:R now that levels may have shifted
+      const _slDist = Math.abs(signal.entry - signal.stopLoss);
+      const _tp1Dist = Math.abs(signal.entry - signal.tp1);
+      const _tp2Dist = Math.abs(signal.entry - signal.tp2);
+      signal.stopPct = (_slDist / signal.entry * 100).toFixed(1);
+      signal.tp1Pct = (_tp1Dist / signal.entry * 100).toFixed(1);
+      signal.tp2Pct = (_tp2Dist / signal.entry * 100).toFixed(1);
+      signal.rr1 = _slDist > 0 ? (_tp1Dist / _slDist).toFixed(1) : signal.rr1;
+      signal.rr2 = _slDist > 0 ? (_tp2Dist / _slDist).toFixed(1) : signal.rr2;
+      // Friction-adjusted R:R — what the trader actually nets after slippage + funding.
+      // Display this alongside raw R:R so the displayed metric is honest.
+      (signal as any).rrAfterFriction = hard.signal.rrAfterFriction;
+      (signal as any).hardening = {
+        action: hard.action,
+        sizeMultiplier: hard.signal.sizeMultiplier,
+        rrAfterFriction: hard.signal.rrAfterFriction,
+        adjustments: hard.adjustments,
+      };
+      if (hard.adjustments.length > 0) {
+        console.log(`[HARDENING] ${sym} ${dir} ADJUSTED — ${hard.adjustments.map(a => a.type).join(", ")}`);
+      }
+    } catch (e) {
+      console.warn(`[HARDENING] ${sym} ${dir} gate error, fail-open:`, (e as Error).message);
+    }
+
     liveSignals.unshift(signal);
     if (liveSignals.length > 50) liveSignals.length = 50;
     lastSignalTime[sym] = now;

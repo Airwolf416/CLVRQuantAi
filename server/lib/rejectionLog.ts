@@ -10,6 +10,13 @@ export type RejectionReason =
   | "MARKET_CLOSED"
   | "LOW_CONFIDENCE"
   | "ANTI_CHASE"
+  // ── Signal Engine Hardening (post-LLM mechanical gates) ───────────────────
+  | "SL_TOO_TIGHT_VS_ATR"
+  | "COUNTER_TREND_MICRO"
+  | "SL_IN_LIQUIDITY_POCKET"
+  | "SHORTS_CROWDED"
+  | "LONGS_CROWDED"
+  | "RR_TOO_LOW_AFTER_FRICTION"
   | "OTHER";
 
 export interface RejectionEntry {

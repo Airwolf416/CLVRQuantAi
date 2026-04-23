@@ -40,7 +40,9 @@ export function calcRSI(history: PricePoint[], period = 14): number {
 }
 
 // ── ATR (Average True Range) ─────────────────────────────────────────────────
-
+// Legacy implementation: average absolute tick-to-tick change. Kept for
+// back-compat with the existing auto-scanner; new code should prefer
+// `calcATR14()` (proper Wilder's smoothing on OHLC candles).
 export function calcATR(history: PricePoint[]): number {
   if (!history || history.length < 10) return 0;
   const recent = history.slice(-60);
@@ -50,6 +52,64 @@ export function calcATR(history: PricePoint[]): number {
   }
   if (intervals.length === 0) return 0;
   return intervals.reduce((a, b) => a + b, 0) / intervals.length;
+}
+
+// ── ATR(14) — proper Wilder's smoothing on OHLC candles ─────────────────────
+// True Range = max(high-low, |high-prevClose|, |low-prevClose|).
+// Used by signal hardening to size minimum SL distance (1.5·ATR floor).
+export function calcATR14(candles: Candle[], period = 14): number {
+  if (!candles || candles.length < period + 1) return 0;
+  const trs: number[] = [];
+  for (let i = 1; i < candles.length; i++) {
+    const c = candles[i], prev = candles[i - 1];
+    trs.push(Math.max(c.h - c.l, Math.abs(c.h - prev.c), Math.abs(c.l - prev.c)));
+  }
+  if (trs.length < period) return 0;
+  // Seed with simple average of first `period` TRs, then Wilder smooth.
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  return atr;
+}
+
+// ── Microstructure direction — counts HH/HL vs LH/LL on last N candles ──────
+// Returns the bias of recent swing structure. Used to penalize signals that
+// fight nascent trend microstructure on the entry timeframe.
+export interface MicrostructureBias {
+  microUp:   boolean;     // ≥4 of last 6 made HL+HH (uptrend microstructure)
+  microDown: boolean;     // ≥4 of last 6 made LH+LL (downtrend microstructure)
+  hhCount:   number;
+  hlCount:   number;
+  lhCount:   number;
+  llCount:   number;
+}
+export function detectMicrostructure(candles: Candle[], lookback = 6): MicrostructureBias {
+  const empty: MicrostructureBias = { microUp: false, microDown: false, hhCount: 0, hlCount: 0, lhCount: 0, llCount: 0 };
+  if (!candles || candles.length < lookback + 1) return empty;
+  const tail = candles.slice(-lookback - 1);  // need 1 prior for first comparison
+  let hh = 0, hl = 0, lh = 0, ll = 0;
+  for (let i = 1; i < tail.length; i++) {
+    const c = tail[i], p = tail[i - 1];
+    if (c.h > p.h) hh++;
+    if (c.l > p.l) hl++;
+    if (c.h < p.h) lh++;
+    if (c.l < p.l) ll++;
+  }
+  // Spec: micro_up = count of HL+HH in last 6 candles >= 4. The naive
+  // `hh+hl` double-counts a candle that is both HH and HL. We dedupe by
+  // counting candles where EITHER condition holds, capped at lookback.
+  let upCandles = 0, downCandles = 0;
+  for (let i = 1; i < tail.length; i++) {
+    const c = tail[i], p = tail[i - 1];
+    if (c.h > p.h || c.l > p.l) upCandles++;
+    if (c.h < p.h || c.l < p.l) downCandles++;
+  }
+  return {
+    microUp:   upCandles   >= 4,
+    microDown: downCandles >= 4,
+    hhCount: hh, hlCount: hl, lhCount: lh, llCount: ll,
+  };
 }
 
 // ── Momentum ─────────────────────────────────────────────────────────────────
