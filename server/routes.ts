@@ -4491,37 +4491,6 @@ Every level must be technically defensible. Return JSON only.`;
       });
       if (!aiRes.ok) { const e = await aiRes.text(); console.error("[/api/quant]", e); return res.status(502).json({ error:"AI Engine failed." }); }
 
-      // ── PROMPT_V2 shadow run (fire-and-forget; signal-gen surface) ────────
-      if (getPromptV2Mode() !== "off") {
-        void (async () => {
-          try {
-            const { runSignalGenV2 } = await import("./lib/promptV2Runner");
-            const perfCtxStr = await buildPerformanceContext().catch(() => "");
-            const dirGuess: "LONG" | "SHORT" = (String(parsed?.signal || "").toUpperCase().includes("SHORT") ? "SHORT" : "LONG");
-            // Pass hardening context so the V2 path applies the same
-            // mechanical gates as the auto-scanner once mode flips to "on".
-            // Today (mode=shadow) the value is logged but the gate is skipped
-            // — this keeps the wiring honest and ready.
-            await runSignalGenV2({
-              token: ticker, direction: dirGuess,
-              perfContextForCombo: perfCtxStr,
-              liveData: indContext.slice(0, 3000),
-              kronosOutput: "",
-              quantScore: adjScore,
-              oiAdjustedScore: adjScore,
-              killSwitches: !macroKillSwitch.safe ? [String(macroKillSwitch.warning || "macro")] : [],
-              calibration: { winRate: (pWin || 0), avgWinPct: tp1DistPct, avgLossPct: slDistPct, sampleSize: 25, suppressionStatus: "active" },
-              hardening: {
-                candles: candles1h || [],
-                currentPrice: Number(hlData[ticker]?.perpPrice) || Number((parsed as any)?.entry) || undefined,
-                fundingRate: hlData[ticker]?.funding,
-                volume24hUsd: Number(hlData[ticker]?.volume) || 0,
-                holdHorizon: "scalp",
-              },
-            }, apiKey, JSON.stringify({ signal: parsed?.signal, ev: evPct }).slice(0, 500));
-          } catch (e: any) { console.warn("[PROMPT_V2 signalGen shadow]", e?.message || e); }
-        })();
-      }
       const aiData: any = await aiRes.json();
       if (aiData.error) { console.error("[/api/quant] API error:", aiData.error.message || aiData.error); return res.status(502).json({ error: "AI Engine failed." }); }
       const rawText = (aiData.content || []).map((b: any) => b.text || "").join("");
@@ -4555,6 +4524,53 @@ Every level must be technically defensible. Return JSON only.`;
       }
       parsed.token = ticker;
       parsed.asset = ticker;
+
+      // ── PROMPT_V2 shadow run (fire-and-forget; signal-gen surface) ────────
+      // Fires AFTER `parsed` is populated so the V2 runner sees the real
+      // signal/entry — previously this block was above the JSON-parse
+      // boundary and referenced `parsed` via a TDZ-bound closure, which only
+      // worked by accident because `await import(...)` yielded first. The
+      // IIFE is still `void (async () => {...})()` so it runs in parallel
+      // with the remainder of the /api/quant response path and does not
+      // block the user-facing result.
+      if (getPromptV2Mode() !== "off") {
+        const shadowCtx = {
+          signal: parsed?.signal,
+          entry:  Number(parsed?.entry?.price) || undefined,
+        };
+        void (async () => {
+          try {
+            const { runSignalGenV2 } = await import("./lib/promptV2Runner");
+            const perfCtxStr = await buildPerformanceContext().catch(() => "");
+            const dirGuess: "LONG" | "SHORT" = (String(shadowCtx.signal || "").toUpperCase().includes("SHORT") ? "SHORT" : "LONG");
+            // Pass hardening context so the V2 path applies the same
+            // mechanical gates as the auto-scanner once mode flips to "on".
+            // Today (mode=shadow) the value is logged but the gate is skipped
+            // — this keeps the wiring honest and ready.
+            await runSignalGenV2({
+              token: ticker, direction: dirGuess,
+              perfContextForCombo: perfCtxStr,
+              liveData: indContext.slice(0, 3000),
+              kronosOutput: "",
+              quantScore: adjScore,
+              oiAdjustedScore: adjScore,
+              killSwitches: !macroKillSwitch.safe ? [String(macroKillSwitch.warning || "macro")] : [],
+              calibration: { winRate: (pWin || 0), avgWinPct: tp1DistPct, avgLossPct: slDistPct, sampleSize: 25, suppressionStatus: "active" },
+              hardening: {
+                candles: candles1h || [],
+                // Deterministic price source order: HL perp → AI-proposed
+                // entry → last computed indicator price. `ind.currentPrice`
+                // is always populated for every asset class so the fallback
+                // never produces NaN.
+                currentPrice: Number(hlData[ticker]?.perpPrice) || shadowCtx.entry || Number(ind.currentPrice) || undefined,
+                fundingRate: hlData[ticker]?.funding,
+                volume24hUsd: Number(hlData[ticker]?.volume) || 0,
+                holdHorizon: "scalp",
+              },
+            }, apiKey, JSON.stringify({ signal: shadowCtx.signal, ev: evPct }).slice(0, 500));
+          } catch (e: any) { console.warn("[PROMPT_V2 signalGen shadow]", e?.message || e); }
+        })();
+      }
 
       // ── ANTI-CHASE OVERRIDE — force NEUTRAL when entering a fully-extended move ──
       // Catches the "buy the top after a 5% pump" failure mode (e.g. PENDLE LONG at +5.5% intraday).
