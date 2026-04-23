@@ -1,0 +1,139 @@
+TASK: Upgrade the prompt templates used by three surfaces — Chart AI, AI Analyst, and Signal Generation — to merge proven structural elements (explicit trade plan, Fib zones, R:R gating) into the existing perp-focused framework. Remove subjective confidence scales and persona theater. Keep Kronos, OI/funding, macro kill switches, and per-token calibration as the primary drivers.
+
+CONTEXT:
+- Asset universe: crypto perps + FX + commodities + equity perps (NOT cash equities — do NOT use P/E, dividends, D/E, 5yr revenue growth).
+- Historical performance data per (token, direction) is already being injected via the AI Performance Context block. This MUST remain the highest-priority input to the model — it overrides any pattern the model "sees" on the chart.
+- Current win rate is 32% with a long bias problem on crypto. New prompts must explicitly account for directional calibration.
+
+=========================================
+1. SHARED PROMPT COMPONENTS (build these as reusable string constants)
+=========================================
+
+A) TRADE_PLAN_SCHEMA — every output from Chart AI, AI Analyst, and Signal Generation must conform to this structure:
+
+{
+  "asset": string,
+  "direction": "LONG" | "SHORT" | "NO_TRADE",
+  "timeframe": "intraday" | "swing" | "position",
+  "thesis": string (max 2 sentences, plain English, no hedging),
+  "entry": { "zone_low": number, "zone_high": number, "trigger": string },
+  "invalidation": { "stop_price": number, "reason": string },
+  "targets": [ { "price": number, "rr": number, "note": string } ],
+  "risk_reward": number,
+  "position_sizing": { "kelly_fraction": number, "suggested_leverage": number, "max_account_risk_pct": number },
+  "context": {
+    "funding_rate": number,
+    "oi_change_24h_pct": number,
+    "taker_buy_sell_ratio": number,
+    "fib_level_in_play": string | null,
+    "key_structure": string
+  },
+  "calibration_check": {
+    "historical_win_rate_this_combo": number,
+    "sample_size": number,
+    "suppression_status": "active" | "suppressed" | "insufficient_sample",
+    "override_reason": string | null
+  },
+  "kill_switches_triggered": [string]
+}
+
+B) HARD_RULES — injected into every prompt, above user context:
+
+"HARD RULES — violate any of these and output NO_TRADE:
+1. If calibration_check.suppression_status == 'suppressed' for this (token, direction), output NO_TRADE unless override_reason is explicitly set by a macro/Kronos override.
+2. If calibration_check.sample_size >= 25 AND historical_win_rate_this_combo < 0.35, output NO_TRADE.
+3. If risk_reward < 1.8, output NO_TRADE. No exceptions.
+4. If any kill switch in the macro_killswitch_list is active for this asset, output NO_TRADE.
+5. If funding is extreme (>|0.1%| 8h-equivalent) AND signal direction aligns with the crowd, downgrade or flip — crowded funding + aligned signal = NO_TRADE.
+6. Do NOT output a 'confidence rating' on a buy/sell scale. Confidence is expressed ONLY via kelly_fraction (0 to 0.25 cap) derived from historical win rate and R:R.
+7. Do NOT invent support/resistance levels. Every level cited must be grounded in actual price data, Fib retracement (0.382 / 0.5 / 0.618 / 0.786), prior swing high/low, or a liquidation cluster."
+
+C) TECHNICAL_FRAMEWORK — replaces the Citadel/Goldman persona:
+
+"Analyze using this framework, in this priority order:
+1. Per-token calibration (from AI Performance Context) — this is ground truth.
+2. Market structure: higher highs/lows vs lower highs/lows on the dominant timeframe.
+3. Liquidity map: recent swing highs/lows, prior day H/L, weekly open, Fib retracement zones.
+4. Flow: funding rate, OI change, taker buy/sell ratio, basis.
+5. Momentum half-life: is the current move early, mid, or late cycle based on Kronos output?
+6. Macro filter: DXY, BTC dominance, risk-on/risk-off regime.
+
+Do NOT use: P/E ratios, dividend metrics, debt ratios, revenue growth, or any equity fundamental. These do not apply to perpetual futures."
+
+=========================================
+2. CHART AI — per-asset deep-dive on user request
+=========================================
+
+Purpose: user pastes/selects a ticker; Claude returns a full trade plan.
+
+Prompt structure:
+[AI Performance Context for this token — both directions]
+[HARD_RULES]
+[TECHNICAL_FRAMEWORK]
+[Live data block: price, 24h range, funding, OI, taker ratio, nearest Fib levels, Kronos output, key S/R from backend]
+[User's question or "Analyze {TICKER}"]
+
+Output: TRADE_PLAN_SCHEMA as JSON, followed by a plain-English 3-bullet summary for the UI ("Why this trade", "What kills it", "What to watch").
+
+=========================================
+3. AI ANALYST — market overview / multi-asset scan
+=========================================
+
+Purpose: user asks "what looks good right now" or "scan my watchlist".
+
+Prompt structure:
+[AI Performance Context — full table, all tokens, both directions]
+[HARD_RULES]
+[TECHNICAL_FRAMEWORK]
+[Live data for all 80+ instruments]
+[User query]
+
+Output:
+- Top 3 LONG candidates that pass ALL hard rules (or fewer if none qualify — do NOT pad).
+- Top 3 SHORT candidates that pass ALL hard rules.
+- Explicit "STAND DOWN" list: any asset where both directions are suppressed or failing.
+- Macro note: 2 sentences on regime (risk-on/off, DXY, BTC dominance).
+- Each candidate in TRADE_PLAN_SCHEMA.
+
+If fewer than 3 candidates qualify on either side, output fewer. NEVER fabricate trades to fill a quota.
+
+=========================================
+4. SIGNAL GENERATION — automated backend signals
+=========================================
+
+Purpose: backend generates signals on schedule without user input.
+
+Prompt structure:
+[AI Performance Context for this specific token + direction]
+[HARD_RULES]
+[TECHNICAL_FRAMEWORK]
+[Live data block for this instrument]
+[Kronos output + quant score + OI-adjusted score]
+[Macro kill switch state]
+[Instruction: "Evaluate whether to publish a {DIRECTION} signal on {TOKEN} right now. Apply hard rules strictly."]
+
+Output: TRADE_PLAN_SCHEMA. If direction == NO_TRADE, log the reason and do not publish.
+
+Additionally: Kelly fraction must be computed as min(0.25, max(0, (win_rate * avg_win - loss_rate * avg_loss) / avg_win)) using the historical data for this exact (token, direction, timeframe) combo. If sample_size < 25, hard-cap kelly_fraction at 0.05 and note "insufficient_sample" in calibration_check.
+
+=========================================
+5. IMPLEMENTATION NOTES
+=========================================
+
+- Store the three prompt templates in /prompts/chartAI.ts, /prompts/aiAnalyst.ts, /prompts/signalGen.ts. Build them from the shared components above — do not copy-paste.
+- Keep model as claude-sonnet-4-6.
+- Set temperature to 0.2 for signal generation (deterministic), 0.4 for Chart AI and AI Analyst (slightly more narrative flexibility).
+- Response format: JSON mode / tool-use with the TRADE_PLAN_SCHEMA as the schema. Parse server-side; reject any output that doesn't validate and retry once.
+- Log every NO_TRADE decision with reason code (suppression / low_winrate / low_rr / killswitch / funding_crowded / insufficient_data) so I can audit false negatives later.
+- Do NOT remove the existing Kronos gating for Elite members or the centralized data bus — these new prompts consume from that same data layer.
+
+=========================================
+6. MIGRATION / ROLLOUT
+=========================================
+
+- Deploy new prompts behind a feature flag PROMPT_V2 (default: off).
+- Run V2 in shadow mode for 48h: generate signals with V2 prompts but DO NOT publish them; log outputs alongside V1 for comparison.
+- After shadow period, switch PROMPT_V2 to on for signal generation first, Chart AI and AI Analyst second (24h gap).
+- Preserve the V1 prompts in the repo for rollback.
+
+Output: full file contents for the three prompt files, the shared components module, the schema validator, and the feature flag wiring. Show me the diff clearly.
