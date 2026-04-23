@@ -85,8 +85,8 @@ export async function buildPerformanceContextStructured(): Promise<PerformanceCo
   const finalized: PerComboStat[] = [];
   for (const c of combos.values()) {
     c.winRate    = c.total > 0 ? c.wins / c.total : 0;
-    c.avgWinPct  = c._winPnls.length  ? c._winPnls.reduce((a,b)=>a+b,0)  / c._winPnls.length  : 0;
-    c.avgLossPct = c._lossPnls.length ? c._lossPnls.reduce((a,b)=>a+b,0) / c._lossPnls.length : 0;
+    c.avgWinPct  = c._winPnls.length  ? c._winPnls.reduce((a: number, b: number)=>a+b,0)  / c._winPnls.length  : 0;
+    c.avgLossPct = c._lossPnls.length ? c._lossPnls.reduce((a: number, b: number)=>a+b,0) / c._lossPnls.length : 0;
     c.sampleSize = c.total;
     c.sufficient = c.total >= MIN_COMBO_SAMPLE;
     delete (c as any)._winPnls;

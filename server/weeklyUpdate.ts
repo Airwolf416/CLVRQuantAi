@@ -318,7 +318,7 @@ export function startWeeklyUpdateScheduler() {
       // 1) Check whether a fresh (last 7 days) update already exists.
       //    If admin posted manually this week, respect that and skip AI generation.
       const latest = await getLatestWeeklyUpdate();
-      const fresh = latest && (Date.now() - new Date(latest.createdAt).getTime() < 7 * 24 * 60 * 60 * 1000);
+      const fresh = latest?.createdAt != null && (Date.now() - new Date(latest.createdAt).getTime() < 7 * 24 * 60 * 60 * 1000);
       const alreadyEmailed = latest?.emailSentAt != null;
 
       if (!fresh || alreadyEmailed) {
