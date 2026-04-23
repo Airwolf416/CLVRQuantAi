@@ -44,17 +44,28 @@ export async function recalculateThresholds(): Promise<number> {
     if (g.total < 5) continue;
 
     const winRate = (g.wins / g.total) * 100;
-    // AGGRESSIVE adjustment scale — matched to overall ~32% win rate problem
+    const wL      = wilsonLower(g.wins, g.total) * 100;   // Wilson lower bound, %
+    // Two-sided adjustment scale.
+    //   Negative side (suppress losers) is unchanged.
+    //   Positive side (PROMOTE winners) is now wider AND gated on the Wilson
+    //   lower bound — we only lower a combo's threshold if both raw WR *and*
+    //   Wilson agree it's hot. This stops a 4-of-5 lucky streak from
+    //   permanently lowering the bar.
     let adjustment = 0;
+    // Sample-size gate: cuts beyond -3 require n>=10 (architect-mandated
+    // anti-lucky-streak guard). With n<10, even a 5/5 hot streak can only
+    // drop the bar by 3 points, so a single bad week can't entrench a
+    // permanently lowered threshold.
+    const bigCutAllowed = g.total >= 10;
     if      (winRate < 20)  adjustment =  25;  // catastrophic
     else if (winRate < 30)  adjustment =  20;  // very bad
     else if (winRate < 40)  adjustment =  15;  // bad
     else if (winRate < 50)  adjustment =  10;  // below average
     else if (winRate < 55)  adjustment =   5;
     else if (winRate <= 65) adjustment =   0;
-    else if (winRate <= 75) adjustment =  -5;
-    else if (winRate <= 85) adjustment = -10;
-    else                    adjustment = -15;
+    else if (winRate <= 75) adjustment = (bigCutAllowed && wL >= 50 ? -7  : -3);
+    else if (winRate <= 85) adjustment = (bigCutAllowed && wL >= 60 ? -12 : -3);
+    else                    adjustment = (bigCutAllowed && wL >= 65 ? -18 : -3);
     adjustment = Math.max(-25, Math.min(25, adjustment));
 
     // Auto-suppress when EITHER:
