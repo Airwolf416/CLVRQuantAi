@@ -17,6 +17,9 @@ export type RejectionReason =
   | "SHORTS_CROWDED"
   | "LONGS_CROWDED"
   | "RR_TOO_LOW_AFTER_FRICTION"
+  // ── News / rate-limit gates ───────────────────────────────────────────────
+  | "NEWS_CONFLICT_HIGH"
+  | "RATE_LIMIT_ASSET"
   | "OTHER";
 
 export interface RejectionEntry {
