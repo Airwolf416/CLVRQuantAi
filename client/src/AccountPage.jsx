@@ -154,6 +154,7 @@ function EmailSystemHealth({ C, MONO }) {
 
 const SYSTEM_EMAILS = [
   {
+    key: "signup-welcome",
     name: "Welcome Email",
     trigger: "Automatic — on new account creation",
     recipients: "New user (individually)",
@@ -161,6 +162,7 @@ const SYSTEM_EMAILS = [
     color: "#00c787",
   },
   {
+    key: "morning-brief",
     name: "Morning Market Brief",
     trigger: "Automatic — daily at 6:00 AM ET",
     recipients: "All subscribed users",
@@ -168,6 +170,7 @@ const SYSTEM_EMAILS = [
     color: "#c9a84c",
   },
   {
+    key: "apology-brief",
     name: "Apology Brief (Manual Resend)",
     trigger: "Manual — owner panel → Emails tab",
     recipients: "All subscribed users",
@@ -175,6 +178,7 @@ const SYSTEM_EMAILS = [
     color: "#ff8c00",
   },
   {
+    key: "service-disruption",
     name: "Service Disruption Apology",
     trigger: "Manual — owner panel → Emails tab",
     recipients: "All users (subscribed and unsubscribed)",
@@ -182,6 +186,7 @@ const SYSTEM_EMAILS = [
     color: "#ff4060",
   },
   {
+    key: "referral-promotion",
     name: "Referral Promotion",
     trigger: "Manual — owner panel → Emails tab",
     recipients: "All users",
@@ -189,6 +194,7 @@ const SYSTEM_EMAILS = [
     color: "#9b59b6",
   },
   {
+    key: "referral-reward",
     name: "Referral Reward",
     trigger: "Automatic — when a referred user subscribes to a paid plan",
     recipients: "Referring user (individually)",
@@ -196,6 +202,7 @@ const SYSTEM_EMAILS = [
     color: "#00d4ff",
   },
   {
+    key: "promo-expiry",
     name: "Promo Code Expiry Reminder",
     trigger: "Automatic — 14 days before promo code expiry",
     recipients: "Users with expiring promo codes (individually)",
@@ -203,6 +210,7 @@ const SYSTEM_EMAILS = [
     color: "#ff8c00",
   },
   {
+    key: "elite-activation",
     name: "Elite Access Activation",
     trigger: "Automatic — when an Elite access code is redeemed",
     recipients: "Newly activated Elite user (individually)",
@@ -210,6 +218,7 @@ const SYSTEM_EMAILS = [
     color: "#00e5ff",
   },
   {
+    key: "account-deletion",
     name: "Account Deletion Retention",
     trigger: "Automatic — when a paid user deletes their account",
     recipients: "Deleted user (individually)",
@@ -217,6 +226,7 @@ const SYSTEM_EMAILS = [
     color: "#ff4060",
   },
   {
+    key: "custom-broadcast",
     name: "Custom Broadcast (Admin Panel)",
     trigger: "Manual — owner panel → Admin tab",
     recipients: "All users or subscribed users (owner's choice)",
@@ -234,6 +244,56 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
   const [sendStatus, setSendStatus] = useState(null);
   const [sendMsg, setSendMsg] = useState("");
   const [showPreview, setShowPreview] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState({});
+  const [testStatus, setTestStatus] = useState({}); // { [key]: "sending" | "ok" | "err" }
+  const [testMsg, setTestMsg] = useState({});
+  const [actionStatus, setActionStatus] = useState({});
+  const [actionMsg, setActionMsg] = useState({});
+
+  const runAction = async (key, url, opts = {}) => {
+    setActionStatus(s => ({ ...s, [key]: "running" }));
+    setActionMsg(m => ({ ...m, [key]: "" }));
+    try {
+      const r = await fetch(url, { method: opts.method || "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: opts.body });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setActionStatus(s => ({ ...s, [key]: "ok" }));
+        setActionMsg(m => ({ ...m, [key]: d.message || "Done." }));
+      } else {
+        setActionStatus(s => ({ ...s, [key]: "err" }));
+        setActionMsg(m => ({ ...m, [key]: d.error || `HTTP ${r.status}` }));
+      }
+    } catch (e) {
+      setActionStatus(s => ({ ...s, [key]: "err" }));
+      setActionMsg(m => ({ ...m, [key]: e.message || "Network error" }));
+    }
+    setTimeout(() => { setActionStatus(s => ({ ...s, [key]: null })); setActionMsg(m => ({ ...m, [key]: "" })); }, 12000);
+  };
+
+  const sendTestSystemEmail = async (key) => {
+    setTestStatus(s => ({ ...s, [key]: "sending" }));
+    setTestMsg(m => ({ ...m, [key]: "" }));
+    try {
+      const r = await fetch("/api/admin/test-system-email", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setTestStatus(s => ({ ...s, [key]: "ok" }));
+        setTestMsg(m => ({ ...m, [key]: d.message || "✓ Test email sent to mikeclaver@clvrquantai.com" }));
+      } else {
+        setTestStatus(s => ({ ...s, [key]: "err" }));
+        setTestMsg(m => ({ ...m, [key]: d.error || `HTTP ${r.status}` }));
+      }
+    } catch (e) {
+      setTestStatus(s => ({ ...s, [key]: "err" }));
+      setTestMsg(m => ({ ...m, [key]: e.message || "Network error" }));
+    }
+    setTimeout(() => { setTestStatus(s => ({ ...s, [key]: null })); setTestMsg(m => ({ ...m, [key]: "" })); }, 10000);
+  };
 
   // Auto-detect HTML when pasting
   const handleBodyChange = (val) => {
@@ -275,18 +335,115 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
         <div style={{ fontSize:11, color:"#6b7fa8", fontFamily:MONO, marginBottom:16, lineHeight:1.6 }}>
           All automated and manual emails sent by CLVRQuant on your behalf. Use this as a reference so you know exactly what users receive and when.
         </div>
-        {SYSTEM_EMAILS.map((em, i) => (
-          <div key={em.name} style={{ borderLeft:`3px solid ${em.color}`, paddingLeft:12, marginBottom:14, paddingBottom:i < SYSTEM_EMAILS.length-1 ? 14 : 0, borderBottom: i < SYSTEM_EMAILS.length-1 ? "1px solid #141e35" : "none" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, flexWrap:"wrap", marginBottom:3 }}>
-              <div style={{ fontFamily:MONO, fontSize:11, fontWeight:700, color:"#f0f4ff" }}>{em.name}</div>
-              <div style={{ fontFamily:MONO, fontSize:8, color:em.color, border:`1px solid ${em.color}44`, borderRadius:2, padding:"2px 7px", whiteSpace:"nowrap", letterSpacing:"0.08em" }}>
-                {em.recipients.includes("individually") ? "INDIVIDUAL" : "BROADCAST"}
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginBottom:10, letterSpacing:"0.06em", lineHeight:1.6 }}>
+          Click any row to expand. The <span style={{ color:"#00e57a" }}>TEST</span> button sends a sample of that template to <code style={{ color:"#e8c96d" }}>mikeclaver@clvrquantai.com</code> to verify delivery for that email category.
+        </div>
+        {SYSTEM_EMAILS.map((em, i) => {
+          const open = !!catalogOpen[em.key];
+          const ts = testStatus[em.key];
+          const tm = testMsg[em.key];
+          return (
+            <div key={em.key} style={{ borderLeft:`3px solid ${em.color}`, paddingLeft:12, marginBottom:8, paddingBottom: 8, borderBottom: i < SYSTEM_EMAILS.length-1 ? "1px solid #141e35" : "none" }}>
+              <div
+                data-testid={`row-catalog-${em.key}`}
+                onClick={() => setCatalogOpen(s => ({ ...s, [em.key]: !open }))}
+                style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, flexWrap:"wrap", cursor:"pointer", padding:"4px 0" }}
+              >
+                <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flex:1 }}>
+                  <span style={{ fontFamily:MONO, fontSize:10, color:"#4a5d80", width:12, display:"inline-block" }}>{open ? "▾" : "▸"}</span>
+                  <span style={{ fontFamily:MONO, fontSize:11, fontWeight:700, color:"#f0f4ff" }}>{em.name}</span>
+                </div>
+                <div style={{ fontFamily:MONO, fontSize:8, color:em.color, border:`1px solid ${em.color}44`, borderRadius:2, padding:"2px 7px", whiteSpace:"nowrap", letterSpacing:"0.08em" }}>
+                  {em.recipients.includes("individually") ? "INDIVIDUAL" : "BROADCAST"}
+                </div>
               </div>
+              {open && (
+                <div style={{ paddingTop:8, paddingBottom:4 }}>
+                  <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginBottom:4, letterSpacing:"0.04em" }}>⚡ {em.trigger}</div>
+                  <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginBottom:6, letterSpacing:"0.04em" }}>👥 {em.recipients}</div>
+                  <div style={{ fontSize:11, color:"#6b7fa8", lineHeight:1.65, marginBottom:10 }}>{em.description}</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                    <button
+                      data-testid={`btn-test-${em.key}`}
+                      onClick={(e) => { e.stopPropagation(); sendTestSystemEmail(em.key); }}
+                      disabled={ts === "sending"}
+                      style={{
+                        background: ts === "ok" ? "rgba(0,229,122,.12)" : ts === "err" ? "rgba(255,100,128,.1)" : "rgba(0,229,122,.08)",
+                        border: `1px solid ${ts === "ok" ? "rgba(0,229,122,.5)" : ts === "err" ? "rgba(255,100,128,.4)" : "rgba(0,229,122,.35)"}`,
+                        color: ts === "err" ? "#ff6680" : "#00e57a",
+                        borderRadius: 4,
+                        padding: "6px 12px",
+                        fontFamily: MONO,
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: "0.1em",
+                        cursor: ts === "sending" ? "not-allowed" : "pointer",
+                        opacity: ts === "sending" ? 0.6 : 1,
+                      }}
+                    >
+                      {ts === "sending" ? "SENDING…" : ts === "ok" ? "✓ TEST SENT" : ts === "err" ? "✗ RETRY TEST" : "🧪 SEND TEST"}
+                    </button>
+                    {tm && (
+                      <span
+                        data-testid={`text-test-msg-${em.key}`}
+                        style={{ fontFamily:MONO, fontSize:9, color: ts === "err" ? "#ff6680" : "#00e57a", lineHeight:1.4 }}
+                      >
+                        {tm}
+                      </span>
+                    )}
+                    {!tm && (
+                      <span style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80" }}>
+                        → mikeclaver@clvrquantai.com
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-            <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginBottom:4, letterSpacing:"0.04em" }}>⚡ {em.trigger}</div>
-            <div style={{ fontSize:11, color:"#6b7fa8", lineHeight:1.65 }}>{em.description}</div>
+          );
+        })}
+      </div>
+
+      {/* Weekly Update Controls (moved from Maintenance tab) */}
+      <div style={{ background:"#0c1220", border:"1px solid rgba(0,229,255,.2)", borderRadius:6, padding:18, marginBottom:16 }}>
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#00e5ff", letterSpacing:"0.2em", marginBottom:14 }}>🆕 WEEKLY UPDATE (WHAT'S NEW)</div>
+        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
+          Every Saturday 10:00 AM ET the system auto-generates this week's update from the last 7 days of code changes (via Claude),
+          posts it to the About page, and emails it to all active subscribers — fully hands-off. You can also publish manually below
+          (overrides the AI for that week), or preview / trigger the AI on demand.
+        </div>
+        <AIWeeklyUpdateControls C={C} MONO={MONO} />
+        <div style={{ height:1, background:"rgba(140,160,200,.12)", margin:"14px 0" }} />
+        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
+          ✍️ Manual override — fill out the form below to publish a hand-written update instead of letting the AI generate it.
+        </div>
+        <WeeklyUpdateEditor onSave={async (payload) => {
+          const r = await fetch("/api/admin/weekly-update", {
+            method:"POST", credentials:"include",
+            headers:{ "Content-Type":"application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (!r.ok) { const t = await r.text().catch(()=>""); alert("Save failed: " + t); return; }
+          alert("Weekly update saved. It is now live on the About page.");
+        }} />
+        <div style={{ marginTop:14 }}>
+          <AdminActionBtn actionKey="weekly-update-send-now" label="✉ SEND WEEKLY EMAIL NOW (MANUAL)" url="/api/admin/weekly-update/send-now" color="#00e5ff" onRun={runAction} status={actionStatus["weekly-update-send-now"]} msg={actionMsg["weekly-update-send-now"]} MONO={MONO} />
+          <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
+            Use only if Saturday automation didn't fire. Sends the latest weekly update to all active subscribers immediately.
           </div>
-        ))}
+        </div>
+      </div>
+
+      {/* Daily Brief Controls (moved from Maintenance tab) */}
+      <div style={{ background:"#0c1220", border:"1px solid rgba(232,201,109,.2)", borderRadius:6, padding:18, marginBottom:16 }}>
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#e8c96d", letterSpacing:"0.2em", marginBottom:14 }}>📧 DAILY BRIEF CONTROLS</div>
+        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:12, lineHeight:1.6 }}>
+          Scheduler runs every 30s and triggers at 6:00 AM ET. Catch-up runs 10s after server startup if today's brief hasn't been sent yet.
+        </div>
+        <AdminActionBtn actionKey="test-brief" label="🧪 ENQUEUE TEST BRIEF" url="/api/admin/test-brief" color="#00d4ff" onRun={runAction} status={actionStatus["test-brief"]} msg={actionMsg["test-brief"]} MONO={MONO} />
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
+          Enqueues a daily brief send. Check server logs for delivery confirmation.
+        </div>
       </div>
 
       {/* Composer */}
@@ -887,45 +1044,8 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
         )}
       </Section>
 
-      {/* Weekly Update Controls */}
-      <Section title="🆕 WEEKLY UPDATE (WHAT'S NEW)" color="#00e5ff">
-        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
-          Every Saturday 10:00 AM ET the system auto-generates this week's update from the last 7 days of code changes (via Claude),
-          posts it to the About page, and emails it to all active subscribers — fully hands-off. You can also publish manually below
-          (overrides the AI for that week), or preview / trigger the AI on demand.
-        </div>
-        <AIWeeklyUpdateControls C={C} MONO={MONO} />
-        <div style={{ height:1, background:"rgba(140,160,200,.12)", margin:"14px 0" }} />
-        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
-          ✍️ Manual override — fill out the form below to publish a hand-written update instead of letting the AI generate it.
-        </div>
-        <WeeklyUpdateEditor onSave={async (payload) => {
-          const r = await fetch("/api/admin/weekly-update", {
-            method:"POST", credentials:"include",
-            headers:{ "Content-Type":"application/json" },
-            body: JSON.stringify(payload)
-          });
-          if (!r.ok) { const t = await r.text().catch(()=>""); alert("Save failed: " + t); return; }
-          alert("Weekly update saved. It is now live on the About page.");
-        }} />
-        <div style={{ marginTop:14 }}>
-          <AdminActionBtn actionKey="weekly-update-send-now" label="✉ SEND WEEKLY EMAIL NOW (MANUAL)" url="/api/admin/weekly-update/send-now" color="#00e5ff" onRun={runAction} status={actionStatus["weekly-update-send-now"]} msg={actionMsg["weekly-update-send-now"]} MONO={MONO} />
-          <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
-            Use only if Saturday automation didn't fire. Sends the latest weekly update to all active subscribers immediately.
-          </div>
-        </div>
-      </Section>
-
-      {/* Daily Brief Controls */}
-      <Section title="📧 DAILY BRIEF CONTROLS" color="#e8c96d">
-        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:12, lineHeight:1.6 }}>
-          Scheduler runs every 30s and triggers at 6:00 AM ET. Catch-up runs 10s after server startup if today's brief hasn't been sent yet.
-        </div>
-        <AdminActionBtn actionKey="test-brief" label="🧪 ENQUEUE TEST BRIEF" url="/api/admin/test-brief" color="#00d4ff" onRun={runAction} status={actionStatus["test-brief"]} msg={actionMsg["test-brief"]} MONO={MONO} />
-        <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
-          Enqueues a daily brief send. Check server logs for delivery confirmation.
-        </div>
-      </Section>
+      {/* Note: Weekly Update + Daily Brief Controls moved to the 🛠 Admin tab
+          (consolidated with the System Email Catalog + Composer). */}
 
       {/* Adaptive Thresholds */}
       <Section title="🧠 ADAPTIVE THRESHOLDS (AUTO-TUNING)" color="#00d4ff">
