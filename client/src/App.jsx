@@ -1151,6 +1151,56 @@ function HelpItem({q,a}){
 
 
 // ─── TRACK RECORD TAB ─────────────────────────────────────
+// ─── PERFORMANCE HIGHLIGHTS (curated, public) ─────────────────
+// Replaces the old public-facing track-record snapshot. Shows ONLY:
+//   - Overall win rate of signals users actually receive (suppressed-excluded)
+//   - Top 3 token/direction combos with sample size >= 25
+// No losing combos, no negative PnL headlines.
+function PerformanceHighlights(){
+  const [data,setData]=useState(null);
+  const [err,setErr]=useState(false);
+  useEffect(()=>{
+    let on=true;
+    fetch("/api/performance-highlights",{credentials:"include"})
+      .then(r=>r.ok?r.json():Promise.reject(r.status))
+      .then(d=>{if(on)setData(d);})
+      .catch(()=>{if(on)setErr(true);});
+    return()=>{on=false;};
+  },[]);
+  if(err||!data||data.overallWinRate==null||data.sampleSize<25)return null;
+  const wr=data.overallWinRate;
+  const wrColor=wr>=55?C.green:wr>=45?C.gold:C.muted2;
+  return(
+    <div data-testid="panel-performance-highlights" style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,padding:"12px 14px",marginBottom:12}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.18em"}}>PERFORMANCE HIGHLIGHTS · LAST {data.windowDays}D</div>
+        <div style={{fontFamily:MONO,fontSize:7,color:C.muted2,letterSpacing:"0.1em"}}>n={data.sampleSize}</div>
+      </div>
+      <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:12}}>
+        <div data-testid="text-overall-winrate" style={{fontFamily:SERIF,fontSize:32,fontWeight:900,color:wrColor,letterSpacing:"-0.02em"}}>{wr}%</div>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>overall win rate · published signals only</div>
+      </div>
+      {data.topCombos&&data.topCombos.length>0&&<>
+        <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:6}}>TOP PERFORMING SETUPS</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {data.topCombos.map((c,i)=>(
+            <div key={`${c.token}-${c.direction}`} data-testid={`row-top-combo-${i}`} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 8px",background:C.bg,borderRadius:3,border:`1px solid ${C.border}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontFamily:MONO,fontSize:11,color:C.text,fontWeight:700}}>{c.token}</span>
+                <span style={{fontFamily:MONO,fontSize:8,color:c.direction==="LONG"?C.green:C.red,letterSpacing:"0.1em"}}>{c.direction}</span>
+              </div>
+              <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+                <span style={{fontFamily:MONO,fontSize:13,fontWeight:800,color:c.winRate>=55?C.green:C.gold}}>{c.winRate}%</span>
+                <span style={{fontFamily:MONO,fontSize:7,color:C.muted}}>n={c.n}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </>}
+    </div>
+  );
+}
+
 function TrackRecordTab({isPro,onUpgrade}){
   const{C}=useContext(ThemeCtx);
   const[stats,setStats]=useState(null);
@@ -3504,6 +3554,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
 
   const isGuest=!!user?.guest;
+  const isAdmin=!!user?.isAdmin;
   const GUEST_TABS=["radar","prices","macro","about","help"];
   const NAV_ALL=[
     {k:"radar",icon:"📡",label:i18n.radar},
@@ -3511,7 +3562,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
-    {k:"track",icon:"📈",label:"RECORD"},
+    ...(isAdmin?[{k:"track",icon:"📈",label:"RECORD"}]:[]),
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -4011,6 +4062,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
           <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
+          <PerformanceHighlights/>
           <TwitterMarketModeStrip onSpikeClick={(tk)=>setSpikeFilter(tk)} activeSpike={spikeFilter}/>
 
           {/* ── Fear & Greed widget — uses live data from useDataBus ── */}

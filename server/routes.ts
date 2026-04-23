@@ -6,6 +6,7 @@ import { pool, db } from "./db";
 import { signalHistory, aiSignalLog, adaptiveThresholds } from "@shared/schema";
 import { logSignal } from "./lib/signalLogger";
 import { buildPerformanceContext, invalidatePerformanceContextCache } from "./lib/performanceContext";
+import { getPromptV2Mode, getShadowLog } from "./prompts/shared";
 import { getThresholdFor, recalculateThresholds } from "./lib/adaptiveThresholds";
 import { getCircuitState, isHalted, manualHalt, manualResume, checkCircuitBreaker, isMacroRiskOff } from "./lib/circuitBreaker";
 import { logRejection, getRecentRejections, getRejectionStats } from "./lib/rejectionLog";
@@ -15,7 +16,7 @@ import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
 import { persistRecentNews } from "./lib/newsPersist";
 import { getUserTier } from "./lib/userTier";
 import { userPromotedAssets, newsItems } from "@shared/schema";
-import { eq, and, lte, gt, desc, or, isNull, sql as dsql } from "drizzle-orm";
+import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import multerLib from "multer";
@@ -1903,19 +1904,88 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
-  // ── TRACK RECORD (public stats + paid extended view) ─────────────────────
-  app.get("/api/track-record", async (req, res) => {
+  // ── ADMIN GUARD ──────────────────────────────────────────────────────────
+  // Returns userId if caller is an admin; otherwise responds 403 (forbidden)
+  // and returns null. Logs every denial for monitoring.
+  async function requireAdmin(req: any, res: any): Promise<string | null> {
     const userId = (req.session as any)?.userId;
-    let isPaidUser = false;
-    if (userId) {
-      try {
-        const dbUser = await storage.getUser(userId);
-        if (dbUser) {
-          const tier = await getEffectiveTier(dbUser);
-          isPaidUser = tier === "pro" || tier === "elite";
-        }
-      } catch { /* */ }
+    const path = req.originalUrl || req.url;
+    const ip   = (req.headers["x-forwarded-for"] || req.ip || "?").toString().split(",")[0].trim();
+    if (!userId) {
+      console.warn(`[admin_access_denied] no_session path=${path} ip=${ip}`);
+      res.status(403).json({ error: "Forbidden" });
+      return null;
     }
+    try {
+      const dbUser = await storage.getUser(userId);
+      if (!dbUser || !(dbUser as any).isAdmin) {
+        console.warn(`[admin_access_denied] not_admin user=${userId} email=${dbUser?.email||"?"} path=${path} ip=${ip}`);
+        res.status(403).json({ error: "Forbidden" });
+        return null;
+      }
+      return userId;
+    } catch (e: any) {
+      console.warn(`[admin_access_denied] error user=${userId} path=${path} err=${e?.message||e}`);
+      res.status(403).json({ error: "Forbidden" });
+      return null;
+    }
+  }
+
+  // ── PUBLIC PERFORMANCE HIGHLIGHTS ────────────────────────────────────────
+  // Curated, admin-safe view: overall win rate (suppressed-excluded) +
+  // top 3 token/direction combos with sample size >= 25. No negative figures.
+  app.get("/api/performance-highlights", async (_req, res) => {
+    try {
+      const sinceDays = 30;
+      const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
+      // Pull resolved signals (excludes pending). Suppressed signals never
+      // get logged with an outcome to ai_signal_log so they're excluded by
+      // construction.
+      const rows = await db.select({
+        token: aiSignalLog.token,
+        direction: aiSignalLog.direction,
+        outcome: aiSignalLog.outcome,
+      }).from(aiSignalLog).where(and(
+        ne(aiSignalLog.outcome, "PENDING"),
+        gte(aiSignalLog.createdAt, since),
+      ));
+      const WIN = new Set(["TP1_HIT","TP2_HIT","TP3_HIT","EXPIRED_WIN"]);
+      let wins = 0, total = 0;
+      const byCombo: Record<string,{wins:number;total:number;token:string;direction:string}> = {};
+      for (const r of rows) {
+        if (!r.outcome) continue;
+        total++;
+        const isWin = WIN.has(r.outcome);
+        if (isWin) wins++;
+        const key = `${r.token}|${r.direction}`;
+        if (!byCombo[key]) byCombo[key] = { wins:0, total:0, token:r.token, direction:r.direction };
+        byCombo[key].total++;
+        if (isWin) byCombo[key].wins++;
+      }
+      const overallWinRate = total > 0 ? Math.round((wins/total)*100) : null;
+      const top = Object.values(byCombo)
+        .filter(c => c.total >= 25)
+        .map(c => ({ token: c.token, direction: c.direction, winRate: Math.round((c.wins/c.total)*100), n: c.total }))
+        .sort((a,b) => b.winRate - a.winRate)
+        .slice(0, 3);
+      return res.json({
+        windowDays: sinceDays,
+        sampleSize: total,
+        overallWinRate,
+        topCombos: top,
+        lastUpdated: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      console.error("[performance-highlights] failed:", e?.message, e?.stack);
+      return res.json({ windowDays: 30, sampleSize: 0, overallWinRate: null, topCombos: [], lastUpdated: new Date().toISOString() });
+    }
+  });
+
+  // ── TRACK RECORD (admin only — full breakdown w/ losing combos) ──────────
+  app.get("/api/track-record", async (req, res) => {
+    const userId = await requireAdmin(req, res);
+    if (!userId) return;
+    let isPaidUser = true; // admin always gets paid view
     let stats;
     try {
       stats = await storage.getSignalStats();
@@ -2491,6 +2561,23 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
           const validDirs = ["long", "short", "no_trade"];
           if (!analysis || typeof analysis !== "object" || !validDirs.includes(analysis.direction)) {
             return res.status(502).json({ error: "AI response failed validation. Try again." });
+          }
+
+          // ── PROMPT_V2 shadow run (fire-and-forget) ─────────────────────────
+          if (getPromptV2Mode() !== "off") {
+            void (async () => {
+              try {
+                const { runChartAIv2 } = await import("./lib/promptV2Runner");
+                const perfCtxAsset = await buildPerformanceContext().catch(() => "");
+                await runChartAIv2({
+                  asset: asset || "UNKNOWN",
+                  perfContextForAsset: perfCtxAsset,
+                  liveData: { price: 0, range24hLow: 0, range24hHigh: 0, keyStructure: "from-image" },
+                  killSwitches: [],
+                  userQuestion: `Analyze chart for ${horizon} trade${asset ? " on " + asset : ""}.`,
+                }, apiKey, JSON.stringify(analysis).slice(0, 500));
+              } catch (e: any) { console.warn("[PROMPT_V2 chartAI shadow]", e?.message || e); }
+            })();
           }
 
           // Cache the news_context for this asset (only if we ran a search this call)
@@ -4336,6 +4423,27 @@ Every level must be technically defensible. Return JSON only.`;
         body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:3000, system, messages:[{ role:"user", content:userMsg }] }),
       });
       if (!aiRes.ok) { const e = await aiRes.text(); console.error("[/api/quant]", e); return res.status(502).json({ error:"AI Engine failed." }); }
+
+      // ── PROMPT_V2 shadow run (fire-and-forget; signal-gen surface) ────────
+      if (getPromptV2Mode() !== "off") {
+        void (async () => {
+          try {
+            const { runSignalGenV2 } = await import("./lib/promptV2Runner");
+            const perfCtxStr = await buildPerformanceContext().catch(() => "");
+            const dirGuess: "LONG" | "SHORT" = (String(parsed?.signal || "").toUpperCase().includes("SHORT") ? "SHORT" : "LONG");
+            await runSignalGenV2({
+              token: ticker, direction: dirGuess,
+              perfContextForCombo: perfCtxStr,
+              liveData: indContext.slice(0, 3000),
+              kronosOutput: "",
+              quantScore: adjScore,
+              oiAdjustedScore: adjScore,
+              killSwitches: macroKillSwitch?.active ? [String(macroKillSwitch.reason || "macro")] : [],
+              calibration: { winRate: (pWin || 0), avgWinPct: tp1DistPct, avgLossPct: slDistPct, sampleSize: 25, suppressionStatus: "active" },
+            }, apiKey, JSON.stringify({ signal: parsed?.signal, ev: evPct }).slice(0, 500));
+          } catch (e: any) { console.warn("[PROMPT_V2 signalGen shadow]", e?.message || e); }
+        })();
+      }
       const aiData: any = await aiRes.json();
       if (aiData.error) { console.error("[/api/quant] API error:", aiData.error.message || aiData.error); return res.status(502).json({ error: "AI Engine failed." }); }
       const rawText = (aiData.content || []).map((b: any) => b.text || "").join("");
@@ -4619,9 +4727,16 @@ Every level must be technically defensible. Return JSON only.`;
   });
 
   // ── /api/performance-context — AI learning context (plain text) ──────────
-  app.get("/api/performance-context", async (_req, res) => {
+  app.get("/api/performance-context", async (req, res) => {
     try {
       const ctx = await buildPerformanceContext();
+      // Dev mode: if the build hit an error, surface it in a header so it's
+      // visible in Network tab without changing the response body shape.
+      if (process.env.NODE_ENV !== "production") {
+        const { getLastPerformanceContextError } = await import("./lib/performanceContext");
+        const lastErr = getLastPerformanceContextError();
+        if (lastErr) res.set("X-PerfCtx-Error", encodeURIComponent(JSON.stringify(lastErr)));
+      }
       res.type("text/plain").send(ctx);
     } catch (e: any) {
       res.status(500).type("text/plain").send("HISTORICAL PERFORMANCE: Error loading.");
@@ -4863,6 +4978,26 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
+  // ── /api/admin/prompt-v2/status — admin-only: shows current PROMPT_V2_MODE ─
+  app.get("/api/admin/prompt-v2/status", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    res.json({
+      mode: getPromptV2Mode(),
+      env: process.env.PROMPT_V2_MODE || "off",
+      surfaces: ["chartAI", "signalGen", "aiAnalyst"],
+      note: "Set PROMPT_V2_MODE env var to off|shadow|on. Restart required.",
+    });
+  });
+
+  // ── /api/admin/prompt-v2/shadow-log — admin-only: in-memory comparison log ──
+  app.get("/api/admin/prompt-v2/shadow-log", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    const limit = Math.min(500, Number(req.query.limit) || 100);
+    res.json({ mode: getPromptV2Mode(), entries: getShadowLog(limit) });
+  });
+
   // ── /api/ai/log-trades — called by client after Trade Ideas are parsed ──
   app.post("/api/ai/log-trades", async (req, res) => {
     const userId = (req.session as any)?.userId;
@@ -4994,6 +5129,21 @@ Every level must be technically defensible. Return JSON only.`;
           return res.status(503).json({ error: "__MAINTENANCE__" });
         }
         return res.status(response.status).json({ error: `API Error ${response.status}: ${errorText}` });
+      }
+
+      // ── PROMPT_V2 shadow run (fire-and-forget; AI Analyst surface) ────────
+      if (getPromptV2Mode() !== "off") {
+        void (async () => {
+          try {
+            const { runAnalystV2 } = await import("./lib/promptV2Runner");
+            await runAnalystV2({
+              fullPerfContext: perfCtx || "",
+              instrumentsLive: "(see user query)",
+              killSwitches: [],
+              userQuery: userMessage.slice(0, 2000),
+            }, apiKey, systemRaw.slice(0, 200));
+          } catch (e: any) { console.warn("[PROMPT_V2 analyst shadow]", e?.message || e); }
+        })();
       }
 
       let data: any = await response.json();
@@ -6836,7 +6986,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (!user) return res.json({ user: null });
       const tier = await getEffectiveTier(user);
       const pendingVerification = !user.emailVerified && !!user.emailVerificationToken;
-      res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification } });
+      res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification, isAdmin: !!(user as any).isAdmin } });
     } catch {
       res.json({ user: null });
     }

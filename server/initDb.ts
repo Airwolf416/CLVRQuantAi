@@ -31,9 +31,14 @@ export async function initializeDatabase(): Promise<void> {
         must_change_password     BOOLEAN DEFAULT false,
         email_verified           BOOLEAN NOT NULL DEFAULT false,
         email_verification_token TEXT,
+        is_admin                 BOOLEAN NOT NULL DEFAULT false,
         created_at               TIMESTAMP DEFAULT NOW()
       )
     `);
+    // Idempotent migration for existing DBs
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false`);
+    // Promote owner to admin (idempotent)
+    await client.query(`UPDATE users SET is_admin = true WHERE LOWER(email) = LOWER('mikeclaver@gmail.com') AND is_admin = false`);
 
     // ── access_codes ─────────────────────────────────────────────────────────
     await client.query(`
@@ -206,6 +211,8 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_source ON ai_signal_log (source)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_created ON ai_signal_log (created_at DESC)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_pending_expires ON ai_signal_log (outcome, kill_clock_expires) WHERE outcome = 'PENDING'`);
+    // Performance context aggregation index — covers the hot per-(token,direction,resolved-window) query
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_perf_combo ON ai_signal_log (token, direction, created_at DESC) WHERE outcome IS NOT NULL AND outcome <> 'PENDING'`);
 
     // ── adaptive_thresholds (auto-tuning per token + direction) ───────────────
     await client.query(`
