@@ -147,7 +147,9 @@ export async function runAnalystV2(input: AnalystPromptInput, apiKey: string, v1
 
 // Renders a hardening rejection into a chat-friendly structured response so
 // the AI Analyst surface can show "signal rejected + why" instead of a card.
-function rejectionExplanation(reason: string, detail: string, ticker: string): string {
+// Exported so the v1 /api/quant path can reuse the same messaging and avoid
+// drifting from V2 / auto-scanner rejection copy.
+export function rejectionExplanation(reason: string, detail: string, ticker: string): string {
   switch (reason) {
     case "SL_TOO_TIGHT_VS_ATR":      return `Proposed stop is inside ${ticker}'s normal noise envelope (${detail}). A stop this tight will likely get hunted before the move plays out — widen to at least 1.5× ATR or wait for a cleaner setup.`;
     case "COUNTER_TREND_MICRO":      return `${ticker}'s last 6 candles show clear counter-direction microstructure (${detail}). The proposed entry fights the prevailing short-term trend — wait for a structural break before re-entering.`;
