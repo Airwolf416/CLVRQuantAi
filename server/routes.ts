@@ -6107,6 +6107,114 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
+  // Admin-only endpoint: for each entry in the System Email Catalog, send a
+  // representative TEST email to a fixed inbox so the owner can verify that
+  // every template category is deliverable (DKIM/SPF/Resend pathway).
+  // Does NOT broadcast to users — recipient is hard-coded.
+  app.post("/api/admin/test-system-email", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+      const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+      if (userEmail !== OWNER_EMAIL) return res.status(403).json({ error: "Owner only" });
+
+      const { key } = (req.body || {}) as { key?: string };
+      if (!key || typeof key !== "string") return res.status(400).json({ error: "Missing key" });
+
+      const CATALOG: Record<string, { name: string; subject: string; body: string }> = {
+        "signup-welcome": {
+          name: "Welcome Email",
+          subject: "Welcome to CLVRQuantAI",
+          body: "Sent immediately when a user creates an account. Contains a platform overview, feature list, and login link.",
+        },
+        "morning-brief": {
+          name: "Morning Market Brief",
+          subject: "CLVRQuantAI — Today's Morning Brief",
+          body: "Daily AI-generated brief covering market sentiment, macro outlook, top trades, and price signals. Auto-sent 6:00 AM ET.",
+        },
+        "apology-brief": {
+          name: "Apology Brief (Manual Resend)",
+          subject: "CLVRQuantAI — Today's Brief (Apology Resend)",
+          body: "Re-sends today's brief with an apology note if the automated 6AM send failed or had issues.",
+        },
+        "service-disruption": {
+          name: "Service Disruption Apology",
+          subject: "CLVRQuantAI — Service Disruption Update",
+          body: "Formal apology email sent during outages or data disruptions. Links users to Support@CLVRQuantAI.com.",
+        },
+        "referral-promotion": {
+          name: "Referral Promotion",
+          subject: "CLVRQuantAI — Share & Earn a Free Week of Pro",
+          body: "Encourages users to share their referral code. They earn 1 week of free Pro per paid referral.",
+        },
+        "referral-reward": {
+          name: "Referral Reward",
+          subject: "CLVRQuantAI — You earned 1 week of Pro!",
+          body: "Notifies the referrer they've earned 1 week of free Pro access for a successful referral.",
+        },
+        "promo-expiry": {
+          name: "Promo Code Expiry Reminder",
+          subject: "CLVRQuantAI — Your Elite access expires soon",
+          body: "Reminds users their promo-based access expires soon and nudges them to subscribe via Stripe.",
+        },
+        "elite-activation": {
+          name: "Elite Access Activation",
+          subject: "CLVRQuantAI — Elite Access Activated",
+          body: "Welcome email confirming Elite access is now active, with a full feature breakdown.",
+        },
+        "account-deletion": {
+          name: "Account Deletion Retention",
+          subject: "CLVRQuantAI — We'd love to have you back",
+          body: "Sent only if the deleted user had a paid plan. Offers 1 free month to return.",
+        },
+        "custom-broadcast": {
+          name: "Custom Broadcast (Admin Panel)",
+          subject: "CLVRQuantAI — Custom Broadcast",
+          body: "Free-form broadcast email typed in the Admin tab. Sent with CLVRQuant HTML branding and founder signature.",
+        },
+      };
+
+      const item = CATALOG[key];
+      if (!item) return res.status(400).json({ error: `Unknown email key: ${key}` });
+
+      const TEST_TO = "mikeclaver@clvrquantai.com";
+      const { client: resend, fromEmail } = await getUncachableResendClient();
+      const now = new Date();
+      const html = `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+  <div style="text-align:center;margin-bottom:20px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+  <div style="background:rgba(232,201,109,.08);border:1px solid rgba(232,201,109,.35);border-radius:6px;padding:10px 14px;margin-bottom:18px;font-family:Consolas,monospace;font-size:11px;color:#e8c96d;letter-spacing:0.1em;text-align:center">🧪 TEST EMAIL · template: <strong>${key}</strong></div>
+  <div style="border-top:1px solid #141e35;padding-top:18px">
+    <p style="font-size:15px;color:#f0f4ff;font-weight:700;margin:0 0 4px">${item.name}</p>
+    <p style="font-size:12px;color:#00d4ff;font-family:Consolas,monospace;margin:0 0 14px">Subject preview: ${item.subject}</p>
+    <p style="font-size:13px;color:#a8b3c8;line-height:1.75">${item.body}</p>
+    <p style="font-size:12px;color:#6b7fa8;line-height:1.75;margin-top:18px">✅ If you received this email, the Resend → <strong style="color:#e8c96d">${TEST_TO}</strong> delivery pathway for this template category is working correctly.</p>
+    <p style="font-size:10px;color:#4a5d80;margin-top:20px;border-top:1px solid #141e35;padding-top:14px;line-height:1.6">
+      Sent: ${now.toISOString()}<br/>
+      From: ${fromEmail}<br/>
+      Template key: <code style="color:#00d4ff">${key}</code>
+    </p>
+  </div>
+</div>`;
+      const text = `[TEST] ${item.name}\n\nSubject preview: ${item.subject}\n\n${item.body}\n\nIf you received this, the delivery pathway for "${key}" is working.\n\nSent: ${now.toISOString()}\nFrom: ${fromEmail}`;
+
+      const result = await resend.emails.send({
+        from: fromEmail,
+        to: TEST_TO,
+        replyTo: "Support@clvrquantai.com",
+        subject: `[TEST · ${key}] ${item.subject}`,
+        html,
+        text,
+      });
+      const msgId = (result as any)?.data?.id || (result as any)?.id || null;
+      console.log(`[test-system-email] owner=${userEmail} key=${key} to=${TEST_TO} msgId=${msgId || "?"}`);
+      res.json({ ok: true, message: `✓ ${item.name} test sent → ${TEST_TO}`, id: msgId, key });
+    } catch (e: any) {
+      console.log("[test-system-email] error:", e?.message || e);
+      res.status(500).json({ error: e?.message || "Send failed" });
+    }
+  });
+
   // Diagnostic: verify email system health (Resend credential + subscriber count)
   app.get("/api/admin/email-health", async (req, res) => {
     const userId = (req.session as any)?.userId;
