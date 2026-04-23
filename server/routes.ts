@@ -4746,6 +4746,106 @@ Every level must be technically defensible. Return JSON only.`;
           }
         }
       }
+      // ── SIGNAL ENGINE HARDENING (mechanical post-AI gates) ──────────────
+      // Routes the v1 /api/quant AI plan output through the exact same
+      // hardening pipeline already used by the auto-scanner (routes.ts:~1095)
+      // and the V2 path (promptV2Runner.ts:~203). Single source of truth —
+      // `applySignalHardening` in server/lib/signalHardening.ts.
+      //
+      // On REJECT: forces NEUTRAL + populates `suppressed`/`suppression_*`
+      // fields (matches the pre-existing v1 cooldown/macro/news suppression
+      // shape so the client contract is preserved) AND attaches a
+      // `rejection` payload in the identical shape V2 returns, so any client
+      // that understands the V2 rejection envelope reads both paths
+      // identically.
+      //
+      // On ACCEPT/ADJUST: mutates parsed levels + conviction, recomputes
+      // derived metrics (gain_pct, rr_ratio, distance_pct, rr), and attaches
+      // `parsed.hardening = { action, sizeMultiplier, rrAfterFriction,
+      // adjustments }` mirroring the auto-scanner's signal mutation.
+      //
+      // Fails open on unexpected errors — matches auto-scanner + V2
+      // behaviour — so a transient Coinglass / hardening failure cannot
+      // take down a user-facing /api/quant request.
+      if (parsed.signal && (parsed.signal.includes("LONG") || parsed.signal.includes("SHORT"))
+          && parsed.entry?.price && parsed.stopLoss?.price && parsed.tp1?.price
+          && Array.isArray(candles1h) && candles1h.length > 0) {
+        const hdDir: "LONG" | "SHORT" = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
+        const hdStart = Date.now();
+        try {
+          const { applySignalHardening, recordOiSample, getOiChangePct } = await import("./lib/signalHardening");
+          const { getLiquidityClusters } = await import("./services/coinglass");
+          const { rejectionExplanation } = await import("./lib/promptV2Runner");
+          const hlCtx: any = (typeof hlData !== "undefined" ? (hlData as any)[ticker] : undefined);
+          if (hlCtx?.oi) recordOiSample(ticker, hlCtx.oi);
+          const entryPx = Number(parsed.entry.price);
+          const dayVolUsd = Number(hlCtx?.volume) || 0;
+          const clusters = await getLiquidityClusters(ticker, entryPx, dayVolUsd);
+          const hdHorizon: "scalp" | "swing" = tf.id === "scalp" ? "scalp" : "swing";
+          const convIn = typeof parsed.conviction === "number" ? parsed.conviction : (bayesian?.probability ?? 60);
+          console.log(`[HARDENING v1] ${ticker} ${hdDir} entry — entry=${entryPx} sl=${parsed.stopLoss.price} tp1=${parsed.tp1.price} conv=${convIn} horizon=${hdHorizon}`);
+          const hard = applySignalHardening({
+            token: ticker,
+            direction: hdDir,
+            entry: entryPx,
+            stopLoss: Number(parsed.stopLoss.price),
+            tp1: Number(parsed.tp1.price),
+            tp2: Number(parsed.tp2?.price ?? parsed.tp1.price),
+            conviction: convIn,
+            candles: candles1h,
+            fundingRate: hlCtx?.funding,
+            oiChange6hPct: getOiChangePct(ticker),
+            holdHorizon: hdHorizon,
+            liquidityClusters: clusters,
+            volume24hUsd: dayVolUsd,
+            source: "ai_signal",
+          });
+          if (hard.action === "REJECT") {
+            console.log(`[HARDENING v1] ${ticker} ${hdDir} REJECTED — ${hard.reason}: ${hard.detail} (${Date.now()-hdStart}ms)`);
+            // Persist to rejection log, consistent with the cooldown/macro/news
+            // gates above which also call logRejection.
+            logRejection({
+              source: "ai_signal", token: ticker, direction: hdDir,
+              reason: hard.reason as any, detail: hard.detail,
+            });
+            const explanation = rejectionExplanation(hard.reason, hard.detail, ticker);
+            parsed.signal = "NEUTRAL";
+            parsed.suppressed = true;
+            parsed.suppression_message = explanation;
+            parsed.suppression_rules = [hard.reason];
+            (parsed as any).rejection = { status: "rejected", reason_code: hard.reason, explanation, detail: hard.detail };
+          } else {
+            // ACCEPT or ADJUST — apply mutations and recompute derived metrics
+            parsed.entry.price = hard.signal.entry;
+            parsed.stopLoss.price = hard.signal.stopLoss;
+            parsed.tp1.price = hard.signal.tp1;
+            if (parsed.tp2) parsed.tp2.price = hard.signal.tp2;
+            parsed.conviction = hard.signal.conviction;
+            const ep2 = parsed.entry.price;
+            const slDist2 = Math.abs(ep2 - parsed.stopLoss.price);
+            if (slDist2 > 0.000001) {
+              parsed.tp1.gain_pct = parseFloat((Math.abs(parsed.tp1.price - ep2) / ep2 * 100).toFixed(2));
+              parsed.tp1.rr_ratio = parseFloat((Math.abs(parsed.tp1.price - ep2) / slDist2).toFixed(2));
+              if (parsed.tp2?.price != null) {
+                parsed.tp2.gain_pct = parseFloat((Math.abs(parsed.tp2.price - ep2) / ep2 * 100).toFixed(2));
+                parsed.tp2.rr_ratio = parseFloat((Math.abs(parsed.tp2.price - ep2) / slDist2).toFixed(2));
+              }
+              parsed.stopLoss.distance_pct = parseFloat((slDist2 / ep2 * 100).toFixed(2));
+              parsed.rr = parsed.tp1.rr_ratio;
+            }
+            (parsed as any).hardening = {
+              action: hard.action,
+              sizeMultiplier: hard.signal.sizeMultiplier,
+              rrAfterFriction: hard.signal.rrAfterFriction,
+              adjustments: hard.adjustments,
+            };
+            console.log(`[HARDENING v1] ${ticker} ${hdDir} ${hard.action}${hard.adjustments.length ? ` — adjustments: ${hard.adjustments.map(a => a.type).join(", ")}` : ""} (${Date.now()-hdStart}ms)`);
+          }
+        } catch (e: any) {
+          console.warn(`[HARDENING v1] ${ticker} ${hdDir} gate error, fail-open:`, e?.message || e);
+        }
+      }
+
       // Unified gate audit log — one line per signal attempt summarising every gate
       console.log(`[SIGNAL GATE] ${ticker} ${parsed.signal || "NONE"} — adaptL.suppressed=${!!adaptLong?.suppressed}, adaptS.suppressed=${!!adaptShort?.suppressed}, cdL=${cdLong.inCooldown ? cdLong.minutesLeft + "m" : "ok"}, cdS=${cdShort.inCooldown ? cdShort.minutesLeft + "m" : "ok"}, macroHalt=${macroRisk.halted}, circuit=${isHalted()}`);
       // Remove tp3 if AI hallucinated it when conditions not met
