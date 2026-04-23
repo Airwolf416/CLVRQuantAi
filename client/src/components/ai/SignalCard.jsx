@@ -102,6 +102,28 @@ export default function SignalCard({ ticker, result, rank, mode }) {
         </div>
       </div>
 
+      {result.hardening?.adjustments?.length > 0 && (
+        <div data-testid={`hardening-badges-${ticker}`} style={{
+          display: "flex", flexWrap: "wrap", gap: 6,
+          padding: "6px 14px 8px", borderTop: "1px solid rgba(255,255,255,0.04)",
+        }}>
+          {result.hardening.adjustments.map((a, i) => {
+            const palette = a.type === "atr_widened"        ? { fg: "#22c55e", bg: "rgba(34,197,94,0.10)",  bd: "#22c55e55", label: "ATR-adjusted SL" }
+                          : a.type === "size_reduced"       ? { fg: "#f59e0b", bg: "rgba(245,158,11,0.10)", bd: "#f59e0b55", label: `Size ${Math.round((a.after ?? 1) * 100)}%` }
+                          : a.type === "liquidity_shifted"  ? { fg: "#22c55e", bg: "rgba(34,197,94,0.10)",  bd: "#22c55e55", label: "Liquidity-shifted SL" }
+                          : a.type === "conviction_penalty" ? { fg: "#f59e0b", bg: "rgba(245,158,11,0.10)", bd: "#f59e0b55", label: "Counter-trend −15" }
+                          :                                   { fg: "#e0e0e0", bg: "rgba(255,255,255,0.05)", bd: "rgba(255,255,255,0.10)", label: a.type };
+            return (
+              <span key={i} title={a.detail} style={{
+                fontSize: 9, fontWeight: 700, color: palette.fg, background: palette.bg,
+                border: `1px solid ${palette.bd}`, borderRadius: 4, padding: "2px 7px",
+                fontFamily: MONO, letterSpacing: "0.04em", textTransform: "uppercase",
+              }}>{palette.label}</span>
+            );
+          })}
+        </div>
+      )}
+
       {entry && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 0, borderTop: "1px solid rgba(255,255,255,0.04)" }}>
           {[
@@ -126,6 +148,11 @@ export default function SignalCard({ ticker, result, rank, mode }) {
         <div style={{ padding: "8px", borderRight: "1px solid rgba(255,255,255,0.04)", textAlign: "center" }}>
           <div style={{ fontSize: 7, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginBottom: 3 }}>R:R</div>
           <div style={{ fontSize: 14, fontWeight: 800, color: rr >= 2 ? "#22c55e" : rr >= 1.5 ? "#f59e0b" : "#ef4444", fontFamily: MONO }}>{rr ? `${rr.toFixed ? rr.toFixed(1) : rr}:1` : "—"}</div>
+          {result.rrAfterFriction !== undefined && result.rrAfterFriction !== null && (
+            <div title="R:R after slippage + funding cost" style={{ fontSize: 8, color: "rgba(255,255,255,0.45)", fontFamily: MONO, marginTop: 2 }}>
+              net {Number(result.rrAfterFriction).toFixed(2)}:1
+            </div>
+          )}
         </div>
         <div style={{ padding: "8px", textAlign: "center" }}>
           <div style={{ fontSize: 7, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginBottom: 3 }}>DURATION</div>
