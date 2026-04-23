@@ -1092,10 +1092,14 @@ async function detectMoves() {
     // funding/OI crowding gate, and friction-adjusted R:R. Liquidity-cluster
     // gate is a no-op until Coinglass heatmap data is wired in.
     try {
-      const { applySignalHardening, getLiquidityClusters, recordOiSample, getOiChangePct } = await import("./lib/signalHardening");
+      const { applySignalHardening, recordOiSample, getOiChangePct } = await import("./lib/signalHardening");
+      const { getLiquidityClusters } = await import("./services/coinglass");
       // Sample OI every signal-build tick so the 6h delta gate has data to work with.
       if (hl?.oi) recordOiSample(sym, hl.oi);
-      const clusters = await getLiquidityClusters(sym);
+      // Pass 24h notional volume so the cluster-significance threshold scales
+      // with asset liquidity (max($500k, 0.5% × dayVol)).
+      const dayVolUsd = Number(hl?.volume) || 0;
+      const clusters = await getLiquidityClusters(sym, signal.entry, dayVolUsd);
       const hard = applySignalHardening({
         token: sym,
         direction: dir as "LONG" | "SHORT",
@@ -4490,6 +4494,10 @@ Every level must be technically defensible. Return JSON only.`;
             const { runSignalGenV2 } = await import("./lib/promptV2Runner");
             const perfCtxStr = await buildPerformanceContext().catch(() => "");
             const dirGuess: "LONG" | "SHORT" = (String(parsed?.signal || "").toUpperCase().includes("SHORT") ? "SHORT" : "LONG");
+            // Pass hardening context so the V2 path applies the same
+            // mechanical gates as the auto-scanner once mode flips to "on".
+            // Today (mode=shadow) the value is logged but the gate is skipped
+            // — this keeps the wiring honest and ready.
             await runSignalGenV2({
               token: ticker, direction: dirGuess,
               perfContextForCombo: perfCtxStr,
@@ -4499,6 +4507,13 @@ Every level must be technically defensible. Return JSON only.`;
               oiAdjustedScore: adjScore,
               killSwitches: macroKillSwitch?.active ? [String(macroKillSwitch.reason || "macro")] : [],
               calibration: { winRate: (pWin || 0), avgWinPct: tp1DistPct, avgLossPct: slDistPct, sampleSize: 25, suppressionStatus: "active" },
+              hardening: {
+                candles: syntheticCandles,
+                currentPrice: Number(hl?.price) || Number((parsed as any)?.entry) || undefined,
+                fundingRate: hl?.funding,
+                volume24hUsd: Number(hl?.volume) || 0,
+                holdHorizon: "scalp",
+              },
             }, apiKey, JSON.stringify({ signal: parsed?.signal, ev: evPct }).slice(0, 500));
           } catch (e: any) { console.warn("[PROMPT_V2 signalGen shadow]", e?.message || e); }
         })();
@@ -4983,13 +4998,65 @@ Every level must be technically defensible. Return JSON only.`;
       if (!uid) return res.status(401).json({ error: "Unauthorized" });
       const u = await storage.getUser(uid);
       if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
-      const limit = Math.min(500, Math.max(10, parseInt(String(req.query.limit ?? "200"), 10) || 200));
-      res.json({
-        rejections: getRecentRejections(limit),
-        stats_1h: getRejectionStats(60 * 60 * 1000),
-        stats_24h: getRejectionStats(24 * 60 * 60 * 1000),
-      });
+
+      const windowParam = String(req.query.window ?? "24h");
+      const windowMs = windowParam === "1h"  ? 60 * 60 * 1000
+                     : windowParam === "24h" ? 24 * 60 * 60 * 1000
+                     : windowParam === "7d"  ? 7  * 24 * 60 * 60 * 1000
+                     : windowParam === "30d" ? 30 * 24 * 60 * 60 * 1000
+                     : windowParam === "all" ? Number.MAX_SAFE_INTEGER
+                     : 24 * 60 * 60 * 1000;
+      const assetFilter = String(req.query.asset ?? "").toUpperCase().trim() || null;
+      const limit = Math.min(500, Math.max(10, parseInt(String(req.query.limit ?? "100"), 10) || 100));
+
+      // Try DB first; fall back to in-memory ring buffer if the table is unavailable.
+      try {
+        const { db } = await import("./db");
+        const { signalRejections } = await import("@shared/schema");
+        const { gte, eq, and, desc, sql: dsql } = await import("drizzle-orm");
+        const sinceMs = windowMs === Number.MAX_SAFE_INTEGER ? 0 : Date.now() - windowMs;
+        const since = new Date(sinceMs);
+        const where = assetFilter
+          ? and(gte(signalRejections.ts, since), eq(signalRejections.token, assetFilter))
+          : gte(signalRejections.ts, since);
+        const rows = await db.select().from(signalRejections).where(where).orderBy(desc(signalRejections.ts)).limit(limit);
+        // Aggregate by reason and by asset over the same window
+        const reasonRows = await db.select({
+          reason: signalRejections.reason,
+          count: dsql<number>`count(*)::int`,
+          avg_conf: dsql<number>`avg(coalesce(${signalRejections.conviction}, 0))::float`,
+        }).from(signalRejections).where(where).groupBy(signalRejections.reason);
+        const assetRows = await db.select({
+          token: signalRejections.token,
+          count: dsql<number>`count(*)::int`,
+        }).from(signalRejections).where(where).groupBy(signalRejections.token).orderBy(dsql`count(*) desc`).limit(20);
+
+        const totalRejections = reasonRows.reduce((s, r) => s + Number(r.count || 0), 0);
+        return res.json({
+          window: windowParam,
+          assetFilter,
+          source: "db",
+          totalRejections,
+          byReason: reasonRows.map(r => ({ reason: r.reason, count: Number(r.count), pct: totalRejections > 0 ? +(Number(r.count) / totalRejections * 100).toFixed(1) : 0, avgConfidence: +Number(r.avg_conf || 0).toFixed(1) })),
+          byAsset: assetRows.map(r => ({ token: r.token, count: Number(r.count) })),
+          recent: rows,
+        });
+      } catch (dbErr: any) {
+        console.warn("[admin/rejections] DB query failed, falling back to in-memory ring:", dbErr?.message);
+        return res.json({
+          window: windowParam,
+          assetFilter,
+          source: "memory",
+          totalRejections: getRecentRejections(500).length,
+          byReason: [],
+          byAsset: [],
+          recent: getRecentRejections(limit),
+          stats_1h: getRejectionStats(60 * 60 * 1000),
+          stats_24h: getRejectionStats(24 * 60 * 60 * 1000),
+        });
+      }
     } catch (e: any) {
+      console.error("[admin/rejections] error:", e?.message);
       res.status(500).json({ error: "Failed to load rejections" });
     }
   });

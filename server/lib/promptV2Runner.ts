@@ -145,8 +145,22 @@ export async function runAnalystV2(input: AnalystPromptInput, apiKey: string, v1
   return validation.success ? validation.data : null;
 }
 
+// Renders a hardening rejection into a chat-friendly structured response so
+// the AI Analyst surface can show "signal rejected + why" instead of a card.
+function rejectionExplanation(reason: string, detail: string, ticker: string): string {
+  switch (reason) {
+    case "SL_TOO_TIGHT_VS_ATR":      return `Proposed stop is inside ${ticker}'s normal noise envelope (${detail}). A stop this tight will likely get hunted before the move plays out — widen to at least 1.5× ATR or wait for a cleaner setup.`;
+    case "COUNTER_TREND_MICRO":      return `${ticker}'s last 6 candles show clear counter-direction microstructure (${detail}). The proposed entry fights the prevailing short-term trend — wait for a structural break before re-entering.`;
+    case "SL_IN_LIQUIDITY_POCKET":   return `Proposed stop sits directly on a visible liquidation cluster (${detail}). This is a high-probability sweep zone — shifting the stop beyond it would break the R:R, so the setup is invalid.`;
+    case "SHORTS_CROWDED":           return `Shorts are heavily crowded on ${ticker} (${detail}). Squeeze risk outweighs the technical setup — wait for funding to normalize.`;
+    case "LONGS_CROWDED":            return `Longs are heavily crowded on ${ticker} (${detail}). Flush risk outweighs the technical setup — wait for funding to normalize.`;
+    case "RR_TOO_LOW_AFTER_FRICTION":return `Reward-to-risk falls below 1.8 once slippage and funding cost are subtracted (${detail}). The edge isn't large enough to overcome real execution cost.`;
+    default:                         return `Signal rejected by hardening pipeline: ${reason} — ${detail}`;
+  }
+}
+
 // ── SIGNAL GEN ──────────────────────────────────────────────────────────────
-export async function runSignalGenV2(input: SignalGenPromptInput, apiKey: string, v1Summary?: string): Promise<{ plan: any; precomputedKelly: number } | null> {
+export async function runSignalGenV2(input: SignalGenPromptInput, apiKey: string, v1Summary?: string): Promise<{ plan: any; precomputedKelly: number } | { rejection: { status: "rejected"; reason_code: string; explanation: string; detail: string } } | null> {
   const mode = getPromptV2Mode();
   if (mode === "off") return null;
   const { system, user, precomputedKelly } = buildSignalGenV2Prompt(input);
@@ -175,5 +189,47 @@ export async function runSignalGenV2(input: SignalGenPromptInput, apiKey: string
     });
     return null;
   }
-  return validation.ok ? { plan: validation.plan, precomputedKelly } : null;
+  if (!validation.ok) return null;
+
+  // ── Hardening pass (live mode only) ──────────────────────────────────────
+  // Mechanical gates run after schema validation. Requires hardening context
+  // (candles + currentPrice) to be useful — caller supplies it via
+  // input.hardening. Without context, gates are skipped silently and the
+  // plan is returned unchanged (back-compat with current call sites).
+  const plan: any = validation.plan;
+  const h = input.hardening;
+  if (h?.candles?.length && Number.isFinite(h.currentPrice) && plan?.direction !== "NO_TRADE") {
+    try {
+      const { applySignalHardening } = await import("./signalHardening");
+      const { getLiquidityClusters } = await import("../services/coinglass");
+      const cur = Number(h.currentPrice);
+      const clusters = await getLiquidityClusters(input.token, cur, h.volume24hUsd ?? 0);
+      const tp1 = Number(plan?.targets?.[0]?.price ?? plan?.tp1?.price ?? 0);
+      const tp2 = Number(plan?.targets?.[1]?.price ?? plan?.tp2?.price ?? tp1);
+      const sl  = Number(plan?.invalidation?.stop_price ?? plan?.stopLoss?.price ?? 0);
+      const entry = Number(plan?.entry?.zone?.[0] ?? plan?.entry?.price ?? cur);
+      const conv = Number(plan?.confidence ?? plan?.conviction ?? 60);
+      if (Number.isFinite(entry) && Number.isFinite(sl) && Number.isFinite(tp1) && entry > 0 && sl > 0 && tp1 > 0) {
+        const hard = applySignalHardening({
+          token: input.token, direction: input.direction,
+          entry, stopLoss: sl, tp1, tp2: tp2 || tp1, conviction: conv,
+          candles: h.candles, fundingRate: h.fundingRate, oiChange6hPct: h.oiChange6hPct,
+          holdHorizon: h.holdHorizon || "scalp",
+          liquidityClusters: clusters,
+          source: "ai_signal",
+        });
+        if (hard.action === "REJECT") {
+          return { rejection: { status: "rejected", reason_code: hard.reason, explanation: rejectionExplanation(hard.reason, hard.detail, input.token), detail: hard.detail } };
+        }
+        // Apply adjustments back onto the plan so the caller sees hardened levels.
+        if (plan.invalidation) plan.invalidation.stop_price = hard.signal.stopLoss;
+        if (plan.stopLoss) plan.stopLoss.price = hard.signal.stopLoss;
+        plan.confidence = hard.signal.conviction;
+        plan.hardening = { action: hard.action, sizeMultiplier: hard.signal.sizeMultiplier, rrAfterFriction: hard.signal.rrAfterFriction, adjustments: hard.adjustments };
+      }
+    } catch (e: any) {
+      console.warn(`[PROMPT_V2 hardening] ${input.token} fail-open:`, e?.message || e);
+    }
+  }
+  return { plan, precomputedKelly };
 }

@@ -23,6 +23,17 @@ export interface SignalGenPromptInput {
     sampleSize:  number;
     suppressionStatus: "active" | "suppressed" | "insufficient_sample";
   };
+  // ── Optional context for the signal-hardening pass ────────────────────────
+  // When supplied, runSignalGenV2 runs the same mechanical gates the auto-
+  // scanner uses. Skipped silently when omitted (no candles ⇒ no ATR gate).
+  hardening?: {
+    candles?:        Array<{ c: number; h: number; l: number; o: number }>;
+    currentPrice?:   number;
+    fundingRate?:    number;
+    oiChange6hPct?:  number;
+    volume24hUsd?:   number;
+    holdHorizon?:    "scalp" | "swing";
+  };
 }
 
 export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {

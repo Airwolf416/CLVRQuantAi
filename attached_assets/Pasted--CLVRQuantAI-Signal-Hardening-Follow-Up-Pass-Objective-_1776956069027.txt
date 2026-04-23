@@ -1,0 +1,164 @@
+# CLVRQuantAI Signal Hardening — Follow-Up Pass
+
+## Objective
+
+Close the four open items from the initial hardening pass:
+
+1. Activate the Coinglass liquidation heatmap gate (currently stubbed)
+1. Route AI Signal Gen V2 through the hardening pipeline (currently ungated)
+1. Surface `sizeMultiplier` on signal card UI with context
+1. Ship admin rejection-reason dashboard for filter tuning
+
+Order below is by impact. Ship 1 and 2 first — they close active exposure.
+
+-----
+
+## 1. Coinglass Liquidation Heatmap Client (HIGH PRIORITY)
+
+Replace the stubbed data source with a real client, then activate the liquidity gate that’s already wired into the hardening pipeline.
+
+### Client implementation
+
+- File: `coinglass_client.py` (extend existing)
+- Endpoint: Coinglass liquidation heatmap API for the asset + timeframe matching the signal
+- Return normalized cluster objects:
+  
+  ```
+  {
+    "price": float,
+    "notional_usd": float,
+    "side": "long" | "short",   # which side gets liquidated at this price
+    "distance_pct": float        # signed % from current price
+  }
+  ```
+- Cache responses per asset for 60s to stay inside rate limits
+- Fail-open on API errors (signal proceeds with rejection-reason log `COINGLASS_UNAVAILABLE`, not a hard block)
+
+### Gate activation
+
+- Swap the stub call in `risk_manager.py` for the real client
+- Threshold for “significant cluster”: `notional_usd >= max(500_000, 0.5% of 24h volume)` — tune later
+- Keep existing gate logic as-is (shift SL beyond cluster + 0.15% buffer, or reject with `SL_IN_LIQUIDITY_POCKET`)
+
+### Acceptance
+
+- Manual test on current ONDO, SOL, DOGE signals — confirm clusters are populated and gate triggers on at least one historical near-miss
+- Log every gate activation with cluster price, notional, and action taken (shifted vs rejected)
+
+-----
+
+## 2. Route `runSignalGenV2` Through Hardening Pipeline (HIGH PRIORITY)
+
+The AI Analyst / chat-driven signal path currently bypasses all gates. Any subscriber asking “should I short X?” can still get an ungated tight-stop setup.
+
+### Changes
+
+- In `runSignalGenV2`, after the AI produces a proposed signal (entry, SL, TP, confidence) but **before** it’s returned to the UI, pass it through the same hardening functions the auto-scanner uses:
+  - `apply_atr_gate()`
+  - `apply_counter_trend_penalty()`
+  - `apply_liquidity_gate()` (now real post-item 1)
+  - `apply_funding_oi_gate()`
+  - `apply_friction_adjusted_rr()`
+
+### Rejection handling in chat context
+
+Unlike the auto-scanner (which silently filters), the V2 path should surface rejections conversationally. When a signal is rejected, return structured output:
+
+```
+{
+  "status": "rejected",
+  "reason_code": "SL_TOO_TIGHT_VS_ATR",
+  "explanation": "Proposed SL is 0.3% from entry, but ONDO's 30min ATR is 0.8%. This stop is inside normal noise — would likely get hunted. Consider widening SL to at least 0.259x or waiting for a cleaner setup."
+}
+```
+
+The AI Analyst front-end should render this as a clear “signal rejected + why” message, not a normal trade card. Keep IBM Plex Mono styling.
+
+### Acceptance
+
+- Replay 10 historical AI Analyst conversations through the new path; log which would now be rejected and why
+- Confirm no regression on legitimate signals (confidence ≥ threshold, sane SL, no crowded positioning)
+
+-----
+
+## 3. Surface `sizeMultiplier` on Signal Card
+
+Currently persisted as metadata but invisible to subscribers. If the ATR gate widened an SL, users need to know to scale down or they’ll take the trade at default size and eat the same $ risk as a tight stop.
+
+### UI changes
+
+- Signal card component: add a size guidance row, only visible when `sizeMultiplier < 1.0`
+- Display:
+  
+  ```
+  SIZE GUIDANCE: {sizeMultiplier × 100}% of default
+  ⓘ SL widened to 1.5× ATR for volatility — reduce position size to preserve intended $ risk
+  ```
+- Styling: amber accent (not red — this is guidance, not a warning), Plex Mono, consistent with existing card tokens
+- Tooltip (ⓘ hover/tap) shows full explanation including original SL, adjusted SL, and ATR value
+
+### Logic
+
+- If `sizeMultiplier == 1.0` → hide the row entirely
+- If `sizeMultiplier < 1.0` → show the row with computed % and tooltip
+- Also echo the multiplier in any alert/notification copy for the signal (Telegram, email, push)
+
+### Acceptance
+
+- Signal cards render correctly for both gated and ungated signals
+- Tooltip content is accurate and matches the hardening log entry
+- Mobile responsive — row doesn’t break card layout at 375px width
+
+-----
+
+## 4. Admin Rejection-Reason Dashboard
+
+Need visibility into which filters are firing before running the 90-day backtest. If one filter is rejecting 80% of signals, thresholds are wrong.
+
+### Scope
+
+Simple internal-only dashboard at `/admin/rejections` — auth-gated to admin users only.
+
+### Data
+
+Query the signal history table, group by `rejection_reason` over selectable time windows (24h, 7d, 30d, all-time). Show:
+
+- Total signals generated
+- Total accepted vs rejected (with %)
+- Breakdown by reason code: count, % of rejections, avg confidence pre-rejection
+- Breakdown by asset: which assets rejection-heavy vs signal-heavy
+- Recent 50 rejections with timestamp, asset, reason, proposed entry/SL/TP, confidence
+
+### UI
+
+- Minimal — table + summary cards, Plex Mono, dark terminal aesthetic
+- No export needed yet (add later if useful)
+- Date range picker + asset filter
+
+### Acceptance
+
+- Loads in under 1s for 30d window
+- Numbers reconcile against raw signal history table
+- Admin auth check prevents non-admin access (return 403)
+
+-----
+
+## Files likely touched
+
+- `coinglass_client.py` (real implementation)
+- `risk_manager.py` (swap stub, no logic change)
+- `ai_analyst_router.py` or wherever `runSignalGenV2` lives (pipeline routing)
+- Signal card component (size guidance row)
+- New: `/admin/rejections` page + backing API endpoint
+- Signal history schema — confirm `rejection_reason`, `adjustments_applied`, `size_multiplier`, `original_sl`, `adjusted_sl` columns exist; add if missing
+
+## Out of scope for this pass
+
+- 90-day backtest report (run after 2 weeks of live rejection data accumulates)
+- Dynamic ATR multiplier based on Kronos confidence (Elite tier feature, later)
+- Auto-execution layer consuming `sizeMultiplier`
+- Retraining any model weights
+
+## Styling reminder
+
+Black background, gold/green accents, IBM Plex Mono. Amber for size-guidance warnings, red only for hard rejections in admin view.

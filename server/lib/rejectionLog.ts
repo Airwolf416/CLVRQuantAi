@@ -31,10 +31,42 @@ export interface RejectionEntry {
 const MAX_ENTRIES = 500;
 const ring: RejectionEntry[] = [];
 
-export function logRejection(entry: Omit<RejectionEntry, "ts">): void {
+export interface PersistContext {
+  proposedEntry?: number;
+  proposedSl?: number;
+  proposedTp1?: number;
+  conviction?: number;
+}
+
+export function logRejection(entry: Omit<RejectionEntry, "ts">, ctx?: PersistContext): void {
   const e: RejectionEntry = { ts: Date.now(), ...entry };
   ring.push(e);
   if (ring.length > MAX_ENTRIES) ring.splice(0, ring.length - MAX_ENTRIES);
+  // Best-effort durable persist for the admin tuning dashboard. Skip the
+  // soft Coinglass health logs (they would dominate the table at no value).
+  if (entry.detail?.startsWith("COINGLASS_UNAVAILABLE")) return;
+  void persistRejectionAsync(e, ctx).catch(() => { /* swallow — non-blocking */ });
+}
+
+async function persistRejectionAsync(e: RejectionEntry, ctx?: PersistContext): Promise<void> {
+  try {
+    const { db } = await import("../db");
+    const { signalRejections } = await import("@shared/schema");
+    await db.insert(signalRejections).values({
+      source: e.source,
+      token: e.token,
+      direction: e.direction,
+      reason: e.reason,
+      detail: e.detail,
+      proposedEntry: ctx?.proposedEntry,
+      proposedSl: ctx?.proposedSl,
+      proposedTp1: ctx?.proposedTp1,
+      conviction: ctx?.conviction,
+    });
+  } catch {
+    // DB unavailable — in-memory ring still has the entry; the dashboard
+    // will degrade to that source via its existing fallback path.
+  }
 }
 
 export function getRecentRejections(limit = 100): RejectionEntry[] {

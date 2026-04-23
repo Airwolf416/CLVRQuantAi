@@ -33,7 +33,8 @@ export interface HardeningInput {
   oiChange6hPct?:  number;          // % change in OI over last 6h
   expectedHoldHrs?: number;         // for friction calc, default = scalp/swing inferred
   holdHorizon?:    HoldHorizon;
-  liquidityClusters?: Array<{ price: number; side: "LONG" | "SHORT" }>; // stub today
+  liquidityClusters?: Array<{ price: number; side: "LONG" | "SHORT"; notionalUsd?: number }>;
+  volume24hUsd?:   number;          // for cluster-significance threshold (passed through to caller)
   source:          "auto_scanner" | "ai_signal" | "manual";
 }
 
@@ -74,12 +75,9 @@ const OI_CROWDED_THRESHOLD    =  3.0;    // % growth over 6h
 const SLIPPAGE_BPS            =  2;      // each side
 const MIN_RR_AFTER_FRICTION   =  1.8;
 
-// ── Stub for Coinglass heatmap — returns [] today.
-// When a Coinglass client is added, swap this for the real fetch and the
-// liquidity-aware SL gate becomes active automatically.
-export async function getLiquidityClusters(_token: string): Promise<Array<{ price: number; side: "LONG" | "SHORT" }>> {
-  return [];
-}
+// Real Coinglass heatmap is fetched by the caller (server/services/coinglass.ts);
+// the gate accepts an optional cluster array so the hardening module stays
+// dependency-free and unit-testable.
 
 // ── Gate 1: ATR-gated SL ────────────────────────────────────────────────────
 function gate_atr(input: HardeningInput, atr: number, adj: HardeningAdjustment[]): { stopLoss: number; sizeMultiplier: number } | { reject: { reason: RejectionReason; detail: string } } {
@@ -134,7 +132,11 @@ function gate_liquidity(input: HardeningInput, currentStop: number, adj: Hardeni
   const proximity = currentStop * LIQUIDITY_PROXIMITY_PCT;
   // For SHORT, sweep side is ABOVE entry (clusters above stop are dangerous).
   // For LONG,  sweep side is BELOW entry (clusters below stop are dangerous).
-  const sweepSide = input.direction === "SHORT" ? "LONG" : "SHORT";
+  // For a LONG setup the stop sits BELOW entry; if a LONG-liquidation cluster
+  // sits at/just past the stop, a flush there triggers a cascade that sweeps
+  // the stop. Symmetric reasoning for SHORT (cluster of shorts above stop →
+  // squeeze cascade). So the dangerous side equals the trade direction.
+  const sweepSide = input.direction;
   const danger = clusters.find(c => c.side === sweepSide && Math.abs(c.price - currentStop) <= proximity);
   if (!danger) return { stopLoss: currentStop };
 
@@ -199,44 +201,37 @@ export function applySignalHardening(input: HardeningInput): HardeningResult {
 
   const atr = calcATR14(input.candles);
 
+  // Helper to consistently log + return REJECT with the proposal context so
+  // the admin tuning dashboard sees the entry/SL/TP that would have shipped.
+  const ctx = { proposedEntry: input.entry, proposedSl: input.stopLoss, proposedTp1: input.tp1, conviction: input.conviction };
+  const reject = (reason: RejectionReason, detail: string): HardeningResult => {
+    logRejection({ source: input.source, token: input.token, direction: input.direction, reason, detail }, ctx);
+    return { action: "REJECT", reason, detail, adjustments };
+  };
+
   // 1) ATR
   const r1 = gate_atr(input, atr, adjustments);
-  if ("reject" in r1) {
-    logRejection({ source: input.source, token: input.token, direction: input.direction, reason: r1.reject.reason, detail: r1.reject.detail });
-    return { action: "REJECT", reason: r1.reject.reason, detail: r1.reject.detail, adjustments };
-  }
+  if ("reject" in r1) return reject(r1.reject.reason, r1.reject.detail);
   stopLoss = r1.stopLoss;
   let resultSizeMul = r1.sizeMultiplier;
 
   // 2) Microstructure
   const r2 = gate_microstructure(input, conviction, adjustments);
-  if ("reject" in r2) {
-    logRejection({ source: input.source, token: input.token, direction: input.direction, reason: r2.reject.reason, detail: r2.reject.detail });
-    return { action: "REJECT", reason: r2.reject.reason, detail: r2.reject.detail, adjustments };
-  }
+  if ("reject" in r2) return reject(r2.reject.reason, r2.reject.detail);
   conviction = r2.conviction;
 
   // 3) Liquidity
   const r3 = gate_liquidity(input, stopLoss, adjustments);
-  if ("reject" in r3) {
-    logRejection({ source: input.source, token: input.token, direction: input.direction, reason: r3.reject.reason, detail: r3.reject.detail });
-    return { action: "REJECT", reason: r3.reject.reason, detail: r3.reject.detail, adjustments };
-  }
+  if ("reject" in r3) return reject(r3.reject.reason, r3.reject.detail);
   stopLoss = r3.stopLoss;
 
   // 4) Funding / OI
   const r4 = gate_funding_oi(input);
-  if (r4) {
-    logRejection({ source: input.source, token: input.token, direction: input.direction, reason: r4.reject.reason, detail: r4.reject.detail });
-    return { action: "REJECT", reason: r4.reject.reason, detail: r4.reject.detail, adjustments };
-  }
+  if (r4) return reject(r4.reject.reason, r4.reject.detail);
 
   // 5) Friction-adjusted R:R (use the post-liquidity SL)
   const r5 = gate_friction({ ...input, stopLoss }, stopLoss);
-  if (r5) {
-    logRejection({ source: input.source, token: input.token, direction: input.direction, reason: r5.reject.reason, detail: r5.reject.detail });
-    return { action: "REJECT", reason: r5.reject.reason, detail: r5.reject.detail, adjustments };
-  }
+  if (r5) return reject(r5.reject.reason, r5.reject.detail);
 
   const action = adjustments.length > 0 ? "ADJUST" : "ACCEPT";
   const rrAfterFriction = computeFrictionRR({ entry: input.entry, stopLoss, tp: input.tp1, fundingRate: input.fundingRate, expectedHoldHrs: input.expectedHoldHrs, holdHorizon: input.holdHorizon });

@@ -153,6 +153,11 @@ export default function SignalCard({ ticker, result, rank, mode }) {
               net {Number(result.rrAfterFriction).toFixed(2)}:1
             </div>
           )}
+          {Number.isFinite(result.sizeMultiplier) && result.sizeMultiplier < 1 && (
+            <div data-testid={`text-size-mult-${ticker}`} title="Mechanical risk gates reduced size — your stop is wider than the original ATR floor, so position size was scaled down to keep $-risk constant. Multiply your normal position size by this number." style={{ fontSize: 8, color: "#f59e0b", fontFamily: MONO, marginTop: 2, fontWeight: 700 }}>
+              size ×{Number(result.sizeMultiplier).toFixed(2)}
+            </div>
+          )}
         </div>
         <div style={{ padding: "8px", textAlign: "center" }}>
           <div style={{ fontSize: 7, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginBottom: 3 }}>DURATION</div>
