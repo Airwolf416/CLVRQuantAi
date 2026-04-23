@@ -63,19 +63,34 @@ function macroRegimeColors(regime: string) {
 
 // ── Render daily brief email ──────────────────────────────────────────────────
 
+export interface TieredTradeIdea {
+  instrument:     string;
+  direction:      string;          // "LONG" | "SHORT"
+  entry:          string;
+  stop:           string;
+  tp1:            string;
+  tp2:            string;
+  rrDisplay:      string;          // e.g. "2.4"
+  winRateDisplay: string;          // e.g. "58% (n=44)"
+  thesis?:        string;
+  sessionFlag?:   string;
+}
+
 export function renderDailyBriefEmail(
   briefJson: any,
   dateStr: string,
   marketData: MarketData,
   tierOrIsPro: string | boolean = false,
-  subscriberEmail = ""
+  subscriberEmail = "",
+  tieredTrades?: TieredTradeIdea[],         // when present → tiered v1 path
+  heldSlotNote?: string,                    // e.g. "1 slot held — no setup met threshold"
 ): string {
   const template = getTemplate("daily_brief");
 
-  // Tier rules: free=0 ideas (locked), pro=1 idea (topTrade only), elite=3 ideas (top + 2 additional)
   const tier = typeof tierOrIsPro === "string" ? tierOrIsPro.toLowerCase() : (tierOrIsPro ? "pro" : "free");
-  const isElite = tier === "elite";
-  const isPro = tier === "pro" || isElite; // back-compat for any legacy template branch
+  const isElite    = tier === "elite";
+  const isPro      = tier === "pro";          // strict — pro means pro, not pro|elite
+  const isFreeTier = !isPro && !isElite;
 
   const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787"
     : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
@@ -83,16 +98,47 @@ export function renderDailyBriefEmail(
   const { color: macroRegimeColor, border: macroRegimeBorderColor, bg: macroRegimeBg } =
     macroRegimeColors(briefJson.macroRegime || "");
 
-  // Pro: 0 additional (1 total). Elite: 2 additional (3 total). Free: locked.
-  const additionalCap = isElite ? 2 : 0;
-  const additionalTrades = (briefJson.additionalTrades || [])
-    .slice(0, additionalCap)
-    .map((t: any, i: number) => ({
-      ...t,
-      tradeNum: i + 2,
-      flags: t.flags || "None",
-      riskLabel: t.riskLabel || "🟡",
-    }));
+  // ── Trade list ─────────────────────────────────────────────────────────────
+  // Preferred source: tiered v1 selection. Fallback (when flag is off/shadow):
+  // map Claude's legacy topTrade + additionalTrades into the same shape so the
+  // new template still renders trade cards for Pro/Elite — preserves legacy
+  // brief content while we run the v1 pipeline in shadow mode.
+  let tradeIdeas: any[] = [];
+  const accent = isElite ? "#00e5ff" : "#c9a84c";
+  if (tieredTrades && tieredTrades.length) {
+    tradeIdeas = tieredTrades.map((t, i) => ({ ...t, idx: i + 1, accent }));
+  } else if (!isFreeTier) {
+    // Legacy fallback: rehydrate from Claude's brief JSON
+    const cap = isElite ? 3 : 2;
+    const legacySource = [briefJson.topTrade, ...((briefJson.additionalTrades) || [])]
+      .filter(Boolean)
+      .slice(0, cap);
+    tradeIdeas = legacySource.map((t: any, i: number) => {
+      const entryN = parseFloat(String(t.entry).replace(/[^0-9.\-]/g, "")) || 0;
+      const stopN  = parseFloat(String(t.stop).replace(/[^0-9.\-]/g, ""))  || 0;
+      const tp2N   = parseFloat(String(t.tp2).replace(/[^0-9.\-]/g, ""))   || 0;
+      const risk   = Math.abs(entryN - stopN);
+      const reward = Math.abs(tp2N - entryN);
+      const rr     = risk > 0 ? (reward / risk).toFixed(2) : "—";
+      return {
+        idx:            i + 1,
+        accent,
+        instrument:     t.asset || t.instrument || "—",
+        direction:      String(t.dir || t.direction || "").toUpperCase(),
+        entry:          String(t.entry ?? "—"),
+        stop:           String(t.stop ?? "—"),
+        tp1:            String(t.tp1 ?? "—"),
+        tp2:            String(t.tp2 ?? "—"),
+        rrDisplay:      rr,
+        winRateDisplay: t.winRateDisplay || "—",
+        thesis:         t.edge || t.thesis || "",
+        sessionFlag:    t.sessionFlag,
+      };
+    });
+  }
+  const ideaCount = isFreeTier ? 0 : tradeIdeas.length;
+  const ideaCountLabel = ideaCount === 1 ? "Idea" : "Ideas";
+  const tierLabel = isElite ? "Elite" : isPro ? "Pro" : "Free";
 
   const data = {
     dateStr,
@@ -107,11 +153,14 @@ export function renderDailyBriefEmail(
     macroRiskNote:   briefJson.macroRiskNote || "",
     priceRows:       buildPriceRows(marketData),
     commentary:      briefJson.commentary || [],
-    topTrade:        briefJson.topTrade ? { ...briefJson.topTrade, flags: briefJson.topTrade.flags || "None" } : null,
-    additionalTrades,
+    tradeIdeas,
+    ideaCount,
+    ideaCountLabel,
+    heldSlotNote:    heldSlotNote || "",
     isPro,
     isElite,
-    tierLabel: isElite ? "ELITE" : isPro ? "PRO" : "FREE",
+    isFreeTier,
+    tierLabel,
     watchItems:     briefJson.watchItems || [],
     riskNote:       briefJson.riskNote || "",
     riskLevelUpper: (briefJson.riskLevel || "MEDIUM").toUpperCase(),

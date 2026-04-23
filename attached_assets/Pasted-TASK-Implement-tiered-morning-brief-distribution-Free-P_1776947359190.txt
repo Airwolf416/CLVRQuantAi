@@ -1,0 +1,116 @@
+TASK: Implement tiered morning brief distribution. Free, Pro, and Elite users all receive the daily brief, but the trade ideas section is gated by subscription tier. Trade selection must be driven by historical win probability, not narrative fit.
+
+=========================================
+1. TIER STRUCTURE
+=========================================
+
+FREE tier:
+- Receives: market summary table, market commentary & outlook, key things to watch, risk level.
+- Trade ideas section: REPLACED with a locked-state CTA block — "Upgrade to Pro to unlock 2 daily trade ideas" / "Upgrade to Elite to unlock 3 daily trade ideas". Include pricing and upgrade link.
+- Do NOT show blurred/preview trades. Clean lock state only.
+
+PRO tier:
+- Receives everything Free receives PLUS 2 trade ideas.
+- Footer CTA: "Upgrade to Elite for a 3rd daily trade idea + [list other Elite perks]".
+
+ELITE tier:
+- Receives everything Pro receives PLUS a 3rd trade idea.
+- No upgrade CTA in trade section.
+
+Header text must match tier: "⚡ Today's Trade Ideas — Pro (2 Ideas)" / "⚡ Today's Trade Ideas — Elite (3 Ideas)". Remove the current hardcoded "Pro (4 Ideas)" label bug.
+
+=========================================
+2. TRADE SELECTION LOGIC
+=========================================
+
+Purpose: pick the 3 highest-probability DAY TRADES across the full asset universe, diversified by asset class.
+
+Universe (must sample from all four):
+- Crypto (perps + spot): BTC, ETH, SOL, XRP, and the ~80 instruments already tracked.
+- FX majors: EUR/USD, USD/JPY, GBP/USD, USD/CAD, AUD/USD, USD/CHF.
+- Commodities: Gold, Silver, WTI, Brent, Natural Gas, Copper.
+- Equities (single names + perps if available): the universe currently in the pipeline (MSFT, MSTR, TSLA, NFLX, AMD, etc.).
+
+Selection algorithm (run daily, 60-90 min before email send):
+
+a) For every (instrument, direction) pair in the universe, compute a composite score:
+   score = (historical_win_rate_30d * 0.40)
+         + (expected_rr * 0.25)
+         + (kronos_confidence * 0.15)
+         + (macro_alignment * 0.10)
+         + (flow_score * 0.10)
+   Where:
+   - historical_win_rate_30d pulled from calibration table; if sample_size < 25, score = 0 (ineligible).
+   - expected_rr = (target1 - entry) / (entry - stop), normalized to [0,1] via min(rr/3, 1).
+   - kronos_confidence from the Kronos model output [0,1].
+   - macro_alignment: +1 if direction aligns with regime (risk-off → short risk assets / long safe havens), -1 if against, 0 if neutral.
+   - flow_score derived from funding + OI + taker ratio; positive if flow supports direction.
+
+b) Apply HARD FILTERS (reject any candidate that fails):
+   - calibration_check.suppression_status != 'suppressed'
+   - historical_win_rate_30d >= 0.45 (day-trade threshold, stricter than standard signal gen)
+   - risk_reward >= 1.8
+   - No active macro kill switch for this instrument
+   - Liquidity check: average daily volume sufficient for retail execution
+   - Not crowded funding aligned with signal direction
+
+c) Rank all surviving candidates by composite score.
+
+d) Apply DIVERSIFICATION constraint on the top 3:
+   - Max 2 from any single asset class (crypto / FX / commodities / equities).
+   - Max 1 from any single instrument (no BTC long AND BTC short in same brief).
+   - If top 3 by raw score violates diversification, swap in the next-highest-scored candidate from an underrepresented class.
+
+e) If fewer than 3 candidates pass all filters:
+   - Ship only what qualifies. Header adjusts: "Today's Trade Ideas — Elite (2 Ideas — 1 slot held, no setup met quality threshold)".
+   - NEVER pad with lower-quality trades to hit the number. A held slot with honest framing is a trust-builder, not a failure.
+
+f) For Pro tier, take the top 2 from the Elite list of 3 (highest composite score first). Pro gets the best 2, Elite gets all 3.
+
+=========================================
+3. TRADE IDEA OUTPUT FORMAT
+=========================================
+
+Each trade idea in the email must include:
+- Instrument + direction
+- Entry price (or entry zone)
+- Stop loss
+- TP1 and TP2
+- Risk/Reward ratio (computed from entry/stop/TP1) — DISPLAY THIS, do not hide it
+- Historical win rate for this (instrument, direction) combo with sample size, e.g. "30d win rate: 58% (n=44)"
+- 1-sentence thesis grounded in today's macro or flow driver
+- Session flag if relevant (e.g., "Asian session — lower liquidity, size down")
+
+Remove the subjective "Confidence: 62%" field. Replace with the historical win rate and R:R, which are empirically grounded.
+
+=========================================
+4. DATA INTEGRITY CHECKS (RUN BEFORE EMAIL SEND)
+=========================================
+
+Before the brief is built, validate the data feed:
+- Any instrument with 0.00% change across the session: flag as stale, refetch, and if still 0.00% exclude from both the price table and trade ideas. Current Gold/Silver 0.00% prints are almost certainly stale data.
+- Any instrument with >3% divergence from a correlated reference (e.g., Brent vs WTI daily move) triggers a flag and manual review before send. The Brent -4.81% vs WTI +0.59% on April 23 is the pattern to catch.
+- Every instrument cited in a trade idea MUST appear in the market summary table. No orphan tickers.
+
+If data integrity check fails critically (e.g., >20% of feed stale), abort send and alert admin instead of shipping a broken brief.
+
+=========================================
+5. IMPLEMENTATION
+=========================================
+
+- Add a `subscription_tier` field on user model if not already present ('free' | 'pro' | 'elite').
+- Build the trade selection as a single function `selectDailyTrades()` that returns the ranked, filtered, diversified list of 3. Called once per day.
+- Email template takes (user, trades[]) and renders the correct tier view. Do NOT generate separate trade lists per tier — generate 3, slice to [0,2] for Pro, [0,3] for Elite, empty for Free.
+- Log which trades were shown to each tier for later performance auditing.
+- Feature flag: TIERED_BRIEF_V1, default off. Run shadow mode for 2 days logging what WOULD have been sent before going live.
+
+=========================================
+6. WHAT NOT TO DO
+=========================================
+
+- Do NOT manually curate trades in the brief. Selection is algorithmic from the composite score.
+- Do NOT override the suppression layer for "interesting" narrative trades. The EU PMI → EUR short thesis in today's brief is well-written but must still pass the hard filters to ship.
+- Do NOT use subjective confidence ratings. Historical win rate is the ground truth.
+- Do NOT ship a Free-tier email with blurred or teased trades. Clean lock state with clear upgrade value prop converts better than frustration.
+
+Output: the selectDailyTrades function, the tier-aware email template, the data integrity checker, and the feature flag wiring. Show diffs.
