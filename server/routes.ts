@@ -3515,7 +3515,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   // 5 timeframe param sets — Apr 2026 spec. Each carries its own candle interval,
   // recommended leverage band, and hold-horizon string the prompt threads into the AI.
   const QUANT_TIMEFRAMES: Record<string, {
-    label: string; interval: string; count: number; binanceInterval: string;
+    id?: string; label: string; interval: string; count: number; binanceInterval: string;
     holdHorizon: string; leverage: [number, number]; tpRatios: [number, number];
   }> = {
     quick:   { label: "Quick (<1h)",       interval: "5m",  count: 180, binanceInterval: "5m",
@@ -4005,8 +4005,11 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       const { ticker, marketType, userQuery, riskId, timeframeId, assetClass, twitterContext } = req.body;
       if (!ticker || !marketType || !riskId || !timeframeId) return res.status(400).json({ error: "Missing required parameters." });
       const risk = QUANT_RISK_PROFILES[riskId];
-      const tf   = QUANT_TIMEFRAMES[timeframeId];
-      if (!risk || !tf) return res.status(400).json({ error: "Invalid risk or timeframe." });
+      const tfBase = QUANT_TIMEFRAMES[timeframeId];
+      if (!risk || !tfBase) return res.status(400).json({ error: "Invalid risk or timeframe." });
+      // Attach the lookup key as `id` so downstream gates (hardening horizon,
+      // killHours, ai_signal_log.tradeType) can branch on the timeframe.
+      const tf = { ...tfBase, id: timeframeId as string };
       const QUANT_EQUITIES = ["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD","HOOD","NFLX","ORCL","TSM","GME","RIVN","BABA","HIMS","CRCL"];
       const QUANT_COMMODITIES = ["XAU","XAG","WTI","BRENT","NATGAS","COPPER","PLATINUM"];
       const QUANT_FOREX = ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD","EURGBP","EURJPY","GBPJPY","USDMXN","USDZAR","USDTRY","USDSGD"];
