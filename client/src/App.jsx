@@ -2127,6 +2127,13 @@ export default function App(){
 
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
+  // After login, if a checkout URL was stashed before auth, navigate to it now
+  const _checkPostLoginRedirect=()=>{
+    try{
+      const dest=sessionStorage.getItem("clvr_post_login_url");
+      if(dest){sessionStorage.removeItem("clvr_post_login_url");setTimeout(()=>{window.location.href=dest;},80);}
+    }catch{}
+  };
   const [sessionChecked,setSessionChecked]=useState(false);
   const [isDark,setIsDark]=useState(()=>{try{return localStorage.getItem("clvr_theme")!=="light";}catch{return true;}});
   const toggleTheme=useCallback(()=>{setIsDark(d=>{const next=!d;try{localStorage.setItem("clvr_theme",next?"dark":"light");}catch{}return next;});},[]);
@@ -2142,7 +2149,7 @@ export default function App(){
   useEffect(()=>{
     fetch("/api/auth/me",{credentials:"include"})
       .then(r=>r.ok?r.json():null)
-      .then(d=>{ if(d?.id) setUser(d); })
+      .then(d=>{ if(d?.id){ setUser(d); _checkPostLoginRedirect(); } })
       .catch(()=>{})
       .finally(()=>setSessionChecked(true));
   },[]);
@@ -2161,7 +2168,7 @@ export default function App(){
   if(showAuth){
     return(
       <ThemeCtx.Provider value={themeVal}>
-        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);setShowAuth(false);}} onBack={()=>setShowAuth(false)}/>
+        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);setShowAuth(false);_checkPostLoginRedirect();}} onBack={()=>setShowAuth(false)}/>
       </ThemeCtx.Provider>
     );
   }
@@ -2169,7 +2176,7 @@ export default function App(){
   if(!user){
     return(
       <ThemeCtx.Provider value={themeVal}>
-        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>setUser(u)}/>
+        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);_checkPostLoginRedirect();}}/>
       </ThemeCtx.Provider>
     );
   }
@@ -3710,12 +3717,41 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           let price=null;
           if(tierId==="elite"){price=isYearly?stripePrices.eliteYearly:stripePrices.eliteMonthly;}
           else{price=isYearly?stripePrices.yearly:stripePrices.monthly;}
-          if(price?.price_id){
-            setShowPricingModal(false);
-            await handleCheckout(price.price_id);
-          } else {
+          if(!price?.price_id){
             setToast("Payment is loading — please try again in a moment");
+            return;
           }
+          const checkoutUrl=`/checkout?priceId=${encodeURIComponent(price.price_id)}&plan=${tierId}&cycle=${billing}`;
+
+          // Already on this exact tier — bail out
+          if((userTier||"free")===tierId){
+            setToast(`You're already on CLVR ${tierId.charAt(0).toUpperCase()+tierId.slice(1)}`);
+            setShowPricingModal(false);
+            return;
+          }
+
+          // Logged out — stash destination and open auth modal
+          if(!user){
+            try{sessionStorage.setItem("clvr_post_login_url",checkoutUrl);}catch{}
+            setShowPricingModal(false);
+            setShowAuth(true);
+            return;
+          }
+
+          // Downgrade (Elite → Pro) — confirm before routing
+          const tiers=["free","pro","elite"];
+          const isDowngrade=tiers.indexOf(tierId)<tiers.indexOf(userTier||"free");
+          if(isDowngrade){
+            const ok=window.confirm(
+              `Downgrade to CLVR ${tierId.charAt(0).toUpperCase()+tierId.slice(1)}?\n\n`+
+              `You'll lose access to Elite-only features (Chart AI, SEC Insider Flow, Macro Intel Feed, unlimited AI Analyst, Squawk Box).\n\n`+
+              `Your new plan will start at the next billing cycle.`
+            );
+            if(!ok)return;
+          }
+
+          setShowPricingModal(false);
+          window.location.href=checkoutUrl;
         }}
       />
 

@@ -1,0 +1,73 @@
+Update the CLVR QuantAI pricing modal so the upgrade buttons route to our new embedded Stripe Checkout at /checkout. Do NOT change the modal design, copy, feature lists, or tier styling — only change button behavior and add the billing cycle toggle wiring.
+
+=== FIND THE PRICING MODAL COMPONENT ===
+Locate the existing pricing modal (likely PricingModal.jsx, Pricing.jsx, or PlansModal.jsx). It currently renders three tabs: FREE, PRO, ELITE with a Monthly/Yearly toggle and "Upgrade to CLVR Pro" / "Upgrade to CLVR Elite" buttons.
+
+=== PRICE ID MAPPING ===
+At the top of the file, add the price ID map reading from env vars:
+
+const PRICE_IDS = {
+  pro: {
+    monthly: import.meta.env.VITE_STRIPE_PRICE_PRO_MONTHLY,
+    yearly: import.meta.env.VITE_STRIPE_PRICE_PRO_YEARLY,
+  },
+  elite: {
+    monthly: import.meta.env.VITE_STRIPE_PRICE_ELITE_MONTHLY,
+    yearly: import.meta.env.VITE_STRIPE_PRICE_ELITE_YEARLY,
+  },
+};
+
+Add these to Replit Secrets AND expose as VITE_ prefixed env vars so the frontend can read them (they are publishable — price IDs are safe client-side).
+
+=== BUTTON WIRING ===
+The "Upgrade to CLVR Pro" button should call:
+
+const handleUpgrade = (tier) => {
+  // tier = 'pro' or 'elite'
+  // billingCycle = 'monthly' or 'yearly' (from the toggle state)
+  if (!user) {
+    // redirect to login with return path
+    window.location.href = `/login?returnTo=/checkout?priceId=${PRICE_IDS[tier][billingCycle]}`;
+    return;
+  }
+  if (user.tier === tier) {
+    // already on this tier — show toast or redirect to account
+    return;
+  }
+  window.location.href = `/checkout?priceId=${PRICE_IDS[tier][billingCycle]}&plan=${tier}&cycle=${billingCycle}`;
+};
+
+Pro button: onClick={() => handleUpgrade('pro')}
+Elite button: onClick={() => handleUpgrade('elite')}
+
+=== BILLING CYCLE TOGGLE ===
+The Monthly/Yearly toggle should already exist as state (likely useState). Make sure it's called billingCycle and its value is 'monthly' or 'yearly'. The price displayed in the modal should switch based on this state:
+
+Pro Monthly: $29.99/mo
+Pro Yearly: $299/yr (show "Save $60 · $24.92/mo equivalent")
+Elite Monthly: $129/mo
+Elite Yearly: $1,199/yr (show "Save $349 · $99.92/mo equivalent")
+
+=== CURRENT PLAN HANDLING ===
+The FREE tab currently shows "Your current plan" when user.tier === 'free'. Extend this so:
+- Pro tab shows "Your current plan" button (disabled, gray) if user.tier === 'pro'
+- Elite tab shows "Your current plan" button (disabled, gray) if user.tier === 'elite'
+- If user is on Pro and views Elite tab, button text changes to "Upgrade to CLVR Elite" (works normally)
+- If user is on Elite and views Pro tab, button text changes to "Downgrade to CLVR Pro" with a confirmation modal before routing to /checkout
+
+=== LOGGED-OUT HANDLING ===
+If user is not logged in, clicking Upgrade should redirect to /login?returnTo=/checkout?priceId=... so after signup/login they land directly on the embedded checkout page.
+
+=== DON'T TOUCH ===
+- Tier card styling (amber/cyan borders, monospace feature text)
+- The "RECOMMENDED" badge on Elite
+- The lock icons on gated features
+- Free tier display
+- Footer: "Cancel anytime · Secure checkout via Stripe · All prices in USD"
+
+=== TEST ===
+1. Open pricing modal while logged out → click Upgrade to CLVR Pro → should redirect to login, then to /checkout?priceId=...&plan=pro&cycle=monthly after auth
+2. Open pricing modal while logged in as Free user → toggle to Yearly → click Upgrade to CLVR Pro → should land on /checkout?priceId={pro_yearly_id}&plan=pro&cycle=yearly
+3. Open pricing modal while logged in as Pro user → Pro tab button shows "Your current plan" disabled → Elite tab button works normally as "Upgrade to CLVR Elite"
+4. Verify billing cycle toggle updates both the displayed price AND the priceId passed to /checkout
+5. Confirm user arrives at /checkout with the embedded Stripe Checkout rendering the correct plan and price
