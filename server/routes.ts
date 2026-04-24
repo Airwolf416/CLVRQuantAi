@@ -7434,6 +7434,120 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
+  // ── ADMIN: email diagnostics + manual recovery (owner only) ──────────────
+  // These exist so the owner can debug "user never got email" without needing
+  // to dig through Railway logs. They surface the actual Resend response (id
+  // or error object) so domain-verification / rate-limit / bounce issues are
+  // immediately visible.
+  const requireOwnerSession = async (req: any, res: any): Promise<boolean> => {
+    const userId = req.session?.userId;
+    if (!userId) { res.status(401).json({ error: "Not signed in" }); return false; }
+    const u = await storage.getUser(userId);
+    if (!u || u.email !== OWNER_EMAIL) { res.status(403).json({ error: "Owner only" }); return false; }
+    return true;
+  };
+
+  // GET /api/admin/email-diag?email=foo@bar.com — show verification + tier state
+  app.get("/api/admin/email-diag", async (req, res) => {
+    if (!(await requireOwnerSession(req, res))) return;
+    const raw = (req.query.email as string || "").toLowerCase().trim();
+    if (!raw || !raw.includes("@")) return res.status(400).json({ error: "email query param required" });
+    try {
+      const u = await storage.getUserByEmail(raw);
+      if (!u) return res.json({ found: false, email: raw });
+      res.json({
+        found: true,
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        tier: u.tier,
+        emailVerified: u.emailVerified,
+        hasVerificationToken: !!u.emailVerificationToken,
+        promoCode: (u as any).promoCode || null,
+        promoExpiresAt: (u as any).promoExpiresAt || null,
+        createdAt: (u as any).createdAt || null,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/admin/resend-verification-by-email  body: { email }
+  // Generates a fresh token and sends — returns the raw Resend response so the
+  // actual cause of any failure (unverified-domain, rate-limit, etc.) is visible.
+  app.post("/api/admin/resend-verification-by-email", async (req, res) => {
+    if (!(await requireOwnerSession(req, res))) return;
+    const raw = (req.body?.email as string || "").toLowerCase().trim();
+    if (!raw || !raw.includes("@")) return res.status(400).json({ error: "email required" });
+    try {
+      const user = await storage.getUserByEmail(raw);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (user.emailVerified) return res.json({ ok: true, message: "Already verified", user: { id: user.id, email: user.email } });
+      const crypto = await import("crypto");
+      const token = crypto.randomBytes(24).toString("hex");
+      await storage.setEmailVerificationToken(user.id, token);
+      const verifyUrl = `${getAppUrl()}?verify=${token}`;
+      const { client: resend, fromEmail: resendFrom } = await getUncachableResendClient();
+      const result = await resend.emails.send({
+        from: resendFrom,
+        replyTo: "Support@clvrquantai.com",
+        to: user.email,
+        subject: "Verify your CLVRQuant email",
+        headers: {
+          "List-Unsubscribe": "<mailto:Support@clvrquantai.com?subject=unsubscribe>",
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
+        text: `Hi ${user.name},\n\nClick the link below to verify your email and activate your CLVRQuant account:\n${verifyUrl}\n\nIf you didn't sign up, you can ignore this email.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
+        html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+          <div style="text-align:center;margin-bottom:24px">
+            <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
+            <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">AI · MARKET INTELLIGENCE</div>
+          </div>
+          <p style="font-size:15px;color:#f0f4ff">Hi <strong>${user.name}</strong>,</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:28px">Click the button below to confirm your email and activate your account.</p>
+          <div style="text-align:center;margin:28px 0">
+            <a href="${verifyUrl}" style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e8c96d);color:#050709;font-family:Georgia,serif;font-style:italic;font-weight:700;font-size:16px;padding:16px 40px;border-radius:6px;text-decoration:none">Verify My Email</a>
+          </div>
+          <p style="font-size:11px;color:#4a5d80;text-align:center;margin-bottom:6px">Or copy this link:<br><span style="font-family:monospace;font-size:10px;color:#6b7fa8;word-break:break-all">${verifyUrl}</span></p>
+          <p style="font-size:10px;color:#3a4d68;text-align:center;margin-top:20px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
+        </div>`,
+      });
+      const resendId = (result as any)?.data?.id || (result as any)?.id || null;
+      const resendError = (result as any)?.error || null;
+      console.log(`[admin-resend-verify] to=${user.email} from=${resendFrom} id=${resendId} err=${resendError ? JSON.stringify(resendError) : "none"}`);
+      res.json({
+        ok: !resendError,
+        sent_to: user.email,
+        from: resendFrom,
+        resend_id: resendId,
+        resend_error: resendError,
+        verify_url: verifyUrl,
+      });
+    } catch (e: any) {
+      console.error("[admin-resend-verify] threw:", e?.message, e?.name);
+      res.status(500).json({ error: e?.message || "send failed", name: e?.name });
+    }
+  });
+
+  // POST /api/admin/mark-verified  body: { email }
+  // Manual escape hatch when email delivery is blocked entirely (e.g. recipient's
+  // inbox provider hard-bouncing). Marks the user as verified without a token roundtrip.
+  app.post("/api/admin/mark-verified", async (req, res) => {
+    if (!(await requireOwnerSession(req, res))) return;
+    const raw = (req.body?.email as string || "").toLowerCase().trim();
+    if (!raw || !raw.includes("@")) return res.status(400).json({ error: "email required" });
+    try {
+      const user = await storage.getUserByEmail(raw);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      if (user.emailVerified) return res.json({ ok: true, message: "Already verified" });
+      await storage.markEmailVerified(user.id);
+      console.log(`[admin-mark-verified] manually verified ${user.email} (id=${user.id})`);
+      res.json({ ok: true, email: user.email, id: user.id });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── WEBAUTHN / FACE ID BIOMETRIC AUTH ────────────────────────────────────
   // Simplified flow: store credential ID server-side, verify on auth.
   // Actual biometric check is done locally by the device (no signature verification needed).
