@@ -176,3 +176,21 @@ Other failure modes (no subscribers, critical integrity failure) already DELETEd
 **The fundamental rule going forward:** the claim row is a lock. Every code path between claim and successful UPDATE must release the lock on failure. Otherwise one bad day blocks every retry.
 
 **Operational caveat:** if subscriber count grows enough that a real send takes >15 min, the lease window needs to grow too (or move to a heartbeat pattern). Monitor send duration before scaling recipients.
+
+### Daily brief — render-stage attribution + template parse fix (Apr 24, 2026)
+**Symptom:** owner pressed the "Resend morning brief" button, route returned "started", row was atomically created and then DELETEd within ~1 minute, no email arrived. Promotional email sent fine. The all-caught error path was hiding which stage was actually failing.
+
+**Root causes (two separate bugs, in order of discovery):**
+1. **Silent fire-and-forget route.** `POST /api/admin/retry-daily-brief` and `enqueueDailyBrief()` were void-returning. The send loop's `try/catch` logged generically and the route had already responded "started", so the UI couldn't tell render failures apart from send failures apart from success.
+2. **Orphan `{{/if}}` in `server/templates/daily_brief.hbs`.** A previous edit removed the opening `{{#if}}` that wrapped the trade-idea disclaimer block but left the closing `{{/if}}` on line 134, breaking Handlebars parse for **every** subscriber. Because rendering happened before the Resend call, every send "failed" without ever touching Resend — and the slot-release path did its job, deleting the row.
+
+**Fixes:**
+1. **`server/dailyBrief.ts`** — added `BriefSendResult` type. `sendDailyBriefBody`, `sendDailyBriefEmails`, and `enqueueDailyBrief` now return `{ran, sent, total, reason?, errors[]}`. Per-email loop tracks `stage: "render" | "send"` so failures are attributed to the actual failing call. Errors include the recipient and stage so we can never again be blind to which step is failing.
+2. **`server/routes.ts`** — `POST /api/admin/retry-daily-brief` now `Promise.race`s the brief against a 90-second deadline and returns the structured result to the UI (sent count, total, first error, stage). The button finally tells the truth.
+3. **`server/templates/daily_brief.hbs`** — restored the missing `{{#if ideaCount}}` wrap around the disclaimer so the existing `{{/if}}` balances. Free tier (`ideaCount=0`) hides the disclaimer (correct — they get no ideas to disclaim). Pro/Elite show it. Verified by isolated Handlebars compile against both tier shapes.
+
+**Lesson:** "fire-and-forget with caught errors" is the same anti-pattern as "claim slot then never release" — both turn real bugs into silent ones. Always return structured result objects from background work the user can trigger, and always attribute errors to the stage that produced them. A loud failure is a feature.
+
+**End-to-end verification (Apr 24, 2026 11:29 UTC):** after the template fix landed, the catch-up scheduler ran on workflow restart, generated the brief via Anthropic, and successfully delivered to all 7 active subscribers via Resend (`daily_briefs_log.recipient_count = 7`, `sent_at = 11:29:25`). Same DB / same subscriber list / same Resend credentials as production — production needs the deploy to pick up the template fix before its next 6 AM ET schedule.
+
+**Architect review follow-ups (Apr 24, 2026):** addressed two of three architect findings — (1) `errors[]` summaries now include the recipient (`stage:email:errName:msg`) so partial failures identify *which* subscribers failed, and (2) the 90s route timeout now returns `ok:false` + `status:"timeout"` so the UI shows the honest "outcome unknown" state instead of falsely implying success while the send continues in background. The third finding — true cancellable execution / heartbeat lease for sends exceeding the 90s deadline — is deferred until subscriber count makes it material (current 7 subs send well under the deadline).

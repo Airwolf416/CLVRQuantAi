@@ -6591,13 +6591,78 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }
       const released = { rowCount: row.released };
       console.log(`[retry-daily-brief] Owner ${userEmail} forcing retry for ${dateKey} — released ${released.rowCount || 0} stuck slot(s)`);
-      enqueueDailyBrief()
-        .then(() => console.log(`[retry-daily-brief] enqueue completed for ${dateKey}`))
-        .catch((err: any) => console.log(`[retry-daily-brief] enqueue error for ${dateKey}:`, err?.message || err));
-      res.json({
-        ok: true,
-        message: `Retry started for ${dateKey} — watch logs for delivery status`,
+
+      // Synchronously await the send (with a 90s deadline) so we can return
+      // the REAL outcome to the UI button. Previously this was fire-and-forget
+      // returning "Retry started" — which lied: a render-stage exception or
+      // 0/N delivery would silently release the slot and the user would never
+      // know why no email arrived. The deadline keeps the route from hanging
+      // on a stuck Anthropic generation; if we time out the actual send keeps
+      // running in the background and the next button press will see either
+      // recipient_count>0 (refuse with 409) or another stuck slot (retry).
+      const SEND_DEADLINE_MS = 90_000;
+      let result: any = null;
+      let timedOut = false;
+      try {
+        result = await Promise.race([
+          enqueueDailyBrief(),
+          new Promise(res2 => setTimeout(() => { timedOut = true; res2(null); }, SEND_DEADLINE_MS)),
+        ]);
+      } catch (e: any) {
+        console.log(`[retry-daily-brief] enqueue error for ${dateKey}:`, e?.message || e);
+        return res.status(500).json({
+          error: `Brief send threw: ${e?.message || e}`,
+          dateKey,
+          releasedStuckSlot: (released.rowCount || 0) > 0,
+        });
+      }
+
+      if (timedOut) {
+        // Important: Promise.race does NOT cancel enqueueDailyBrief — the send
+        // continues in the background. We return ok:false + status:"timeout"
+        // so the UI shows yellow ("uncertain") rather than green ("done"),
+        // because we genuinely don't know if the brief reached subscribers
+        // until the row is updated. Owner can press again to read the slot
+        // state (refused-as-sent, refused-in-progress, or another stuck slot).
+        return res.json({
+          ok: false,
+          status: "timeout",
+          dateKey,
+          message: `Brief send still running after ${SEND_DEADLINE_MS / 1000}s — outcome unknown. Check daily_briefs_log in 30s for the final recipient_count, or press again to see status.`,
+          releasedStuckSlot: (released.rowCount || 0) > 0,
+        });
+      }
+
+      // result === null → BullMQ path (Redis dev). Production has no Redis so
+      // result is the structured BriefSendResult.
+      if (!result) {
+        return res.json({
+          ok: true,
+          dateKey,
+          message: `Brief queued via background worker — check logs for delivery status.`,
+          releasedStuckSlot: (released.rowCount || 0) > 0,
+        });
+      }
+
+      const r = result;
+      // Honest status mapping: even when ran=true with sent=0 we 200 the
+      // response so the UI shows the reason field instead of a generic
+      // "Network error", but flag failure via `ok:false` for clarity.
+      const success = r.ran && r.sent > 0 && r.sent === r.total;
+      const partial = r.ran && r.sent > 0 && r.sent < r.total;
+      console.log(`[retry-daily-brief] result for ${dateKey} — ran=${r.ran} sent=${r.sent}/${r.total} reason=${r.reason || "ok"} errors=${(r.errors || []).length}`);
+      return res.json({
+        ok: success || partial,
+        dateKey,
+        sent: r.sent,
+        total: r.total,
+        reason: r.reason,
+        errors: r.errors,
         releasedStuckSlot: (released.rowCount || 0) > 0,
+        message:
+          success ? `Sent today's brief to ${r.sent} of ${r.total} subscribers.`
+          : partial ? `Partial: sent ${r.sent} of ${r.total} subscribers. ${(r.errors || [])[0] || ""}`
+          : `Sent 0 of ${r.total}. ${r.reason || ""} ${(r.errors || []).slice(0, 2).join(" | ")}`.trim(),
       });
     } catch (e: any) {
       console.log("[retry-daily-brief] route error:", e?.message || e);

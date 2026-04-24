@@ -407,7 +407,32 @@ Return EXACTLY:
 }
 
 
-async function sendDailyBriefEmails() {
+// Result shape returned to callers (manual retry route, scheduler) so the UI
+// and logs can distinguish "didn't run" from "ran and N/M delivered" from
+// "blew up because X". `errors` is a deduped, truncated list (max 5 entries,
+// 200 chars each) safe to surface in admin responses.
+export type BriefSendResult = {
+  ran: boolean;          // false → claim refused (already sent / in flight elsewhere)
+  sent: number;
+  total: number;
+  reason?: string;       // populated on abort / catastrophic failure
+  errors: string[];      // per-email failure summaries (empty on full success)
+};
+
+function dedupeAndTrim(errs: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const e of errs) {
+    const k = (e || "").slice(0, 80);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push((e || "").slice(0, 200));
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+async function sendDailyBriefEmails(): Promise<BriefSendResult> {
   const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
   const dateKey = etTime.toISOString().split("T")[0];
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
@@ -419,8 +444,9 @@ async function sendDailyBriefEmails() {
   // invocations to both pass the gate and double-send.
   const claimed = await claimBriefSlot(dateKey);
   if (!claimed) {
-    console.log(`[daily-brief] Slot for ${dateKey} already claimed elsewhere — ${briefTag()} aborting.`);
-    return;
+    const reason = `Slot for ${dateKey} already claimed elsewhere`;
+    console.log(`[daily-brief] ${reason} — ${briefTag()} aborting.`);
+    return { ran: false, sent: 0, total: 0, reason, errors: [] };
   }
   console.log(`[daily-brief] Slot ${dateKey} claimed by ${briefTag()} — generating...`);
 
@@ -433,17 +459,20 @@ async function sendDailyBriefEmails() {
   try {
     return await sendDailyBriefBody(dateKey, today);
   } catch (e: any) {
-    console.log(`[daily-brief] Pre-send exception for ${dateKey}:`, e?.message || e, `— releasing slot`);
+    const msg = e?.message || String(e);
+    const where = (e?.stack || "").split("\n").slice(0, 3).join(" | ");
+    console.log(`[daily-brief] Pre-send exception for ${dateKey}: ${msg} — releasing slot. trace=${where}`);
     try {
       await pool.query(
         `DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`,
         [dateKey]
       );
     } catch {}
+    return { ran: true, sent: 0, total: 0, reason: `Pre-send exception: ${msg}`, errors: [msg] };
   }
 }
 
-async function sendDailyBriefBody(dateKey: string, today: string) {
+async function sendDailyBriefBody(dateKey: string, today: string): Promise<BriefSendResult> {
 
   const marketData = await fetchMarketData();
   console.log(`[daily-brief] Market data: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
@@ -464,10 +493,11 @@ async function sendDailyBriefBody(dateKey: string, today: string) {
       console.log(`[daily-brief] integrity warnings — ${integrity.warnings.join(" | ")}`);
     }
     if (integrity.criticalFailure) {
+      const reason = `Data integrity gate: ${integrity.staleCount}/${integrity.totalInstruments} instruments stale`;
       console.log(`[daily-brief] 🛑 CRITICAL DATA INTEGRITY FAILURE — ${integrity.staleCount}/${integrity.totalInstruments} stale. Aborting send. ${briefTag()}`);
       // Release the slot so a subsequent retry (manual or next tick) can attempt the send.
       try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
-      return;
+      return { ran: true, sent: 0, total: 0, reason, errors: [reason] };
     }
     if (integrity.dropList.length) {
       console.log(`[daily-brief] dropping stale rows from feed: ${integrity.dropList.join(", ")}`);
@@ -539,11 +569,15 @@ async function sendDailyBriefBody(dateKey: string, today: string) {
     // send once subscribers exist. Without this, recipient_count=0 blocks
     // the day permanently.
     try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
-    return;
+    return { ran: true, sent: 0, total: 0, reason: "No active subscribers", errors: [] };
   }
 
   console.log(`[daily-brief] Sending to ${subs.length} subscribers in parallel batches of 50...`);
   let sentCount = 0;
+  // Per-email failures, captured WITH attribution (render vs send vs other)
+  // so the manual-retry route can return them to the UI and we stop guessing
+  // why "Failed for X@Y" actually failed.
+  const sendErrors: string[] = [];
 
   // ── TIERED BRIEF V1: build the canonical Elite list of up to 3 trades ───
   // Source candidates from Claude's brief (topTrade + additionalTrades), map
@@ -643,6 +677,10 @@ async function sendDailyBriefBody(dateKey: string, today: string) {
       for (let emailIdx = 0; emailIdx < chunk.length; emailIdx++) {
         if (emailIdx > 0) await new Promise(r => setTimeout(r, 250));
         const sub = chunk[emailIdx];
+        // Track which step failed so the catch below can attribute the error
+        // (render bug vs Resend bug vs other) instead of the previous
+        // ambiguous "Failed for X@Y: <msg>" that hid render exceptions.
+        let stage: "render" | "send" = "render";
         try {
           const subTierForRender = (sub.tier || "free").toLowerCase();
           const tieredTrades = buildTierTrades(subTierForRender);
@@ -677,6 +715,7 @@ async function sendDailyBriefBody(dateKey: string, today: string) {
             subTier === "elite" ? `🏆 CLVRQuant Elite Brief — ${today} · ${eliteCt} trade idea${eliteCt === 1 ? "" : "s"} inside`
             : subTier === "pro" ? `📊 CLVRQuant Pro Brief — ${today} · ${proCt} trade idea${proCt === 1 ? "" : "s"} today`
             : `☕ CLVRQuant Daily Brief — ${today} · upgrade for trade ideas`;
+          stage = "send";
           const resp = await client.emails.send({
             from: "CLVRQuant <hello@clvrquantai.com>",
             to: sub.email,
@@ -697,7 +736,20 @@ async function sendDailyBriefBody(dateKey: string, today: string) {
           console.log(`[daily-brief] Sent to ${sub.email} [${sub.tier}] — id: ${id}`);
           sentCount++;
         } catch (err: any) {
-          console.log(`[daily-brief] Failed for ${sub.email}:`, err?.message || err);
+          // Attribute the failure: render-stage = template/data bug (same root
+          // cause for every subscriber), send-stage = Resend API rejection.
+          // Without this distinction the previous log made every render bug
+          // look like a transient delivery failure.
+          const errName = err?.name || "Error";
+          const msg = err?.message || String(err);
+          // Include recipient in the summary so a partial failure ({3 sent, 4 failed})
+          // tells the owner WHICH 4 failed — not just the error class. Architect
+          // review caught that the previous `${stage}:${errName}:${msg}` format
+          // dropped the recipient and made forensic triage harder than it needed
+          // to be. Format: "render:user@example.com:ParseError:Parse error..."
+          const summary = `${stage}:${sub.email}:${errName}:${msg}`;
+          console.log(`[daily-brief] Failed for ${sub.email} at ${stage} stage — ${errName}: ${msg}`);
+          sendErrors.push(summary);
         }
       }
     }
@@ -710,20 +762,40 @@ async function sendDailyBriefBody(dateKey: string, today: string) {
       // recipient_count=0 lock for the day.
       console.log(`[daily-brief] 0/${subs.length} delivered — releasing slot ${dateKey} for retry`);
       try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
-    } else {
-      await pool.query(
-        `UPDATE daily_briefs_log SET recipient_count = $1 WHERE date_key = $2`,
-        [sentCount, dateKey]
-      );
+      return {
+        ran: true,
+        sent: 0,
+        total: subs.length,
+        reason: `0/${subs.length} delivered`,
+        errors: dedupeAndTrim(sendErrors),
+      };
     }
+    await pool.query(
+      `UPDATE daily_briefs_log SET recipient_count = $1 WHERE date_key = $2`,
+      [sentCount, dateKey]
+    );
+    return {
+      ran: true,
+      sent: sentCount,
+      total: subs.length,
+      errors: dedupeAndTrim(sendErrors),
+    };
   } catch (e: any) {
     // Catastrophic failure before/during the loop (most often: Resend client
     // init threw — missing key, connector outage, bad token). Without releasing
     // the claim, today's slot is permanently locked at recipient_count=0 and
     // every retry path (scheduled tick, restart catch-up, manual admin) silently
     // aborts. Release the slot so the next attempt can actually run.
-    console.log("[daily-brief] Resend client error:", e.message, `— releasing slot ${dateKey} for retry`);
+    const msg = e?.message || String(e);
+    console.log("[daily-brief] Resend client / loop error:", msg, `— releasing slot ${dateKey} for retry`);
     try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
+    return {
+      ran: true,
+      sent: sentCount,
+      total: subs.length,
+      reason: `Loop / client error: ${msg}`,
+      errors: dedupeAndTrim([...sendErrors, msg]),
+    };
   }
 }
 

@@ -234,14 +234,18 @@ export async function sendPushBatch(
 //   • runs the underlying function directly (dev / no-Redis fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function enqueueDailyBrief(): Promise<void> {
+// Returns the structured BriefSendResult when the send runs in-process
+// (no Redis, the production code path on Railway). Returns null when the
+// job was handed off to BullMQ (Redis dev path) — caller should fall back
+// to log-only feedback in that case.
+export async function enqueueDailyBrief(): Promise<import("../dailyBrief").BriefSendResult | null> {
   const queued = await addToQueue("daily_brief", { type: "daily_brief" });
   if (!queued) {
     const { sendDailyBriefEmails } = await import("../dailyBrief");
-    await sendDailyBriefEmails();
-  } else {
-    console.log("[notifications] Daily brief job queued via BullMQ");
+    return await sendDailyBriefEmails();
   }
+  console.log("[notifications] Daily brief job queued via BullMQ");
+  return null;
 }
 
 export async function enqueuePromoEmail(): Promise<{ sent: number; skipped: number }> {
