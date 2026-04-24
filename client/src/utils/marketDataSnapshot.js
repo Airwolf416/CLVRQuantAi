@@ -160,6 +160,12 @@ ${hlSpotRows.length ? hlSpotRows.join(" | ") : (signalFilter ? "(no pump/dump si
     const tagged = (sym, store, klass, label) => {
       const d = store?.[sym];
       if (!d) return null;
+      // CRITICAL: never feed stale fallback prices to the AI. Equity/metal/
+      // forex stores get seeded with hardcoded constants (months stale —
+      // AMD was $145, EURUSD was 1.0842, etc) so the UI tiles render
+      // immediately, but those seeds are wrong by the time the AI sees them.
+      // Crypto comes from CoinGecko which is always live, no `live` flag.
+      if ((klass === "equity" || klass === "commodity" || klass === "forex") && d.live !== true) return null;
       const cls = keepOrDrop(d.chg, klass, sym);
       if (cls === null) return null;
       const base = snap(sym, store);
