@@ -404,14 +404,22 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
         })}
       </div>
 
+      {/* Email Diagnostics — debug "user didn't get email" without Railway logs */}
+      <EmailDiagnosticsPanel C={C} MONO={MONO} />
+
       {/* Weekly Update Controls (moved from Maintenance tab) */}
       <div style={{ background:"#0c1220", border:"1px solid rgba(0,229,255,.2)", borderRadius:6, padding:18, marginBottom:16 }}>
         <div style={{ fontFamily:MONO, fontSize:9, color:"#00e5ff", letterSpacing:"0.2em", marginBottom:14 }}>🆕 WEEKLY UPDATE (WHAT'S NEW)</div>
         <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
-          Every Saturday 10:00 AM ET the system auto-generates this week's update from the last 7 days of code changes (via Claude),
-          posts it to the About page, and emails it to all active subscribers — fully hands-off. You can also publish manually below
-          (overrides the AI for that week), or preview / trigger the AI on demand.
+          Every Saturday 10:00 AM ET the system auto-generates this week's update from your <strong style={{ color:"#00e5ff" }}>improvement log</strong> below
+          (and git commits as a fallback), posts it to the About page, and emails all active subscribers — hands-off. Log entries
+          throughout the week, then click GENERATE & PUBLISH NOW any time to ship them immediately.
         </div>
+
+        {/* Improvement log — accumulates throughout the week */}
+        <UpdateLogManager C={C} MONO={MONO} />
+
+        <div style={{ height:1, background:"rgba(140,160,200,.12)", margin:"14px 0" }} />
         <AIWeeklyUpdateControls C={C} MONO={MONO} />
         <div style={{ height:1, background:"rgba(140,160,200,.12)", margin:"14px 0" }} />
         <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:10, lineHeight:1.6 }}>
@@ -603,6 +611,235 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
 // ── Weekly Update editor (admin) ────────────────────────────────────────────
 // Defined at module scope so React doesn't unmount/remount it on parent
 // re-render (which would otherwise wipe input state and lose cursor focus).
+// ── Update Log Manager — accumulates "what shipped" entries through the week ──
+function UpdateLogManager({ C, MONO }) {
+  const [entries, setEntries] = useState([]);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [headline, setHeadline] = useState("");
+  const [detail, setDetail] = useState("");
+  const [emoji, setEmoji] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [showShipped, setShowShipped] = useState(false);
+
+  const refresh = async () => {
+    try {
+      const r = await fetch("/api/admin/update-log", { credentials:"include" });
+      const j = await r.json();
+      if (r.ok) { setEntries(j.entries || []); setPendingCount(j.pendingCount || 0); }
+    } catch {}
+    setLoading(false);
+  };
+  useEffect(() => { refresh(); }, []);
+
+  const add = async () => {
+    if (!headline.trim()) { setMsg("Headline required"); return; }
+    setSaving(true); setMsg("");
+    try {
+      const r = await fetch("/api/admin/update-log", {
+        method:"POST", credentials:"include",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ headline: headline.trim(), detail: detail.trim() || null, emoji: emoji.trim() || null }),
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok) { setMsg("✗ " + (j?.error || "Save failed")); return; }
+      setHeadline(""); setDetail(""); setEmoji("");
+      setMsg("✓ Logged");
+      await refresh();
+      setTimeout(() => setMsg(""), 2000);
+    } catch (e) { setMsg("✗ " + (e?.message || "Network error")); }
+    finally { setSaving(false); }
+  };
+
+  const del = async (id) => {
+    if (!confirm("Delete this entry?")) return;
+    try {
+      const r = await fetch(`/api/admin/update-log/${id}`, { method:"DELETE", credentials:"include" });
+      if (r.ok) await refresh();
+    } catch {}
+  };
+
+  const visible = showShipped ? entries : entries.filter(e => !e.shipped);
+  const inp = { background:"#0a1226", border:"1px solid #1c2b4a", color:"#e8e0d0", padding:"7px 10px", fontFamily:MONO, fontSize:11, borderRadius:4, boxSizing:"border-box" };
+
+  return (
+    <div style={{ background:"rgba(0,229,255,.04)", border:"1px solid rgba(0,229,255,.18)", borderRadius:6, padding:"12px 14px" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <div style={{ fontFamily:MONO, fontSize:9, color:"#00e5ff", letterSpacing:"0.18em" }}>
+          📝 IMPROVEMENT LOG · {pendingCount} PENDING THIS WEEK
+        </div>
+        <button onClick={() => setShowShipped(s => !s)} style={{ background:"transparent", border:"1px solid #1c2b4a", color:"#6b7fa8", borderRadius:3, padding:"3px 8px", fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.08em" }}>
+          {showShipped ? "HIDE SHIPPED" : "SHOW ALL"}
+        </button>
+      </div>
+
+      {/* Add form */}
+      <div style={{ display:"grid", gridTemplateColumns:"60px 1fr", gap:6, marginBottom:6 }}>
+        <input data-testid="input-log-emoji" placeholder="🚀" maxLength={4} value={emoji} onChange={e=>setEmoji(e.target.value)} style={{...inp, textAlign:"center", fontSize:14}} />
+        <input data-testid="input-log-headline" placeholder="What did you ship? (e.g. Added Face ID login)" value={headline} onChange={e=>setHeadline(e.target.value)} maxLength={200} style={inp}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); } }} />
+      </div>
+      <textarea data-testid="input-log-detail" placeholder="Optional: why it matters to traders (1-2 sentences)" rows={2} value={detail} onChange={e=>setDetail(e.target.value)} maxLength={500} style={{ ...inp, width:"100%", resize:"vertical", lineHeight:1.5 }} />
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:8 }}>
+        <div style={{ fontFamily:MONO, fontSize:9, color: msg.startsWith("✓") ? "#00e57a" : msg.startsWith("✗") ? "#ff6680" : "#6b7fa8" }}>{msg || "Press Enter or click ADD to log"}</div>
+        <button data-testid="btn-log-add" disabled={saving || !headline.trim()} onClick={add}
+          style={{ background:"rgba(0,229,255,.12)", border:"1px solid rgba(0,229,255,.45)", color:"#00e5ff", borderRadius:4, padding:"6px 14px", fontFamily:MONO, fontSize:10, fontWeight:700, letterSpacing:"0.1em", cursor: saving||!headline.trim()?"not-allowed":"pointer", opacity: saving||!headline.trim()?0.5:1 }}>
+          {saving ? "ADDING…" : "+ ADD"}
+        </button>
+      </div>
+
+      {/* Entries list */}
+      <div style={{ marginTop:12, maxHeight:280, overflowY:"auto" }}>
+        {loading ? (
+          <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", padding:"6px 0" }}>Loading…</div>
+        ) : visible.length === 0 ? (
+          <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", padding:"6px 0", fontStyle:"italic" }}>
+            {showShipped ? "No entries yet." : "No pending entries. Add one above as you ship features this week."}
+          </div>
+        ) : visible.map(e => (
+          <div key={e.id} data-testid={`row-log-${e.id}`} style={{ display:"flex", gap:10, alignItems:"flex-start", padding:"8px 0", borderTop:"1px solid rgba(140,160,200,.08)", opacity: e.shipped?0.5:1 }}>
+            <div style={{ fontSize:14, width:22, textAlign:"center", flexShrink:0 }}>{e.emoji || "·"}</div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontFamily:MONO, fontSize:11, color: e.shipped?"#6b7fa8":"#e8e0d0", textDecoration: e.shipped?"line-through":"none" }}>{e.headline}</div>
+              {e.detail && <div style={{ fontFamily:MONO, fontSize:9, color:"#6b7fa8", marginTop:3, lineHeight:1.5 }}>{e.detail}</div>}
+              <div style={{ fontFamily:MONO, fontSize:8, color:"#4a5d80", marginTop:3 }}>
+                {new Date(e.createdAt).toLocaleString()}
+                {e.shipped && <span style={{ color:"#00e57a", marginLeft:8 }}>· shipped in update #{e.includedInUpdateId}</span>}
+              </div>
+            </div>
+            {!e.shipped && (
+              <button data-testid={`btn-log-del-${e.id}`} onClick={() => del(e.id)} style={{ background:"transparent", border:"1px solid rgba(255,64,96,.3)", color:"#ff6680", borderRadius:3, padding:"3px 8px", fontFamily:MONO, fontSize:8, cursor:"pointer", flexShrink:0 }}>×</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Email Diagnostics — owner debugs "user didn't get email" without Railway logs ──
+function EmailDiagnosticsPanel({ C, MONO }) {
+  const [email, setEmail] = useState("");
+  const [diag, setDiag] = useState(null);
+  const [busy, setBusy] = useState(null); // 'diag' | 'resend' | 'mark' | null
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState("");
+
+  const lookup = async () => {
+    if (!email.includes("@")) { setErr("Enter a valid email"); return; }
+    setBusy("diag"); setErr(""); setResult(null); setDiag(null);
+    try {
+      const r = await fetch(`/api/admin/email-diag?email=${encodeURIComponent(email.trim())}`, { credentials:"include" });
+      const j = await r.json();
+      if (!r.ok) { setErr(j?.error || "Lookup failed"); return; }
+      setDiag(j);
+    } catch (e) { setErr(e?.message || "Network error"); }
+    finally { setBusy(null); }
+  };
+
+  const resend = async () => {
+    setBusy("resend"); setErr(""); setResult(null);
+    try {
+      const r = await fetch("/api/admin/resend-verification-by-email", {
+        method:"POST", credentials:"include",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const j = await r.json();
+      setResult({ kind:"resend", data: j, ok: r.ok && j.ok });
+    } catch (e) { setErr(e?.message || "Network error"); }
+    finally { setBusy(null); }
+  };
+
+  const markVerified = async () => {
+    if (!confirm(`Manually mark ${email} as verified? Use only if email delivery is blocked.`)) return;
+    setBusy("mark"); setErr(""); setResult(null);
+    try {
+      const r = await fetch("/api/admin/mark-verified", {
+        method:"POST", credentials:"include",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const j = await r.json();
+      setResult({ kind:"mark", data: j, ok: r.ok && j.ok });
+      if (r.ok) await lookup();
+    } catch (e) { setErr(e?.message || "Network error"); }
+    finally { setBusy(null); }
+  };
+
+  const inp = { background:"#0a1226", border:"1px solid #1c2b4a", color:"#e8e0d0", padding:"7px 10px", fontFamily:MONO, fontSize:11, borderRadius:4, boxSizing:"border-box" };
+  const btn = (color, disabled) => ({
+    background: `rgba(${color},.08)`, border:`1px solid rgba(${color},.4)`, color:`rgb(${color})`,
+    borderRadius:4, padding:"7px 12px", fontFamily:MONO, fontSize:10, fontWeight:700,
+    letterSpacing:"0.08em", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
+  });
+
+  return (
+    <div style={{ background:"#0c1220", border:"1px solid rgba(255,140,0,.25)", borderRadius:6, padding:18, marginBottom:16 }}>
+      <div style={{ fontFamily:MONO, fontSize:9, color:"#ff8c00", letterSpacing:"0.2em", marginBottom:10 }}>📧 EMAIL DIAGNOSTICS</div>
+      <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:12, lineHeight:1.6 }}>
+        Look up any user by email to check verification status, force-resend the verification email
+        (returns the actual Resend response — exposes domain / quota / bounce errors), or manually
+        mark them as verified if email delivery is blocked.
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8, marginBottom:10 }}>
+        <input data-testid="input-diag-email" type="email" placeholder="user@example.com" value={email} onChange={e=>setEmail(e.target.value)}
+          onKeyDown={e => { if (e.key==="Enter") lookup(); }} style={inp} />
+        <button data-testid="btn-diag-lookup" disabled={!!busy} onClick={lookup} style={btn("0,212,255", !!busy)}>
+          {busy === "diag" ? "LOOKING UP…" : "🔍 LOOKUP"}
+        </button>
+      </div>
+      {err && <div style={{ fontFamily:MONO, fontSize:10, color:"#ff6680", marginBottom:8 }}>✗ {err}</div>}
+      {diag && (
+        <div data-testid="panel-diag-result" style={{ background:"rgba(0,212,255,.04)", border:"1px solid rgba(0,212,255,.18)", borderRadius:4, padding:"10px 12px", marginTop:8 }}>
+          {!diag.found ? (
+            <div style={{ fontFamily:MONO, fontSize:11, color:"#ff6680" }}>No user found with email <strong>{diag.email}</strong></div>
+          ) : (
+            <>
+              <div style={{ fontFamily:MONO, fontSize:11, color:"#e8e0d0", marginBottom:6 }}>
+                <strong style={{ color:"#00d4ff" }}>{diag.name}</strong> — {diag.email}
+              </div>
+              <div style={{ fontFamily:MONO, fontSize:10, color:"#a8b3c8", lineHeight:1.7 }}>
+                Tier: <strong style={{ color:"#e8c96d" }}>{diag.tier}</strong> · Verified: <strong style={{ color: diag.emailVerified?"#00e57a":"#ff6680" }}>{diag.emailVerified ? "YES" : "NO"}</strong> · Token: {diag.hasVerificationToken ? "yes" : "none"}
+                {diag.promoCode && <> · Promo: <strong style={{ color:"#c9a84c" }}>{diag.promoCode}</strong></>}
+              </div>
+              <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
+                <button data-testid="btn-diag-resend" disabled={!!busy || diag.emailVerified} onClick={resend} style={btn("0,229,255", !!busy || diag.emailVerified)}>
+                  {busy === "resend" ? "SENDING…" : "✉ FORCE RESEND"}
+                </button>
+                <button data-testid="btn-diag-mark" disabled={!!busy || diag.emailVerified} onClick={markVerified} style={btn("232,201,109", !!busy || diag.emailVerified)}>
+                  {busy === "mark" ? "MARKING…" : "✓ MARK VERIFIED (escape hatch)"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {result && (
+        <div data-testid="panel-diag-action-result" style={{ background: result.ok?"rgba(0,229,122,.05)":"rgba(255,102,128,.06)", border:`1px solid ${result.ok?"rgba(0,229,122,.25)":"rgba(255,102,128,.25)"}`, borderRadius:4, padding:"10px 12px", marginTop:10 }}>
+          <div style={{ fontFamily:MONO, fontSize:10, color: result.ok?"#00e57a":"#ff6680", marginBottom:6, fontWeight:700 }}>
+            {result.ok ? "✓" : "✗"} {result.kind === "resend" ? "RESEND RESULT" : "MARK VERIFIED RESULT"}
+          </div>
+          <pre style={{ fontFamily:MONO, fontSize:9, color:"#a8b3c8", margin:0, whiteSpace:"pre-wrap", wordBreak:"break-word", maxHeight:200, overflow:"auto" }}>
+            {JSON.stringify(result.data, null, 2)}
+          </pre>
+          {result.kind === "resend" && result.ok && (
+            <div style={{ fontFamily:MONO, fontSize:9, color:"#6b7fa8", marginTop:6, lineHeight:1.5 }}>
+              Email left Resend. If the user still doesn't see it: check Promotions tab, whitelist <code style={{color:"#00e5ff"}}>hello@clvrquantai.com</code>, then check Resend dashboard → Emails for delivery status.
+            </div>
+          )}
+          {result.kind === "resend" && !result.ok && result.data?.resend_error && (
+            <div style={{ fontFamily:MONO, fontSize:9, color:"#ff8c00", marginTop:6, lineHeight:1.5 }}>
+              ⚠ Resend rejected the send. Most common cause: <strong>clvrquantai.com domain not verified</strong> in your Resend dashboard. Add SPF + DKIM DNS records and verify.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AIWeeklyUpdateControls({ C, MONO }) {
   const [busy, setBusy] = useState(null); // 'preview' | 'generate' | null
   const [preview, setPreview] = useState(null);

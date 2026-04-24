@@ -35,6 +35,12 @@ Goal: replace Claude-as-originator with a deterministic quant scorer; Claude bec
 - ✅ Frontend `QuantStatusCard` shows ONLINE/OFFLINE, PASSED/BLOCKED/VETOED counters from `/api/quant/recent`, last 5 scores
 - ✅ Architect review fixes applied: `child.on("error")`, `aiIpLimiter` + `PHASE2A_TEST_TOKEN` on test-flow, snake_case in UI
 
+## Admin: Email Diagnostics + Update Log (Apr 2026)
+
+Owner-only tooling in Account → Admin tab:
+- **EmailDiagnosticsPanel** — lookup user by email, force-resend verification (returns raw Resend response: id or error), or manually mark verified as escape hatch when delivery is blocked. Endpoints: `GET /api/admin/email-diag`, `POST /api/admin/resend-verification-by-email`, `POST /api/admin/mark-verified` (routes.ts ~7440-7560). Built so prod email failures can be diagnosed without Railway logs.
+- **UpdateLogManager** — accumulator for "what shipped this week" entries. Owner logs improvements throughout the week (headline + optional detail/emoji). When `/api/admin/weekly-update/ai-generate` is called, the AI synthesizes from these curated entries (preferred) or git commits (fallback — Railway often strips `.git`). Entries are stamped with `included_in_update_id` once shipped so the buffer auto-clears. Table `update_log_entries` (created via executeSql, not db:push). Endpoints: `GET/POST /api/admin/update-log`, `DELETE /api/admin/update-log/:id` (routes.ts ~5034-5104). Generator logic in `server/weeklyUpdate.ts` (`getPendingUpdateLogEntries`, `markLogEntriesShipped`, updated `generateWeeklyUpdateWithAI`).
+
 ### How to flip Phase 2A live
 - Dev: `PHASE2A_ENABLED=1 npm run dev` (or set in Replit Secrets)
 - Prod (Railway): set `PHASE2A_ENABLED=1` env var. Health check on `/api/quant/health` gates deploy.

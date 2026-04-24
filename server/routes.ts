@@ -5000,11 +5000,37 @@ Every level must be technically defensible. Return JSON only.`;
       const u = await storage.getUser(uid);
       if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
       const mod = await import("./weeklyUpdate");
-      // Internal helper: call Claude but DON'T persist. We re-implement the lightweight
-      // path here by reading the same internals that the scheduler uses.
+      // Mirror generateWeeklyUpdateWithAI's input-building logic exactly so
+      // the preview matches what publish would actually produce. Never write to DB.
+      const pending = await (mod as any).getPendingUpdateLogEntries?.() || [];
       const commits = (mod as any).getRecentCommitSubjects?.(7) || [];
-      const digest = await (mod as any).synthesizeWeeklyUpdateFromCommits?.(commits);
-      res.json({ ok: true, commitCount: commits.length, commits: commits.slice(0, 30), digest });
+      let inputs: string[] = [];
+      let source: "log" | "commits" | "both" | "none" = "none";
+      if (pending.length > 0 && commits.length > 0) {
+        source = "both";
+        inputs = [
+          ...pending.map((p: any) => `[LOG${p.emoji ? " " + p.emoji : ""}] ${p.headline}${p.detail ? " — " + p.detail : ""}`),
+          ...commits.map((c: string) => `[GIT] ${c}`),
+        ];
+      } else if (pending.length > 0) {
+        source = "log";
+        inputs = pending.map((p: any) => `${p.emoji ? p.emoji + " " : ""}${p.headline}${p.detail ? " — " + p.detail : ""}`);
+      } else if (commits.length > 0) {
+        source = "commits";
+        inputs = commits;
+      }
+      const digest = inputs.length > 0
+        ? await (mod as any).synthesizeWeeklyUpdateFromCommits?.(inputs)
+        : null;
+      res.json({
+        ok: true,
+        source,
+        pendingCount: pending.length,
+        pendingEntries: pending.map((p: any) => ({ headline: p.headline, emoji: p.emoji })),
+        commitCount: commits.length,
+        commits: commits.slice(0, 30),
+        digest,
+      });
     } catch (e: any) {
       console.error("weekly-update ai-preview error:", e);
       res.status(500).json({ error: e?.message || "Failed to preview" });
@@ -5025,6 +5051,78 @@ Every level must be technically defensible. Return JSON only.`;
     } catch (e: any) {
       console.error("weekly-update ai-generate error:", e);
       res.status(500).json({ error: e?.message || "Failed to generate" });
+    }
+  });
+
+  // ── UPDATE LOG BUFFER (owner only) ───────────────────────────────────────
+  // Owner logs noteworthy improvements throughout the week. The AI generator
+  // pulls from these (preferred) or git commits (fallback) when publishing
+  // the weekly digest. Once shipped, entries are stamped with the update id
+  // so they don't reappear next week.
+  const requireOwner = async (req: any, res: any): Promise<boolean> => {
+    const uid = req.session?.userId;
+    if (!uid) { res.status(401).json({ error: "Unauthorized" }); return false; }
+    const u = await storage.getUser(uid);
+    if (!u || u.email !== "mikeclaver@gmail.com") { res.status(403).json({ error: "Forbidden" }); return false; }
+    return true;
+  };
+
+  app.get("/api/admin/update-log", async (req, res) => {
+    if (!(await requireOwner(req, res))) return;
+    try {
+      const r = await pool.query(
+        `SELECT id, headline, detail, emoji, added_by, included_in_update_id, created_at
+           FROM update_log_entries
+          ORDER BY created_at DESC
+          LIMIT 200`
+      );
+      const entries = r.rows.map((row) => ({
+        id: row.id,
+        headline: row.headline,
+        detail: row.detail,
+        emoji: row.emoji,
+        addedBy: row.added_by,
+        includedInUpdateId: row.included_in_update_id,
+        createdAt: row.created_at,
+        shipped: !!row.included_in_update_id,
+      }));
+      const pendingCount = entries.filter((e) => !e.shipped).length;
+      res.json({ entries, pendingCount });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/update-log", async (req, res) => {
+    if (!(await requireOwner(req, res))) return;
+    try {
+      const headline = String(req.body?.headline || "").trim();
+      const detail = req.body?.detail ? String(req.body.detail).trim() : null;
+      const emoji = req.body?.emoji ? String(req.body.emoji).trim().slice(0, 4) : null;
+      if (!headline) return res.status(400).json({ error: "headline required" });
+      if (headline.length > 200) return res.status(400).json({ error: "headline too long (max 200)" });
+      const uid = (req.session as any).userId;
+      const u = await storage.getUser(uid);
+      const r = await pool.query(
+        `INSERT INTO update_log_entries (headline, detail, emoji, added_by)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [headline, detail, emoji, u?.email || null]
+      );
+      res.json({ ok: true, entry: r.rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/admin/update-log/:id", async (req, res) => {
+    if (!(await requireOwner(req, res))) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+      await pool.query(`DELETE FROM update_log_entries WHERE id=$1`, [id]);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 

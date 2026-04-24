@@ -385,3 +385,23 @@ export const insertWeeklyUpdateSchema = createInsertSchema(weeklyUpdates).omit({
   id: true, createdAt: true, emailSentAt: true, emailRecipientCount: true,
 });
 export type InsertWeeklyUpdate = z.infer<typeof insertWeeklyUpdateSchema>;
+
+// Update log buffer — owner adds noteworthy improvements throughout the week
+// (e.g. "Added Face ID login"). When the weekly update is generated/published,
+// the AI synthesizes from these curated entries instead of relying on git
+// commits (which Railway deployments often strip). Entries get stamped with
+// `included_in_update_id` once shipped, so the buffer naturally clears.
+export const updateLogEntries = pgTable("update_log_entries", {
+  id: serial("id").primaryKey(),
+  headline: text("headline").notNull(),       // short title — what shipped
+  detail: text("detail"),                     // optional longer description / why it matters to user
+  emoji: text("emoji"),                       // optional emoji hint for the digest
+  addedBy: text("added_by"),                  // admin email
+  includedInUpdateId: integer("included_in_update_id"),  // FK to weekly_updates.id once shipped
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export type UpdateLogEntry = typeof updateLogEntries.$inferSelect;
+export const insertUpdateLogEntrySchema = createInsertSchema(updateLogEntries).omit({
+  id: true, createdAt: true, includedInUpdateId: true,
+});
+export type InsertUpdateLogEntry = z.infer<typeof insertUpdateLogEntrySchema>;
