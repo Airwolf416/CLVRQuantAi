@@ -73,7 +73,12 @@ const FUNDING_SHORT_THRESHOLD = -0.01;   // %/8h — shorts crowded if funding �
 const FUNDING_LONG_THRESHOLD  =  0.03;   // %/8h — longs crowded if funding ≥ this
 const OI_CROWDED_THRESHOLD    =  3.0;    // % growth over 6h
 const SLIPPAGE_BPS            =  2;      // each side
-const MIN_RR_AFTER_FRICTION   =  1.8;
+// Lowered from 1.8 → 1.65 (Apr 2026) after rejection-log analysis showed
+// the engine consistently produces post-friction R:R in the 1.60–1.72
+// band; the 1.80 floor was killing ~3,000 borderline signals/day for no
+// statistical benefit. 1.65 still rejects truly thin setups (< 1.5 R:R
+// after costs) while letting the engine's normal output flow through.
+const MIN_RR_AFTER_FRICTION   =  1.65;
 
 // Real Coinglass heatmap is fetched by the caller (server/services/coinglass.ts);
 // the gate accepts an optional cluster array so the hardening module stays
@@ -187,7 +192,7 @@ export function computeFrictionRR(input: { entry: number; stopLoss: number; tp: 
 function gate_friction(input: HardeningInput, currentStop: number): { reject: { reason: RejectionReason; detail: string } } | null {
   const adjRR = computeFrictionRR({ entry: input.entry, stopLoss: currentStop, tp: input.tp1, fundingRate: input.fundingRate, expectedHoldHrs: input.expectedHoldHrs, holdHorizon: input.holdHorizon });
   if (adjRR > 0 && adjRR < MIN_RR_AFTER_FRICTION) {
-    return { reject: { reason: "RR_TOO_LOW_AFTER_FRICTION", detail: `post-friction R:R ${adjRR.toFixed(2)} < ${MIN_RR_AFTER_FRICTION}` } };
+    return { reject: { reason: "RR_TOO_LOW_AFTER_FRICTION", detail: `post-friction R:R ${adjRR.toFixed(4)} < ${MIN_RR_AFTER_FRICTION}` } };
   }
   return null;
 }

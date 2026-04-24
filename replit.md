@@ -135,3 +135,19 @@ Behavior:
 - Never throws — failures log to console and return cleanly. Logging an improvement must never be able to break a feature.
 
 Manual entries via the Account page UpdateLogManager continue to work alongside this.
+
+### Signal throughput recovery — relax R:R floor + cap adaptive lockout (Apr 2026)
+Symptom: 24h signal output collapsed from ~125/day baseline to 15/24h. Worker not dead — gates strangling.
+
+Diagnosis from rejection telemetry (10 min window): 23,332 ADAPTIVE_SUPPRESSED + 3,372 RR_TOO_LOW_AFTER_FRICTION. 42 of 53 combos suppressed, 19 pinned at threshold=100 (full lockout — no probe path). Friction-rejected R:R values clustered at 1.60–1.72 against a 1.80 floor.
+
+Two-knob fix:
+1. **`server/lib/signalHardening.ts`**: `MIN_RR_AFTER_FRICTION` 1.80 → 1.65. Engine TP/SL math + slippage/funding costs naturally produce R:R in the 1.6x band — the 1.80 floor was structurally unreachable.
+2. **`server/lib/adaptiveThresholds.ts`**: per-combo adjustment cap +25 → +20, so threshold maxes at 95 (never 100). A combo at 100 has no path back — even a perfect signal can't beat a never-attainable score. 95 leaves room for occasional probe trades.
+3. **`server/lib/adaptiveThresholds.ts`**: added `probeStaleSuppressedCombos()`, wired into `recalcAllThresholds()` cycle. Any suppressed combo that has fired **zero signals (any status) in the last 7d** gets reset to threshold=90, suppressed=false, adjustment=15. Operational rule: a permanently silent combo is information-starved, not necessarily bad — let it through occasionally to refresh the win-rate sample.
+
+DB cleanup applied at fix time: 21 rows capped 100→95; first probe-stale run released 15 fully-locked combos.
+
+**Open question:** post-fix R:R rejection histogram shows 35 of 55 rejects clustered at *exactly* 1.64 — the engine's natural output is 0.01 below the new floor. May need to drop to 1.55 to truly free the bulk, or widen TP at engine level. Deferred for explicit user call.
+
+**What "WORKER STALE (Nm)" on the Account page actually means:** the AccountPage `workerHealthy` indicator shows minutes since the last DB-saved signal. It is a *throughput* signal, not a process-liveness signal. A high number can mean the worker is dead OR every signal it produced was rejected by gates. Always check `signal_rejections` before assuming the worker is dead.
