@@ -99,7 +99,7 @@ export type YfCandle = { t: number; o: number; h: number; l: number; c: number; 
 
 export async function getYahooCandles(
   symbol: string,
-  interval: "5m" | "15m" | "30m" | "1h" | "1d" = "1h",
+  interval: "1m" | "5m" | "15m" | "30m" | "1h" | "1d" = "1h",
   lookbackDays: number = 5
 ): Promise<YfCandle[]> {
   // Yahoo accepts: 1m,2m,5m,15m,30m,60m,90m,1h,1d,5d,1wk,1mo,3mo
@@ -107,6 +107,7 @@ export async function getYahooCandles(
   // Range needs to match interval granularity (1m≤7d, 5m/15m/30m/60m≤60d, 1d≤max)
   const range =
     interval === "1d" ? `${Math.max(lookbackDays, 30)}d`
+    : interval === "1m" ? `${Math.min(lookbackDays, 7)}d`
     : `${Math.min(lookbackDays, 60)}d`;
   try {
     const r = await fetch(
