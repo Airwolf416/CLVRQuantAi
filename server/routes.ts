@@ -15,6 +15,7 @@ import { isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
 import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
 import { persistRecentNews } from "./lib/newsPersist";
 import { getUserTier } from "./lib/userTier";
+import { getAppUrl } from "./lib/appUrl";
 import { userPromotedAssets, newsItems } from "@shared/schema";
 import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
@@ -6923,7 +6924,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                 <li>Macro calendar with AI event-by-event analysis</li>
               </ul>
               <div style="border-top:1px solid #141e35;padding-top:20px;margin-top:24px;text-align:center">
-                <a href="https://clvrquantai.com" style="display:inline-block;background:#e8c96d;color:#050709;font-family:monospace;font-size:12px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none">OPEN TERMINAL →</a>
+                <a href="${getAppUrl()}" style="display:inline-block;background:#e8c96d;color:#050709;font-family:monospace;font-size:12px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none">OPEN TERMINAL →</a>
               </div>
               <p style="font-size:10px;color:#2a3d5a;text-align:center;margin-top:24px">CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.<br/>© 2026 CLVRQuant · Support@clvrquantai.com</p>
             </div>`,
@@ -7243,14 +7244,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         console.log(`[signup] Resend fromEmail configured as: "${fromEmail}"`);
         const senderAddress = fromEmail;
         console.log(`[signup] Sending welcome email to ${email.toLowerCase().trim()} from ${senderAddress}`);
-        // Resolve the verification base URL the same way push notifications +
-        // password-reset do (see PUSH_ORIGIN, line ~104, and reset-password,
-        // line ~7509). Hardcoding clvrquantai.com here meant emails sent from
-        // any non-prod environment (Replit preview, staging, custom domain)
-        // produced a link that didn't reach the running app.
-        const APP_URL = process.env.APP_URL
-          || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}` : "https://clvrquantai.com");
-        const verifyUrl = `${APP_URL}?verify=${verifyToken}`;
+        const verifyUrl = `${getAppUrl()}?verify=${verifyToken}`;
         const emailResult = await resend.emails.send({
           from: senderAddress,
           replyTo: "Support@clvrquantai.com",
@@ -7407,10 +7401,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const crypto = await import("crypto");
       const token = crypto.randomBytes(24).toString("hex");
       await storage.setEmailVerificationToken(userId, token);
-      // Same env-aware base URL resolution as the signup-time verify email.
-      const APP_URL = process.env.APP_URL
-        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}` : "https://clvrquantai.com");
-      const verifyUrl = `${APP_URL}?verify=${token}`;
+      const verifyUrl = `${getAppUrl()}?verify=${token}`;
       const { client: resend, fromEmail: resendFrom } = await getUncachableResendClient();
       await resend.emails.send({
         from: resendFrom,
@@ -7515,8 +7506,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const expiry = new Date(Date.now() + 3600000);
       const hashedTemp = await bcrypt.hash(tempPassword, 12);
       await storage.updateUserResetToken(user.id, token, expiry);
-      const APP_URL = process.env.APP_URL || "https://clvrquant.replit.app";
-      const resetLink = `${APP_URL}?reset=${token}`;
+      const resetLink = `${getAppUrl()}?reset=${token}`;
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
         await resend.emails.send({
