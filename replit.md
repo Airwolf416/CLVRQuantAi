@@ -113,3 +113,13 @@ Finnhub WS hit hard 429 limits and the REST tier rate-capped equity refreshes at
 ### Known limitations
 - FMP free-tier batch endpoints all return 402; if you upgrade FMP to Starter ($14/mo), uncomment the batch path in `fmp.ts::fmpQuoteBatch` and `marketData.ts` will pick it up automatically. The current path is robust and free.
 - CCXT exchanges all return 451/403 from Replit dev IPs (binance/binanceusdm/bybit are US-blocked). On Railway production servers (US-East/EU) at least one CCXT venue should succeed; Yahoo fallback always works.
+
+### Email verification — "Link Invalid" fix (Apr 2026)
+Root cause: `storage.markEmailVerified` nulled `emailVerificationToken` on first hit. Any second GET (Gmail/Outlook safe-link previewer, double-tap, refresh, or coming back later) returned 404 → red "Link Invalid" page right after the user actually got verified.
+
+Current behavior:
+- `markEmailVerified` no longer clears the token; it rotates naturally on the next `setEmailVerificationToken` (resend or new signup). Repeat clicks of the same valid link succeed and return `{ ok: true, alreadyVerified: true, email, name }`.
+- `/api/auth/verify-email` returns `{ error, code: "already_used" }` on token-not-found. The frontend treats this as a positive "already verified, sign in to continue" state with no PII echoed back, instead of the alarming red error. Trade-off: a typo'd random URL also shows a friendly success — recovery is one failed sign-in attempt followed by requesting a new link. Architect-acknowledged.
+- Server logs each verify attempt with the 8-char token prefix and outcome (`OK alreadyVerified=…` / `no user — likely already-used or replaced` / threw) for traceability on Railway.
+
+Future hardening (not done): add `emailVerificationTokenIssuedAt` and a TTL (e.g., 24 h after verify) to bound the replay window; tighten 404 semantics so genuinely unknown tokens don't all map to `already_used`.

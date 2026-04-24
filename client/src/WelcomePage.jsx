@@ -317,6 +317,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const [verifyState, setVerifyState] = useState(null); // null | "loading" | "success" | "error"
   const [verifiedEmail, setVerifiedEmail] = useState("");
   const [verifiedName, setVerifiedName] = useState("");
+  const [verifiedAlready, setVerifiedAlready] = useState(false);
   const [verifyError, setVerifyError] = useState("");
   const [verifyPassword, setVerifyPassword] = useState("");
   const [verifySignInLoading, setVerifySignInLoading] = useState(false);
@@ -335,6 +336,15 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
           if (data.ok) {
             setVerifiedEmail(data.email || "");
             setVerifiedName(data.name || "");
+            setVerifiedAlready(!!data.alreadyVerified);
+            setVerifyState("success");
+            window.history.replaceState({}, "", window.location.pathname);
+          } else if (data.code === "already_used") {
+            // Most common cause: email-app safe-link previewer or user
+            // tap-twice. Show a friendly "already verified — sign in" UI
+            // instead of an alarming red error. The user is almost always
+            // genuinely verified at this point (or about to be by signing in).
+            setVerifiedAlready(true);
             setVerifyState("success");
             window.history.replaceState({}, "", window.location.pathname);
           } else {
@@ -573,14 +583,32 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
         </div>
 
         <div style={{ animation: "fadeUp .4s ease .8s both", textAlign: "center", marginBottom: 28 }}>
-          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 26, color: "#4ade80", marginBottom: 6 }}>Email Verified!</div>
-          <div style={{ fontFamily: SANS, fontSize: 14, color: C.muted2, marginBottom: 4 }}>
-            Welcome, <strong style={{ color: C.white }}>{verifiedName}</strong>
+          <div style={{ fontFamily: SERIF, fontWeight: 900, fontSize: 26, color: "#4ade80", marginBottom: 6 }}>
+            {verifiedAlready ? "Already Verified" : "Email Verified!"}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, letterSpacing: "0.08em" }}>{verifiedEmail}</div>
+          {verifiedName ? (
+            <div style={{ fontFamily: SANS, fontSize: 14, color: C.muted2, marginBottom: 4 }}>
+              {verifiedAlready ? <>Welcome back, <strong style={{ color: C.white }}>{verifiedName}</strong></> : <>Welcome, <strong style={{ color: C.white }}>{verifiedName}</strong></>}
+            </div>
+          ) : (
+            <div style={{ fontFamily: SANS, fontSize: 14, color: C.muted2, marginBottom: 4, maxWidth: 320, lineHeight: 1.6 }}>
+              Your email is already verified. Sign in to continue.
+            </div>
+          )}
+          {verifiedEmail && <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, letterSpacing: "0.08em" }}>{verifiedEmail}</div>}
         </div>
 
-        {/* Password re-entry to sign in */}
+        {/* If we don't know the email (link was already used / replaced),
+            send them straight to the regular sign-in form. */}
+        {!verifiedEmail ? (
+          <div style={{ animation: "fadeUp .4s ease 1s both", width: "100%", maxWidth: 340 }}>
+            <button onClick={() => { setVerifyState(null); setVerifiedAlready(false); setMode("signin"); }}
+              style={{ width: "100%", background: "rgba(34,197,94,.12)", border: "1px solid rgba(34,197,94,.35)", borderRadius: 6, padding: "14px", fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 15, color: "#4ade80", cursor: "pointer" }}>
+              Sign In →
+            </button>
+          </div>
+        ) : (
+        /* Password re-entry to sign in (we know the email) */
         <div style={{ animation: "fadeUp .4s ease 1s both", width: "100%", maxWidth: 340 }}>
           <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted2, letterSpacing: "0.12em", marginBottom: 12, textAlign: "center" }}>ENTER YOUR PASSWORD TO CONTINUE</div>
           <input
@@ -601,6 +629,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
             {verifySignInLoading ? "Signing in..." : "Enter Dashboard →"}
           </button>
         </div>
+        )}
       </div>
     );
   }

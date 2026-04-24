@@ -230,7 +230,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async markEmailVerified(userId: string): Promise<void> {
-    await db.update(users).set({ emailVerified: true, emailVerificationToken: null }).where(eq(users.id, userId));
+    // Intentionally do NOT clear emailVerificationToken here. Email apps
+    // (Gmail/iMessage/Outlook safe-link preview, antivirus link scanners,
+    // and double-tap users) commonly hit the verification URL twice. If we
+    // nulled the token on first hit, the second hit would 404 and the user
+    // would see "Link Invalid" right after being successfully verified.
+    // Keeping the token lets the verify-email endpoint detect the second
+    // hit and return a friendly "already verified" success instead.
+    // The token IS overwritten the next time setEmailVerificationToken
+    // runs (resend / new signup flow), so it never lingers indefinitely.
+    await db.update(users).set({ emailVerified: true }).where(eq(users.id, userId));
   }
 
   // ── Signal History ──────────────────────────────────────────────────────────

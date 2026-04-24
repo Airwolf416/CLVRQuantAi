@@ -7478,13 +7478,25 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
   app.get("/api/auth/verify-email", async (req, res) => {
     const { token } = req.query as { token?: string };
     if (!token) return res.status(400).json({ error: "Missing token" });
+    const tokenPrefix = String(token).slice(0, 8);
     try {
       const user = await storage.getUserByEmailVerificationToken(token);
-      if (!user) return res.status(404).json({ error: "Invalid or expired verification link" });
-      await storage.markEmailVerified(user.id);
-      res.json({ ok: true, email: user.email, name: user.name });
+      if (!user) {
+        // Token doesn't match any user. Almost always one of:
+        //   (a) admin used MARK VERIFIED (legacy path that nulled the token), or
+        //   (b) user requested a resend, which overwrote this token, or
+        //   (c) genuinely bad/typoed link.
+        // Return a soft "already_used" signal so the UI can show a positive
+        // "you're already verified — sign in" instead of an alarming red error.
+        console.log(`[verify-email] no user for token prefix=${tokenPrefix} — likely already-used or replaced`);
+        return res.status(404).json({ error: "Invalid or expired verification link", code: "already_used" });
+      }
+      const wasAlreadyVerified = !!user.emailVerified;
+      if (!wasAlreadyVerified) await storage.markEmailVerified(user.id);
+      console.log(`[verify-email] OK email=${user.email} alreadyVerified=${wasAlreadyVerified} prefix=${tokenPrefix}`);
+      res.json({ ok: true, email: user.email, name: user.name, alreadyVerified: wasAlreadyVerified });
     } catch (e: any) {
-      console.error("[verify-email]", e.message);
+      console.error(`[verify-email] threw prefix=${tokenPrefix}:`, e.message);
       res.status(500).json({ error: "Verification failed. Please try again." });
     }
   });
