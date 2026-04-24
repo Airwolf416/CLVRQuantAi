@@ -153,3 +153,26 @@ DB cleanup applied at fix time: 21 rows capped 100→95; first probe-stale run r
 **Decision (Apr 2026):** holding floor at 1.65 for ~1 week. Rejection logging upgraded to 4-decimal precision (`signalHardening.ts` line ~198) so calibration uses real values, not rounded bins. After ~7d of data, bucket realized outcomes (from `ai_signal_log`) by true unrounded post-friction R:R and choose the lowest R:R where net-of-cost expectancy stays positive. Avoid a blind drop to 1.55 — prefer per-token / per-regime / per-hold-horizon relaxation if expectancy supports it.
 
 **What "WORKER STALE (Nm)" on the Account page actually means:** the AccountPage `workerHealthy` indicator shows minutes since the last DB-saved signal. It is a *throughput* signal, not a process-liveness signal. A high number can mean the worker is dead OR every signal it produced was rejected by gates. Always check `signal_rejections` before assuming the worker is dead.
+
+### Daily brief reliability — release stuck slots + force-retry endpoint (Apr 2026)
+**Symptom:** intermittent missed daily brief sends — three failures in three weeks (Apr 2, Apr 16, Apr 24), each appearing in `daily_briefs_log` as a row with `recipient_count=0`.
+
+**Root cause:** `sendDailyBriefEmails()` uses a "claim slot then send" pattern. `claimBriefSlot(dateKey)` does an atomic `INSERT ... ON CONFLICT DO NOTHING RETURNING` to lock the day. The slot is meant to be UPDATEd to the real `recipient_count` after the loop finishes. Two failure modes left the row at 0 with no retry path:
+- Resend client init throws → outer catch logged the error and returned. Slot stayed at 0.
+- All individual `client.emails.send()` calls failed → `sentCount=0`, row UPDATEd to 0. Slot stayed at 0.
+- (Discovered during architect review:) any uncaught exception in pre-send work — `fetchMarketData()`, brief generation, subscriber query, tier-trade pipeline — would also throw past every existing catch and leave the row at 0.
+
+Other failure modes (no subscribers, critical integrity failure) already DELETEd the row to release it. These three paths were missing the same release.
+
+**Fixes:**
+1. **`server/dailyBrief.ts`**:
+   - Send-loop catch now DELETEs the row instead of swallowing the error.
+   - End-of-loop check: if `sentCount === 0`, DELETE instead of UPDATE-to-zero.
+   - Extracted body to `sendDailyBriefBody()`, wrapped in a top-level try/catch in `sendDailyBriefEmails()` — any pre-send throw releases the slot.
+2. **`server/routes.ts`**: new `POST /api/admin/retry-daily-brief` (owner-only, owner email check). Atomic CTE pattern — single query reads current state and conditionally DELETEs the row only if `recipient_count=0` AND `sent_at < NOW() - 15 minutes`. Refuses with 409 in two cases:
+   - Already sent (`recipient_count > 0`) — prevents accidental double-broadcast.
+   - In-progress (row at 0 inside the 15-min lease) — prevents racing a live send. The 15-min lease comfortably covers worst-case AI generation + sequential 250ms-spaced sends to current subscriber base.
+
+**The fundamental rule going forward:** the claim row is a lock. Every code path between claim and successful UPDATE must release the lock on failure. Otherwise one bad day blocks every retry.
+
+**Operational caveat:** if subscriber count grows enough that a real send takes >15 min, the lease window needs to grow too (or move to a heartbeat pattern). Monitor send duration before scaling recipients.
