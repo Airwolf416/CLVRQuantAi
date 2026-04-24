@@ -4906,17 +4906,139 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               )}
 
               {!briefLoading&&!briefError&&briefData&&(
-                <div data-testid="status-brief-ready" style={{marginTop:14,padding:"12px 14px",border:"1px solid rgba(0,199,135,.3)",background:"rgba(0,199,135,.06)",borderRadius:2,fontFamily:SANS,fontSize:13,color:C.text,lineHeight:1.55,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
-                  <span><span style={{fontFamily:MONO,fontSize:9,letterSpacing:"0.15em",color:C.green,marginRight:8}}>READY</span>Today's brief is generated.</span>
-                  <button data-testid="button-view-brief" onClick={()=>setTab("radar")} style={{height:30,padding:"0 12px",background:"rgba(201,168,76,.1)",color:C.gold2,border:"1px solid rgba(201,168,76,.35)",borderRadius:2,fontFamily:MONO,fontSize:9,letterSpacing:"0.15em",cursor:"pointer",whiteSpace:"nowrap"}}>VIEW ON RADAR →</button>
+                <div data-testid="status-brief-ready" style={{marginTop:14,padding:"12px 14px",border:"1px solid rgba(0,199,135,.3)",background:"rgba(0,199,135,.06)",borderRadius:2,fontFamily:SANS,fontSize:13,color:C.text,lineHeight:1.55}}>
+                  <span style={{fontFamily:MONO,fontSize:9,letterSpacing:"0.15em",color:C.green,marginRight:8}}>READY</span>Today's brief is below — scroll to read.
                 </div>
               )}
-
-              <div style={{marginTop:10,fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em",textAlign:"center"}}>
-                Results render on the RADAR tab.
-              </div>
             </div>
           </div>
+          {briefData&&<>
+            <div style={{background:isDark?"linear-gradient(135deg,#080d18,#0f1a2e)":C.panel,borderRadius:2,border:`1px solid ${C.border2}`,padding:"22px 18px",marginBottom:10,textAlign:"center",position:"relative",overflow:"hidden"}}>
+              <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`}}/>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.28em",marginBottom:5}}>CLVRQuant · MORNING BRIEF</div>
+              <div style={{fontFamily:SERIF,fontWeight:900,fontSize:20,color:C.white,fontStyle:"italic",marginBottom:4}}>Market Summary</div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{briefDate}</div>
+              <div style={{marginTop:10,display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
+                <span style={{padding:"4px 14px",borderRadius:2,fontFamily:MONO,fontSize:8,letterSpacing:"0.15em",
+                  background:briefData.bias==="RISK ON"?"rgba(0,199,135,.1)":briefData.bias==="RISK OFF"?"rgba(255,64,96,.1)":"rgba(201,168,76,.1)",
+                  color:briefData.bias==="RISK ON"?C.green:briefData.bias==="RISK OFF"?C.red:C.gold,
+                  border:`1px solid ${briefData.bias==="RISK ON"?"rgba(0,199,135,.3)":briefData.bias==="RISK OFF"?"rgba(255,64,96,.3)":"rgba(201,168,76,.3)"}`}}>
+                  {briefData.bias}
+                </span>
+                {briefData.macroRisk==="HIGH"&&<span style={{padding:"4px 14px",borderRadius:2,fontFamily:MONO,fontSize:8,letterSpacing:"0.15em",background:"rgba(255,64,96,.1)",color:C.red,border:"1px solid rgba(255,64,96,.3)"}}>🔴 MACRO RISK</span>}
+              </div>
+              <div style={{marginTop:12,fontFamily:SERIF,fontSize:15,color:C.text,fontStyle:"italic",lineHeight:1.7}}>"{briefData.headline}"</div>
+            </div>
+            <div style={panel}>
+              <div style={ph}><PTitle>Live Prices</PTitle></div>
+              {[{sym:"BTC",label:"BTC/USD",prices:cryptoPrices},{sym:"ETH",label:"ETH/USD",prices:cryptoPrices},{sym:"SOL",label:"SOL/USD",prices:cryptoPrices},{sym:"EURUSD",label:"EUR/USD",prices:forexPrices},{sym:"USDJPY",label:"USD/JPY",prices:forexPrices},{sym:"USDCAD",label:"USD/CAD",prices:forexPrices},{sym:"XAU",label:"Gold XAU",prices:metalPrices},{sym:"XAG",label:"Silver XAG",prices:metalPrices},{sym:"WTI",label:"Oil WTI",prices:metalPrices},{sym:"BRENT",label:"Oil Brent",prices:metalPrices},{sym:"NATGAS",label:"Nat Gas",prices:metalPrices}].map(({sym,label,prices})=>{
+                const d=prices[sym];const chg=d?.chg||0;
+                return(<div key={sym} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:10,alignItems:"center",padding:"12px 14px",borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{fontFamily:MONO,fontSize:12,color:C.muted2,letterSpacing:"0.06em"}}>{label}</div>
+                  <div style={{fontFamily:MONO,fontSize:13,color:C.white}}>{fmt(d?.price,sym)}</div>
+                  <div style={{fontFamily:MONO,fontSize:12,fontWeight:600,color:chg>=0?C.green:C.red}}>{chg>=0?"▲":"▼"} {Math.abs(chg).toFixed(2)}%</div>
+                </div>);
+              })}
+            </div>
+            <div style={panel}>
+              <div style={ph}><PTitle>Analysis & Outlook</PTitle></div>
+              {[{icon:"₿",label:"Bitcoin",key:"btc",col:C.gold},{icon:"Ξ",label:"Ethereum",key:"eth",col:C.purple},{icon:"◎",label:"Solana",key:"sol",col:C.cyan},{icon:"📈",label:"US Equities (SPX · NDX)",key:"equities",col:C.blue},{icon:"▣",label:"Gold XAU",key:"xau",col:C.gold2},{icon:"◈",label:"Silver XAG",key:"xag",col:C.muted2},{icon:"🛢️",label:"Oil & Gas (WTI · Brent · NatGas)",key:"oil",col:C.orange},{icon:"€",label:"EUR/USD",key:"eurusd",col:C.blue},{icon:"¥",label:"USD/JPY",key:"usdjpy",col:C.teal},{icon:"$",label:"USD/CAD",key:"usdcad",col:C.green}].filter(s=>briefData[s.key]).map(s=>(
+                <div key={s.key} style={{padding:"16px 16px",borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:16,color:s.col,marginBottom:8,fontStyle:"italic"}}>{s.icon} {s.label}</div>
+                  <div style={{fontSize:14,color:C.text,lineHeight:1.75,fontFamily:SERIF}}>{briefData[s.key]}</div>
+                </div>
+              ))}
+            </div>
+            {Array.isArray(briefData.impactfulNews)&&briefData.impactfulNews.length>0&&<div style={{...panel,border:`1px solid rgba(6,182,212,.22)`}}>
+              <div style={{...ph,background:"rgba(6,182,212,.05)"}}><PTitle>Impactful News for Trading</PTitle></div>
+              {briefData.impactfulNews.slice(0,5).map((n,i)=>{
+                const impact=(n.impact||"").toUpperCase();
+                const iColor=impact==="BULLISH"?C.green:impact==="BEARISH"?C.red:C.gold;
+                const iBg=impact==="BULLISH"?"rgba(0,199,135,.1)":impact==="BEARISH"?"rgba(255,64,96,.1)":"rgba(201,168,76,.1)";
+                return(<div key={i} style={{padding:"12px 14px",borderBottom:i<Math.min(briefData.impactfulNews.length,5)-1?`1px solid ${C.border}`:"none"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
+                    <div style={{fontSize:14,fontWeight:700,color:C.white,lineHeight:1.4,flex:1}}>{n.title||"—"}</div>
+                    <span style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:iColor,background:iBg,border:`1px solid ${iColor}40`,borderRadius:2,padding:"3px 8px",letterSpacing:"0.1em",flexShrink:0}}>{impact||"NEUTRAL"}</span>
+                  </div>
+                  {n.assets&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em",marginBottom:6}}>📍 {n.assets}</div>}
+                  {n.takeaway&&<div style={{fontFamily:SERIF,fontStyle:"italic",fontSize:13,color:C.text,lineHeight:1.7}}>→ {n.takeaway}</div>}
+                </div>);
+              })}
+            </div>}
+            {briefData.watchToday&&<div style={{...panel,border:`1px solid ${C.border2}`}}>
+              <div style={{...ph,background:"rgba(201,168,76,.04)"}}><PTitle>What to Watch Today</PTitle></div>
+              {briefData.watchToday.map((item,i)=>(
+                <div key={i} style={{padding:"12px 14px",borderBottom:i<briefData.watchToday.length-1?`1px solid ${C.border}`:"none",display:"flex",alignItems:"flex-start",gap:10}}>
+                  <span style={{fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:14,color:C.gold,flexShrink:0}}>{i+1}.</span>
+                  <div style={{fontSize:13,color:C.text,lineHeight:1.7,fontFamily:SERIF}}>{item}</div>
+                </div>
+              ))}
+            </div>}
+            {briefData.keyRisk&&<div style={{...panel,border:`1px solid rgba(255,64,96,.2)`}}>
+              <div style={{padding:"14px 16px",background:"rgba(255,64,96,.04)",display:"flex",gap:10,alignItems:"flex-start"}}>
+                <span style={{fontFamily:MONO,fontSize:10,color:C.red,letterSpacing:"0.15em",fontWeight:600,flexShrink:0,marginTop:3}}>RISK</span>
+                <div style={{fontSize:13.5,color:C.text,lineHeight:1.75,fontFamily:SERIF}}>{briefData.keyRisk}</div>
+              </div>
+            </div>}
+            {(() => {
+              const briefTradeCount = userTier === "elite" ? 4 : userTier === "pro" ? 1 : 0;
+              if (briefTradeCount === 0) {
+                return (
+                  <div style={{...panel,border:`1px solid rgba(201,168,76,.25)`,padding:"22px 18px",textAlign:"center"}}>
+                    <div style={{fontSize:24,marginBottom:8}}>🔒</div>
+                    <div style={{fontFamily:SERIF,fontWeight:700,fontSize:15,color:C.gold,marginBottom:6,fontStyle:"italic"}}>Trade Ideas — Pro Feature</div>
+                    <div style={{fontFamily:MONO,fontSize:10,color:C.muted,letterSpacing:"0.06em",marginBottom:14,lineHeight:1.6}}>
+                      Upgrade to see today's top trade ideas — entry, stops, targets, confidence, and edge.
+                    </div>
+                    <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowUpgrade && setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
+                      Upgrade to Pro — $29.99/mo
+                    </button>
+                  </div>
+                );
+              }
+              const trades = [
+                ...(briefData.topTrade ? [briefData.topTrade] : []),
+                ...(briefTradeCount >= 4 && Array.isArray(briefData.additionalTrades) ? briefData.additionalTrades.slice(0, 3) : []),
+              ];
+              if (trades.length === 0) return null;
+              const titleLabel = briefTradeCount === 1 ? "Today's Top Trade Idea" : `Trade Ideas (Elite — ${trades.length} Ideas)`;
+              return (
+                <div style={{...panel,border:`1px solid rgba(201,168,76,.2)`}}>
+                  <div style={{...ph,background:"rgba(201,168,76,.04)"}}><PTitle>{titleLabel}</PTitle></div>
+                  {trades.map((trade,idx)=>(
+                    <div key={idx} style={{padding:"14px",borderBottom:idx<trades.length-1?`1px solid ${C.border}`:"none"}}>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.18em",marginBottom:8,fontWeight:700}}>⚡ TRADE IDEA {idx+1}</div>
+                      <div style={{fontFamily:SERIF,fontWeight:700,fontSize:14,color:C.white,marginBottom:10,fontStyle:"italic"}}>{trade.riskLabel||"🟡"} {trade.asset||""} {trade.dir||""}</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 16px",fontFamily:MONO,fontSize:10,color:C.text,lineHeight:2}}>
+                        <div>📍 Entry: <span style={{color:C.white}}>{trade.entry||"—"}</span></div>
+                        <div>🛑 Stop: <span style={{color:C.red}}>{trade.stop||"—"}</span></div>
+                        <div>🎯 TP1: <span style={{color:C.green}}>{trade.tp1||"—"}</span></div>
+                        <div>🎯 TP2: <span style={{color:C.green}}>{trade.tp2||"—"}</span></div>
+                        <div>📊 Confidence: <span style={{color:C.gold}}>{trade.confidence||"—"}</span></div>
+                        <div>⚠️ Flags: <span style={{color:C.muted}}>{trade.flags||"None"}</span></div>
+                      </div>
+                      {trade.edge&&<div style={{marginTop:8,fontFamily:SERIF,fontStyle:"italic",fontSize:11,color:C.muted,lineHeight:1.6}}>💡 {trade.edge}</div>}
+                    </div>
+                  ))}
+                  {userTier === "pro" && <div style={{padding:"10px 14px",background:"rgba(201,168,76,.04)",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>
+                    🔒 <span style={{color:C.gold}}>Elite members get 4 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
+                  </div>}
+                </div>
+              );
+            })()}
+            <div style={panel}>
+              <div style={{padding:"14px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:12,alignItems:"center"}}>
+                <div style={{width:36,height:36,border:`1px solid rgba(201,168,76,.25)`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <span style={{fontFamily:SERIF,fontWeight:900,fontSize:14,color:C.gold}}>CQ</span>
+                </div>
+                <div>
+                  <div style={{fontFamily:SERIF,fontWeight:700,fontSize:13,color:C.white}}>CLVRQuant Support</div>
+                  <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginTop:2}}>Questions or issues? Support@CLVRQuantAI.com</div>
+                </div>
+              </div>
+              <div style={{padding:"9px 14px",fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",letterSpacing:"0.12em"}}>⚠ INFORMATIONAL PURPOSES ONLY · NOT FINANCIAL ADVICE</div>
+            </div>
+          </>}
 
         </>}
 
