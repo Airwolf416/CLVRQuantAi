@@ -40,6 +40,46 @@ export function getRecentCommitSubjects(days: number = 7): string[] {
   }
 }
 
+// Read curated update-log entries that haven't been shipped yet. These are
+// what the owner adds via the admin UI throughout the week — the source of
+// truth for the digest, since git history isn't always present in production.
+export async function getPendingUpdateLogEntries(): Promise<
+  { id: number; headline: string; detail: string | null; emoji: string | null; createdAt: Date }[]
+> {
+  try {
+    const r = await pool.query(
+      `SELECT id, headline, detail, emoji, created_at
+         FROM update_log_entries
+        WHERE included_in_update_id IS NULL
+        ORDER BY created_at ASC
+        LIMIT 100`
+    );
+    return r.rows.map((row) => ({
+      id: row.id,
+      headline: row.headline,
+      detail: row.detail,
+      emoji: row.emoji,
+      createdAt: row.created_at,
+    }));
+  } catch (e: any) {
+    console.log("[weekly-update] update_log_entries read failed:", e?.message || e);
+    return [];
+  }
+}
+
+// Mark the given log-entry IDs as shipped under a given update id.
+export async function markLogEntriesShipped(entryIds: number[], updateId: number): Promise<void> {
+  if (!entryIds.length) return;
+  try {
+    await pool.query(
+      `UPDATE update_log_entries SET included_in_update_id=$1 WHERE id = ANY($2::int[])`,
+      [updateId, entryIds]
+    );
+  } catch (e: any) {
+    console.log("[weekly-update] markLogEntriesShipped failed:", e?.message || e);
+  }
+}
+
 // Ask Claude to turn raw commit subjects into a polished WeeklyUpdate object.
 export async function synthesizeWeeklyUpdateFromCommits(
   commits: string[]
@@ -110,21 +150,52 @@ ${commits.map((c) => "- " + c).join("\n")}`;
   }
 }
 
-// Auto-generate this week's update from git commits via Claude, then insert it.
-// Returns the new update id, or null if nothing to ship.
+// Auto-generate this week's update via Claude, then insert it.
+// Source priority: curated update_log_entries (the owner's own log) FIRST,
+// falling back to git commit subjects. The buffer is the reliable source —
+// git history isn't always present in production deployments.
+// Returns the new update or null if nothing to ship.
 export async function generateWeeklyUpdateWithAI(): Promise<WeeklyUpdate | null> {
+  const pending = await getPendingUpdateLogEntries();
   const commits = getRecentCommitSubjects(7);
-  console.log(`[weekly-update] AI generation: scanned ${commits.length} commits from last 7 days`);
-  const digest = await synthesizeWeeklyUpdateFromCommits(commits);
+  console.log(`[weekly-update] AI generation: ${pending.length} pending log entries + ${commits.length} commits from last 7d`);
+
+  // Build the input the AI will distill. Prefer the curated buffer entries —
+  // they're already trader-friendly. Fall back to commit subjects only when
+  // the buffer is empty so we still have something to summarize.
+  let inputs: string[];
+  let source: "log" | "commits" | "both";
+  if (pending.length > 0 && commits.length > 0) {
+    source = "both";
+    inputs = [
+      ...pending.map((p) => `[LOG${p.emoji ? " " + p.emoji : ""}] ${p.headline}${p.detail ? " — " + p.detail : ""}`),
+      ...commits.map((c) => `[GIT] ${c}`),
+    ];
+  } else if (pending.length > 0) {
+    source = "log";
+    inputs = pending.map((p) => `${p.emoji ? p.emoji + " " : ""}${p.headline}${p.detail ? " — " + p.detail : ""}`);
+  } else if (commits.length > 0) {
+    source = "commits";
+    inputs = commits;
+  } else {
+    console.log("[weekly-update] no log entries AND no commits — nothing to summarize");
+    return null;
+  }
+
+  const digest = await synthesizeWeeklyUpdateFromCommits(inputs);
   if (!digest) return null;
   const created = await createWeeklyUpdate({
     version: null,
     title: digest.title,
     summary: digest.summary,
     items: digest.items,
-    createdBy: "ai-auto",
+    createdBy: source === "log" ? "ai-from-log" : source === "commits" ? "ai-from-commits" : "ai-from-both",
   });
-  console.log(`[weekly-update] AI-generated update id=${created.id}: "${digest.title}" (${digest.items.length} items)`);
+  // Mark all consumed buffer entries as shipped so they don't reappear next week.
+  if (pending.length > 0) {
+    await markLogEntriesShipped(pending.map((p) => p.id), created.id);
+  }
+  console.log(`[weekly-update] AI-generated update id=${created.id} from ${source}: "${digest.title}" (${digest.items.length} items)`);
   return created;
 }
 
