@@ -61,12 +61,14 @@ export default function TopTradeIdeas({
       const freshPreflight = await fetchPreflight();
 
       // Pass marketTypeFilter so the snapshot drops the wrong-section data
-      // (PERP → no spot prices, SPOT → no perp prices). This is what fixes
-      // the bug where selecting PERP returned an AMD spot entry — AMD has
-      // no Hyperliquid perp, so under PERP filter it's now excluded entirely
-      // from the AI's universe instead of leaking in via Yahoo spot data.
-      // signalFilter:true drops assets without active pump/dump movement so
-      // the AI only sees assets actually moving.
+      // (PERP → no spot prices, SPOT → no perp prices). This fixes the bug
+      // where selecting PERP returned an AMD entry priced at the Yahoo
+      // spot ($145) even though AMD has a real HL perp on the xyz dex
+      // ($340.50). Old code injected both Section A (HL xyz:AMD perp) AND
+      // Section C (Yahoo AMD spot); AI grabbed the cheaper spot and labeled
+      // it PERP. New code: under PERP, only Section A is shown, so the AI
+      // can only quote the real perp price. signalFilter:true drops assets
+      // without pump/dump movement so the AI focuses on real movers.
       const snap = buildMarketSnapshot({
         storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
         liveSignals, newsFeed, macroEvents, insiderData, regimeData,
@@ -102,8 +104,9 @@ CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER 
       const marketTypeRule = marketTypeFilter === "PERP"
         ? `MARKET TYPE FILTER: PERP ONLY.
 - Recommend ONLY perpetual futures / leveraged trades from Hyperliquid.
-- ENTRY / SL / TP must come from the Section A perp prices below — do NOT use any spot price (none are supplied for a reason).
-- If an asset is NOT listed in Section A, you CANNOT recommend it. There is no Hyperliquid perp for it. Pick a different asset.
+- ENTRY / SL / TP must come from the Section A perp prices below — do NOT use any spot price (none are supplied; that is intentional).
+- If an asset is NOT listed in Section A, you CANNOT recommend it for this run. Either it has no Hyperliquid perp, or it has been filtered out by the active pump/dump signal filter. Either way: pick a different asset from Section A.
+- HL equity & commodity perps (e.g. AMD, TSLA, GOLD) are SYNTHETIC and trade 24/7 — their prices can decouple meaningfully from Yahoo/FMP spot during off-hours. Use ONLY the Section A perp price; never substitute a spot reference.
 - Include leverage on every trade (respect asset class caps).
 - Tight SL. Thesis MUST reference funding rate, OI, or liquidation levels from the data shown.
 - Every trade MUST set "marketType":"PERP".`
@@ -111,7 +114,7 @@ CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER 
         ? `MARKET TYPE FILTER: SPOT ONLY.
 - Recommend ONLY spot / cash trades.
 - ENTRY / SL / TP must come from Section B (HL spot) or Section C (CoinGecko/Yahoo/FMP) prices below — do NOT invent perp prices (none are supplied).
-- If an asset is NOT listed in Section B or Section C, you CANNOT recommend it.
+- If an asset is NOT listed in Section B or Section C, you CANNOT recommend it for this run (either no spot feed, or filtered out by pump/dump). Pick a different asset.
 - NO leverage — set "leverage":"1x" on every trade.
 - Thesis should reference accumulation zones, DCA levels, or portfolio allocation.
 - SL can be wider, kill clock can be longer.
@@ -119,8 +122,8 @@ CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER 
         : `MARKET TYPE FILTER: BOTH.
 - Mix of PERP and SPOT opportunities — diversify across both.
 - For each trade label "marketType":"PERP" or "SPOT" explicitly. PERP trades MUST use the Section A price; SPOT trades MUST use the Section B/C price.
-- PERP trades: include leverage, tight SL, funding/OI rationale. SPOT trades: "leverage":"1x", wider SL acceptable, accumulation/DCA rationale.
-- Do NOT mix prices across sections (e.g. take a Section C spot price and call it a PERP entry).`;
+- IMPORTANT: HL equity/commodity perps (Section A) and Yahoo/FMP spots (Section C) for the same ticker can show meaningfully different prices because the HL synthetic trades 24/7 while spot is the cash market. Treat them as two distinct instruments. PERP trade → quote Section A. SPOT trade → quote Section C. Never cross them.
+- PERP trades: include leverage, tight SL, funding/OI rationale. SPOT trades: "leverage":"1x", wider SL acceptable, accumulation/DCA rationale.`;
 
       // ── Kronos forecast context (Elite) — pulled from in-memory cache populated by KronosPanel ──
       let kronosCtx = "";

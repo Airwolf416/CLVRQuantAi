@@ -148,9 +148,10 @@ export default function AIChat({
       } catch {}
 
       // Same filter pattern as TopTradeIdeas — PERP/SPOT drops the wrong-
-      // section data so the AI can't reach for a spot price when the user
-      // selected perps. signalFilter focuses chat answers on assets actually
-      // moving (pump/dump) instead of the entire stale price universe.
+      // section data so the AI can't reach for a spot price (e.g. Yahoo's
+      // $145 AMD) when the user selected perps and the real HL xyz:AMD perp
+      // is trading $340. signalFilter focuses chat answers on assets
+      // actually moving (pump/dump) instead of the full stale universe.
       const snap = buildMarketSnapshot({
         storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
         liveSignals, newsFeed, macroEvents, insiderData, regimeData,
