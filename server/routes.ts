@@ -7243,7 +7243,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         console.log(`[signup] Resend fromEmail configured as: "${fromEmail}"`);
         const senderAddress = fromEmail;
         console.log(`[signup] Sending welcome email to ${email.toLowerCase().trim()} from ${senderAddress}`);
-        const verifyUrl = `https://clvrquantai.com?verify=${verifyToken}`;
+        // Resolve the verification base URL the same way push notifications +
+        // password-reset do (see PUSH_ORIGIN, line ~104, and reset-password,
+        // line ~7509). Hardcoding clvrquantai.com here meant emails sent from
+        // any non-prod environment (Replit preview, staging, custom domain)
+        // produced a link that didn't reach the running app.
+        const APP_URL = process.env.APP_URL
+          || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}` : "https://clvrquantai.com");
+        const verifyUrl = `${APP_URL}?verify=${verifyToken}`;
         const emailResult = await resend.emails.send({
           from: senderAddress,
           replyTo: "Support@clvrquantai.com",
@@ -7400,7 +7407,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const crypto = await import("crypto");
       const token = crypto.randomBytes(24).toString("hex");
       await storage.setEmailVerificationToken(userId, token);
-      const verifyUrl = `https://clvrquantai.com?verify=${token}`;
+      // Same env-aware base URL resolution as the signup-time verify email.
+      const APP_URL = process.env.APP_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}` : "https://clvrquantai.com");
+      const verifyUrl = `${APP_URL}?verify=${token}`;
       const { client: resend, fromEmail: resendFrom } = await getUncachableResendClient();
       await resend.emails.send({
         from: resendFrom,
