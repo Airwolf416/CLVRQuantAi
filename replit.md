@@ -237,3 +237,18 @@ Added per-session VWAP (with ±1σ bands) and Opening Range (ORH/ORL) overlays t
 
 **Architect review:** PASS with two correctness fixes applied — (1) `LiveOverlayChart` now syncs internal `sym` state when the parent `symbol` prop changes, and (2) AIChat ticker extraction is gated client-side by the eligible map so noise tokens don't hit the API. Logged as improvement entry in `update_log_entries`.
 
+
+### Generate Today's Brief — UX fix (Apr 24, 2026)
+**Symptom:** user reported the "Generate Today's Brief" button under the Brief tab "doesn't work."
+
+**Root cause:** the click handler was `()=>{generateBrief();setTab("radar");}` — fire-and-forget the async generator AND immediately switch tabs. The user landed on the Radar tab with no visible loading state. If `/api/ai/analyze` failed (Anthropic 503 maintenance, 429 rate limit, 401/403 auth, malformed JSON, network), the only feedback was a single generic toast `"Brief is taking longer than usual — please tap Generate again in a moment."` which (a) auto-dismisses, (b) doesn't communicate WHY it failed, and (c) the user has to navigate back to the Brief tab to retry. Compounding: stale `briefData` from a previous session stayed mounted on Radar so the user couldn't even tell whether the new attempt had succeeded or shown them yesterday's output. No console error was logged, so prod debugging was blind.
+
+**Fix:** in `client/src/App.jsx`:
+1. **Stop hijacking the tab on click.** The button no longer calls `setTab("radar")`. The user stays on Brief and watches the status panel right under the button.
+2. **Visible inline status panel** below the button with three states — `Generating brief — this can take 30–60s...` (neutral), `BRIEF FAILED` (red, with the actual reason), `READY` (green, with a `VIEW ON RADAR →` button so the user chooses when to navigate).
+3. **Error categorization in `generateBrief`.** Auth (401), Pro tier (403), rate limit (429), maintenance (503/`__MAINTENANCE__`), parse failure, empty content, and network are each mapped to a specific human-readable message. Hard failures (auth/tier/rate/maintenance) skip the retry loop instead of burning all 3 attempts on a 401.
+4. **`console.error` log** with the error kind + message so prod failures are debuggable from browser dev tools.
+5. **`setBriefError("")` on every click** so the prior error clears when retrying.
+
+Logged as improvement entry. Verified TS clean compile + no JSX render errors (HTTP 200 on `/`).
+
