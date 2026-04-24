@@ -2358,6 +2358,64 @@ Output JSON only, no prose, no code fences.`;
     }
   });
 
+  // ── Execution Levels (VWAP / Opening Range) ────────────────────────────────
+  // Session VWAP + ORH/ORL for SPOT equities, SPOT FX, SPOT commodities only.
+  // Returns 404 with {reason:"asset_class_not_eligible"} for any crypto / perp.
+  // Auth: same session gate as /api/basket/promoted (Pro+ already paying for
+  // intraday data; free tier is OK to read these computed levels since the
+  // raw bars come from Yahoo's free public endpoint).
+  app.get("/api/execution_levels/eligible", async (_req, res) => {
+    try {
+      const { getEligibleSymbols } = await import("./lib/executionOverlay");
+      res.json(getEligibleSymbols());
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "failed to list eligible symbols" });
+    }
+  });
+
+  app.get("/api/execution_levels/:symbol", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      const { isExecutionOverlayEligible } = await import("./lib/executionOverlay");
+      const { computeExecutionLevels } = await import("./lib/executionLevels");
+      const sym = String(req.params.symbol || "").trim().toUpperCase().slice(0, 16);
+      if (!sym) return res.status(400).json({ error: "symbol required" });
+      if (!isExecutionOverlayEligible(sym)) {
+        return res.status(404).json({ reason: "asset_class_not_eligible" });
+      }
+      const levels = await computeExecutionLevels(sym);
+      if (!levels) {
+        return res.status(503).json({ reason: "no_session_data_available" });
+      }
+      res.json(levels);
+    } catch (e: any) {
+      console.error("[/api/execution_levels] exception:", e?.message);
+      res.status(500).json({ error: e?.message || "compute failed" });
+    }
+  });
+
+  // 1-min OHLCV bars from session anchor → now, used by the Chart AI overlay
+  // chart. Same eligibility gate as the levels endpoint.
+  app.get("/api/execution_levels/:symbol/bars", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    try {
+      const { isExecutionOverlayEligible } = await import("./lib/executionOverlay");
+      const { getSessionBars } = await import("./lib/executionLevels");
+      const sym = String(req.params.symbol || "").trim().toUpperCase().slice(0, 16);
+      if (!sym) return res.status(400).json({ error: "symbol required" });
+      if (!isExecutionOverlayEligible(sym)) {
+        return res.status(404).json({ reason: "asset_class_not_eligible" });
+      }
+      const bars = await getSessionBars(sym);
+      res.json({ symbol: sym, bars });
+    } catch (e: any) {
+      console.error("[/api/execution_levels/bars] exception:", e?.message);
+      res.status(500).json({ error: e?.message || "fetch failed" });
+    }
+  });
+
   // ── Chart AI (Elite) — POST /api/chart-ai/analyze ──────────────────────────
   // Upload a chart image; Claude returns a structured trade plan.
   // 5 analyses/day per user (UTC), 15-min news cache per asset, $300/mo kill switch.
@@ -2494,12 +2552,35 @@ Output JSON only, no prose, no code fences.`;
             ? `\n\nFRESH WEB NEWS CONTEXT (cached, last 15 min — do NOT re-search):\n${cachedNews.newsContext}\n`
             : "";
 
+          // ── Execution context block (VWAP + Opening Range) ─────────────
+          // Computed only when the user supplied an asset AND it is a spot
+          // equity / spot FX / spot commodity. Crypto and perps return null
+          // here so the prompt remains silent on session-structure levels
+          // for them.
+          let execContextBlock = "";
+          let execEligibleNote = "";
+          if (asset) {
+            try {
+              const { isExecutionOverlayEligible } = await import("./lib/executionOverlay");
+              if (isExecutionOverlayEligible(asset)) {
+                const { computeExecutionLevels, formatExecutionContextBlock } = await import("./lib/executionLevels");
+                const lvl = await computeExecutionLevels(asset);
+                if (lvl) {
+                  execContextBlock = "\n\n" + formatExecutionContextBlock(lvl) + "\n";
+                  execEligibleNote = `When the EXECUTION CONTEXT block is present above, reference VWAP and opening range levels in your "reasoning" tape-read. If absent, do not mention these levels — the asset is not eligible for intraday session structure analysis.`;
+                }
+              }
+            } catch (e: any) {
+              console.error("[chart-ai] exec levels inject failed:", e?.message);
+            }
+          }
+
           const system = `You are an elite quantitative technical analyst for CLVRQuantAI. Analyze the attached chart and return ONLY a JSON object — no prose, no markdown fences, no explanation outside the JSON.
 
 Context:
 - Trading horizon: ${horizon}
 - Asset (user-provided): ${assetLabel}
-- Current UTC time: ${nowIso}${cachedNewsBlock}${inAppNewsBlock}
+- Current UTC time: ${nowIso}${cachedNewsBlock}${inAppNewsBlock}${execContextBlock}${execEligibleNote ? "\n\n" + execEligibleNote : ""}
 
 ═══ MANDATORY ANALYSIS CHECKLIST — complete EVERY step before deciding ═══
 

@@ -105,6 +105,21 @@ function FormattedAIMessage({ text }) {
 
 const QUICK_CHIPS = ["BTC", "ETH", "SOL", "TRUMP", "HYPE", "XAU", "WTI", "EURUSD", "TSLA", "NVDA"];
 
+// Module-level cache for the eligible execution-overlay symbol map.
+// Single fetch is shared across all AIChat sendMessage calls.
+let __eligibleExecCache = null;
+async function getEligibleExecutionSymbols() {
+  if (__eligibleExecCache) return __eligibleExecCache;
+  __eligibleExecCache = (async () => {
+    try {
+      const r = await fetch("/api/execution_levels/eligible", { credentials: "include" });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  })();
+  return __eligibleExecCache;
+}
+
 export default function AIChat({
   storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
   liveSignals, newsFeed, macroEvents, insiderData, regimeData,
@@ -162,6 +177,54 @@ export default function AIChat({
 
       const macroCtx = buildMacroPreflightContext(preflight);
 
+      // ── Execution context (VWAP + Opening Range) ─────────────────────────
+      // Detect spot equity / FX / commodity tickers mentioned in the user's
+      // question, fetch /api/execution_levels for each, and append a context
+      // block. The endpoint returns 404 for ineligible (crypto / perp) so we
+      // never feed VWAP/OR for those — which keeps the analyst silent on
+      // session structure for assets that have no defined session anchor.
+      // Client-side: pre-filter against the eligible map so we don't fire
+      // wasted requests for noise tokens (AND/VS/etc.) or crypto mentions.
+      let execContext = "";
+      try {
+        const eligibleMap = await getEligibleExecutionSymbols();
+        const eligibleSet = new Set([
+          ...(eligibleMap?.equity || []),
+          ...(eligibleMap?.fx || []),
+          ...(eligibleMap?.commodity || []),
+        ]);
+        const mentions = Array.from(new Set(
+          (userMsg.toUpperCase().match(/\b[A-Z]{2,8}\b/g) || []).filter(t =>
+            eligibleSet.has(t)
+          )
+        )).slice(0, 3);
+        const blocks = [];
+        for (const sym of mentions) {
+          try {
+            const r = await fetch(`/api/execution_levels/${sym}`, { credentials: "include" });
+            if (!r.ok) continue;
+            const lvl = await r.json();
+            const dec = lvl.current_price < 10 ? 4 : 2;
+            const f = (n) => Number(n).toFixed(dec);
+            const rangePos = lvl.in_or_range ? "inside" : (lvl.current_price > lvl.orh ? "above" : "below");
+            const ts = new Date(lvl.current_ts).toISOString().slice(11, 16) + " UTC";
+            blocks.push(
+              `EXECUTION CONTEXT (${lvl.symbol}, ${ts}):\n` +
+              `- Session VWAP: $${f(lvl.vwap)} (price ${lvl.price_vs_vwap_pct >= 0 ? "+" : ""}${lvl.price_vs_vwap_pct}% away)\n` +
+              `- VWAP bands: $${f(lvl.vwap_lower_1sd)} / $${f(lvl.vwap_upper_1sd)}\n` +
+              `- Opening Range: $${f(lvl.orl)} — $${f(lvl.orh)} (width ${lvl.or_width_pct}%)\n` +
+              `- Current price: $${f(lvl.current_price)} (${rangePos} opening range)\n` +
+              `- ORB status: ${lvl.orb_status}`
+            );
+          } catch {}
+        }
+        if (blocks.length) execContext = blocks.join("\n\n");
+      } catch {}
+
+      const execContextRule = execContext
+        ? `When the EXECUTION CONTEXT block is present, reference VWAP and opening range levels in your tape-read. If absent, do not mention these levels — the asset is not eligible for intraday session structure analysis.`
+        : `Do NOT mention VWAP or opening range levels in this response — no execution context was supplied for the assets in question.`;
+
       const marketTypeRule = marketTypeFilter === "PERP"
         ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged setups. Use ONLY the Section A perp prices supplied below for entry/SL/TP — no spot prices are provided. If an asset is not in Section A it has no Hyperliquid perp; do NOT suggest it. Include leverage. Tight SL. Reference funding/OI/liquidation in thesis.`
         : marketTypeFilter === "SPOT"
@@ -182,6 +245,8 @@ ${outOfUniverseRule}
 
 MANDATORY STEP 1 — MACRO PRE-FLIGHT:
 ${macroCtx || "No macro data. Proceed with CAUTION."}
+
+${execContext ? execContext + "\n\n" : ""}EXECUTION CONTEXT RULE: ${execContextRule}
 
 RULES:
 1. TRADE TYPE: Classify as SCALP (1-4H), DAY TRADE (4-24H), SWING (1-7D), or POSITION (1-4W).

@@ -3,6 +3,7 @@ import {
   ScanLine, Upload, X, Zap, Clock, TrendingUp, Calendar,
   Info, Share2, RotateCcw, AlertTriangle, Camera,
 } from "lucide-react";
+import LiveOverlayChart from "../components/chartai/LiveOverlayChart.jsx";
 
 const HORIZONS = [
   { id: "scalp",    label: "Scalp",    sub: "1–15m",         Icon: Zap },
@@ -201,6 +202,9 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
           <div>Resets at 00:00 UTC</div>
         </div>
       </div>
+
+      {/* ─── Live Execution Overlay (spot equities/FX/commodities only) ── */}
+      <LiveOverlayChart symbol={asset || "AAPL"} />
 
       {/* ─── Upload area ────────────────────────────────────────── */}
       <div
