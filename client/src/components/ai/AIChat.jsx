@@ -147,23 +147,37 @@ export default function AIChat({
         if (pRes.ok) preflight = await pRes.json();
       } catch {}
 
+      // Same filter pattern as TopTradeIdeas — PERP/SPOT drops the wrong-
+      // section data so the AI can't reach for a spot price when the user
+      // selected perps. signalFilter focuses chat answers on assets actually
+      // moving (pump/dump) instead of the entire stale price universe.
       const snap = buildMarketSnapshot({
         storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
         liveSignals, newsFeed, macroEvents, insiderData, regimeData,
         storeMode, storeTotalMarkets, storeAlerts,
+        marketTypeFilter,
+        signalFilter: true,
       });
 
       const macroCtx = buildMacroPreflightContext(preflight);
 
       const marketTypeRule = marketTypeFilter === "PERP"
-        ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged setups. Include leverage suggestion. Tight SL. Reference funding/OI/liquidation in thesis.`
+        ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged setups. Use ONLY the Section A perp prices supplied below for entry/SL/TP — no spot prices are provided. If an asset is not in Section A it has no Hyperliquid perp; do NOT suggest it. Include leverage. Tight SL. Reference funding/OI/liquidation in thesis.`
         : marketTypeFilter === "SPOT"
-        ? `MARKET TYPE FILTER: SPOT ONLY. Recommend ONLY spot / cash trades. NO leverage — set leverage 1x. Wider SL acceptable. Reference accumulation/DCA logic.`
-        : `MARKET TYPE FILTER: BOTH. Mix of PERP and SPOT — label every recommendation as PERP or SPOT. PERP: leverage + funding/OI rationale. SPOT: 1x, accumulation logic.`;
+        ? `MARKET TYPE FILTER: SPOT ONLY. Recommend ONLY spot / cash trades. Use ONLY the Section B/C spot prices supplied below — no perp prices are provided. If an asset is not in Section B or C, do NOT suggest it. NO leverage — set leverage 1x. Wider SL acceptable. Reference accumulation/DCA logic.`
+        : `MARKET TYPE FILTER: BOTH. Mix of PERP and SPOT — label every recommendation as PERP or SPOT and use the price from the matching section (PERP→A, SPOT→B/C, never mix). PERP: leverage + funding/OI rationale. SPOT: 1x, accumulation logic.`;
+
+      // If the user asks about an asset that's been intentionally filtered out
+      // (no pump/dump signal, or wrong section for the active marketType),
+      // don't guess — say so plainly. This prevents the AI from inventing
+      // prices for assets the snapshot deliberately omitted.
+      const outOfUniverseRule = `OUT-OF-UNIVERSE QUESTIONS: If the user asks about an asset that is NOT present in the snapshot sections below, do NOT invent a price or setup. Say plainly: "[ASSET] is not in the current data feed — it's either filtered out by the active market-type filter (${marketTypeFilter}) or has no pump/dump movement right now. Switch the market-type filter or wait for a signal." Then offer to discuss assets that ARE in the snapshot.`;
 
       const sys = `You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
 
 ${marketTypeRule}
+
+${outOfUniverseRule}
 
 MANDATORY STEP 1 — MACRO PRE-FLIGHT:
 ${macroCtx || "No macro data. Proceed with CAUTION."}

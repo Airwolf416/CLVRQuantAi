@@ -60,10 +60,19 @@ export default function TopTradeIdeas({
     try {
       const freshPreflight = await fetchPreflight();
 
+      // Pass marketTypeFilter so the snapshot drops the wrong-section data
+      // (PERP → no spot prices, SPOT → no perp prices). This is what fixes
+      // the bug where selecting PERP returned an AMD spot entry — AMD has
+      // no Hyperliquid perp, so under PERP filter it's now excluded entirely
+      // from the AI's universe instead of leaking in via Yahoo spot data.
+      // signalFilter:true drops assets without active pump/dump movement so
+      // the AI only sees assets actually moving.
       const snap = buildMarketSnapshot({
         storePerps, storeSpot, cryptoPrices, equityPrices, metalPrices, forexPrices,
         liveSignals, newsFeed, macroEvents, insiderData, regimeData,
         storeMode, storeTotalMarkets, storeAlerts,
+        marketTypeFilter,
+        signalFilter: true,
       });
 
       const macroCtx = buildMacroPreflightContext(freshPreflight);
@@ -91,10 +100,27 @@ CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER 
 - Respect the leverage caps above` : "";
 
       const marketTypeRule = marketTypeFilter === "PERP"
-        ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged trades. Use Hyperliquid perp data (Section A) as primary. Include leverage suggestion on every trade (respect asset class caps). Tight SL. Thesis must reference funding rate, OI, or liquidation levels. Every trade MUST set "marketType":"PERP".`
+        ? `MARKET TYPE FILTER: PERP ONLY.
+- Recommend ONLY perpetual futures / leveraged trades from Hyperliquid.
+- ENTRY / SL / TP must come from the Section A perp prices below — do NOT use any spot price (none are supplied for a reason).
+- If an asset is NOT listed in Section A, you CANNOT recommend it. There is no Hyperliquid perp for it. Pick a different asset.
+- Include leverage on every trade (respect asset class caps).
+- Tight SL. Thesis MUST reference funding rate, OI, or liquidation levels from the data shown.
+- Every trade MUST set "marketType":"PERP".`
         : marketTypeFilter === "SPOT"
-        ? `MARKET TYPE FILTER: SPOT ONLY. Recommend ONLY spot / cash trades. NO leverage — set "leverage":"1x" on every trade. Use Section B (HL spot) and Section C (CoinGecko/Finnhub). Thesis should reference accumulation zones, DCA levels, or portfolio allocation. SL can be wider, kill clock can be longer. Every trade MUST set "marketType":"SPOT".`
-        : `MARKET TYPE FILTER: BOTH. Mix of PERP and SPOT opportunities — diversify across both. For each trade, label "marketType":"PERP" or "SPOT" explicitly. PERP trades: include leverage suggestion, tight SL, funding/OI rationale. SPOT trades: "leverage":"1x", wider SL acceptable, accumulation/DCA rationale.`;
+        ? `MARKET TYPE FILTER: SPOT ONLY.
+- Recommend ONLY spot / cash trades.
+- ENTRY / SL / TP must come from Section B (HL spot) or Section C (CoinGecko/Yahoo/FMP) prices below — do NOT invent perp prices (none are supplied).
+- If an asset is NOT listed in Section B or Section C, you CANNOT recommend it.
+- NO leverage — set "leverage":"1x" on every trade.
+- Thesis should reference accumulation zones, DCA levels, or portfolio allocation.
+- SL can be wider, kill clock can be longer.
+- Every trade MUST set "marketType":"SPOT".`
+        : `MARKET TYPE FILTER: BOTH.
+- Mix of PERP and SPOT opportunities — diversify across both.
+- For each trade label "marketType":"PERP" or "SPOT" explicitly. PERP trades MUST use the Section A price; SPOT trades MUST use the Section B/C price.
+- PERP trades: include leverage, tight SL, funding/OI rationale. SPOT trades: "leverage":"1x", wider SL acceptable, accumulation/DCA rationale.
+- Do NOT mix prices across sections (e.g. take a Section C spot price and call it a PERP entry).`;
 
       // ── Kronos forecast context (Elite) — pulled from in-memory cache populated by KronosPanel ──
       let kronosCtx = "";
@@ -117,7 +143,7 @@ CRITICAL: Scale TPs to this timeframe. A 5-minute scalp with a 5% TP will NEVER 
         }
       } catch { /* ignore */ }
 
-      const sys = `You are CLVRQuantAI's Trade Idea Generator. Return exactly ${tradeCount} trade ideas as a JSON object. No markdown. No prose. Only valid JSON.
+      const sys = `You are CLVRQuantAI's Trade Idea Generator. Return UP TO ${tradeCount} trade ideas as a JSON object. No markdown. No prose. Only valid JSON.
 
 ${marketTypeRule}
 ${todayModeRule}
@@ -126,8 +152,8 @@ MANDATORY STEP 1 — MACRO PRE-FLIGHT CHECK:
 ${macroCtx || "No macro data available. Proceed with CAUTION flag."}${kronosCtx}
 
 RULES:
-- Return EXACTLY ${tradeCount} trades, ranked by conviction (highest first)
-- Cover diverse assets (crypto, equity, FX, commodity — don't repeat unless one class dominates)
+- Return UP TO ${tradeCount} trades, ranked by conviction (highest first). It is BETTER to return fewer trades — or an empty "trades":[] array with a one-line "reason" — than to invent setups for assets that are not present in the market data sections below. The user's filter has deliberately narrowed the universe; do not fabricate.
+- Cover diverse assets (crypto, equity, FX, commodity — don't repeat unless one class dominates), but ONLY from the assets actually listed in the snapshot.
 - ATR-scaled TP/SL: TP1=0.5x ATR(4H) at 50%, TP2=1x ATR at 30%, TP3=1.5x ATR at 20% trailing
 - Vol regime: compare ATR to 20-period avg. HIGH(>1.5x): compress TP 30%, widen SL 20%. LOW(<0.7x): skip.
 - Minimum R:R to TP1: 1.2:1
