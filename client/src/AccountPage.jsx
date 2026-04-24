@@ -96,10 +96,10 @@ function OwnerResendBrief({ C, MONO }) {
   return (
     <OwnerEmailTool C={C} MONO={MONO}
       title="Morning Market Brief (Resend)"
-      description="Manually resend today's market brief + apology note to all active subscribers. Use if the 6AM automated email failed to deliver."
-      endpoint="/api/admin/send-apology-brief"
+      description="Resends TODAY's morning market brief to all active subscribers. Refuses if today's brief already went out (no double-sends) or if a send is currently in progress (15-min lease)."
+      endpoint="/api/admin/retry-daily-brief"
       testId="btn-owner-resend-brief"
-      buttonLabel="📤 Resend Brief to All Subscribers"
+      buttonLabel="📤 Resend Today's Morning Brief"
     />
   );
 }
@@ -442,17 +442,12 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
         </div>
       </div>
 
-      {/* Daily Brief Controls (moved from Maintenance tab) */}
-      <div style={{ background:"#0c1220", border:"1px solid rgba(232,201,109,.2)", borderRadius:6, padding:18, marginBottom:16 }}>
-        <div style={{ fontFamily:MONO, fontSize:9, color:"#e8c96d", letterSpacing:"0.2em", marginBottom:14 }}>📧 DAILY BRIEF CONTROLS</div>
-        <div style={{ fontFamily:MONO, fontSize:10, color:"#6b7fa8", marginBottom:12, lineHeight:1.6 }}>
-          Scheduler runs every 30s and triggers at 6:00 AM ET. Catch-up runs 10s after server startup if today's brief hasn't been sent yet.
-        </div>
-        <AdminActionBtn actionKey="test-brief" label="🧪 ENQUEUE TEST BRIEF" url="/api/admin/test-brief" color="#00d4ff" onRun={runAction} status={actionStatus["test-brief"]} msg={actionMsg["test-brief"]} MONO={MONO} />
-        <div style={{ fontFamily:MONO, fontSize:9, color:"#4a5d80", marginTop:4, lineHeight:1.5 }}>
-          Enqueues a daily brief send. Check server logs for delivery confirmation.
-        </div>
-      </div>
+      {/* Daily brief manual-resend lives on the Email tab as
+          "Morning Market Brief (Resend)" — single source of truth.
+          The previous "ENQUEUE TEST BRIEF" button here pointed at
+          /api/admin/test-brief which never existed (real route is
+          /api/send-test-brief), so it silently 404'd. Removed to
+          eliminate the duplicate broken control. */}
 
       {/* Composer */}
       <div style={{ background:"#0c1220", border:`1px solid ${htmlMode ? "rgba(0,212,255,.3)" : "rgba(201,168,76,.25)"}`, borderRadius:6, padding:18 }}>
