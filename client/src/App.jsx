@@ -2606,6 +2606,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [briefLoading,setBriefLoading]=useState(false);
   const [briefData,setBriefData]=useState(null);
   const [briefDate,setBriefDate]=useState(null);
+  const [briefError,setBriefError]=useState("");
 
   const [userTier,setUserTier]=useState(()=>{try{return user?.tier||localStorage.getItem("clvr_tier")||"free";}catch{return"free";}});
   const isPreview=user?.preview===true;
@@ -3223,12 +3224,15 @@ STYLE RULES:
 
 Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT live prices above.
 {"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","oil":"3-4 sentences covering WTI AND Brent prices, supply/demand drivers (OPEC+, US inventories, demand), geopolitical risk premium (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), and natural gas price if notable. End with 🟢/🟡/🔴 bias for energy sector","equities":"3-4 sentences covering SPX AND NDX levels and overnight move, mega-cap leadership (NVDA/TSLA/AAPL/MSFT/META direction), breadth and sector rotation, key earnings or Fed cross-currents, VIX context. End with 🟢/🟡/🔴 bias for US equities","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","impactfulNews":[{"title":"short headline (<80 chars)","impact":"BULLISH|BEARISH|NEUTRAL","assets":"comma-separated tickers most affected","takeaway":"one sentence — what a trader should DO or WATCH because of this"}],"watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it","topTrade":{"asset":"Best trade today","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence edge","riskLabel":"🟢 or 🟡 or 🔴","flags":"macro risk flags or None"},"additionalTrades":[{"asset":"2nd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"4th trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"}]}`;
-    // Retry with exponential backoff — never show "unavailable" without trying 3 times
+    // Retry with exponential backoff — never show "unavailable" without trying 3 times.
+    // Classify errors so the user gets a real, actionable message instead of a
+    // generic "taking longer than usual" toast that makes the button feel broken.
+    setBriefError("");
     let lastErr = null;
+    let lastErrKind = null; // "auth" | "tier" | "rate" | "maintenance" | "parse" | "empty" | "network"
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         if (attempt > 1) {
-          setToast(`Retrying brief (attempt ${attempt}/3)...`);
           await new Promise(r => setTimeout(r, 1500 * Math.pow(2, attempt - 2))); // 1.5s, 3s
         }
         const res = await fetch("/api/ai/analyze", {
@@ -3236,21 +3240,53 @@ Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT 
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userMessage: prompt, maxTokens: 6000, skipTools: true, enableWebSearch: true }),
         });
-        const data = await res.json();
-        if (!res.ok) { lastErr = new Error(data.error || `HTTP ${res.status}`); continue; }
-        const txt = data.text || "";
+        let data = {};
+        try { data = await res.json(); } catch {}
+        if (!res.ok) {
+          const errMsg = data?.error || `HTTP ${res.status}`;
+          // Hard failures — don't waste retry attempts
+          if (res.status === 401) { lastErrKind = "auth"; lastErr = new Error("Sign in required to generate the brief."); break; }
+          if (res.status === 403) { lastErrKind = "tier"; lastErr = new Error("The Morning Brief is a Pro feature. Upgrade to unlock it."); break; }
+          if (res.status === 429) { lastErrKind = "rate"; lastErr = new Error("Hourly AI limit reached — please try again later."); break; }
+          if (res.status === 503 || errMsg === "__MAINTENANCE__") {
+            lastErrKind = "maintenance";
+            lastErr = new Error("CLVR AI is briefly under maintenance — please try again in a few minutes.");
+            break;
+          }
+          lastErr = new Error(errMsg);
+          lastErrKind = "network";
+          continue;
+        }
+        const txt = data?.text || "";
+        if (!txt) { lastErr = new Error("Empty response from CLVR AI"); lastErrKind = "empty"; continue; }
         const clean = txt.replace(/```json|```/g, "").trim();
         const jsonMatch = clean.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) { lastErr = new Error("No JSON found"); continue; }
-        setBriefData(JSON.parse(jsonMatch[0]));
+        if (!jsonMatch) { lastErr = new Error("Brief format unexpected"); lastErrKind = "parse"; continue; }
+        let parsed;
+        try { parsed = JSON.parse(jsonMatch[0]); }
+        catch (pe) { lastErr = new Error("Brief format unexpected"); lastErrKind = "parse"; continue; }
+        setBriefData(parsed);
         setBriefDate(todayStr);
         lastErr = null;
+        lastErrKind = null;
         break;
       } catch (e) {
         lastErr = e;
+        lastErrKind = "network";
       }
     }
-    if (lastErr) setToast("Brief is taking longer than usual — please tap Generate again in a moment.");
+    if (lastErr) {
+      console.error("[generateBrief] failed:", lastErrKind, lastErr?.message);
+      const friendly = lastErrKind === "auth"        ? "Sign in required to generate the morning brief."
+                     : lastErrKind === "tier"        ? "The Morning Brief is a Pro feature — upgrade to unlock."
+                     : lastErrKind === "rate"        ? "You've hit the hourly AI limit — please try again later."
+                     : lastErrKind === "maintenance" ? "CLVR AI is briefly under maintenance. Try again in a few minutes."
+                     : lastErrKind === "parse"       ? "Brief came back malformed — please tap Generate again."
+                     : lastErrKind === "empty"       ? "CLVR AI returned no content — please tap Generate again."
+                     :                                 "Couldn't reach CLVR AI — check your connection and tap Generate again.";
+      setBriefError(friendly);
+      setToast(friendly);
+    }
     setBriefLoading(false);
   };
 
@@ -4852,11 +4888,32 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             <div style={ph}><PTitle>Daily Intelligence Brief</PTitle><Badge label="AI · Live Prices" color="gold"/></div>
             <div style={{padding:16}}>
               <div style={{fontSize:11,color:C.muted2,lineHeight:1.8,marginBottom:14,fontStyle:"italic"}}>Same analysis as the 6AM email — generated live with current prices.</div>
-              <button data-testid="button-generate-brief" onClick={()=>{generateBrief();setTab("radar");}} disabled={briefLoading} style={{width:"100%",height:44,background:"rgba(201,168,76,.1)",color:briefLoading?C.muted:C.gold2,border:`1px solid ${briefLoading?"rgba(201,168,76,.15)":"rgba(201,168,76,.35)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:15,cursor:briefLoading?"not-allowed":"pointer",letterSpacing:"0.04em"}}>
-                {briefLoading?"Generating...":"Generate Today's Brief →"}
+              <button data-testid="button-generate-brief" onClick={()=>{ setBriefError(""); generateBrief(); }} disabled={briefLoading} style={{width:"100%",height:44,background:"rgba(201,168,76,.1)",color:briefLoading?C.muted:C.gold2,border:`1px solid ${briefLoading?"rgba(201,168,76,.15)":"rgba(201,168,76,.35)"}`,borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:15,cursor:briefLoading?"not-allowed":"pointer",letterSpacing:"0.04em"}}>
+                {briefLoading?"Generating brief — this can take 30–60s...":"Generate Today's Brief →"}
               </button>
+
+              {briefLoading&&(
+                <div data-testid="status-brief-loading" style={{marginTop:14,padding:"12px 14px",border:`1px solid ${C.border}`,borderRadius:2,fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.06em",textAlign:"center"}}>
+                  CLVR AI is pulling prices, scanning the wire and writing your brief. Please don't navigate away — the results panel will appear here when ready.
+                </div>
+              )}
+
+              {!briefLoading&&briefError&&(
+                <div data-testid="status-brief-error" style={{marginTop:14,padding:"12px 14px",border:"1px solid rgba(255,64,96,.35)",background:"rgba(255,64,96,.08)",borderRadius:2,fontFamily:SANS,fontSize:13,color:C.text,lineHeight:1.55}}>
+                  <div style={{fontFamily:MONO,fontSize:9,letterSpacing:"0.15em",color:C.red,marginBottom:6}}>BRIEF FAILED</div>
+                  {briefError}
+                </div>
+              )}
+
+              {!briefLoading&&!briefError&&briefData&&(
+                <div data-testid="status-brief-ready" style={{marginTop:14,padding:"12px 14px",border:"1px solid rgba(0,199,135,.3)",background:"rgba(0,199,135,.06)",borderRadius:2,fontFamily:SANS,fontSize:13,color:C.text,lineHeight:1.55,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                  <span><span style={{fontFamily:MONO,fontSize:9,letterSpacing:"0.15em",color:C.green,marginRight:8}}>READY</span>Today's brief is generated.</span>
+                  <button data-testid="button-view-brief" onClick={()=>setTab("radar")} style={{height:30,padding:"0 12px",background:"rgba(201,168,76,.1)",color:C.gold2,border:"1px solid rgba(201,168,76,.35)",borderRadius:2,fontFamily:MONO,fontSize:9,letterSpacing:"0.15em",cursor:"pointer",whiteSpace:"nowrap"}}>VIEW ON RADAR →</button>
+                </div>
+              )}
+
               <div style={{marginTop:10,fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em",textAlign:"center"}}>
-                Results appear on the RADAR tab.
+                Results render on the RADAR tab.
               </div>
             </div>
           </div>
