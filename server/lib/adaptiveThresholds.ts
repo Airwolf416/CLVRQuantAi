@@ -66,7 +66,12 @@ export async function recalculateThresholds(): Promise<number> {
     else if (winRate <= 75) adjustment = (bigCutAllowed && wL >= 50 ? -7  : -3);
     else if (winRate <= 85) adjustment = (bigCutAllowed && wL >= 60 ? -12 : -3);
     else                    adjustment = (bigCutAllowed && wL >= 65 ? -18 : -3);
-    adjustment = Math.max(-25, Math.min(25, adjustment));
+    // Cap the upper adjustment at +20 (max threshold = 95) instead of +25 (=100).
+    // A 100-confidence floor is an absolute lockout that prevents the system
+    // from ever recovering from a bad streak — a probe at 95+ is nearly as
+    // restrictive but at least allows extreme-conviction signals through so
+    // we keep collecting fresh data on the combo. Lower bound stays at -25.
+    adjustment = Math.max(-25, Math.min(20, adjustment));
 
     // Auto-suppress when EITHER:
     //   (a) Wilson lower bound < 30% with 10+ resolved signals (conservative), OR
@@ -178,15 +183,88 @@ export async function suppressHistoricalBleeders(): Promise<number> {
   }
 }
 
+// Releases combos that have been completely locked out by suppression —
+// no signals fired (resolved OR pending) in the last 7 days. That state
+// means the gate is preventing all data collection on the combo, so the
+// suppression itself is now self-perpetuating: no new outcomes ever land,
+// the recalc has nothing fresh to chew on, and the row stays suppressed
+// indefinitely. Releasing to threshold 90 (still strict, not a green
+// light) lets a probe trade fire so we can re-learn the combo. If it
+// fails, the next recalc re-suppresses it on actual evidence.
+//
+// Skips manual_override rows — admins can pin a combo permanently.
+const PROBE_STALE_DAYS = 7;
+export async function probeStaleSuppressedCombos(): Promise<number> {
+  try {
+    const cutoff = new Date(Date.now() - PROBE_STALE_DAYS * 24 * 60 * 60 * 1000);
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`
+        WITH stale AS (
+          SELECT t.token, t.direction
+          FROM adaptive_thresholds t
+          WHERE t.suppressed = true
+            AND t.manual_override = false
+            AND NOT EXISTS (
+              SELECT 1 FROM ai_signal_log l
+              WHERE l.token = t.token AND l.direction = t.direction
+                AND l.created_at > $1
+            )
+        )
+        UPDATE adaptive_thresholds t
+        SET current_threshold = 90,
+            suppressed = false,
+            adjustment = 15,
+            last_recalc = NOW(),
+            updated_at = NOW()
+        FROM stale s
+        WHERE t.token = s.token AND t.direction = s.direction
+        RETURNING t.token, t.direction
+      `, [cutoff]);
+      const n = result.rowCount || 0;
+      if (n > 0) {
+        console.log(`[AdaptiveThresholds] 🔄 Released ${n} fully-locked-out combos for probe trades (no signals fired in ${PROBE_STALE_DAYS}d):`);
+        for (const r of result.rows) console.log(`  • ${r.token} ${r.direction} → threshold 90, unsuppressed`);
+      }
+      return n;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error("[AdaptiveThresholds] probeStaleSuppressedCombos failed:", e);
+    return 0;
+  }
+}
+
+// In-flight mutex: prevents overlapping cycles when a recalc + probe runs
+// longer than INTERVAL_MS. Without this, two concurrent cycles could race
+// on the same adaptive_thresholds rows (cap-down + probe-release flipping
+// the same row repeatedly within one tick). Single-process only — for
+// multi-instance safety, layer a Postgres advisory lock on top.
+let cycleInFlight = false;
+
 export function startAdaptiveThresholds(): void {
   if (started) return;
   started = true;
-  // First run after 2 min (let app settle)
+  // First run after 2 min (let app settle). Each cycle: recalc thresholds
+  // from fresh outcomes, then release any combos that have been suppressed
+  // long enough to have starved out their own data feed.
+  const cycle = async () => {
+    if (cycleInFlight) {
+      console.warn("[AdaptiveThresholds] previous cycle still running — skipping this tick");
+      return;
+    }
+    cycleInFlight = true;
+    try {
+      try { await recalculateThresholds(); } catch (e) { console.error("[AdaptiveThresholds] recalc failed:", e); }
+      try { await probeStaleSuppressedCombos(); } catch (e) { console.error("[AdaptiveThresholds] probe failed:", e); }
+    } finally {
+      cycleInFlight = false;
+    }
+  };
   setTimeout(() => {
-    recalculateThresholds().catch(e => console.error("[AdaptiveThresholds] recalc failed:", e));
-    setInterval(() => {
-      recalculateThresholds().catch(e => console.error("[AdaptiveThresholds] recalc failed:", e));
-    }, INTERVAL_MS);
+    cycle();
+    setInterval(cycle, INTERVAL_MS);
   }, 2 * 60 * 1000);
   console.log(`[AdaptiveThresholds] Started — recalculating every ${INTERVAL_MS / 60000} min`);
 }
