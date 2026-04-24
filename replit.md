@@ -252,3 +252,8 @@ Added per-session VWAP (with ±1σ bands) and Opening Range (ORH/ORL) overlays t
 
 Logged as improvement entry. Verified TS clean compile + no JSX render errors (HTTP 200 on `/`).
 
+
+### Brief tab — output renders inline (Apr 24, 2026 — follow-up)
+**Symptom:** user reported via screenshot that even with the new READY status banner, the brief output still didn't appear on the Brief tab — they had to tap "VIEW ON RADAR →" and switch tabs to actually read today's analysis. Their expectation: tap Generate, read the brief in place.
+
+**Fix:** in `client/src/App.jsx`, copied the entire `{briefData && <>...</>}` render block (lines ~4615-4741: header card, Live Prices, Analysis & Outlook, Impactful News, What to Watch, Key Risk, Trade Ideas, Support footer) into the Brief tab section (`{tab==="brief" && isPro && <>...</>}`) right below the Generate button's status panel. Also removed the now-misleading `VIEW ON RADAR →` button and the `Results render on the RADAR tab.` footnote — replaced with `READY · Today's brief is below — scroll to read.`. The Radar tab still renders the same brief block (additive, no regression for users who navigate there from Radar).
