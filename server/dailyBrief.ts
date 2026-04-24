@@ -424,6 +424,27 @@ async function sendDailyBriefEmails() {
   }
   console.log(`[daily-brief] Slot ${dateKey} claimed by ${briefTag()} — generating...`);
 
+  // Outer guard: any uncaught throw between the claim and the send loop
+  // (market data fetch, brief generation, subscriber query, tier-trade
+  // pipeline, etc.) would otherwise leave the row at recipient_count=0 and
+  // permanently lock the day. Catch any such throw and release the slot so a
+  // retry can run. The send loop below has its own narrower try/catch that
+  // also releases on its specific failure modes.
+  try {
+    return await sendDailyBriefBody(dateKey, today);
+  } catch (e: any) {
+    console.log(`[daily-brief] Pre-send exception for ${dateKey}:`, e?.message || e, `— releasing slot`);
+    try {
+      await pool.query(
+        `DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`,
+        [dateKey]
+      );
+    } catch {}
+  }
+}
+
+async function sendDailyBriefBody(dateKey: string, today: string) {
+
   const marketData = await fetchMarketData();
   console.log(`[daily-brief] Market data: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
 
@@ -682,12 +703,27 @@ async function sendDailyBriefEmails() {
     }
 
     console.log(`[daily-brief] Done — ${sentCount}/${subs.length} emails sent across ${chunks.length} batch(es)`);
-    await pool.query(
-      `UPDATE daily_briefs_log SET recipient_count = $1 WHERE date_key = $2`,
-      [sentCount, dateKey]
-    );
+    if (sentCount === 0) {
+      // Every individual send failed (rate limit storm, bad domain, transient
+      // Resend outage). Release the slot so the next scheduled tick or a
+      // manual retry can attempt the send instead of recording a permanent
+      // recipient_count=0 lock for the day.
+      console.log(`[daily-brief] 0/${subs.length} delivered — releasing slot ${dateKey} for retry`);
+      try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
+    } else {
+      await pool.query(
+        `UPDATE daily_briefs_log SET recipient_count = $1 WHERE date_key = $2`,
+        [sentCount, dateKey]
+      );
+    }
   } catch (e: any) {
-    console.log("[daily-brief] Resend client error:", e.message);
+    // Catastrophic failure before/during the loop (most often: Resend client
+    // init threw — missing key, connector outage, bad token). Without releasing
+    // the claim, today's slot is permanently locked at recipient_count=0 and
+    // every retry path (scheduled tick, restart catch-up, manual admin) silently
+    // aborts. Release the slot so the next attempt can actually run.
+    console.log("[daily-brief] Resend client error:", e.message, `— releasing slot ${dateKey} for retry`);
+    try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
   }
 }
 
