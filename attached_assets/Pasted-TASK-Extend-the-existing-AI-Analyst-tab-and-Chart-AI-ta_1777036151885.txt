@@ -1,0 +1,101 @@
+TASK: Extend the existing AI Analyst tab and Chart AI tab with session VWAP
+and Opening Range (ORH/ORL) overlays. Build ON TOP of the current module —
+do not refactor or replace existing logic. Gate strictly to SPOT equities,
+SPOT FX, and SPOT commodities. Exclude all perps and all crypto (spot + perp).
+
+=== 1. ASSET-CLASS GATING (do this first) ===
+
+Before any VWAP/ORL logic runs, check asset metadata:
+  if symbol.asset_class not in ("equity_spot", "fx_spot", "commodity_spot"):
+      return None  # do not compute, do not display
+
+Add a helper: is_execution_overlay_eligible(symbol) -> bool
+Use this gate in BOTH backend computation and frontend rendering so perps
+and crypto never trigger the overlay even if a payload leaks through.
+
+=== 2. BACKEND: new module /server/execution_levels.py ===
+
+Compute per eligible ticker:
+  - session_vwap (cumulative Σ(price*volume)/Σ(volume) from session open)
+  - vwap_upper_1sd / vwap_lower_1sd
+  - orh / orl (high/low of first N min after session open)
+  - or_width_pct
+  - price_vs_vwap_pct
+  - in_or_range (bool)
+  - orb_status: "pending" | "broken_up" | "broken_down" | "failed_breakout"
+
+Session anchors + OR windows:
+  - equity_spot:    RTH open of listing exchange (NYSE/Nasdaq 13:30 UTC,
+                    LSE 08:00 UTC, TSX 13:30 UTC, etc.) — first 15 min
+  - fx_spot:        anchor to 22:00 UTC (Sydney/Wellington open = FX daily roll)
+                    — first 60 min
+  - commodity_spot: anchor to underlying exchange RTH
+                    (e.g. COMEX gold 13:30 UTC, LME copper 12:00 UTC)
+                    — first 30 min
+
+Pull 1-min OHLCV from the existing centralized data bus. Do NOT add a new
+data source. Cache in Redis w/ 30s TTL.
+
+Expose: GET /api/execution_levels/{symbol}
+  - Require existing auth token (same gate as Signals endpoint)
+  - Return 404 with body {"reason": "asset_class_not_eligible"} for
+    ineligible symbols — never return partial/null payloads
+
+=== 3. AI ANALYST TAB — ADDITIVE ONLY ===
+
+Locate the existing AI Analyst context-builder (wherever the ticker payload
+gets assembled before the Claude API call). Do not rewrite it. After the
+existing context blocks, APPEND a new section — only if eligible:
+
+  if is_execution_overlay_eligible(symbol):
+      context += build_execution_context_block(symbol)
+
+The appended block:
+  EXECUTION CONTEXT ({symbol}, {timestamp}):
+  - Session VWAP: ${vwap} (price {price_vs_vwap_pct}% away)
+  - VWAP bands: ${vwap_lower_1sd} / ${vwap_upper_1sd}
+  - Opening Range: ${orl} — ${orh} (width {or_width_pct}%)
+  - Current price: {inside/above/below} opening range
+  - ORB status: {orb_status}
+
+Extend the existing analyst system prompt with one additional instruction
+(do not replace the current prompt):
+  "When the EXECUTION CONTEXT block is present, reference VWAP and opening
+   range levels in your tape-read. If absent, do not mention these levels —
+   the asset is not eligible for intraday session structure analysis."
+
+=== 4. CHART AI TAB — ADDITIVE OVERLAYS ===
+
+In the existing chart component, add a conditional overlay layer that only
+renders when is_execution_overlay_eligible(symbol) is true:
+
+  - Solid gold line: session VWAP (#D4AF37, 1.5px)
+  - Dashed gold: VWAP ±1 std (#D4AF37 @ 40% opacity, 1px)
+  - Horizontal green dashed: ORH (#00FF88, labeled "ORH $X.XX")
+  - Horizontal red dashed: ORL (#FF4444, labeled "ORL $X.XX")
+  - Shaded region between ORH/ORL: #00FF88 @ 8% opacity
+
+For perps/crypto charts: render exactly as today — no overlay, no legend,
+no Claude commentary referencing these levels.
+
+Extend the existing Chart AI commentary call: pass execution_levels into
+the context only when eligible. Claude generates a 2-3 sentence tape-read
+referencing VWAP/ORH/ORL. If not eligible, commentary runs as it does today.
+
+=== 5. UI / AESTHETIC ===
+
+Preserve current terminal style (black bg, IBM Plex Mono, gold/green accents).
+Add a small legend below the chart — ONLY when overlay is active:
+  "VWAP • ORH • ORL"
+  (gold dot, green dot, red dot respectively)
+
+Do not add tooltips, do not add settings toggles in v1. Static overlay only.
+
+=== 6. HARD CONSTRAINTS ===
+
+- Do NOT touch the Signals tab
+- Do NOT touch Kronos, Kelly sizing, OI score, momentum half-life, or Fib
+- Do NOT add VWAP/ORL to any perp or crypto view (spot or perp)
+- Do NOT reset / recompute VWAP outside the defined session anchor
+- Do NOT expose the endpoint without the existing auth token
+- Do NOT break existing AI Analyst or Chart AI behavior for ineligible assets
