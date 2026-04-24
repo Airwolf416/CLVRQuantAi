@@ -124,7 +124,14 @@
     {{/if}}
   </div>
 
-  <!-- Disclaimer -->
+  <!-- Trade-idea disclaimer: only render for tiers that actually receive
+       trade ideas (Pro/Elite). Free-tier subscribers have ideaCount=0 and
+       must not see a disclaimer about ideas they didn't get.
+       NOTE: A previous edit removed the opening {{#if ideaCount}} but left
+       the closing {{/if}} behind, breaking Handlebars parse on line 134
+       and silently failing every brief send (rendered before Resend was
+       called). Restoring the opening tag balances the block. -->
+  {{#if ideaCount}}
   <div style="padding:0 24px 16px">
     <div style="padding:12px 16px;background:rgba(255,160,0,.04);border:1px solid rgba(255,160,0,.18);border-radius:4px">
       <div style="font-family:monospace;font-size:8px;color:#c9a84c;letter-spacing:0.18em;margin-bottom:5px;font-weight:700">⚠️ TRADE IDEA DISCLAIMER</div>
