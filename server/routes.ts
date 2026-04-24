@@ -6529,6 +6529,82 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
+  // Force-retry today's daily brief. Releases any existing claim row for
+  // today's date_key (recipient_count=0) and re-enqueues the send. Use this
+  // when the morning send failed and the slot is locked, OR when you want to
+  // resend (BEWARE: this WILL re-send to every active subscriber if today's
+  // brief is locked at 0 — verify recipient_count=0 before calling).
+  app.post("/api/admin/retry-daily-brief", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const userRes = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+      const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
+      if (userEmail !== OWNER_EMAIL) return res.status(403).json({ error: "Owner only" });
+
+      const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const dateKey = etTime.toISOString().split("T")[0];
+
+      // Stuck-lease policy: a brief send takes a few minutes max (claim →
+      // generate → loop over subscribers with 250ms spacing + small retries).
+      // If a slot still shows recipient_count=0 after this lease window, it
+      // is safely abandoned and can be released for retry. Inside the lease,
+      // assume a legitimate send is still in flight and REFUSE — releasing
+      // a live in-progress row would let a parallel claim re-send the brief.
+      const STUCK_LEASE_MIN = 15;
+
+      // Single CTE: classify the row, refuse if already-sent or in-lease,
+      // otherwise atomically release. Avoids the SELECT-then-DELETE TOCTOU.
+      const txn = await pool.query(
+        `WITH cur AS (
+           SELECT recipient_count, sent_at,
+                  EXTRACT(EPOCH FROM (NOW() - sent_at)) / 60 AS age_min
+           FROM daily_briefs_log WHERE date_key = $1
+         ),
+         rel AS (
+           DELETE FROM daily_briefs_log
+           WHERE date_key = $1
+             AND recipient_count = 0
+             AND sent_at < NOW() - ($2::int || ' minutes')::interval
+           RETURNING id
+         )
+         SELECT
+           COALESCE((SELECT recipient_count FROM cur), -1) AS recipient_count,
+           COALESCE((SELECT age_min FROM cur), -1)         AS age_min,
+           (SELECT COUNT(*) FROM rel)::int                 AS released`,
+        [dateKey, STUCK_LEASE_MIN]
+      );
+      const row = txn.rows[0];
+      if (row.recipient_count > 0) {
+        return res.status(409).json({
+          error: `Today's brief already sent to ${row.recipient_count} recipients — refusing to resend.`,
+          dateKey,
+        });
+      }
+      if (row.recipient_count === 0 && row.released === 0) {
+        // Row exists at 0 but inside the lease window → treat as in-progress.
+        return res.status(409).json({
+          error: `A daily brief send is in progress for ${dateKey} (started ${Math.round(row.age_min)} min ago, lease ${STUCK_LEASE_MIN} min). Wait for it to finish or retry after the lease expires.`,
+          dateKey,
+          inProgressAgeMinutes: Math.round(row.age_min),
+        });
+      }
+      const released = { rowCount: row.released };
+      console.log(`[retry-daily-brief] Owner ${userEmail} forcing retry for ${dateKey} — released ${released.rowCount || 0} stuck slot(s)`);
+      enqueueDailyBrief()
+        .then(() => console.log(`[retry-daily-brief] enqueue completed for ${dateKey}`))
+        .catch((err: any) => console.log(`[retry-daily-brief] enqueue error for ${dateKey}:`, err?.message || err));
+      res.json({
+        ok: true,
+        message: `Retry started for ${dateKey} — watch logs for delivery status`,
+        releasedStuckSlot: (released.rowCount || 0) > 0,
+      });
+    } catch (e: any) {
+      console.log("[retry-daily-brief] route error:", e?.message || e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/admin/send-apology-brief", async (req, res) => {
     // Owner-only: must be logged in as the owner account
     const userId = (req.session as any)?.userId;
