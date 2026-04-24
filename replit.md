@@ -148,6 +148,8 @@ Two-knob fix:
 
 DB cleanup applied at fix time: 21 rows capped 100→95; first probe-stale run released 15 fully-locked combos.
 
-**Open question:** post-fix R:R rejection histogram shows 35 of 55 rejects clustered at *exactly* 1.64 — the engine's natural output is 0.01 below the new floor. May need to drop to 1.55 to truly free the bulk, or widen TP at engine level. Deferred for explicit user call.
+**Open question:** post-fix R:R rejection histogram shows 35 of 55 rejects clustered at *exactly* 1.64 — the engine's natural output is 0.01 below the new floor. May need to drop to 1.55 to truly free the bulk, or widen TP at engine level.
+
+**Decision (Apr 2026):** holding floor at 1.65 for ~1 week. Rejection logging upgraded to 4-decimal precision (`signalHardening.ts` line ~198) so calibration uses real values, not rounded bins. After ~7d of data, bucket realized outcomes (from `ai_signal_log`) by true unrounded post-friction R:R and choose the lowest R:R where net-of-cost expectancy stays positive. Avoid a blind drop to 1.55 — prefer per-token / per-regime / per-hold-horizon relaxation if expectancy supports it.
 
 **What "WORKER STALE (Nm)" on the Account page actually means:** the AccountPage `workerHealthy` indicator shows minutes since the last DB-saved signal. It is a *throughput* signal, not a process-liveness signal. A high number can mean the worker is dead OR every signal it produced was rejected by gates. Always check `signal_rejections` before assuming the worker is dead.
