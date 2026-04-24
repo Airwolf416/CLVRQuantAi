@@ -123,3 +123,15 @@ Current behavior:
 - Server logs each verify attempt with the 8-char token prefix and outcome (`OK alreadyVerified=…` / `no user — likely already-used or replaced` / threw) for traceability on Railway.
 
 Future hardening (not done): add `emailVerificationTokenIssuedAt` and a TTL (e.g., 24 h after verify) to bound the replay window; tighten 404 semantics so genuinely unknown tokens don't all map to `already_used`.
+
+### Improvement Log auto-logging convention (Apr 2026)
+Helper: `server/lib/improvementLog.ts` exports `logImprovement({ headline, detail?, emoji?, addedBy? })`.
+
+**Convention going forward:** after shipping any user-visible change (bugfix, new feature, UX improvement, copy change worth surfacing), the agent calls `logImprovement(...)` from somewhere on the request path or via a one-off script. Entries flow into the same `update_log_entries` table the Saturday weekly digest reads from, so the digest is always populated with real material instead of falling back to git commits (which Railway strips).
+
+Behavior:
+- `addedBy` defaults to `"agent"` so agent-authored entries are distinguishable from manual ones added through the Account page panel (those carry the admin email).
+- Built-in dedupe: same `headline` within the last 7 days is silently skipped. Safe to call on retry / across workflow restarts.
+- Never throws — failures log to console and return cleanly. Logging an improvement must never be able to break a feature.
+
+Manual entries via the Account page UpdateLogManager continue to work alongside this.
