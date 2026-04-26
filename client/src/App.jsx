@@ -523,7 +523,7 @@ function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
 function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const plans=[
     {name:"Free",price:"$0",period:"forever",color:C2.muted2,borderColor:"#1c2b4a",features:["Live crypto, equities & forex prices","Macro calendar & event tracker","Market regime dashboard","Signals with 30-min delay (prices hidden)","Track record — aggregate stats only"]},
-    {name:"Pro",price:"$29.99",period:"/mo",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📰 Daily AI Morning Brief · 4 trade ideas","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
+    {name:"Pro",price:"$29.99",period:"/mo",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📰 Daily AI Morning Brief · 1 trade idea","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
     {name:"Elite",price:"$129",period:"/mo",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","⚡ Hyperliquid perps integration","🔑 Direct founder access · all future features"]},
   ];
   return(
@@ -3223,7 +3223,7 @@ STYLE RULES:
 • Keep R:R for any trade idea ≥ 1.5:1.
 
 Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT live prices above.
-{"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","oil":"3-4 sentences covering WTI AND Brent prices, supply/demand drivers (OPEC+, US inventories, demand), geopolitical risk premium (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), and natural gas price if notable. End with 🟢/🟡/🔴 bias for energy sector","equities":"3-4 sentences covering SPX AND NDX levels and overnight move, mega-cap leadership (NVDA/TSLA/AAPL/MSFT/META direction), breadth and sector rotation, key earnings or Fed cross-currents, VIX context. End with 🟢/🟡/🔴 bias for US equities","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","impactfulNews":[{"title":"short headline (<80 chars)","impact":"BULLISH|BEARISH|NEUTRAL","assets":"comma-separated tickers most affected","takeaway":"one sentence — what a trader should DO or WATCH because of this"}],"watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it","topTrade":{"asset":"Best trade today","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence edge","riskLabel":"🟢 or 🟡 or 🔴","flags":"macro risk flags or None"},"additionalTrades":[{"asset":"2nd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"4th trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"}]}`;
+{"headline":"5-layer insight headline using actual prices and macro context","bias":"RISK ON|RISK OFF|NEUTRAL","macroRisk":"${macroRiskEvts.length>0?"HIGH":"NORMAL"}","btc":"2-3 sentences: price, trend structure, funding rate, key support/resistance, 🟢/🟡/🔴 bias","eth":"2 sentences ETH trend and BTC dominance context","sol":"1-2 sentences SOL with momentum signal","xau":"2-3 sentences: XAU price, real yield driver, DXY correlation, 🟢/🟡/🔴 bias","xag":"1 sentence XAG with XAU correlation","oil":"3-4 sentences covering WTI AND Brent prices, supply/demand drivers (OPEC+, US inventories, demand), geopolitical risk premium (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), and natural gas price if notable. End with 🟢/🟡/🔴 bias for energy sector","equities":"3-4 sentences covering SPX AND NDX levels and overnight move, mega-cap leadership (NVDA/TSLA/AAPL/MSFT/META direction), breadth and sector rotation, key earnings or Fed cross-currents, VIX context. End with 🟢/🟡/🔴 bias for US equities","eurusd":"2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias","usdjpy":"2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias","usdcad":"2-3 sentences: rate, oil price correlation, BOC context","impactfulNews":[{"title":"short headline (<80 chars)","impact":"BULLISH|BEARISH|NEUTRAL","assets":"comma-separated tickers most affected","takeaway":"one sentence — what a trader should DO or WATCH because of this"}],"watchToday":["7 specific actionable items with price levels and triggers — each one tells reader WHAT to watch and WHAT to do if it triggers"],"keyRisk":"single sentence: biggest tail risk today and how to hedge it","topTrade":{"asset":"Best trade today","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence edge","riskLabel":"🟢 or 🟡 or 🔴","flags":"macro risk flags or None"},"additionalTrades":[{"asset":"2nd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"},{"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢 or 🟡 or 🔴","flags":"any flags"}]}`;
     // Retry with exponential backoff — never show "unavailable" without trying 3 times.
     // Classify errors so the user gets a real, actionable message instead of a
     // generic "taking longer than usual" toast that makes the button feel broken.
@@ -4681,7 +4681,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               </div>
             </div>}
             {(() => {
-              const briefTradeCount = userTier === "elite" ? 4 : userTier === "pro" ? 1 : 0;
+              const briefTradeCount = userTier === "elite" ? 3 : userTier === "pro" ? 1 : 0;
               if (briefTradeCount === 0) {
                 return (
                   <div style={{...panel,border:`1px solid rgba(201,168,76,.25)`,padding:"22px 18px",textAlign:"center"}}>
@@ -4698,7 +4698,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               }
               const trades = [
                 ...(briefData.topTrade ? [briefData.topTrade] : []),
-                ...(briefTradeCount >= 4 && Array.isArray(briefData.additionalTrades) ? briefData.additionalTrades.slice(0, 3) : []),
+                ...(briefTradeCount >= 3 && Array.isArray(briefData.additionalTrades) ? briefData.additionalTrades.slice(0, 2) : []),
               ];
               if (trades.length === 0) return null;
               const titleLabel = briefTradeCount === 1 ? "Today's Top Trade Idea" : `Trade Ideas (Elite — ${trades.length} Ideas)`;
@@ -4721,7 +4721,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                     </div>
                   ))}
                   {userTier === "pro" && <div style={{padding:"10px 14px",background:"rgba(201,168,76,.04)",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>
-                    🔒 <span style={{color:C.gold}}>Elite members get 4 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
+                    🔒 <span style={{color:C.gold}}>Elite members get 3 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
                   </div>}
                 </div>
               );
@@ -4981,7 +4981,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               </div>
             </div>}
             {(() => {
-              const briefTradeCount = userTier === "elite" ? 4 : userTier === "pro" ? 1 : 0;
+              const briefTradeCount = userTier === "elite" ? 3 : userTier === "pro" ? 1 : 0;
               if (briefTradeCount === 0) {
                 return (
                   <div style={{...panel,border:`1px solid rgba(201,168,76,.25)`,padding:"22px 18px",textAlign:"center"}}>
@@ -4998,7 +4998,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               }
               const trades = [
                 ...(briefData.topTrade ? [briefData.topTrade] : []),
-                ...(briefTradeCount >= 4 && Array.isArray(briefData.additionalTrades) ? briefData.additionalTrades.slice(0, 3) : []),
+                ...(briefTradeCount >= 3 && Array.isArray(briefData.additionalTrades) ? briefData.additionalTrades.slice(0, 2) : []),
               ];
               if (trades.length === 0) return null;
               const titleLabel = briefTradeCount === 1 ? "Today's Top Trade Idea" : `Trade Ideas (Elite — ${trades.length} Ideas)`;
@@ -5021,7 +5021,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                     </div>
                   ))}
                   {userTier === "pro" && <div style={{padding:"10px 14px",background:"rgba(201,168,76,.04)",textAlign:"center",fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>
-                    🔒 <span style={{color:C.gold}}>Elite members get 4 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
+                    🔒 <span style={{color:C.gold}}>Elite members get 3 trade ideas daily.</span> Upgrade at CLVRQuantAI.com
                   </div>}
                 </div>
               );

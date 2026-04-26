@@ -219,14 +219,14 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
     ? `\n⚠️ CRITICAL — PENDING HIGH-IMPACT EVENTS (NO OUTCOMES YET):\n${pendingHighEvents.map(e => `  - ${e}`).join("\n")}\nFor each of these events you MUST write only forward-looking language. NEVER state the outcome. NEVER write phrases like "Fed holds", "CPI came in at", "rate decision confirmed", or anything describing a result. Write what the market is pricing in and what to watch FOR. Violation of this rule produces misleading information that could cause financial harm.`
     : "";
 
-  const prompt = `You are CLVR AI — elite quantitative trading analyst, powered by Claude. Generate a morning market brief for ${today}. ALL data below is REAL, LIVE, and TIMESTAMPED.
+  const prompt = `You are CLVR AI — a senior markets correspondent (think Bloomberg / FT / Reuters) writing the morning brief for ${today}. Voice: clear, calm, authoritative economic-journalism prose. Short concrete sentences. No marketing fluff, no hedging clichés. Always name the WHY, not just the WHAT. ALL data below is REAL, LIVE, and TIMESTAMPED.
 
 ═══ CRITICAL RULES — READ BEFORE WRITING ═══
 1. Only use prices, percentages, and figures EXPLICITLY provided in the data below. Do NOT invent or round differently.
 2. For any macro event with STATUS:PENDING — write ONLY forward-looking language ("market is pricing in X", "watch for Y"). NEVER state outcomes.
 3. For any macro event with STATUS:RELEASED — state the ACTUAL value provided. Never infer.
-4. Label market sentiment (RISK ON / RISK OFF / MIXED) using provided data only.
-5. The "What to Watch" section must use conditional language: "IF [level] breaks THEN [action]". Never unconditional calls.
+4. Label market sentiment (RISK ON / RISK OFF / NEUTRAL) using provided data only.
+5. The "watchToday" items must use conditional language: "IF [level] breaks THEN [action]". Never unconditional calls.
 6. If any HIGH-impact event is within 6 hours of ${new Date().toISOString()}, add a tail risk note.
 7. Never fabricate data. Never state a macro outcome unless STATUS:RELEASED with actual value.
 ${pendingWarningBlock}
@@ -249,19 +249,35 @@ FOREX: ${fxStr || "Data unavailable"}
 
 LAYER 3 — SESSION: ${sessionCtx}
 
-Return a JSON object with EXACTLY these fields:
+STYLE RULES:
+• Each per-asset section is a tight paragraph (2–4 sentences). Lead with the move + the cause, then the technical level, then the outlook.
+• Use full sentences and connective tissue ("because", "after", "as", "while"). No bullet-style fragments inside the prose fields.
+• Embed risk colour at the END of each section as " 🟢 bias" / " 🟡 bias" / " 🔴 bias".
+• Keep R:R for any trade idea ≥ 1.5:1.
+
+Return a JSON object with EXACTLY these fields (output STRICT JSON only, no markdown, no backticks):
 {
-  "headline": "One compelling headline using 5-layer insight — e.g. 'FOMC Risk-Off: BTC Tests $X Support, Gold at $X as DXY Firms'",
+  "headline": "One compelling 5-layer insight headline using actual prices and macro context — e.g. 'FOMC Risk-Off: BTC Tests $X Support, Gold at $X as DXY Firms'",
+  "bias": "RISK ON" or "RISK OFF" or "NEUTRAL",
   "marketSentiment": "bullish" or "bearish" or "neutral",
   "macroRegime": "RISK ON" or "RISK OFF" or "NEUTRAL",
   "macroRisk": "${macroRiskEvents.length > 0 ? "HIGH" : "NORMAL"}",
   "macroRiskNote": "${macroRiskEvents.length > 0 ? macroRiskEvents[0] : "No critical events within 48h"}",
-  "commentary": [
-    {"emoji":"₿","title":"Bitcoin (BTC/USD)","text":"2 concise sentences: current price + key level, plus 1 catalyst to watch. End with 🟢/🟡/🔴."},
-    {"emoji":"💱","title":"FX Majors (EUR/USD, USD/JPY)","text":"2 concise sentences covering DXY direction and the most actionable major. End with 🟢/🟡/🔴."},
-    {"emoji":"🥇","title":"Gold & Silver","text":"2 concise sentences: XAU price, real-yield driver, key level. End with 🟢/🟡/🔴."},
-    {"emoji":"🛢️","title":"Oil & Energy","text":"2 concise sentences: WTI/Brent move + 1 supply or geopolitical driver. End with 🟢/🟡/🔴."}
+  "btc":      "2-3 sentences: BTC price, trend structure, funding/positioning, key support/resistance, 🟢/🟡/🔴 bias",
+  "eth":      "2 sentences ETH trend and BTC dominance context, 🟢/🟡/🔴 bias",
+  "sol":      "1-2 sentences SOL with momentum signal, 🟢/🟡/🔴 bias",
+  "xau":      "2-3 sentences: XAU price, real-yield driver, DXY correlation, key level, 🟢/🟡/🔴 bias",
+  "xag":      "1-2 sentences XAG with XAU correlation, 🟢/🟡/🔴 bias",
+  "oil":      "3-4 sentences covering WTI AND Brent prices, supply/demand drivers (OPEC+, US inventories, demand), geopolitical risk premium (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), and natural gas if notable. End with 🟢/🟡/🔴 bias",
+  "equities": "3-4 sentences covering SPX AND NDX overnight move, mega-cap leadership (NVDA/TSLA/AAPL/MSFT/META direction), breadth and sector rotation, key earnings or Fed cross-currents, VIX context. End with 🟢/🟡/🔴 bias",
+  "eurusd":   "2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias",
+  "usdjpy":   "2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias",
+  "usdcad":   "2-3 sentences: rate, oil correlation, BOC context, 🟢/🟡/🔴 bias",
+  "impactfulNews": [
+    {"title":"short headline (<80 chars)","impact":"BULLISH|BEARISH|NEUTRAL","assets":"comma-separated tickers most affected","takeaway":"one sentence — what a trader should DO or WATCH because of this"}
   ],
+  "watchToday": ["7 specific actionable items with price levels and triggers — each one tells the reader WHAT to watch and WHAT to do if it triggers"],
+  "keyRisk": "single sentence: biggest tail risk today and how to hedge it",
   "topTrade": {
     "asset": "Best trade idea for today — asset name",
     "dir": "LONG or SHORT",
@@ -278,9 +294,7 @@ Return a JSON object with EXACTLY these fields:
     {"asset":"2nd trade — different asset class from topTrade","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"},
     {"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"}
   ],
-  "watchItems": ["3-4 specific things to watch — include price levels, event names, and what to do if they trigger"],
-  "riskLevel": "low" or "medium" or "high",
-  "riskNote": "One sentence: biggest risk to positions today and how to manage it"
+  "riskLevel": "low" or "medium" or "high"
 }
 
 RULES:
@@ -288,7 +302,9 @@ RULES:
 - Apply 5-layer framework: macro regime → structure → session → signal → risk rules
 - If FOMC/CPI within 48h: ALL signals get 🔴 label, cap leverage at 2x, say SIZE DOWN
 - Minimum R:R 1.5:1 for any trade idea. Skip if R:R is worse.
-- All 4 trade ideas must be from different asset classes (crypto, forex, metals, equities)
+- All 3 trade ideas must be from different asset classes (crypto, forex, metals, equities)
+- impactfulNews: at least 3 items, ranked by trading relevance for the next 24h
+- watchToday: exactly 7 items, each phrased as "IF [level] breaks THEN [action]" or similar conditional
 - Return ONLY the JSON object. No markdown, no backticks.`;
 
   try {
