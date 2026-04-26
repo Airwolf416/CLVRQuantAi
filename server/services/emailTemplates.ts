@@ -92,24 +92,87 @@ export function renderDailyBriefEmail(
   const isPro      = tier === "pro";          // strict — pro means pro, not pro|elite
   const isFreeTier = !isPro && !isElite;
 
-  const sentimentColor = briefJson.marketSentiment === "bullish" ? "#00c787"
-    : briefJson.marketSentiment === "bearish" ? "#ff4060" : "#e8c96d";
+  // ── Schema reconciliation ───────────────────────────────────────────────────
+  // The brief generator now returns the SAME rich schema as the on-demand brief
+  // on the Brief tab (per-asset prose: btc/eth/sol/xau/xag/oil/equities/eurusd/
+  // usdjpy/usdcad, plus impactfulNews / watchToday / keyRisk). Older briefs may
+  // still arrive with the legacy schema (commentary[], watchItems, riskNote).
+  // Map both to the variables the template expects so subscribers see exactly
+  // what the on-demand brief shows.
+  const bias = briefJson.bias || briefJson.macroRegime || "NEUTRAL";
+  const sentimentRaw = (briefJson.marketSentiment || (
+    bias === "RISK ON" ? "bullish" : bias === "RISK OFF" ? "bearish" : "neutral"
+  )).toLowerCase();
+  const sentimentColor = sentimentRaw === "bullish" ? "#00c787"
+    : sentimentRaw === "bearish" ? "#ff4060" : "#e8c96d";
+  const sentimentLabel = sentimentRaw.toUpperCase();
 
+  const macroRegimeStr = briefJson.macroRegime || briefJson.bias || "";
   const { color: macroRegimeColor, border: macroRegimeBorderColor, bg: macroRegimeBg } =
-    macroRegimeColors(briefJson.macroRegime || "");
+    macroRegimeColors(macroRegimeStr);
+
+  // Build commentary[] from the rich per-asset fields if present, else use the
+  // legacy commentary[] verbatim. The order/labels match the on-demand brief
+  // section in App.jsx so the email reads the same as the in-app experience.
+  const richAssetSpecs: Array<{ key: string; emoji: string; title: string }> = [
+    { key: "btc",      emoji: "₿",   title: "Bitcoin (BTC/USD)" },
+    { key: "eth",      emoji: "Ξ",   title: "Ethereum (ETH/USD)" },
+    { key: "sol",      emoji: "◎",   title: "Solana (SOL/USD)" },
+    { key: "equities", emoji: "📈", title: "US Equities (SPX · NDX)" },
+    { key: "xau",      emoji: "🥇", title: "Gold (XAU/USD)" },
+    { key: "xag",      emoji: "🥈", title: "Silver (XAG/USD)" },
+    { key: "oil",      emoji: "🛢️", title: "Oil & Energy (WTI · Brent · NatGas)" },
+    { key: "eurusd",   emoji: "€",   title: "EUR/USD" },
+    { key: "usdjpy",   emoji: "¥",   title: "USD/JPY" },
+    { key: "usdcad",   emoji: "$",   title: "USD/CAD" },
+  ];
+  const richCommentary = richAssetSpecs
+    .filter(s => typeof briefJson[s.key] === "string" && briefJson[s.key].trim().length > 0)
+    .map(s => ({ emoji: s.emoji, title: s.title, text: briefJson[s.key] }));
+  const commentary = richCommentary.length > 0
+    ? richCommentary
+    : (Array.isArray(briefJson.commentary) ? briefJson.commentary : []);
+
+  // watchToday (rich) → watchItems (template). keyRisk (rich) → riskNote.
+  const watchItems = Array.isArray(briefJson.watchToday) && briefJson.watchToday.length > 0
+    ? briefJson.watchToday
+    : (Array.isArray(briefJson.watchItems) ? briefJson.watchItems : []);
+  const riskNote = (briefJson.keyRisk && String(briefJson.keyRisk).trim())
+    || (briefJson.riskNote && String(briefJson.riskNote).trim())
+    || "";
+
+  // riskLevel: prefer Claude's value, otherwise derive from macroRisk.
+  const riskLevelRaw = (briefJson.riskLevel
+    || (briefJson.macroRisk === "HIGH" ? "high" : "medium")).toLowerCase();
+
+  // Impactful News — pass through to template (only present in rich schema).
+  const impactfulNews = Array.isArray(briefJson.impactfulNews)
+    ? briefJson.impactfulNews.slice(0, 5).map((n: any) => {
+        const impact = String(n.impact || "NEUTRAL").toUpperCase();
+        const impactColor = impact === "BULLISH" ? "#00c787" : impact === "BEARISH" ? "#ff4060" : "#e8c96d";
+        return {
+          title: n.title || "—",
+          impact,
+          impactColor,
+          assets: n.assets || "",
+          takeaway: n.takeaway || "",
+        };
+      })
+    : [];
 
   // ── Trade list ─────────────────────────────────────────────────────────────
   // Preferred source: tiered v1 selection. Fallback (when flag is off/shadow):
   // map Claude's legacy topTrade + additionalTrades into the same shape so the
   // new template still renders trade cards for Pro/Elite — preserves legacy
   // brief content while we run the v1 pipeline in shadow mode.
+  // Tier caps: Pro = 1 idea (topTrade only), Elite = 3 ideas (top + 2 additional).
   let tradeIdeas: any[] = [];
   const accent = isElite ? "#00e5ff" : "#c9a84c";
   if (tieredTrades && tieredTrades.length) {
     tradeIdeas = tieredTrades.map((t, i) => ({ ...t, idx: i + 1, accent }));
   } else if (!isFreeTier) {
     // Legacy fallback: rehydrate from Claude's brief JSON
-    const cap = isElite ? 3 : 2;
+    const cap = isElite ? 3 : 1;
     const legacySource = [briefJson.topTrade, ...((briefJson.additionalTrades) || [])]
       .filter(Boolean)
       .slice(0, cap);
@@ -144,15 +207,17 @@ export function renderDailyBriefEmail(
     dateStr,
     headline:    briefJson.headline || "Markets in Motion",
     sentimentColor,
-    sentimentLabel: (briefJson.marketSentiment || "NEUTRAL").toUpperCase(),
-    macroRegime:    briefJson.macroRegime || "",
+    sentimentLabel,
+    macroRegime:    macroRegimeStr,
     macroRegimeColor,
     macroRegimeBorderColor,
     macroRegimeBg,
     isHighMacroRisk: briefJson.macroRisk === "HIGH",
     macroRiskNote:   briefJson.macroRiskNote || "",
     priceRows:       buildPriceRows(marketData),
-    commentary:      briefJson.commentary || [],
+    commentary,
+    impactfulNews,
+    hasImpactfulNews: impactfulNews.length > 0,
     tradeIdeas,
     ideaCount,
     ideaCountLabel,
@@ -161,9 +226,9 @@ export function renderDailyBriefEmail(
     isElite,
     isFreeTier,
     tierLabel,
-    watchItems:     briefJson.watchItems || [],
-    riskNote:       briefJson.riskNote || "",
-    riskLevelUpper: (briefJson.riskLevel || "MEDIUM").toUpperCase(),
+    watchItems,
+    riskNote,
+    riskLevelUpper: riskLevelRaw.toUpperCase(),
     subscriberEmail,
     encodedEmail:   encodeURIComponent(subscriberEmail),
   };

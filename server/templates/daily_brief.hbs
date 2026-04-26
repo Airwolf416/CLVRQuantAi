@@ -62,6 +62,24 @@
     {{/each}}
   </div>
 
+  <!-- Impactful News -->
+  {{#if hasImpactfulNews}}
+  <div style="padding:0 24px 24px">
+    <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:12px">📰 Impactful News</div>
+    <div style="height:2px;background:linear-gradient(90deg,#c9a84c,transparent);margin-bottom:14px"></div>
+    {{#each impactfulNews}}
+    <div style="background:rgba(20,30,53,.45);border:1px solid rgba(201,168,76,.18);border-radius:4px;padding:12px 16px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;margin-bottom:6px">
+        <span style="display:inline-block;padding:2px 10px;border-radius:2px;font-family:monospace;font-size:8px;letter-spacing:0.15em;color:{{impactColor}};border:1px solid {{impactColor}};margin-right:8px;font-weight:700">{{impact}}</span>
+        {{#if assets}}<span style="font-family:monospace;font-size:10px;color:#8a96b2;letter-spacing:0.05em">{{assets}}</span>{{/if}}
+      </div>
+      <div style="font-size:13px;color:#e8e0d0;line-height:1.55;font-weight:600;margin-bottom:4px">{{title}}</div>
+      {{#if takeaway}}<div style="font-size:12px;color:#8a96b2;line-height:1.7;font-style:italic">→ {{takeaway}}</div>{{/if}}
+    </div>
+    {{/each}}
+  </div>
+  {{/if}}
+
   <!-- Trade Ideas (tiered) -->
   <div style="padding:0 24px 24px">
     <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:12px">
@@ -85,7 +103,7 @@
           <td style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.30);border-radius:4px;padding:14px 12px;text-align:center;width:50%">
             <div style="font-family:monospace;font-size:9px;color:#c9a84c;letter-spacing:.18em;font-weight:700">PRO</div>
             <div style="font-size:18px;color:#e8e0d0;font-weight:700;margin-top:6px">$29.99/mo</div>
-            <div style="font-family:monospace;font-size:10px;color:#a8b3c8;margin-top:6px;line-height:1.5">2 daily<br>trade ideas</div>
+            <div style="font-family:monospace;font-size:10px;color:#a8b3c8;margin-top:6px;line-height:1.5">1 daily<br>trade idea</div>
           </td>
           <td style="background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.30);border-radius:4px;padding:14px 12px;text-align:center;width:50%">
             <div style="font-family:monospace;font-size:9px;color:#00e5ff;letter-spacing:.18em;font-weight:700">ELITE</div>
@@ -118,7 +136,7 @@
     {{#if isPro}}
     <!-- Footer CTA: Pro → Elite upsell -->
     <div style="margin-top:8px;padding:12px 14px;background:rgba(0,229,255,.04);border:1px solid rgba(0,229,255,.20);border-radius:4px;font-family:monospace;font-size:10px;color:#8a96b2;text-align:center">
-      🔒 <strong style="color:#00e5ff">Upgrade to Elite for a 3rd daily idea + Chart AI + Track Record access.</strong> <a href="https://clvrquantai.com" style="color:#00e5ff;text-decoration:none">clvrquantai.com</a>
+      🔒 <strong style="color:#00e5ff">Upgrade to Elite for 3 daily trade ideas + Chart AI + Track Record access.</strong> <a href="https://clvrquantai.com" style="color:#00e5ff;text-decoration:none">clvrquantai.com</a>
     </div>
     {{/if}}
     {{/if}}
