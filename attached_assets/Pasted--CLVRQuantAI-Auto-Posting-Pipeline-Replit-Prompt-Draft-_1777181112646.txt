@@ -1,0 +1,253 @@
+# CLVRQuantAI Auto-Posting Pipeline — Replit Prompt (Draft Mode)
+
+> Paste the block below into Replit’s AI agent. It scaffolds a Railway-deployable Python service that turns a signal payload into branded posts ready to publish on Instagram and TikTok. **Default mode is DRAFT** — content is delivered to you via Telegram for manual posting. Auto-publishing is opt-in via a flag.
+
+-----
+
+Build a Python service that generates branded trading signal content (chart cards + Reels/TikTok video + captions) and delivers it to me via Telegram for manual posting. Auto-publishing to Instagram and TikTok is opt-in via a flag — keep it OFF by default. Match the existing CLVRQuantAI dark-terminal aesthetic.
+
+## Stack
+
+- Python 3.11+
+- FastAPI (webhook endpoint + health check)
+- APScheduler (cron-based generation)
+- Anthropic SDK — model: `claude-sonnet-4-6`
+- matplotlib + Pillow (chart + branded overlay rendering)
+- ffmpeg-python (Reel / TikTok video composition)
+- python-telegram-bot (delivery to my phone)
+- requests (Upload-Post API client — only loaded if auto-publish is enabled)
+- python-dotenv, pydantic
+
+## File structure
+
+```
+.
+├── main.py              # FastAPI app + scheduler entry
+├── config.py            # Env vars + brand constants + MODE flag
+├── signal_source.py     # Pulls latest signal (stub for your DB/API)
+├── caption_writer.py    # Claude Sonnet 4.6 caption generation
+├── chart_renderer.py    # matplotlib chart with brand overlay (PNG)
+├── video_renderer.py    # ffmpeg composition for Reels/TikTok (MP4)
+├── delivery_telegram.py # Sends image + video + caption to my Telegram
+├── publisher.py         # Upload-Post API wrapper (only used if AUTO_PUBLISH=true)
+├── pipeline.py          # Orchestrates the full flow
+├── assets/
+│   ├── logo.png
+│   └── IBMPlexMono-Bold.ttf
+├── preview/             # Local output (gitignored, useful for Replit dev only)
+├── requirements.txt
+├── Procfile             # Railway: web: uvicorn main:app --host 0.0.0.0 --port $PORT
+├── runtime.txt          # python-3.11
+└── .env.example
+```
+
+## Operating modes
+
+Three modes controlled by env vars:
+
+|Mode               |`DELIVERY_MODE`|`AUTO_PUBLISH`|What happens                                                                          |
+|-------------------|---------------|--------------|--------------------------------------------------------------------------------------|
+|**Draft (default)**|`telegram`     |`false`       |Generate assets → send to Telegram → I post manually                                  |
+|**Local dev**      |`local`        |`false`       |Generate assets → save to `./preview/` (Replit only — Railway filesystem is ephemeral)|
+|**Full auto**      |`telegram`     |`true`        |Generate → send to Telegram for record → also publish to IG + TikTok via Upload-Post  |
+
+`AUTO_PUBLISH=false` is the hard default. Never publish unless I explicitly flip it.
+
+## Brand aesthetic — apply to ALL generated visuals
+
+- Background: `#0a0a0a` (near-black)
+- Primary text / accent: `#d4af37` (gold)
+- Long / positive: `#00ff88`
+- Short / negative: `#ff3b3b`
+- Grid lines: `#1f1f1f` at 30% opacity
+- Font: IBM Plex Mono Bold (headers), Regular (body) — bundle the .ttf in `assets/`
+- Logo watermark bottom-right at 60% opacity
+- “AI-Generated” tag top-left at 70% opacity (required for algorithm + ToS compliance)
+- Dimensions: 1080×1350 for IG feed; 1080×1920 for IG Reels / TikTok / Stories
+
+## Environment variables (`.env.example`)
+
+```
+ANTHROPIC_API_KEY=
+
+# Delivery
+DELIVERY_MODE=telegram          # telegram | local
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=               # your personal chat ID (get via @userinfobot on Telegram)
+
+# Auto-publish (OFF by default — flip only after weeks of manual testing)
+AUTO_PUBLISH=false
+UPLOAD_POST_API_KEY=
+UPLOAD_POST_PROFILE=clvrquantai
+INSTAGRAM_ENABLED=true
+TIKTOK_ENABLED=true
+STORIES_ENABLED=false
+
+# Webhook + schedule
+SIGNAL_WEBHOOK_SECRET=
+TIMEZONE=America/Toronto
+POST_SCHEDULE_CRON=30 6,12,16,21 * * *
+```
+
+## Signal payload schema (webhook input)
+
+```json
+{
+  "asset": "BTC/USDT",
+  "direction": "long",
+  "entry": 67250.0,
+  "stop": 65800.0,
+  "tp": [68900.0, 70500.0],
+  "kelly_pct": 2.3,
+  "funding_rate": -0.012,
+  "oi_delta_24h": 4.7,
+  "momentum_half_life_h": 18,
+  "rationale_keys": ["funding flip", "OI expansion", "momentum decay favorable"],
+  "tier": "elite",
+  "chart_data": {
+    "timeframe": "4h",
+    "ohlcv": [[ts, o, h, l, c, v], ...]
+  }
+}
+```
+
+## `caption_writer.py`
+
+Function `generate_caption(signal: dict, platform: str) -> dict` returning:
+
+```python
+{
+  "hook": str,            # 1 line, <80 chars, attention-grabbing
+  "body": str,            # 3-5 lines, explains the WHY
+  "cta": str,             # 1 line → clvrquantai.com
+  "hashtags": list[str],  # 8-12, mix of niche + broad
+  "ai_disclosure": str    # MUST appear at end of final caption
+}
+```
+
+System prompt for Claude:
+
+- Voice: confident quant trader, no hype, minimal emojis (one in hook max).
+- Always explain the WHY using the `rationale_keys` (Kelly sizing, funding, OI, momentum half-life, macro kill switches).
+- Reference specific levels for non-Elite tier; for Elite, redact entry/stop/TP and tease “full levels in the Elite signal feed.”
+- Hashtags: mix niche (#kellycriterion, #fundingrate, #perps, #quanttrading) and broad (#crypto, #trading, #fx).
+- TikTok caption ≤ 300 chars total; Instagram caption can be longer.
+- Always end with: `"AI-assisted content. Not financial advice."`
+
+Call params:
+
+```python
+client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=600,
+    system=SYSTEM_PROMPT,
+    messages=[{"role": "user", "content": json.dumps(signal)}]
+)
+```
+
+Force JSON output via prompt — parse and validate with pydantic.
+
+## `chart_renderer.py`
+
+Function `render_signal_card(signal, output_path) -> str`:
+
+- 1080×1350 PNG, brand colors above
+- Header: asset + direction badge (LONG green / SHORT red)
+- Body: matplotlib candle chart of `signal.chart_data.ohlcv`, with horizontal lines for entry (gold), stop (red), TP1/TP2 (green), each labeled
+- Sidebar (right 30%): Kelly %, R:R ratio, funding %, 24h OI Δ, momentum half-life
+- Footer: `@clvrquantai`, ISO timestamp, “AI-Generated” tag top-left
+
+For Elite-tier signals, REDACT entry/stop/TP numeric labels — show only direction + asset + qualitative rationale.
+
+## `video_renderer.py`
+
+Function `render_signal_reel(signal, output_path) -> str`:
+
+- 1080×1920 MP4, ~8 seconds, 30 fps
+- 0–2s: logo + asset ticker reveal on black
+- 2–6s: chart card with entry/stop/TP lines drawing in left-to-right
+- 6–8s: outro card “Full signal on clvrquantai.com” + CTA
+- Silent (you’ll add sound in-app when posting)
+
+## `delivery_telegram.py` — the key piece
+
+```python
+def deliver_signal_pack(
+    signal: dict,
+    card_png_path: str,
+    reel_mp4_path: str,
+    captions: dict
+) -> None
+```
+
+Sends a single Telegram message thread to `TELEGRAM_CHAT_ID` containing:
+
+1. **Header text** — asset, direction, timestamp
+1. **The PNG** — sent as a photo (so I can save it directly to phone Photos)
+1. **The MP4** — sent as a video (saves to phone Photos for Reel/TikTok upload)
+1. **IG caption** — sent as a separate message in a `<pre>...</pre>` code block (one-tap copy on mobile)
+1. **TikTok caption** — same, separate code-block message
+1. **Suggested post times** — based on `POST_SCHEDULE_CRON` and current TZ
+1. **Inline buttons**: `[ ✅ Posted ]` `[ ❌ Skip ]` `[ 🚀 Auto-publish now ]` (the third button only renders if `UPLOAD_POST_API_KEY` is configured)
+
+Use `python-telegram-bot` with `parse_mode='HTML'` for the code blocks. The whole thing should feel like getting a “your post is ready” notification on your phone — tap, save media, copy caption, paste in IG/TikTok, post. ~30 seconds end to end.
+
+## `publisher.py` — Upload-Post.com wrapper (opt-in)
+
+Only imported and instantiated if `AUTO_PUBLISH=true`. Functions:
+
+```python
+def post_instagram_feed(image_path, caption) -> dict
+def post_instagram_reel(video_path, caption) -> dict
+def post_tiktok(video_path, caption) -> dict
+def post_everywhere(assets, captions) -> dict
+```
+
+Append `ai_disclosure` to every caption. Retry once on 5xx with 30s backoff. Return `{platform, status, post_id, error}` per call.
+
+## `pipeline.py`
+
+```python
+def run_pipeline(signal: dict) -> dict:
+    # 1. Validate signal with pydantic; reject 422 on missing kelly_pct or funding_rate
+    # 2. Hash signal payload; if seen in last 6h, skip and log
+    # 3. captions = {ig: ..., tiktok: ...}  via caption_writer
+    # 4. card_png = chart_renderer.render_signal_card(signal, ...)
+    # 5. reel_mp4 = video_renderer.render_signal_reel(signal, ...)
+    # 6. Deliver based on DELIVERY_MODE:
+    #      - 'telegram': delivery_telegram.deliver_signal_pack(...)
+    #      - 'local':    copy to ./preview/
+    # 7. If AUTO_PUBLISH=true: publisher.post_everywhere(...) and notify Telegram of results
+    # 8. Append summary to results.jsonl
+    # 9. Return summary
+```
+
+## `main.py`
+
+- FastAPI app
+- `POST /webhook/signal` — validates `X-Signal-Secret` header, runs pipeline as background task
+- `POST /telegram/callback` — handles the inline-button callbacks (`Posted` / `Skip` / `Auto-publish now`)
+- `GET /health` — `{status, version, mode, auto_publish, last_delivery_at}`
+- APScheduler: schedule `pull_latest_signal_and_post()` per `POST_SCHEDULE_CRON`
+
+## Hard rules — DO NOT skip
+
+1. **`AUTO_PUBLISH=false` is the default**. Even if other env vars are set, do not publish unless this is explicitly `true`.
+1. **Tier gating**: never render Elite-tier numeric entry/stop/TP. Direction + qualitative rationale only.
+1. **AI disclosure**: every caption ends with the disclosure string.
+1. **Validate before delivering**: missing `kelly_pct`, `funding_rate`, or `chart_data` → 422, no delivery.
+1. **No double-delivery**: hash-check against `results.jsonl` within 6 hours.
+1. **Railway filesystem is ephemeral**. Never tell the user “files saved to disk” — Telegram is the delivery channel for production. `./preview/` is Replit-dev only.
+
+## Build order
+
+1. Scaffold the file tree + `requirements.txt` + `.env.example` + `Procfile` + `runtime.txt`.
+1. Implement `caption_writer.py` and `chart_renderer.py` against a hardcoded sample signal.
+1. Run `DELIVERY_MODE=local` in Replit → output PNG + caption JSON to `./preview/`. Show me before continuing.
+1. Implement `video_renderer.py` and verify MP4 plays correctly.
+1. Implement `delivery_telegram.py` and test against my chat ID — I should get a full pack with copy-able captions.
+1. Wire up `pipeline.py` + `main.py` (webhook + scheduler).
+1. Add `results.jsonl` logging and the duplicate-hash check.
+1. **Stop here**. Do not implement `publisher.py` until I explicitly ask. The `AUTO_PUBLISH` flag stays off.
+
+Stop after step 3 and show me the rendered card PNG and the generated caption JSON before going further.
