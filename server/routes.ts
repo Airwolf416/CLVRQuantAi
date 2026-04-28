@@ -1916,6 +1916,56 @@ export async function registerRoutes(
     res.json({ whales: whaleAlerts.filter(w => Date.now() - w.ts < 600000) });
   });
 
+  // ── /api/admin/signals/:id/send-to-telegram ──────────────────────────────
+  // Admin-only: manually re-fire a live signal to the autoposter webhook.
+  // 30-second per-signal cooldown to prevent accidental double-clicks.
+  const lastManualSendBySignal: Record<string, number> = {};
+  const MANUAL_SEND_COOLDOWN_MS = 30 * 1000;
+  app.post("/api/admin/signals/:id/send-to-telegram", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    const id = String(req.params.id || "");
+    if (!id) return res.status(400).json({ error: "Missing signal id" });
+
+    const sig = liveSignals.find((s: any) => String(s?.id) === id);
+    if (!sig) return res.status(404).json({ error: "Signal not found in live buffer" });
+
+    const now = Date.now();
+    // Opportunistic prune of stale entries to keep the map bounded.
+    for (const k of Object.keys(lastManualSendBySignal)) {
+      if (now - lastManualSendBySignal[k] > MANUAL_SEND_COOLDOWN_MS) {
+        delete lastManualSendBySignal[k];
+      }
+    }
+    const last = lastManualSendBySignal[id] || 0;
+    const remaining = MANUAL_SEND_COOLDOWN_MS - (now - last);
+    if (remaining > 0) {
+      return res.status(429).json({
+        error: "Cooldown active",
+        cooldownRemainingMs: remaining,
+      });
+    }
+    lastManualSendBySignal[id] = now;
+
+    try {
+      const result = await notifyAutoposter(sig);
+      if (result.ok) {
+        return res.json({ ok: true, status: result.status });
+      }
+      // Refund cooldown on failure so admin can retry sooner
+      delete lastManualSendBySignal[id];
+      const httpStatus =
+        result.reason === "missing_env" ? 503 :
+        result.reason === "invalid_signal" ? 422 :
+        result.reason === "http_error" ? 502 :
+        502;
+      return res.status(httpStatus).json(result);
+    } catch (e: any) {
+      delete lastManualSendBySignal[id];
+      return res.status(500).json({ ok: false, reason: "internal_error", detail: e?.message || String(e) });
+    }
+  });
+
   // ── SIGNAL HISTORY (paid = full data, free = locked) ─────────────────────
   app.get("/api/signal-history", async (req, res) => {
     const userId = (req.session as any)?.userId;

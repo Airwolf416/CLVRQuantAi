@@ -830,10 +830,16 @@ function holdWindowLabel(tf){
 }
 
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
-function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade,regimeName,regimeMult}){
+function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade,regimeName,regimeMult,isAdmin,onSendToTelegram}){
   const{C}=useContext(ThemeCtx);
   const[expanded,setExpanded]=useState(false);
   const[secsLeft,setSecsLeft]=useState(()=>sig.locked?Math.max(0,30*60-Math.floor((Date.now()-sig.ts)/1000)):0);
+  const[tgState,setTgState]=useState({sending:false,cooldownLeft:0,lastResult:null});
+  useEffect(()=>{
+    if(tgState.cooldownLeft<=0)return;
+    const t=setInterval(()=>setTgState(s=>({...s,cooldownLeft:Math.max(0,s.cooldownLeft-1)})),1000);
+    return()=>clearInterval(t);
+  },[tgState.cooldownLeft]);
   useEffect(()=>{
     if(!sig.locked||secsLeft<=0)return;
     const t=setInterval(()=>setSecsLeft(s=>{if(s<=1){clearInterval(t);return 0;}return s-1;}),1000);
@@ -995,6 +1001,41 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
           <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
             style={{padding:"8px 16px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:2,fontFamily:MONO,fontSize:10,color:C.muted2,cursor:"pointer",letterSpacing:"0.08em"}}>↗ Share</button>
         </div>
+        {isAdmin&&(()=>{
+          const disabled=tgState.sending||tgState.cooldownLeft>0;
+          const label=tgState.sending?"Sending…":tgState.cooldownLeft>0?`Wait ${tgState.cooldownLeft}s`:tgState.lastResult==="ok"?"✓ Sent — send again?":tgState.lastResult==="err"?"⚠ Failed — retry":"📨 Send to Telegram";
+          const baseColor=tgState.lastResult==="err"?C.red:tgState.lastResult==="ok"?C.green:C.cyan||C.gold2;
+          return(
+            <div style={{marginTop:8,padding:"8px 10px",background:"rgba(0,212,255,.04)",border:`1px dashed ${C.border}`,borderRadius:2}}>
+              <div style={{fontFamily:MONO,fontSize:7,color:C.muted,letterSpacing:"0.15em",marginBottom:5}}>ADMIN — MANUAL DISPATCH</div>
+              <button data-testid={`btn-send-telegram-${sig.id}`}
+                disabled={disabled}
+                onClick={async e=>{
+                  e.stopPropagation();
+                  if(disabled)return;
+                  setTgState(s=>({...s,sending:true,lastResult:null}));
+                  try{
+                    const r=await fetch(`/api/admin/signals/${sig.id}/send-to-telegram`,{method:"POST",credentials:"include"});
+                    const body=await r.json().catch(()=>({}));
+                    if(r.ok){
+                      setTgState({sending:false,cooldownLeft:30,lastResult:"ok"});
+                      onSendToTelegram&&onSendToTelegram({ok:true,sig});
+                    }else{
+                      const cdSec=Math.ceil((body?.cooldownRemainingMs||0)/1000);
+                      setTgState({sending:false,cooldownLeft:cdSec,lastResult:"err"});
+                      onSendToTelegram&&onSendToTelegram({ok:false,sig,status:r.status,detail:body?.detail||body?.error||body?.reason||`HTTP ${r.status}`});
+                    }
+                  }catch(err){
+                    setTgState({sending:false,cooldownLeft:0,lastResult:"err"});
+                    onSendToTelegram&&onSendToTelegram({ok:false,sig,detail:err?.message||"Network error"});
+                  }
+                }}
+                style={{width:"100%",padding:"7px 0",background:disabled?"rgba(120,120,120,.06)":`${baseColor}11`,border:`1px solid ${disabled?C.border:baseColor+"55"}`,borderRadius:2,fontFamily:MONO,fontSize:10,fontWeight:700,color:disabled?C.muted:baseColor,cursor:disabled?"not-allowed":"pointer",letterSpacing:"0.1em"}}>
+                {label}
+              </button>
+            </div>
+          );
+        })()}
       </div>}
     </div>
   );
@@ -5144,7 +5185,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                 Signals appear when any tracked token moves &gt;0.8% within a 5-minute window.<br/>
                 Tracking {sigTracking} tokens in real-time. Detector is armed.
               </div>}
-            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult}/>);
+            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult} isAdmin={isAdmin} onSendToTelegram={r=>setToast(r.ok?`Sent ${r.sig.token} ${r.sig.dir} to Telegram ✦`:`Telegram dispatch failed: ${r.detail||"unknown error"}`)}/>);
           })()}
 
           {/* ── Signal Performance Tracker — owner-only diagnostic; the
