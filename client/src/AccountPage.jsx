@@ -1390,8 +1390,15 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       fetch("/api/account", { credentials: "include" }).then(r => {
         if (cancelled) return null;
         if (r.status === 401) {
-          if (attempts++ < 3) setTimeout(tryLoad, 1500); // retry — session may not be ready yet
-          else setLoading(false);
+          if (attempts++ < 3) {
+            setTimeout(tryLoad, 1500); // retry — session may not be ready yet
+          } else {
+            // Session is genuinely gone. Clear stale client state so the parent
+            // routes back to the sign-in screen instead of leaving us stuck on
+            // "Account Unavailable" with no working way out.
+            setLoading(false);
+            if (typeof onSignOut === "function") { try { onSignOut(); } catch {} }
+          }
           return null;
         }
         return r.json();
@@ -1585,25 +1592,26 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
     return (
       <div style={{ textAlign:"center", padding:60 }}>
         <div style={{ fontFamily:SERIF, fontSize:18, fontWeight:700, color:C.gold2, marginBottom:12 }}>
-          {isGuest ? "Sign In to View Account" : "Account Unavailable"}
+          {isGuest ? "Sign In to View Account" : "Session Expired"}
         </div>
         <div style={{ fontFamily:MONO, fontSize:11, color:C.muted2, marginBottom:20, lineHeight:1.6 }}>
           {isGuest
             ? "Create a free account or sign in to access your profile, subscription, and settings."
-            : "Your session may have expired. Sign out and back in to reload your account."}
+            : "Your sign-in has expired. Please sign in again to access your account."}
         </div>
-        {!isGuest && (
+        {!isGuest && onSignOut && (
           <button
-            onClick={() => { setLoading(true); setAcct(null); window.location.reload(); }}
+            data-testid="button-account-resignin"
+            onClick={onSignOut}
             style={{ background:"rgba(201,168,76,.1)", border:`1px solid rgba(201,168,76,.3)`, borderRadius:4, padding:"10px 20px", fontFamily:MONO, fontSize:10, color:C.gold, cursor:"pointer", letterSpacing:"0.1em" }}
           >
-            SIGN OUT & RETRY
+            SIGN IN AGAIN
           </button>
         )}
-        {onSignOut && (
+        {isGuest && onSignOut && (
           <div style={{ marginTop:12 }}>
             <button onClick={onSignOut} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:4, padding:"8px 16px", fontFamily:MONO, fontSize:9, color:C.muted, cursor:"pointer" }}>
-              {isGuest ? "SIGN IN / REGISTER" : "SIGN OUT"}
+              SIGN IN / REGISTER
             </button>
           </div>
         )}
