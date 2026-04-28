@@ -25,6 +25,7 @@ import multerLib from "multer";
 import sharpLib from "sharp";
 import { createHash as cryptoCreateHash } from "crypto";
 import { CLAUDE_MODEL } from "./config";
+import { CHARTAI_SCHEMA_VERSION, CHARTAI_FRAMEWORK_VERSION } from "./lib/chartAIVersions";
 import WebSocket from "ws";
 import webpush from "web-push";
 import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./insider";
@@ -2671,13 +2672,18 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   "direction": "long" | "short" | "no_trade",
   "confidence": <0-100>,
   "entry": { "price": <number>, "type": "market" | "limit" | "breakout" },
+  "entry_zone": { "low": <number>, "high": <number> },
   "stop_loss": <number>,
   "take_profits": [
     { "level": 1, "price": <number> },
     { "level": 2, "price": <number> },
     { "level": 3, "price": <number> }
   ],
+  "rr_tp1": <number>,
+  "rr_tp2": <number>,
   "risk_reward": <number>,
+  "time_horizon_minutes": <integer>,
+  "hard_exit_timer_minutes": <integer>,
   "indicators": {
     "trend": "<bullish|bearish|sideways + brief structure note>",
     "rsi": "<reading or 'not visible — inferred X from price action'>",
@@ -2828,9 +2834,143 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
             console.error("[chart-ai] persist failed:", e?.message);
           }
 
+          // ── Persist structured plan + seed outcome row (best-effort) ──────
+          // Writes a richer, ML-ready row into chartai_plans alongside the
+          // existing chart_ai_analyses log. Stamped with schema/framework
+          // version so downstream analytics can segment by contract.
+          // Errors are swallowed — never fail the user's response on this.
+          let chartAIRequestId: string | null = null;
+          try {
+            const { randomBytes } = await import("crypto");
+            chartAIRequestId = randomBytes(6).toString("hex");
+
+            const tickerRaw =
+              String(analysis?.detected_asset ?? asset ?? "").trim().slice(0, 32) || "UNKNOWN";
+            const ticker = tickerRaw.toUpperCase();
+
+            // Lightweight asset-class heuristic (best-effort; default unknown)
+            const assetClass = (() => {
+              const t = ticker;
+              if (/^(BTC|ETH|SOL|XRP|DOGE|ADA|BNB|AVAX|MATIC|DOT|LINK)/.test(t) || /USDT$|USDC$|PERP$/.test(t)) return "perp";
+              if (/^(EUR|GBP|USD|JPY|AUD|NZD|CAD|CHF)(EUR|GBP|USD|JPY|AUD|NZD|CAD|CHF)$/.test(t.replace(/[/]/g, ""))) return "fx";
+              if (/^(XAU|XAG|CL|GC|NG|SI|HG|PL|PA|ZC|ZW|ZS|BZ)/.test(t)) return "commodity";
+              if (/^[A-Z.]{1,5}$/.test(t)) return "equity";
+              return "unknown";
+            })();
+
+            const dirRaw = String(analysis?.direction ?? "").toLowerCase();
+            const direction = ["long", "short", "no_trade"].includes(dirRaw) ? dirRaw : null;
+
+            // Entry zone with fallback to ±0.1% band around single entry price.
+            let entryLow: number | null = null;
+            let entryHigh: number | null = null;
+            const ez = analysis?.entry_zone;
+            if (ez && Number.isFinite(Number(ez.low)) && Number.isFinite(Number(ez.high))) {
+              entryLow = Math.min(Number(ez.low), Number(ez.high));
+              entryHigh = Math.max(Number(ez.low), Number(ez.high));
+            } else if (analysis?.entry?.price != null && Number.isFinite(Number(analysis.entry.price))) {
+              const p = Number(analysis.entry.price);
+              const band = Math.abs(p) * 0.001;
+              entryLow = p - band;
+              entryHigh = p + band;
+            }
+
+            const num = (v: any): number | null => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+            const stopLoss = num(analysis?.stop_loss);
+            const tps: any[] = Array.isArray(analysis?.take_profits) ? analysis.take_profits : [];
+            const tp1 = num(tps[0]?.price);
+            const tp2 = num(tps[1]?.price);
+            const rrTp1 = num(analysis?.rr_tp1);
+            const rrTp2 = num(analysis?.rr_tp2);
+            const horizonMin = num(analysis?.time_horizon_minutes);
+            const hardExitMin = num(analysis?.hard_exit_timer_minutes);
+            const conviction = num(analysis?.confidence);
+
+            const snapshot = {
+              horizon,
+              asset,
+              image_hash: imageHash,
+              cached_news: !!cachedNews,
+              detected_asset: analysis?.detected_asset ?? null,
+              timeframe: analysis?.timeframe ?? null,
+              indicators: analysis?.indicators ?? null,
+              key_levels: analysis?.key_levels ?? null,
+              news_context: analysis?.news_context ?? null,
+              risk_reward: analysis?.risk_reward ?? null,
+              warnings: analysis?.warnings ?? null,
+            };
+
+            // Atomic: plan + outcome must succeed together. Without a TX, a
+            // second-insert failure would leave an orphan plan with no
+            // outcome row — the resolver would never pick it up and the row
+            // would be invisible to the perf views (since they JOIN on both).
+            const actionable =
+              direction === "long" || direction === "short";
+            const tradeable = actionable
+              && entryLow != null && entryHigh != null && stopLoss != null;
+
+            const client = await pool.connect();
+            try {
+              await client.query("BEGIN");
+              await client.query(
+                `INSERT INTO chartai_plans (
+                  request_id, user_id, ticker, asset_class, direction,
+                  entry_low, entry_high, stop_loss, take_profit_1, take_profit_2,
+                  rr_tp1, rr_tp2, time_horizon_min, hard_exit_timer_min,
+                  conviction, invalidation, rationale, snapshot, model,
+                  chart_image_attached, schema_version, framework_version
+                ) VALUES (
+                  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                  $11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19,$20,$21,$22
+                )`,
+                [
+                  chartAIRequestId, userId, ticker, assetClass, direction,
+                  entryLow, entryHigh, stopLoss, tp1, tp2,
+                  rrTp1, rrTp2,
+                  horizonMin != null ? Math.floor(horizonMin) : null,
+                  hardExitMin != null ? Math.floor(hardExitMin) : null,
+                  conviction != null ? Math.floor(conviction) : null,
+                  analysis?.invalidation ?? null,
+                  analysis?.reasoning ?? null,
+                  JSON.stringify(snapshot),
+                  CLAUDE_MODEL,
+                  true,
+                  CHARTAI_SCHEMA_VERSION,
+                  CHARTAI_FRAMEWORK_VERSION,
+                ],
+              );
+              // Seed outcome row only for actionable plans (real direction +
+              // bounded entry zone + stop). no_trade and refusals get a plan
+              // row (for ML) but no outcome to track.
+              if (tradeable) {
+                await client.query(
+                  `INSERT INTO chartai_outcomes (request_id, status) VALUES ($1, 'open')`,
+                  [chartAIRequestId],
+                );
+              }
+              await client.query("COMMIT");
+            } catch (txErr) {
+              await client.query("ROLLBACK").catch(() => {});
+              throw txErr;
+            } finally {
+              client.release();
+            }
+          } catch (e: any) {
+            // Loud log so missed plans are visible in production monitoring.
+            // Persistence is intentionally best-effort: the analysis was
+            // returned successfully and we won't punish the user for a DB
+            // hiccup, but every miss is a gap in the ML dataset.
+            console.error(
+              "[chart-ai] PLAN_PERSIST_FAILED user=%s ticker=%s err=%s",
+              userId, asset || "?", e?.message,
+            );
+            chartAIRequestId = null;
+          }
+
           const newCount = usedToday + 1;
           return res.json({
             analysis,
+            request_id: chartAIRequestId,
             remaining_today: Math.max(0, CHART_AI_DAILY_LIMIT - newCount),
             resets_at: nextUtcMidnight(),
           });

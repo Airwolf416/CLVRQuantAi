@@ -365,6 +365,110 @@ export const chartAiMonthlySpend = pgTable("chart_ai_monthly_spend", {
 export type ChartAiAnalysis = typeof chartAiAnalyses.$inferSelect;
 export type InsertChartAiAnalysis = typeof chartAiAnalyses.$inferInsert;
 
+// ── Chart AI plans + outcomes (structured trade plan + resolution tracking) ──
+// Backs Alert History UI + supplies labeled dataset for future ML calibration.
+// Features = `snapshot` JSONB; labels = `chartaiOutcomes.realizedR` / `status`.
+//
+// Two tables intentionally — plans is append-only and immutable, outcomes is
+// the mutable state machine (open → active → resolved). 1:1 relationship via
+// requestId. We keep the legacy `chart_ai_analyses` table untouched for back-
+// compat; `chartai_plans` is the richer, ML-ready successor written alongside.
+//
+// schemaVersion + frameworkVersion are stamped on every row so future
+// iterations of the prompt schema or risk-math framework don't pollute the
+// historical dataset. Bump the constants in `server/lib/chartAIVersions.ts`
+// when the contract changes.
+export const chartaiPlans = pgTable("chartai_plans", {
+  requestId: varchar("request_id", { length: 12 }).primaryKey(),
+  planId: varchar("plan_id", { length: 64 }),
+  userId: text("user_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+
+  // Asset context
+  ticker: text("ticker").notNull(),
+  assetClass: text("asset_class").notNull(),    // equity|perp|fx|commodity|unknown
+  session: text("session"),                     // RTH|ETH|24x7
+
+  // Plan vs refusal
+  refusalCode: text("refusal_code"),            // NULL when plan generated
+  refusalExplanation: text("refusal_explanation"),
+
+  // Plan output (NULL for refusals)
+  bias: text("bias"),
+  direction: text("direction"),                 // long|short|no_trade
+  entryLow: decimal("entry_low", { precision: 20, scale: 8 }),
+  entryHigh: decimal("entry_high", { precision: 20, scale: 8 }),
+  stopLoss: decimal("stop_loss", { precision: 20, scale: 8 }),
+  takeProfit1: decimal("take_profit_1", { precision: 20, scale: 8 }),
+  takeProfit2: decimal("take_profit_2", { precision: 20, scale: 8 }),
+  rrTp1: decimal("rr_tp1", { precision: 8, scale: 3 }),
+  rrTp2: decimal("rr_tp2", { precision: 8, scale: 3 }),
+  timeHorizonMin: integer("time_horizon_min"),
+  hardExitTimerMin: integer("hard_exit_timer_min"),
+  conviction: integer("conviction"),
+  invalidation: text("invalidation"),
+  rationale: text("rationale"),
+
+  // Snapshot of inputs at generation time (= ML feature vector)
+  snapshot: jsonb("snapshot").notNull(),
+
+  // Telemetry
+  model: text("model").notNull(),
+  inputTokens: integer("input_tokens"),
+  cacheReadTokens: integer("cache_read_tokens"),
+  outputTokens: integer("output_tokens"),
+  latencyMs: integer("latency_ms"),
+  chartImageAttached: boolean("chart_image_attached").notNull().default(false),
+
+  // Versioning — stamped from constants so post-hoc analytics can segment by
+  // exactly which prompt/math contract produced each row.
+  schemaVersion: text("schema_version").notNull(),
+  frameworkVersion: text("framework_version").notNull(),
+}, (t) => ({
+  byUserCreated: index("idx_chartai_plans_user_created").on(t.userId, t.createdAt),
+  byTickerCreated: index("idx_chartai_plans_ticker_created").on(t.ticker, t.createdAt),
+  byBias: index("idx_chartai_plans_bias").on(t.bias),
+  byRefusal: index("idx_chartai_plans_refusal").on(t.refusalCode),
+}));
+
+export const chartaiOutcomes = pgTable("chartai_outcomes", {
+  // FK to chartai_plans.request_id; CASCADE delete handled in initDb DDL
+  requestId: varchar("request_id", { length: 12 }).primaryKey(),
+
+  // Resolution status — open|active|tp1_hit|tp2_hit|sl_hit|hard_exit|
+  // time_stop|invalidated|expired|manual_close
+  status: text("status").notNull().default("open"),
+
+  // Fill (set when price first enters entry zone)
+  fillPrice: decimal("fill_price", { precision: 20, scale: 8 }),
+  entryFilledAt: timestamp("entry_filled_at", { withTimezone: true }),
+
+  // Resolution
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  exitPrice: decimal("exit_price", { precision: 20, scale: 8 }),
+  realizedR: decimal("realized_r", { precision: 8, scale: 3 }),         // R-multiples
+  realizedPct: decimal("realized_pct", { precision: 8, scale: 4 }),     // raw %
+  durationMinutes: integer("duration_minutes"),
+
+  // Path stats — critical features for ML calibration
+  maxFavorableExcursionR: decimal("max_favorable_excursion_r", { precision: 8, scale: 3 }),
+  maxAdverseExcursionR: decimal("max_adverse_excursion_r", { precision: 8, scale: 3 }),
+  timeToFirst05rMin: integer("time_to_first_05r_min"),
+
+  // Audit
+  resolutionSource: text("resolution_source"),                          // auto_tracker|manual|ws_event
+  notes: text("notes"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byStatus: index("idx_chartai_outcomes_status").on(t.status),
+  byResolved: index("idx_chartai_outcomes_resolved").on(t.resolvedAt),
+}));
+
+export type ChartaiPlan = typeof chartaiPlans.$inferSelect;
+export type InsertChartaiPlan = typeof chartaiPlans.$inferInsert;
+export type ChartaiOutcome = typeof chartaiOutcomes.$inferSelect;
+export type InsertChartaiOutcome = typeof chartaiOutcomes.$inferInsert;
+
 // ── Weekly Updates ("What's New This Week" + Saturday digest email) ──────────
 // Admin posts a major update; the latest one displaces the prior on the About
 // page. The Saturday 10am ET scheduler emails it to subscribers if a fresh

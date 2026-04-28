@@ -14,6 +14,7 @@ import { startDailyBriefScheduler } from "./dailyBrief";
 import { startWeeklyUpdateScheduler } from "./weeklyUpdate";
 import { initializeDatabase } from "./initDb";
 import { startOutcomeResolver } from "./lib/outcomeResolver";
+import { startChartAIResolver } from "./lib/chartAIResolver";
 import { startAdaptiveThresholds, suppressHistoricalBleeders } from "./lib/adaptiveThresholds";
 import { startCalibration } from "./lib/calibration";
 import { startCircuitBreaker } from "./lib/circuitBreaker";
@@ -700,6 +701,7 @@ function logDataSourceStatus() {
   startDailyBriefScheduler();
   startWeeklyUpdateScheduler();
   startOutcomeResolver();
+  startChartAIResolver();
   startAdaptiveThresholds();
   startCalibration();
   startCircuitBreaker();
