@@ -393,6 +393,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
         clearStoredCredential();
         throw new Error(data.error || "Auth failed");
       }
+      // Cache the bearer-token fallback ONLY inside an iframe context, so
+      // biometric sign-ins also work in the Replit preview where ITP drops
+      // the cookie. Top-level tabs use the httpOnly cookie unchanged.
+      try { let inIframe = false; try { inIframe = window.self !== window.top; } catch { inIframe = true; } if (inIframe && data.token) localStorage.setItem("clvr_auth_token", data.token); } catch {}
       setWaLoading(false);
       if (onEnter) onEnter(data.user);
     } catch (e) {
@@ -436,6 +440,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Signup failed"); setLoading(false); return; }
+      // Cache the bearer-token fallback ONLY inside an iframe context. In
+      // top-level tabs the httpOnly cookie works fine and we don't want to
+      // expose the session ID to JS unnecessarily.
+      try { let inIframe = false; try { inIframe = window.self !== window.top; } catch { inIframe = true; } if (inIframe && data.token) localStorage.setItem("clvr_auth_token", data.token); } catch {}
       setLoading(false);
       if (data.user) setSignedUpUser({ ...data.user, isNewUser: true });
       setMode("verify");
@@ -459,6 +467,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Sign in failed"); setLoading(false); return; }
+      // Cache the bearer-token fallback ONLY inside an iframe context. In
+      // top-level tabs the httpOnly cookie works fine and we don't want to
+      // expose the session ID to JS unnecessarily.
+      try { let inIframe = false; try { inIframe = window.self !== window.top; } catch { inIframe = true; } if (inIframe && data.token) localStorage.setItem("clvr_auth_token", data.token); } catch {}
       setLoading(false);
       if (onEnter) onEnter(data.mustChangePassword ? { ...data.user, mustChangePassword: true } : data.user);
     } catch (e) {
@@ -556,6 +568,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
         });
         const data = await res.json();
         if (!res.ok) { setError(data.error || "Incorrect password."); setVerifySignInLoading(false); return; }
+        // Cache the bearer-token fallback ONLY inside an iframe context. In
+        // top-level tabs the httpOnly cookie works fine and we don't want to
+        // expose the session ID to JS unnecessarily.
+        try { let inIframe = false; try { inIframe = window.self !== window.top; } catch { inIframe = true; } if (inIframe && data.token) localStorage.setItem("clvr_auth_token", data.token); } catch {}
         setVerifySignInLoading(false);
         // isNewUser: true — triggers the onboarding tour automatically for fresh signups
         if (onEnter) onEnter({ ...data.user, isNewUser: true });
