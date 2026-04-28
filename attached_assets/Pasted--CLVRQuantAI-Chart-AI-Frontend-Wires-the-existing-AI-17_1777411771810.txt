@@ -1,0 +1,318 @@
+/**
+
+- CLVRQuantAI — Chart AI Frontend
+- ================================
+- 
+- Wires the existing AI Chart button on the asset detail view to the
+- /api/chartai/plan endpoint. Renders the resulting trade plan as a card
+- and produces overlay objects that your existing chart renderer can draw
+- (entry zone band, SL line, TP1/TP2 lines).
+- 
+- Drop-in:
+- import { ChartAIButton, planToOverlays } from ‘./ChartAI’;
+  */
+
+import { useState, useCallback, useRef } from ‘react’;
+
+// ============================================================
+// Types — mirror the backend schema
+// ============================================================
+
+export type EntryZone = { low: number; high: number };
+
+export type TradePlan = {
+plan_id: string | null;
+asset?: string;
+bias?: string;
+direction?: ‘long’ | ‘short’;
+entry_zone?: EntryZone;
+stop_loss?: number;
+take_profit_1?: number;
+take_profit_2?: number | null;
+rr_tp1?: number;
+rr_tp2?: number | null;
+time_horizon_minutes?: number;
+hard_exit_timer_minutes?: number;
+conviction?: number;
+invalidation?: string;
+rationale?: string;
+data_timestamp_utc?: string;
+// Refusal path
+refusal_code?: string;
+explanation?: string;
+};
+
+export type PlanResponse = {
+request_id: string;
+plan: TradePlan;
+quota_remaining: number;
+latency_ms: number;
+};
+
+type State =
+| { status: ‘idle’ }
+| { status: ‘loading’; ticker: string }
+| { status: ‘success’; response: PlanResponse }
+| { status: ‘error’; message: string };
+
+// ============================================================
+// Hook
+// ============================================================
+
+export function useChartAIPlan() {
+const [state, setState] = useState<State>({ status: ‘idle’ });
+const abortRef = useRef<AbortController | null>(null);
+
+const requestPlan = useCallback(
+async (ticker: string, chartImageB64?: string) => {
+// Cancel any in-flight request (user switched ticker mid-call)
+abortRef.current?.abort();
+const ctrl = new AbortController();
+abortRef.current = ctrl;
+setState({ status: ‘loading’, ticker });
+
+```
+  try {
+    const res = await fetch('/api/chartai/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        ticker,
+        chart_image_b64: chartImageB64 ?? null,
+      }),
+    });
+
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.detail) msg = body.detail;
+      } catch {}
+      if (res.status === 429) msg = 'Daily quota exhausted. Resets 00:00 UTC.';
+      if (res.status === 403) msg = 'Elite tier required.';
+      if (res.status === 404) msg = `No live data for ${ticker}.`;
+      setState({ status: 'error', message: msg });
+      return;
+    }
+
+    const data: PlanResponse = await res.json();
+    setState({ status: 'success', response: data });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') return;
+    setState({ status: 'error', message: err?.message ?? 'Network error' });
+  }
+},
+[]
+```
+
+);
+
+const reset = useCallback(() => {
+abortRef.current?.abort();
+setState({ status: ‘idle’ });
+}, []);
+
+return { state, requestPlan, reset };
+}
+
+// ============================================================
+// Button — wires into existing Chart AI tab
+// ============================================================
+
+type ChartAIButtonProps = {
+/** Currently selected ticker from your shared context. */
+ticker: string;
+/** Optional: DOM id of the chart canvas to capture as visual confirmation. */
+chartCanvasId?: string;
+/** Optional: callback so the parent can render overlays on its chart. */
+onPlan?: (plan: TradePlan) => void;
+};
+
+export function ChartAIButton({
+ticker,
+chartCanvasId = ‘chartai-canvas’,
+onPlan,
+}: ChartAIButtonProps) {
+const { state, requestPlan } = useChartAIPlan();
+const isLoading = state.status === ‘loading’;
+
+const handleClick = async () => {
+let b64: string | undefined;
+const canvas = document.getElementById(chartCanvasId) as HTMLCanvasElement | null;
+if (canvas) {
+// Strip “data:image/png;base64,” prefix
+b64 = canvas.toDataURL(‘image/png’).split(’,’)[1];
+}
+await requestPlan(ticker, b64);
+};
+
+// Surface the plan to parent for chart overlay drawing
+if (state.status === ‘success’ && onPlan && !state.response.plan.refusal_code) {
+onPlan(state.response.plan);
+}
+
+return (
+<div className="chartai-container">
+<button
+onClick={handleClick}
+disabled={isLoading || !ticker}
+className=“chartai-cta”
+>
+{isLoading ? ‘Generating plan…’ : `Generate AI Plan${ticker ? ` · ${ticker}` : ''}`}
+</button>
+<PlanResultPanel state={state} />
+</div>
+);
+}
+
+// ============================================================
+// Result panel
+// ============================================================
+
+function PlanResultPanel({ state }: { state: State }) {
+if (state.status === ‘idle’ || state.status === ‘loading’) return null;
+
+if (state.status === ‘error’) {
+return <div className="chartai-error">{state.message}</div>;
+}
+
+const { plan, quota_remaining, latency_ms } = state.response;
+
+// Refusal path
+if (plan.refusal_code) {
+return (
+<div className="chartai-refusal">
+<header>{plan.refusal_code.replace(‘REFUSAL.’, ‘’)}</header>
+<p>{plan.explanation}</p>
+<footer>
+{quota_remaining} analyses remaining · {latency_ms}ms
+</footer>
+</div>
+);
+}
+
+// Plan path
+const conv = plan.conviction ?? 0;
+const convClass = conv >= 70 ? ‘high’ : conv >= 50 ? ‘mid’ : ‘low’;
+const fmt = (n?: number | null) => (n == null ? ‘—’ : `$${n.toFixed(2)}`);
+
+return (
+<div className={`chartai-plan conviction-${convClass}`}>
+<header className="plan-header">
+<span className="bias-tag">{plan.bias}</span>
+<span className={`direction-tag dir-${plan.direction}`}>
+{plan.direction?.toUpperCase()}
+</span>
+<span className="conviction-badge">{conv}/100</span>
+</header>
+
+```
+  <table className="plan-table">
+    <tbody>
+      <tr>
+        <td>Entry zone</td>
+        <td>
+          {fmt(plan.entry_zone?.low)} – {fmt(plan.entry_zone?.high)}
+        </td>
+      </tr>
+      <tr className="row-sl">
+        <td>Stop loss</td>
+        <td>{fmt(plan.stop_loss)}</td>
+      </tr>
+      <tr className="row-tp">
+        <td>TP1 ({plan.rr_tp1}R)</td>
+        <td>{fmt(plan.take_profit_1)}</td>
+      </tr>
+      {plan.take_profit_2 != null && (
+        <tr className="row-tp">
+          <td>TP2 ({plan.rr_tp2}R)</td>
+          <td>{fmt(plan.take_profit_2)}</td>
+        </tr>
+      )}
+      <tr>
+        <td>Time horizon</td>
+        <td>{plan.time_horizon_minutes} min</td>
+      </tr>
+      <tr>
+        <td>Hard exit timer</td>
+        <td>{plan.hard_exit_timer_minutes} min (no 0.5R progress)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p className="rationale">{plan.rationale}</p>
+  <p className="invalidation">
+    <strong>Invalidation:</strong> {plan.invalidation}
+  </p>
+  <footer className="plan-footer">
+    {quota_remaining} left · {latency_ms}ms · {plan.data_timestamp_utc}
+  </footer>
+</div>
+```
+
+);
+}
+
+// ============================================================
+// Chart overlay helper — feed the output to your chart renderer
+// ============================================================
+
+export type ChartOverlay = {
+type: ‘band’ | ‘line’;
+label: string;
+color: string;
+y1: number;
+y2?: number;
+dashed?: boolean;
+};
+
+/**
+
+- Convert a TradePlan into overlay primitives for your chart library.
+- Returns an empty array on refusals or incomplete plans.
+  */
+  export function planToOverlays(plan: TradePlan): ChartOverlay[] {
+  if (plan.refusal_code || !plan.entry_zone || plan.stop_loss == null) {
+  return [];
+  }
+
+const dirColor = plan.direction === ‘long’ ? ‘#22c55e’ : ‘#ef4444’;
+const overlays: ChartOverlay[] = [
+{
+type: ‘band’,
+label: ‘Entry zone’,
+color: dirColor,
+y1: plan.entry_zone.low,
+y2: plan.entry_zone.high,
+},
+{
+type: ‘line’,
+label: ‘SL’,
+color: ‘#ef4444’,
+y1: plan.stop_loss,
+dashed: true,
+},
+];
+
+if (plan.take_profit_1 != null) {
+overlays.push({
+type: ‘line’,
+label: `TP1 (${plan.rr_tp1}R)`,
+color: ‘#22c55e’,
+y1: plan.take_profit_1,
+dashed: true,
+});
+}
+if (plan.take_profit_2 != null) {
+overlays.push({
+type: ‘line’,
+label: `TP2 (${plan.rr_tp2}R)`,
+color: ‘#16a34a’,
+y1: plan.take_profit_2,
+dashed: true,
+});
+}
+return overlays;
+}

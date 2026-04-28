@@ -1,0 +1,305 @@
+# “””
+CLVRQuantAI — Chart AI Trade Plan Endpoint
+
+POST /api/chartai/plan
+
+- Auth: Elite tier required
+- Quota: 5/day per user (resets 00:00 UTC)
+- Pulls live snapshot from MarketDataBus singleton
+- Calls Claude Sonnet 4.6 with cached system prompt + structured payload + optional chart image
+- Returns parsed TradePlan or structured Refusal
+
+Wire-up:
+from chartai_endpoint import router as chartai_router
+app.include_router(chartai_router)
+“””
+
+import os
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Optional, Literal
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
+from anthropic import Anthropic
+
+# –– Adjust these imports to your project layout ––
+
+from .auth import get_current_user, User
+from .market_data_bus import MarketDataBus, get_bus
+from .quota import check_and_decrement_quota, QuotaExceeded
+from .db import save_plan
+
+# ——————————————————
+
+logger = logging.getLogger(**name**)
+router = APIRouter(prefix=”/api/chartai”, tags=[“chartai”])
+
+ANTHROPIC_MODEL = “claude-sonnet-4-6”
+MAX_TOKENS = 1500
+DAILY_QUOTA = 5
+
+# Load system prompt once at module init
+
+_PROMPT_PATH = os.path.join(os.path.dirname(**file**), “prompts”, “chartai_system_prompt.md”)
+with open(_PROMPT_PATH, “r”) as f:
+SYSTEM_PROMPT = f.read()
+
+client = Anthropic(api_key=os.environ[“ANTHROPIC_API_KEY”])
+
+# ============================================================
+
+# Models
+
+# ============================================================
+
+class PlanRequest(BaseModel):
+ticker: str = Field(…, min_length=1, max_length=12)
+chart_image_b64: Optional[str] = None  # base64 PNG, no data: prefix
+
+class EntryZone(BaseModel):
+low: float
+high: float
+
+class TradePlan(BaseModel):
+plan_id: Optional[str] = None
+asset: Optional[str] = None
+bias: Optional[str] = None
+direction: Optional[Literal[“long”, “short”]] = None
+entry_zone: Optional[EntryZone] = None
+stop_loss: Optional[float] = None
+take_profit_1: Optional[float] = None
+take_profit_2: Optional[float] = None
+rr_tp1: Optional[float] = None
+rr_tp2: Optional[float] = None
+time_horizon_minutes: Optional[int] = None
+hard_exit_timer_minutes: Optional[int] = None
+conviction: Optional[int] = None
+invalidation: Optional[str] = None
+rationale: Optional[str] = None
+data_timestamp_utc: Optional[str] = None
+# Refusal path
+refusal_code: Optional[str] = None
+explanation: Optional[str] = None
+
+class PlanResponse(BaseModel):
+request_id: str
+plan: TradePlan
+quota_remaining: int
+latency_ms: int
+
+# ============================================================
+
+# Endpoint
+
+# ============================================================
+
+@router.post(”/plan”, response_model=PlanResponse)
+async def generate_plan(
+req: PlanRequest,
+user: User = Depends(get_current_user),
+bus: MarketDataBus = Depends(get_bus),
+):
+request_id = uuid4().hex[:12]
+started = datetime.now(timezone.utc)
+
+```
+# --- Tier check ---
+if user.tier != "elite":
+    raise HTTPException(403, "Chart AI is an Elite-tier feature.")
+
+# --- Quota check ---
+try:
+    quota_remaining = await check_and_decrement_quota(
+        user.id, "chartai_plan", daily_limit=DAILY_QUOTA
+    )
+except QuotaExceeded:
+    raise HTTPException(429, "Daily Chart AI quota exhausted. Resets at 00:00 UTC.")
+
+# --- Snapshot from shared bus ---
+snapshot = await bus.get_chartai_snapshot(req.ticker.upper())
+if snapshot is None:
+    raise HTTPException(404, f"No live data for {req.ticker}.")
+
+# Defense-in-depth staleness check (model also enforces via REFUSAL.MISSING_DATA)
+age_s = (datetime.now(timezone.utc) - snapshot["as_of"]).total_seconds()
+asset_class = snapshot["asset"]["class"]
+max_age = 60 if asset_class == "perp" else 300
+if age_s > max_age:
+    return _wrap(
+        request_id, started, quota_remaining,
+        TradePlan(
+            refusal_code="REFUSAL.MISSING_DATA",
+            explanation=f"Snapshot {int(age_s)}s old (max {max_age}s for {asset_class}).",
+        ),
+    )
+
+# --- Build user message ---
+payload_json = json.dumps(snapshot["payload"], default=str, indent=2)
+user_content = [{
+    "type": "text",
+    "text": f"Generate a trade plan from this payload:\n\n{payload_json}",
+}]
+if req.chart_image_b64:
+    user_content.insert(0, {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": req.chart_image_b64,
+        },
+    })
+
+# --- Anthropic call (system prompt cached, ~70% cost reduction on hits) ---
+try:
+    response = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=MAX_TOKENS,
+        system=[{
+            "type": "text",
+            "text": SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }],
+        messages=[{"role": "user", "content": user_content}],
+    )
+except Exception:
+    logger.exception("Anthropic call failed", extra={"request_id": request_id})
+    raise HTTPException(502, "Plan generation upstream error.")
+
+# --- Parse response ---
+raw_text = "".join(getattr(b, "text", "") for b in response.content)
+plan = _parse_plan_json(raw_text, request_id)
+
+# --- Persist for Alert History / analytics ---
+await save_plan(
+    user_id=user.id,
+    request_id=request_id,
+    ticker=req.ticker.upper(),
+    snapshot=snapshot["payload"],
+    plan=plan.model_dump(),
+)
+
+logger.info(
+    "chartai_plan_generated",
+    extra={
+        "request_id": request_id,
+        "user_id": user.id,
+        "ticker": req.ticker.upper(),
+        "refusal_code": plan.refusal_code,
+        "bias": plan.bias,
+        "direction": plan.direction,
+        "conviction": plan.conviction,
+        "input_tokens": response.usage.input_tokens,
+        "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
+        "output_tokens": response.usage.output_tokens,
+    },
+)
+
+return _wrap(request_id, started, quota_remaining, plan)
+```
+
+# ============================================================
+
+# Helpers
+
+# ============================================================
+
+def _wrap(request_id: str, started: datetime, quota: int, plan: TradePlan) -> PlanResponse:
+latency_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+return PlanResponse(
+request_id=request_id,
+plan=plan,
+quota_remaining=quota,
+latency_ms=latency_ms,
+)
+
+def _parse_plan_json(raw: str, request_id: str) -> TradePlan:
+“”“Strip markdown fences if present, parse JSON, validate against schema.”””
+text = raw.strip()
+if text.startswith(”`"): # `json … `or` … ` text = text.split("`”, 2)[1]
+if text.lower().startswith(“json”):
+text = text[4:]
+text = text.rsplit(”```”, 1)[0].strip()
+
+```
+try:
+    data = json.loads(text)
+    return TradePlan(**data)
+except (json.JSONDecodeError, ValueError):
+    logger.error(
+        "chartai_plan_parse_error",
+        extra={"request_id": request_id, "raw_head": raw[:500]},
+    )
+    return TradePlan(
+        refusal_code="REFUSAL.PARSE_ERROR",
+        explanation="Model output failed schema validation.",
+    )
+```
+
+# ============================================================
+
+# Snapshot builder — add this method to your MarketDataBus class
+
+# ============================================================
+
+“””
+async def get_chartai_snapshot(self, ticker: str) -> Optional[dict]:
+state = self._state.get(ticker.upper())
+if state is None:
+return None
+
+```
+asset_class = self._classify(ticker)         # 'equity' | 'perp' | 'fx' | 'commodity'
+session = self._session_for(asset_class)     # 'RTH' | 'ETH' | '24x7'
+
+payload = {
+    "asset": {"ticker": ticker.upper(), "class": asset_class, "session": session},
+    "price": {
+        "current": state.last,
+        "vwap": state.vwap,
+        "pct_vs_vwap": ((state.last / state.vwap) - 1) * 100 if state.vwap else 0,
+    },
+    "opening_range": {
+        "high": state.or_high,
+        "low": state.or_low,
+        "width_pct": ((state.or_high - state.or_low) / state.or_low * 100)
+                     if state.or_low else 0,
+        "status": state.or_status,  # 'pending'|'breakout_up'|'breakout_down'|'failed_breakout'|'inside'
+    },
+    "trend": {
+        "regime_15m": state.regime_15m,
+        "regime_1h": state.regime_1h,
+        "regime_1d": state.regime_1d,
+    },
+    "volume": {
+        "rvol_session": state.rvol_session,
+        "rvol_5m": state.rvol_5m,
+    },
+    "volatility": {
+        "atr_5m": state.atr_5m,
+        "atr_1d_pct": state.atr_1d_pct,
+        "median_or_width_20d_pct": state.median_or_width_20d,
+    },
+    "levels": {
+        "pdh": state.pdh, "pdl": state.pdl, "pdc": state.pdc,
+        "premkt_high": state.premkt_high, "premkt_low": state.premkt_low,
+    },
+    "catalyst_flags": {
+        "earnings_window": state.earnings_window,
+        "macro_event_window": state.macro_event_window,
+        "macro_event_minutes_to": state.macro_event_minutes_to,
+        "news_spike": state.news_spike,
+    },
+    "perp_only": ({
+        "funding_rate_8h": state.funding_rate_8h,
+        "oi_change_1h_pct": state.oi_change_1h_pct,
+        "oi_change_24h_pct": state.oi_change_24h_pct,
+    } if asset_class == "perp" else None),
+    "timestamp_utc": state.as_of.isoformat(),
+}
+return {"payload": payload, "as_of": state.as_of, "asset": payload["asset"]}
+```
+
+“””
