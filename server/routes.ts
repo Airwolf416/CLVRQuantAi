@@ -7675,7 +7675,9 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }
       (req.session as any).userId = user.id;
       req.session.save(() => {
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier, emailVerified: false, pendingVerification: true } });
+        // Return `token` (session ID) for the cookieless bearer-token
+        // fallback used inside the Replit preview iframe on Safari/iOS.
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier, emailVerified: false, pendingVerification: true }, token: req.sessionID });
       });
     } catch (e: any) {
       console.error("Signup error:", e.message);
@@ -7706,7 +7708,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         // Include isAdmin so the client unlocks admin-only UI (e.g. the
         // "Send to Telegram" button on signal cards) immediately after
         // sign-in, without needing a page refresh to pick it up via /me.
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification: !user.emailVerified && !!user.emailVerificationToken, isAdmin: !!(user as any).isAdmin }, mustChangePassword });
+        // Also return `token` (the session ID) so the client can fall back
+        // to Authorization: Bearer auth in cookieless contexts (Safari ITP
+        // inside the Replit preview iframe drops the cookie silently).
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification: !user.emailVerified && !!user.emailVerificationToken, isAdmin: !!(user as any).isAdmin }, mustChangePassword, token: req.sessionID });
       });
     } catch (e: any) {
       res.status(500).json({ error: "Sign in failed" });
@@ -7746,7 +7751,18 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
-  app.post("/api/auth/signout", (req, res) => {
+  app.post("/api/auth/signout", async (req, res) => {
+    // If the client signed in via the bearer-token fallback, also delete
+    // that session row from the store so the localStorage-cached token can
+    // no longer be used. The current cookie session (if any) is destroyed
+    // separately below.
+    const auth = req.headers.authorization;
+    if (auth && auth.startsWith("Bearer ")) {
+      const bearerSid = auth.slice(7).trim();
+      if (bearerSid && bearerSid !== req.sessionID) {
+        try { await pool.query("DELETE FROM user_sessions WHERE sid = $1", [bearerSid]); } catch {}
+      }
+    }
     req.session.destroy(() => {});
     res.json({ ok: true });
   });
@@ -7977,7 +7993,11 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       (req.session as any).userId = user.id;
       (req.session as any).user = { id: user.id, email: user.email, name: user.name, tier, username: user.username };
       await new Promise<void>((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, tier, username: user.username } });
+      // Return `token` (session ID) for the cookieless bearer-token fallback
+      // used inside the Replit preview iframe. The client only persists this
+      // when actually running inside an iframe, so non-iframe biometric
+      // sign-ins don't expose the session ID to JS unnecessarily.
+      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, tier, username: user.username }, token: req.sessionID });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

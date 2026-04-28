@@ -3864,7 +3864,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             onClick={async()=>{
               setDrawerOpen(false);
               try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}
-              try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}
+              try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}
               setUser(null);
             }}
             style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"none",border:"none",borderRadius:4,color:C.red,fontFamily:MONO,fontSize:11,cursor:"pointer",textAlign:"left",letterSpacing:"0.06em"}}
@@ -5627,7 +5627,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </>}
 
         {tab==="account"&&isPreview&&<PreviewPricingPage C2={C} MONO2={MONO} SERIF2={SERIF} onSignUp={()=>onShowAuth&&onShowAuth()} onSignIn={()=>onShowAuth&&onShowAuth()}/>}
-        {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell}/>}
+        {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · HYPERLIQUID · FMP · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT

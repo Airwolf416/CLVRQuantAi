@@ -442,6 +442,46 @@ app.use(session({
   },
 }));
 
+// Bearer-token fallback for cookieless contexts (Safari/iOS Intelligent
+// Tracking Prevention silently drops cross-site cookies inside the Replit
+// preview iframe even with SameSite=None;Secure). When the cookie path
+// fails, the client sends the same session ID it received from sign-in as
+// `Authorization: Bearer <sid>`. We look that sid up in the existing
+// user_sessions store and seed req.session.userId for THIS request only —
+// every existing route keeps reading req.session.userId unchanged.
+app.use(async (req, res, next) => {
+  if ((req.session as any)?.userId) return next();
+  // Sign-in and sign-up create their own real session via password auth and
+  // must persist normally; skip the bearer override on those paths so the
+  // sid we return in the response body is actually saved to the store.
+  if (req.path === "/api/auth/signin" || req.path === "/api/auth/signup") return next();
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith("Bearer ")) return next();
+  const token = auth.slice(7).trim();
+  if (!token) return next();
+  try {
+    const r = await pool.query(
+      "SELECT sess FROM user_sessions WHERE sid = $1 AND expire > NOW()",
+      [token]
+    );
+    if (r.rows.length > 0) {
+      const sessData = r.rows[0].sess;
+      const userId = sessData?.userId;
+      if (userId) {
+        (req.session as any).userId = userId;
+        // Don't let express-session persist a brand-new empty session row
+        // back to the DB just because we hydrated userId on the auto-created
+        // session for this request. The canonical session is the bearer
+        // token's row; we only need it to live for this request's lifetime.
+        (req.session as any).save = (cb?: any) => { if (typeof cb === "function") cb(null); return req.session; };
+      }
+    }
+  } catch (e) {
+    // Silently fall through with no auth — the route will 401 itself.
+  }
+  next();
+});
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
