@@ -7997,7 +7997,11 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       // used inside the Replit preview iframe. The client only persists this
       // when actually running inside an iframe, so non-iframe biometric
       // sign-ins don't expose the session ID to JS unnecessarily.
-      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, tier, username: user.username }, token: req.sessionID });
+      // Include isAdmin so admin-only UI (e.g. the "Send to Telegram"
+      // button on each signal card) unlocks for biometric sign-ins too.
+      // Without this, owner accounts that prefer Face ID/Touch ID would
+      // never see admin controls because the response shape was missing.
+      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, tier, username: user.username, isAdmin: !!(user as any).isAdmin }, token: req.sessionID });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
