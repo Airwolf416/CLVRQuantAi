@@ -1,0 +1,49 @@
+Yes to question 2 — and you don't need any changes on this side to do it. This pipeline is already exposed as a webhook receiver. Any "Send signal to Telegram" button on your CLVRQuantAI admin panel just needs to fire an HTTP POST to it with the right payload. Here's the full contract:
+
+Endpoint: POST https://web-production-4e7d.up.railway.app/webhook/signal
+
+Headers:
+
+Content-Type: application/json
+X-Signal-Secret: clvr_wh_a8f3k2j9d7s6m5n4q1p0xY3zR7
+JSON body (all fields required unless marked optional):
+
+{
+  "token": "BTCUSDT",
+  "direction": "LONG",
+  "timeframe": "4h",
+  "entry": 95430.5,
+  "stopLoss": 94100.0,
+  "tp1": 98200.0,
+  "tp2": 100500.0,
+  "leverage": "10x",
+  "confidence": 82,
+  "advancedScore": 85,
+  "reasoning": ["breakout retest", "OI rising", "funding neutral"],
+  "isStrongSignal": true,
+  "timestamp": 1714327429000
+}
+Field notes:
+
+token — uppercase symbol, /USDT is appended automatically (e.g. BTCUSDT → BTC/USDT).
+direction — "LONG" or "SHORT".
+timeframe — drives which OKX candles are fetched ("1h", "4h", "1d", etc.). Defaults to "4h" if omitted.
+tp2 — optional second target.
+leverage — string like "10x" or int 10.
+confidence / advancedScore — 0–100. advancedScore must be ≥75 to clear the gate.
+reasoning — array of short bullet strings; first 3 show in the card's RATIONALE block.
+isStrongSignal — true ⇒ tier "elite" (card hides numeric levels and teases the Elite feed). false ⇒ tier "standard" (full numbers visible).
+timestamp — unix ms (or ISO string like "2026-04-28T16:42:49Z"). This is what shows on the card's "Signal" line.
+Successful response:
+
+{ "status": "accepted", "schema": "alt", "message": "Signal queued for processing" }
+Returned in <100ms — the actual rendering + Telegram upload runs in the background and takes ~10–30s.
+
+Error responses to handle on your admin button:
+
+403 — wrong/missing X-Signal-Secret
+400 — body isn't valid JSON
+422 — payload fails schema validation (the response detail tells you which field)
+So the admin button on CLVRQuantAI can be as simple as: collect the latest signal data, do a fetch() to that URL with that payload, show a success/error toast based on the response. No changes needed on this pipeline.
+
+One safety suggestion: gate the admin button so it can only be clicked once per signal (or disable it for ~30s after a click) to avoid double-firing — though the pipeline's per-asset cooldown will catch most accidental double-clicks anyway and return them as rate_limited rather than re-posting.
