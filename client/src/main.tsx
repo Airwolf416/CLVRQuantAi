@@ -18,7 +18,7 @@ import "./index.css";
 (function installBearerFetch() {
   const TOKEN_KEY = "clvr_auth_token";
   let inIframe = false;
-  try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
+  try { inIframe = window.self !== window.top; } catch { inIframe = true; }
   // Top-level tabs don't need bearer auth — the cookie works there. Defensively
   // purge any leftover token so it's not exposed to JS in non-iframe contexts.
   if (!inIframe) {
@@ -26,30 +26,38 @@ import "./index.css";
     return;
   }
   const origFetch = window.fetch.bind(window);
-  window.fetch = ((input: any, init?: any) => {
+  const wrapped: typeof window.fetch = (input, init) => {
     try {
-      const url = typeof input === "string"
-        ? input
-        : (input instanceof URL ? input.href : (input && input.url) || "");
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+          ? input.href
+          : input.url;
       if (url && url.indexOf("/api/") !== -1) {
-        const token = localStorage.getItem(TOKEN_KEY);
-        if (token) {
-          const headers = new Headers(init?.headers);
-          if (input instanceof Request) {
-            input.headers.forEach((v, k) => { if (!headers.has(k)) headers.set(k, v); });
-          }
-          if (!headers.has("Authorization")) {
-            headers.set("Authorization", "Bearer " + token);
-            init = { ...(init || {}), headers };
-            if (!init.credentials) init.credentials = "include";
-          }
+        const headers = new Headers(init?.headers);
+        if (input instanceof Request) {
+          input.headers.forEach((v, k) => { if (!headers.has(k)) headers.set(k, v); });
         }
+        const token = localStorage.getItem(TOKEN_KEY);
+        if (token && !headers.has("Authorization")) {
+          headers.set("Authorization", "Bearer " + token);
+        }
+        // Always send cookies on /api/* — the cookie path remains the
+        // primary auth mechanism in non-ITP browsers, and we must not
+        // break it. The bearer header is purely additive.
+        init = {
+          ...(init || {}),
+          headers,
+          credentials: init?.credentials ?? "include",
+        };
       }
-    } catch (e) {
+    } catch {
       // Never let auth wrapping break the request.
     }
     return origFetch(input, init);
-  }) as typeof window.fetch;
+  };
+  window.fetch = wrapped;
 })();
 
 if ("serviceWorker" in navigator) {
