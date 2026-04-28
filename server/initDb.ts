@@ -371,6 +371,24 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_outcomes_status   ON chartai_outcomes (status)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_outcomes_resolved ON chartai_outcomes (resolved_at DESC)`);
 
+    // ── update_log_entries (improvement log buffer for weekly digest) ─────────
+    // Owner adds noteworthy improvements throughout the week; the weekly AI
+    // digest pulls from these. Also written to by the agent's `logImprovement`
+    // helper and by the `/api/internal/improvement-log/mirror` endpoint when
+    // the dev workspace mirrors entries to prod.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS update_log_entries (
+        id                       SERIAL PRIMARY KEY,
+        headline                 TEXT NOT NULL,
+        detail                   TEXT,
+        emoji                    TEXT,
+        added_by                 TEXT,
+        included_in_update_id    INTEGER,
+        created_at               TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_update_log_pending ON update_log_entries (created_at DESC) WHERE included_in_update_id IS NULL`);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
 
