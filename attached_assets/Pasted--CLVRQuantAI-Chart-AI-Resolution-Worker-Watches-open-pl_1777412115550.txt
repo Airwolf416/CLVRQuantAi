@@ -1,0 +1,479 @@
+# “””
+CLVRQuantAI — Chart AI Resolution Worker
+
+Watches open plans, detects fills, tracks path stats (MFE/MAE/time-to-0.5R),
+fires exit conditions (TP1/TP2/SL/hard-timer/time-stop), persists outcomes,
+and broadcasts WebSocket events to connected clients.
+
+Lifecycle states (chartai_outcomes.status):
+open      -> plan created, entry not yet filled
+active    -> entry zone touched, watching for exits
+tp1_hit / tp2_hit / sl_hit / hard_exit / time_stop / invalidated / expired
+
+Wire-up in main.py:
+from chartai_resolver import ResolverWorker
+resolver = ResolverWorker(bus, db_pool, ws_broadcaster)
+@app.on_event(“startup”)
+async def _start(): await resolver.start()
+@app.on_event(“shutdown”)
+async def _stop(): await resolver.stop()
+“””
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal
+from typing import Optional
+
+logger = logging.getLogger(**name**)
+
+# Persist path-stat updates at most this often (per plan).
+
+# DB writes are heavy; in-memory state is the source of truth between flushes.
+
+PATH_STATS_FLUSH_INTERVAL_S = 30
+
+# How often the housekeeping loop runs (time-based exits, stale plan rehydration).
+
+HOUSEKEEPING_INTERVAL_S = 5
+
+# ============================================================
+
+# In-memory plan state
+
+# ============================================================
+
+@dataclass
+class ActivePlan:
+“”“In-memory mirror of a plan being tracked. Source of truth between DB flushes.”””
+request_id: str
+user_id: int
+ticker: str
+direction: str                          # ‘long’ | ‘short’
+entry_low: Decimal
+entry_high: Decimal
+stop_loss: Decimal
+take_profit_1: Decimal
+take_profit_2: Optional[Decimal]
+time_horizon_min: int
+hard_exit_timer_min: int
+created_at: datetime
+
+```
+# Mutable runtime state
+status: str = "open"                    # open | active | resolved
+entry_filled_at: Optional[datetime] = None
+fill_price: Optional[Decimal] = None
+risk_per_r: Optional[Decimal] = None    # |fill_price - stop_loss|
+
+# Path stats (in R-multiples)
+mfe_r: Decimal = Decimal("0")
+mae_r: Decimal = Decimal("0")
+time_to_first_05r_min: Optional[int] = None
+
+# Flush tracking
+last_persisted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+dirty: bool = False
+
+# ----- Computed helpers -----
+
+def entry_midpoint(self) -> Decimal:
+    return (self.entry_low + self.entry_high) / 2
+
+def is_in_entry_zone(self, price: Decimal) -> bool:
+    return self.entry_low <= price <= self.entry_high
+
+def current_r(self, price: Decimal) -> Decimal:
+    """Unrealized P&L in R-multiples. Requires entry to be filled."""
+    if self.fill_price is None or self.risk_per_r is None or self.risk_per_r == 0:
+        return Decimal("0")
+    delta = price - self.fill_price
+    if self.direction == "short":
+        delta = -delta
+    return delta / self.risk_per_r
+
+def target_hit(self, price: Decimal, target: Decimal) -> bool:
+    if self.direction == "long":
+        return price >= target
+    return price <= target
+
+def stop_hit(self, price: Decimal) -> bool:
+    if self.direction == "long":
+        return price <= self.stop_loss
+    return price >= self.stop_loss
+```
+
+# ============================================================
+
+# Worker
+
+# ============================================================
+
+class ResolverWorker:
+def **init**(self, bus, db_pool, ws_broadcaster):
+“””
+:param bus: MarketDataBus singleton — must support
+`subscribe_ticks(callback)` where callback is
+`async def cb(ticker: str, price: Decimal, ts: datetime)`.
+:param db_pool: asyncpg pool.
+:param ws_broadcaster: object with `async broadcast(user_id, event_dict)`.
+“””
+self.bus = bus
+self.db = db_pool
+self.ws = ws_broadcaster
+
+```
+    # ticker -> {request_id -> ActivePlan}
+    self._plans: dict[str, dict[str, ActivePlan]] = {}
+    self._lock = asyncio.Lock()
+    self._running = False
+    self._tasks: list[asyncio.Task] = []
+    self._unsubscribe = None
+
+# -------------------------------------------------------
+# Lifecycle
+# -------------------------------------------------------
+
+async def start(self):
+    if self._running:
+        return
+    self._running = True
+    await self._rehydrate_from_db()
+    self._unsubscribe = self.bus.subscribe_ticks(self._on_tick)
+    self._tasks.append(asyncio.create_task(self._housekeeping_loop()))
+    logger.info("chartai_resolver_started", extra={"plans_loaded": self._count_plans()})
+
+async def stop(self):
+    self._running = False
+    if self._unsubscribe:
+        self._unsubscribe()
+    for t in self._tasks:
+        t.cancel()
+    await asyncio.gather(*self._tasks, return_exceptions=True)
+    await self._flush_all_dirty()
+    logger.info("chartai_resolver_stopped")
+
+# -------------------------------------------------------
+# Public — call this from the /api/chartai/plan endpoint
+# right after save_plan() succeeds.
+# -------------------------------------------------------
+
+async def register_plan(self, plan_row: dict) -> None:
+    """Hand a freshly-created plan to the resolver for tracking."""
+    if plan_row.get("refusal_code") or plan_row.get("direction") is None:
+        return  # Refusals don't need resolution
+
+    plan = ActivePlan(
+        request_id=plan_row["request_id"],
+        user_id=plan_row["user_id"],
+        ticker=plan_row["ticker"],
+        direction=plan_row["direction"],
+        entry_low=Decimal(str(plan_row["entry_low"])),
+        entry_high=Decimal(str(plan_row["entry_high"])),
+        stop_loss=Decimal(str(plan_row["stop_loss"])),
+        take_profit_1=Decimal(str(plan_row["take_profit_1"])),
+        take_profit_2=Decimal(str(plan_row["take_profit_2"])) if plan_row.get("take_profit_2") else None,
+        time_horizon_min=plan_row["time_horizon_min"],
+        hard_exit_timer_min=plan_row["hard_exit_timer_min"],
+        created_at=plan_row["created_at"],
+    )
+
+    async with self._lock:
+        self._plans.setdefault(plan.ticker, {})[plan.request_id] = plan
+
+    # Seed an outcome row in 'open' state so the resolved view always has a join target
+    await self._db_insert_outcome_open(plan)
+
+    logger.info(
+        "chartai_plan_registered",
+        extra={"request_id": plan.request_id, "ticker": plan.ticker, "direction": plan.direction},
+    )
+
+# -------------------------------------------------------
+# Tick handler — main hot path
+# -------------------------------------------------------
+
+async def _on_tick(self, ticker: str, price: Decimal, ts: datetime) -> None:
+    bucket = self._plans.get(ticker)
+    if not bucket:
+        return
+
+    resolved_ids: list[tuple[str, str, Decimal]] = []  # (request_id, status, exit_price)
+
+    for plan in list(bucket.values()):
+        # ---- 1. Fill detection ----
+        if plan.status == "open":
+            if plan.is_in_entry_zone(price):
+                plan.status = "active"
+                plan.entry_filled_at = ts
+                plan.fill_price = price
+                plan.risk_per_r = abs(price - plan.stop_loss)
+                plan.dirty = True
+                await self._broadcast(plan, "fill", {"fill_price": str(price)})
+            else:
+                continue
+
+        # ---- 2. Path stats ----
+        r = plan.current_r(price)
+        if r > plan.mfe_r:
+            plan.mfe_r = r
+            plan.dirty = True
+        if r < plan.mae_r:
+            plan.mae_r = r
+            plan.dirty = True
+
+        if plan.time_to_first_05r_min is None and abs(r) >= Decimal("0.5"):
+            elapsed = (ts - plan.entry_filled_at).total_seconds() / 60
+            plan.time_to_first_05r_min = int(elapsed)
+            plan.dirty = True
+
+        # ---- 3. Exit checks (priority: SL > TP2 > TP1) ----
+        if plan.stop_hit(price):
+            resolved_ids.append((plan.request_id, "sl_hit", price))
+        elif plan.take_profit_2 is not None and plan.target_hit(price, plan.take_profit_2):
+            resolved_ids.append((plan.request_id, "tp2_hit", price))
+        elif plan.target_hit(price, plan.take_profit_1):
+            # If there's no TP2, TP1 closes the trade. Otherwise this is partial-style.
+            # For v1 simplicity: TP1 closes the whole position. Add scaling later.
+            resolved_ids.append((plan.request_id, "tp1_hit", price))
+
+    # Apply resolutions outside the iteration
+    for request_id, status, exit_price in resolved_ids:
+        await self._resolve(ticker, request_id, status, exit_price, ts)
+
+    # Periodic path-stat flush
+    for plan in bucket.values():
+        if plan.dirty and (ts - plan.last_persisted_at).total_seconds() >= PATH_STATS_FLUSH_INTERVAL_S:
+            await self._db_update_path_stats(plan)
+            plan.last_persisted_at = ts
+            plan.dirty = False
+
+# -------------------------------------------------------
+# Housekeeping — time-based exits don't fire from ticks
+# -------------------------------------------------------
+
+async def _housekeeping_loop(self):
+    while self._running:
+        try:
+            await self._check_time_based_exits()
+        except Exception:
+            logger.exception("chartai_resolver_housekeeping_error")
+        await asyncio.sleep(HOUSEKEEPING_INTERVAL_S)
+
+async def _check_time_based_exits(self):
+    now = datetime.now(timezone.utc)
+
+    async with self._lock:
+        snapshot = [
+            (ticker, plan)
+            for ticker, bucket in self._plans.items()
+            for plan in bucket.values()
+        ]
+
+    for ticker, plan in snapshot:
+        last_price = await self.bus.get_last_price(ticker)
+        if last_price is None:
+            continue
+
+        if plan.status == "open":
+            # Plan never filled -> expire after time_horizon
+            if (now - plan.created_at) >= timedelta(minutes=plan.time_horizon_min):
+                await self._resolve(ticker, plan.request_id, "expired", last_price, now)
+            continue
+
+        # status == 'active'
+        elapsed = (now - plan.entry_filled_at).total_seconds() / 60
+
+        # Hard exit timer: no 0.5R progress in hard_exit_timer_min
+        if (
+            elapsed >= plan.hard_exit_timer_min
+            and plan.time_to_first_05r_min is None
+        ):
+            await self._resolve(ticker, plan.request_id, "hard_exit", last_price, now)
+            continue
+
+        # Time stop: exceeded total horizon
+        if elapsed >= plan.time_horizon_min:
+            await self._resolve(ticker, plan.request_id, "time_stop", last_price, now)
+
+# -------------------------------------------------------
+# Resolution
+# -------------------------------------------------------
+
+async def _resolve(
+    self,
+    ticker: str,
+    request_id: str,
+    status: str,
+    exit_price: Decimal,
+    ts: datetime,
+):
+    async with self._lock:
+        bucket = self._plans.get(ticker, {})
+        plan = bucket.pop(request_id, None)
+        if not bucket:
+            self._plans.pop(ticker, None)
+
+    if plan is None:
+        return  # already resolved
+
+    # Compute realized
+    if plan.fill_price is not None and plan.risk_per_r and plan.risk_per_r > 0:
+        delta = exit_price - plan.fill_price
+        if plan.direction == "short":
+            delta = -delta
+        realized_r = delta / plan.risk_per_r
+        realized_pct = (delta / plan.fill_price) * 100
+        duration_min = int((ts - plan.entry_filled_at).total_seconds() / 60)
+    else:
+        # Plan expired without fill
+        realized_r = Decimal("0")
+        realized_pct = Decimal("0")
+        duration_min = int((ts - plan.created_at).total_seconds() / 60)
+
+    await self._db_finalize_outcome(
+        request_id=request_id,
+        status=status,
+        exit_price=exit_price,
+        realized_r=realized_r,
+        realized_pct=realized_pct,
+        duration_min=duration_min,
+        mfe_r=plan.mfe_r,
+        mae_r=plan.mae_r,
+        time_to_first_05r_min=plan.time_to_first_05r_min,
+        resolved_at=ts,
+    )
+
+    await self._broadcast(plan, "resolved", {
+        "status": status,
+        "exit_price": str(exit_price),
+        "realized_r": str(realized_r),
+        "realized_pct": str(realized_pct),
+        "duration_min": duration_min,
+    })
+
+    logger.info(
+        "chartai_plan_resolved",
+        extra={
+            "request_id": request_id,
+            "ticker": ticker,
+            "status": status,
+            "realized_r": float(realized_r),
+            "duration_min": duration_min,
+            "mfe_r": float(plan.mfe_r),
+            "mae_r": float(plan.mae_r),
+        },
+    )
+
+# -------------------------------------------------------
+# WebSocket broadcast — payload suppression for non-paid users
+# is enforced upstream in ws_broadcaster (Alert History gating)
+# -------------------------------------------------------
+
+async def _broadcast(self, plan: ActivePlan, event_type: str, body: dict):
+    try:
+        await self.ws.broadcast(plan.user_id, {
+            "channel": "chartai",
+            "event": event_type,
+            "request_id": plan.request_id,
+            "ticker": plan.ticker,
+            **body,
+        })
+    except Exception:
+        logger.exception("chartai_ws_broadcast_failed", extra={"request_id": plan.request_id})
+
+# -------------------------------------------------------
+# DB layer
+# -------------------------------------------------------
+
+async def _rehydrate_from_db(self):
+    """Reload open + active plans on worker startup (post-redeploy crash recovery)."""
+    rows = await self.db.fetch("""
+        SELECT
+            p.request_id, p.user_id, p.ticker, p.direction,
+            p.entry_low, p.entry_high, p.stop_loss,
+            p.take_profit_1, p.take_profit_2,
+            p.time_horizon_min, p.hard_exit_timer_min, p.created_at,
+            o.status, o.exit_price,
+            o.max_favorable_excursion_r, o.max_adverse_excursion_r,
+            o.time_to_first_05r_min
+        FROM chartai_plans p
+        JOIN chartai_outcomes o ON o.request_id = p.request_id
+        WHERE o.status IN ('open', 'active')
+          AND p.refusal_code IS NULL
+    """)
+
+    for row in rows:
+        plan = ActivePlan(
+            request_id=row["request_id"],
+            user_id=row["user_id"],
+            ticker=row["ticker"],
+            direction=row["direction"],
+            entry_low=row["entry_low"],
+            entry_high=row["entry_high"],
+            stop_loss=row["stop_loss"],
+            take_profit_1=row["take_profit_1"],
+            take_profit_2=row["take_profit_2"],
+            time_horizon_min=row["time_horizon_min"],
+            hard_exit_timer_min=row["hard_exit_timer_min"],
+            created_at=row["created_at"],
+            status=row["status"],
+            mfe_r=row["max_favorable_excursion_r"] or Decimal("0"),
+            mae_r=row["max_adverse_excursion_r"] or Decimal("0"),
+            time_to_first_05r_min=row["time_to_first_05r_min"],
+        )
+        self._plans.setdefault(plan.ticker, {})[plan.request_id] = plan
+
+async def _db_insert_outcome_open(self, plan: ActivePlan):
+    await self.db.execute("""
+        INSERT INTO chartai_outcomes (request_id, status, resolution_source)
+        VALUES ($1, 'open', 'auto_tracker')
+        ON CONFLICT (request_id) DO NOTHING
+    """, plan.request_id)
+
+async def _db_update_path_stats(self, plan: ActivePlan):
+    await self.db.execute("""
+        UPDATE chartai_outcomes
+        SET status = $2,
+            max_favorable_excursion_r = $3,
+            max_adverse_excursion_r = $4,
+            time_to_first_05r_min = $5,
+            updated_at = NOW()
+        WHERE request_id = $1
+    """, plan.request_id, plan.status, plan.mfe_r, plan.mae_r, plan.time_to_first_05r_min)
+
+async def _db_finalize_outcome(self, **kw):
+    await self.db.execute("""
+        UPDATE chartai_outcomes
+        SET status = $2,
+            resolved_at = $3,
+            exit_price = $4,
+            realized_r = $5,
+            realized_pct = $6,
+            duration_minutes = $7,
+            max_favorable_excursion_r = $8,
+            max_adverse_excursion_r = $9,
+            time_to_first_05r_min = $10,
+            resolution_source = 'auto_tracker',
+            updated_at = NOW()
+        WHERE request_id = $1
+    """,
+        kw["request_id"], kw["status"], kw["resolved_at"], kw["exit_price"],
+        kw["realized_r"], kw["realized_pct"], kw["duration_min"],
+        kw["mfe_r"], kw["mae_r"], kw["time_to_first_05r_min"],
+    )
+
+async def _flush_all_dirty(self):
+    for bucket in self._plans.values():
+        for plan in bucket.values():
+            if plan.dirty:
+                try:
+                    await self._db_update_path_stats(plan)
+                except Exception:
+                    logger.exception("chartai_resolver_flush_failed",
+                                     extra={"request_id": plan.request_id})
+
+def _count_plans(self) -> int:
+    return sum(len(b) for b in self._plans.values())
+```
