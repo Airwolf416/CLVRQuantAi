@@ -75,7 +75,13 @@ export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult>
       timestamp: new Date(signal.ts).toISOString(),
     };
 
-    const url = baseUrl.replace(/\/+$/, "") + "/webhook/signal";
+    // Use AUTOPOSTER_WEBHOOK_URL exactly as configured. We accept either
+    // the full webhook endpoint (e.g. https://host/webhook/signal) or a
+    // bare base URL — if the configured value doesn't already include the
+    // /webhook/signal path, we append it. This lets operators paste the
+    // exact URL their downstream service exposes without surprises.
+    const trimmed = baseUrl.replace(/\/+$/, "");
+    const url = /\/webhook\/signal$/.test(trimmed) ? trimmed : trimmed + "/webhook/signal";
 
     const res = await fetch(url, {
       method: "POST",
