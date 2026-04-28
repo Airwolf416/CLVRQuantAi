@@ -303,8 +303,149 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── chartai_plans + chartai_outcomes (structured plan + outcome tracking) ─
+    // Mirrors the Drizzle definitions in shared/schema.ts so the schema is
+    // available even on fresh deploys where `npm run db:push` hasn't run yet.
+    // Drizzle (db:push) is the canonical source; this is the safety net.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chartai_plans (
+        request_id            VARCHAR(12) PRIMARY KEY,
+        plan_id               VARCHAR(64),
+        user_id               TEXT NOT NULL,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ticker                TEXT NOT NULL,
+        asset_class           TEXT NOT NULL,
+        session               TEXT,
+        refusal_code          TEXT,
+        refusal_explanation   TEXT,
+        bias                  TEXT,
+        direction             TEXT,
+        entry_low             NUMERIC(20,8),
+        entry_high            NUMERIC(20,8),
+        stop_loss             NUMERIC(20,8),
+        take_profit_1         NUMERIC(20,8),
+        take_profit_2         NUMERIC(20,8),
+        rr_tp1                NUMERIC(8,3),
+        rr_tp2                NUMERIC(8,3),
+        time_horizon_min      INTEGER,
+        hard_exit_timer_min   INTEGER,
+        conviction            INTEGER,
+        invalidation          TEXT,
+        rationale             TEXT,
+        snapshot              JSONB NOT NULL,
+        model                 TEXT NOT NULL,
+        input_tokens          INTEGER,
+        cache_read_tokens     INTEGER,
+        output_tokens         INTEGER,
+        latency_ms            INTEGER,
+        chart_image_attached  BOOLEAN NOT NULL DEFAULT FALSE,
+        schema_version        TEXT NOT NULL,
+        framework_version     TEXT NOT NULL
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_plans_user_created   ON chartai_plans (user_id, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_plans_ticker_created ON chartai_plans (ticker, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_plans_bias           ON chartai_plans (bias)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_plans_refusal        ON chartai_plans (refusal_code)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chartai_outcomes (
+        request_id                 VARCHAR(12) PRIMARY KEY
+                                   REFERENCES chartai_plans(request_id) ON DELETE CASCADE,
+        status                     TEXT NOT NULL DEFAULT 'open',
+        fill_price                 NUMERIC(20,8),
+        entry_filled_at            TIMESTAMPTZ,
+        resolved_at                TIMESTAMPTZ,
+        exit_price                 NUMERIC(20,8),
+        realized_r                 NUMERIC(8,3),
+        realized_pct               NUMERIC(8,4),
+        duration_minutes           INTEGER,
+        max_favorable_excursion_r  NUMERIC(8,3),
+        max_adverse_excursion_r    NUMERIC(8,3),
+        time_to_first_05r_min      INTEGER,
+        resolution_source          TEXT,
+        notes                      TEXT,
+        updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_outcomes_status   ON chartai_outcomes (status)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chartai_outcomes_resolved ON chartai_outcomes (resolved_at DESC)`);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
+
+    // ── Chart AI performance views (post-commit, idempotent) ──────────────────
+    // Wrapped separately so a view definition error never blocks startup.
+    // Keyed on TEXT user_id (matches our existing convention everywhere).
+    try {
+      await pool.query(`
+        CREATE OR REPLACE VIEW v_chartai_resolved AS
+        SELECT
+          p.request_id,
+          p.user_id,
+          p.created_at,
+          p.ticker,
+          p.asset_class,
+          p.bias,
+          p.direction,
+          p.conviction,
+          p.schema_version,
+          p.framework_version,
+          o.status,
+          o.fill_price,
+          o.exit_price,
+          o.realized_r,
+          o.realized_pct,
+          o.duration_minutes,
+          o.max_favorable_excursion_r,
+          o.max_adverse_excursion_r,
+          o.time_to_first_05r_min,
+          o.resolved_at
+        FROM chartai_plans p
+        JOIN chartai_outcomes o ON o.request_id = p.request_id
+        WHERE o.resolved_at IS NOT NULL
+      `);
+      await pool.query(`
+        CREATE OR REPLACE VIEW v_chartai_daily_perf AS
+        SELECT
+          user_id,
+          (resolved_at AT TIME ZONE 'UTC')::date AS day,
+          schema_version,
+          framework_version,
+          COUNT(*)                                                              AS resolved_count,
+          COUNT(*) FILTER (WHERE status IN ('tp1_hit','tp2_hit'))                AS wins,
+          COUNT(*) FILTER (WHERE status = 'sl_hit')                              AS sl_count,
+          COUNT(*) FILTER (WHERE status IN ('hard_exit','time_stop','expired'))  AS time_or_hard_exits,
+          ROUND(AVG(realized_r)::numeric, 3)                                     AS avg_r,
+          ROUND(SUM(realized_r)::numeric, 3)                                     AS total_r,
+          ROUND(AVG(max_favorable_excursion_r)::numeric, 3)                      AS avg_mfe_r,
+          ROUND(AVG(max_adverse_excursion_r)::numeric, 3)                        AS avg_mae_r
+        FROM v_chartai_resolved
+        GROUP BY user_id, (resolved_at AT TIME ZONE 'UTC')::date, schema_version, framework_version
+      `);
+      await pool.query(`
+        CREATE OR REPLACE VIEW v_chartai_bias_perf AS
+        SELECT
+          user_id,
+          bias,
+          direction,
+          schema_version,
+          framework_version,
+          COUNT(*) AS n,
+          ROUND(
+            (COUNT(*) FILTER (WHERE status IN ('tp1_hit','tp2_hit')))::numeric
+              / NULLIF(COUNT(*), 0),
+            4
+          ) AS win_rate,
+          ROUND(AVG(realized_r)::numeric, 3) AS avg_r,
+          ROUND(SUM(realized_r)::numeric, 3) AS total_r
+        FROM v_chartai_resolved
+        GROUP BY user_id, bias, direction, schema_version, framework_version
+      `);
+      console.log("[db] chartai_* perf views (re)created");
+    } catch (viewErr: any) {
+      console.warn("[db] chartai_* views skipped:", viewErr?.message);
+    }
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("[db] Table initialization failed:", err);
