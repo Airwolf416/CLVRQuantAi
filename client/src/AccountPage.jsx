@@ -1390,15 +1390,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       fetch("/api/account", { credentials: "include" }).then(r => {
         if (cancelled) return null;
         if (r.status === 401) {
-          if (attempts++ < 3) {
-            setTimeout(tryLoad, 1500); // retry — session may not be ready yet
-          } else {
-            // Session is genuinely gone. Clear stale client state so the parent
-            // routes back to the sign-in screen instead of leaving us stuck on
-            // "Account Unavailable" with no working way out.
-            setLoading(false);
-            if (typeof onSignOut === "function") { try { onSignOut(); } catch {} }
-          }
+          if (attempts++ < 3) setTimeout(tryLoad, 1500); // retry — session may not be ready yet
+          else setLoading(false); // give up; the fallback screen has a working "Sign In Again" button
           return null;
         }
         return r.json();
