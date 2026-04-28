@@ -2355,11 +2355,19 @@ export default function App(){
     document.documentElement.classList.toggle("light-mode",!isDark);
   },[isDark]);
 
-  // Check for existing session on mount
+  // Check for existing session on mount.
+  // The server returns either { user: { id, ..., isAdmin } } (current shape)
+  // or, in older code paths, the user fields directly at the top level.
+  // We accept both so admin flags propagate correctly on page reload —
+  // otherwise admin-only UI like the "Send to Telegram" button stays
+  // hidden after a refresh even though the user is signed in.
   useEffect(()=>{
     fetch("/api/auth/me",{credentials:"include"})
       .then(r=>r.ok?r.json():null)
-      .then(d=>{ if(d?.id){ setUser(d); _checkPostLoginRedirect(); } })
+      .then(d=>{
+        const u = d?.user?.id ? d.user : (d?.id ? d : null);
+        if(u){ setUser(u); _checkPostLoginRedirect(); }
+      })
       .catch(()=>{})
       .finally(()=>setSessionChecked(true));
   },[]);
