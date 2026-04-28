@@ -7703,7 +7703,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const mustChangePassword = !!(user as any).mustChangePassword;
       (req.session as any).userId = user.id;
       req.session.save(() => {
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification: !user.emailVerified && !!user.emailVerificationToken }, mustChangePassword });
+        // Include isAdmin so the client unlocks admin-only UI (e.g. the
+        // "Send to Telegram" button on signal cards) immediately after
+        // sign-in, without needing a page refresh to pick it up via /me.
+        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification: !user.emailVerified && !!user.emailVerificationToken, isAdmin: !!(user as any).isAdmin }, mustChangePassword });
       });
     } catch (e: any) {
       res.status(500).json({ error: "Sign in failed" });
