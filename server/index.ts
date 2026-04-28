@@ -432,8 +432,13 @@ app.use(session({
   cookie: {
     maxAge: 30 * 24 * 60 * 60 * 1000,
     httpOnly: true,
-    sameSite: "lax",
-    secure: isProduction,
+    // SameSite=None + Secure is required so the session cookie is sent inside
+    // cross-site iframes (e.g. the Replit preview pane). Replit serves the dev
+    // and production URLs over HTTPS, so Secure=true works in both. Without
+    // this, Safari/Firefox silently drop the cookie inside the preview iframe
+    // and every authed request returns 401 even though the user is signed in.
+    sameSite: "none",
+    secure: true,
   },
 }));
 
