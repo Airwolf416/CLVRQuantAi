@@ -1582,16 +1582,37 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
 
   if (!acct) {
     const isGuest = user?.guest;
+    // Detect embedded preview iframe (e.g. Replit canvas preview). Safari's
+    // Intelligent Tracking Prevention blocks the session cookie cross-site
+    // even with SameSite=None+Secure, so the only reliable fix is to open
+    // the app in its own top-level tab where it becomes first-party.
+    let inIframe = false;
+    try { inIframe = typeof window !== "undefined" && window.self !== window.top; } catch (e) { inIframe = true; }
+    // If we're authenticated client-side (user object exists, not a guest)
+    // but /api/account still returns 401, the cookie is being blocked. Treat
+    // that as the iframe-cookie problem rather than a real expired session.
+    const cookieBlocked = !isGuest && !!user?.id && inIframe;
     return (
       <div style={{ textAlign:"center", padding:60 }}>
         <div style={{ fontFamily:SERIF, fontSize:18, fontWeight:700, color:C.gold2, marginBottom:12 }}>
-          {isGuest ? "Sign In to View Account" : "Session Expired"}
+          {isGuest ? "Sign In to View Account" : (cookieBlocked ? "Open in a New Tab" : "Session Expired")}
         </div>
-        <div style={{ fontFamily:MONO, fontSize:11, color:C.muted2, marginBottom:20, lineHeight:1.6 }}>
+        <div style={{ fontFamily:MONO, fontSize:11, color:C.muted2, marginBottom:20, lineHeight:1.6, maxWidth:520, margin:"0 auto 20px" }}>
           {isGuest
             ? "Create a free account or sign in to access your profile, subscription, and settings."
-            : "Your sign-in has expired. Please sign in again to access your account."}
+            : (cookieBlocked
+                ? "This embedded preview blocks sign-in cookies (Safari / iOS limitation). Open the app in a new tab — your account will work normally there."
+                : "Your sign-in has expired. Please sign in again to access your account.")}
         </div>
+        {cookieBlocked && (
+          <button
+            data-testid="button-account-newtab"
+            onClick={() => { try { window.open(window.location.origin, "_blank", "noopener"); } catch (e) {} }}
+            style={{ background:`linear-gradient(135deg,${C.gold},${C.gold2})`, border:"none", color:C.bg, borderRadius:4, padding:"10px 22px", fontFamily:MONO, fontSize:10, fontWeight:700, cursor:"pointer", letterSpacing:"0.1em", marginRight:10 }}
+          >
+            OPEN IN NEW TAB
+          </button>
+        )}
         {!isGuest && onSignOut && (
           <button
             data-testid="button-account-resignin"
