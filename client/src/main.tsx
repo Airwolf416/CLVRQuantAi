@@ -25,6 +25,24 @@ import "./index.css";
     try { localStorage.removeItem(TOKEN_KEY); } catch {}
     return;
   }
+  // Strict same-origin /api/ matcher. Critically, a substring match like
+  // url.indexOf("/api/") would also match third-party URLs whose path
+  // happens to contain "/api/" (e.g. https://evil.com/api/x), which would
+  // exfiltrate the bearer session ID. We therefore require either a
+  // relative path beginning with "/api/" OR an absolute URL whose origin
+  // matches window.location.origin AND whose pathname starts with "/api/".
+  const ourOrigin = window.location.origin;
+  const isOurApi = (rawUrl: string): boolean => {
+    if (!rawUrl) return false;
+    if (rawUrl.startsWith("/api/") || rawUrl === "/api") return true;
+    if (rawUrl.startsWith("/")) return false; // other relative path
+    try {
+      const u = new URL(rawUrl);
+      return u.origin === ourOrigin && u.pathname.startsWith("/api/");
+    } catch {
+      return false;
+    }
+  };
   const origFetch = window.fetch.bind(window);
   const wrapped: typeof window.fetch = (input, init) => {
     try {
@@ -34,7 +52,7 @@ import "./index.css";
           : input instanceof URL
           ? input.href
           : input.url;
-      if (url && url.indexOf("/api/") !== -1) {
+      if (isOurApi(url)) {
         const headers = new Headers(init?.headers);
         if (input instanceof Request) {
           input.headers.forEach((v, k) => { if (!headers.has(k)) headers.set(k, v); });
@@ -43,7 +61,7 @@ import "./index.css";
         if (token && !headers.has("Authorization")) {
           headers.set("Authorization", "Bearer " + token);
         }
-        // Always send cookies on /api/* — the cookie path remains the
+        // Always send cookies on our /api/* — the cookie path remains the
         // primary auth mechanism in non-ITP browsers, and we must not
         // break it. The bearer header is purely additive.
         init = {
