@@ -1,5 +1,12 @@
 type AnySignal = Record<string, any>;
 
+export type NotifyResult =
+  | { ok: true; status: number }
+  | { ok: false; reason: "missing_env"; detail: string }
+  | { ok: false; reason: "invalid_signal"; detail: string }
+  | { ok: false; reason: "http_error"; status: number; detail?: string }
+  | { ok: false; reason: "network_error"; detail: string };
+
 const REQUIRED_FIELDS = [
   "token",
   "dir",
@@ -13,31 +20,33 @@ const REQUIRED_FIELDS = [
   "ts",
 ] as const;
 
-export async function notifyAutoposter(signal: AnySignal): Promise<void> {
+export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult> {
   try {
     const baseUrl = process.env.AUTOPOSTER_WEBHOOK_URL;
     const secret = process.env.AUTOPOSTER_WEBHOOK_SECRET;
 
     if (!baseUrl || !secret) {
-      return;
+      return { ok: false, reason: "missing_env", detail: "AUTOPOSTER_WEBHOOK_URL or AUTOPOSTER_WEBHOOK_SECRET not set" };
     }
 
     if (!signal || typeof signal !== "object") {
       console.warn("[AUTOPOSTER] Skipping notify: signal is missing or not an object");
-      return;
+      return { ok: false, reason: "invalid_signal", detail: "signal is missing or not an object" };
     }
 
     for (const field of REQUIRED_FIELDS) {
       const value = (signal as AnySignal)[field];
       if (value === undefined || value === null) {
-        console.warn(`[AUTOPOSTER] Skipping notify: required field "${field}" is missing or null on signal`);
-        return;
+        const msg = `required field "${field}" is missing or null on signal`;
+        console.warn(`[AUTOPOSTER] Skipping notify: ${msg}`);
+        return { ok: false, reason: "invalid_signal", detail: msg };
       }
     }
 
     if (!Array.isArray(signal.reasoning)) {
-      console.warn('[AUTOPOSTER] Skipping notify: "reasoning" must be an array of strings');
-      return;
+      const msg = '"reasoning" must be an array of strings';
+      console.warn(`[AUTOPOSTER] Skipping notify: ${msg}`);
+      return { ok: false, reason: "invalid_signal", detail: msg };
     }
 
     const entry = parseFloat(signal.entry);
@@ -46,8 +55,9 @@ export async function notifyAutoposter(signal: AnySignal): Promise<void> {
     const tp2 = signal.tp2 !== undefined && signal.tp2 !== null ? parseFloat(signal.tp2) : undefined;
 
     if (!Number.isFinite(entry) || !Number.isFinite(stopLoss) || !Number.isFinite(tp1)) {
-      console.warn("[AUTOPOSTER] Skipping notify: entry/stopLoss/tp1 did not parse to finite numbers");
-      return;
+      const msg = "entry/stopLoss/tp1 did not parse to finite numbers";
+      console.warn(`[AUTOPOSTER] Skipping notify: ${msg}`);
+      return { ok: false, reason: "invalid_signal", detail: msg };
     }
 
     const payload = {
@@ -81,12 +91,14 @@ export async function notifyAutoposter(signal: AnySignal): Promise<void> {
       console.warn(
         `[AUTOPOSTER] Webhook returned non-OK status ${res.status} for ${payload.token} ${payload.direction}`
       );
-      return;
+      return { ok: false, reason: "http_error", status: res.status };
     }
 
     console.log(`[AUTOPOSTER] Notified for ${payload.token} ${payload.direction}`);
+    return { ok: true, status: res.status };
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
     console.warn(`[AUTOPOSTER] Notify failed (non-fatal): ${msg}`);
+    return { ok: false, reason: "network_error", detail: msg };
   }
 }
