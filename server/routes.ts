@@ -20,6 +20,7 @@ import { userPromotedAssets, newsItems } from "@shared/schema";
 import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
+import { notifyAutoposter } from "./autoposterNotify";
 import multerLib from "multer";
 import sharpLib from "sharp";
 import { createHash as cryptoCreateHash } from "crypto";
@@ -1153,6 +1154,7 @@ async function detectMoves() {
     }
 
     liveSignals.unshift(signal);
+    notifyAutoposter(signal).catch(() => {}); // fire and forget — never blocks signal flow
     if (liveSignals.length > 50) liveSignals.length = 50;
     lastSignalTime[sym] = now;
     if (!perAssetSignalLog[sym]) perAssetSignalLog[sym] = [];

@@ -78,9 +78,8 @@ export async function notifyAutoposter(signal: AnySignal): Promise<void> {
     });
 
     if (!res.ok) {
-      const bodyText = await res.text().catch(() => "");
       console.warn(
-        `[AUTOPOSTER] Webhook returned non-OK status ${res.status} for ${payload.token} ${payload.direction}: ${bodyText.slice(0, 200)}`
+        `[AUTOPOSTER] Webhook returned non-OK status ${res.status} for ${payload.token} ${payload.direction}`
       );
       return;
     }
