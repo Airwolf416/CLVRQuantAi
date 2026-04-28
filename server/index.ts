@@ -414,7 +414,7 @@ app.use((req, res, next) => {
 
 app.use(express.urlencoded({ extended: false }));
 
-import session from "express-session";
+import session, { Session } from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { pool } from "./db";
 const PgSession = connectPgSimple(session);
@@ -449,8 +449,17 @@ app.use(session({
 // `Authorization: Bearer <sid>`. We look that sid up in the existing
 // user_sessions store and seed req.session.userId for THIS request only —
 // every existing route keeps reading req.session.userId unchanged.
-app.use(async (req, res, next) => {
-  if ((req.session as any)?.userId) return next();
+//
+// We attach userId via Object.defineProperty with enumerable:false so
+// express-session's auto-save path (which compares JSON.stringify(session)
+// against the loaded hash to detect modifications) does NOT consider this
+// session modified. That means we do NOT have to monkey-patch
+// req.session.save — routes that legitimately call req.session.save() on
+// real (cookie) sessions still work normally, and the canonical bearer
+// session row in user_sessions is never overwritten with an empty hydrate.
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  const sess = req.session as Session & { userId?: string };
+  if (sess?.userId) return next();
   // Sign-in and sign-up create their own real session via password auth and
   // must persist normally; skip the bearer override on those paths so the
   // sid we return in the response body is actually saved to the store.
@@ -465,15 +474,18 @@ app.use(async (req, res, next) => {
       [token]
     );
     if (r.rows.length > 0) {
-      const sessData = r.rows[0].sess;
+      const sessData = r.rows[0].sess as { userId?: string } | null;
       const userId = sessData?.userId;
       if (userId) {
-        (req.session as any).userId = userId;
-        // Don't let express-session persist a brand-new empty session row
-        // back to the DB just because we hydrated userId on the auto-created
-        // session for this request. The canonical session is the bearer
-        // token's row; we only need it to live for this request's lifetime.
-        (req.session as any).save = (cb?: any) => { if (typeof cb === "function") cb(null); return req.session; };
+        // Non-enumerable: invisible to JSON.stringify, so express-session's
+        // modified-hash check sees no change and skips auto-save. Property
+        // access (req.session.userId) works exactly the same for routes.
+        Object.defineProperty(req.session, "userId", {
+          value: userId,
+          writable: true,
+          enumerable: false,
+          configurable: true,
+        });
       }
     }
   } catch (e) {
