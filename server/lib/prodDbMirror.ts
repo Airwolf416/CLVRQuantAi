@@ -1,95 +1,121 @@
-// Prod-DB mirror for the improvement log.
+// Prod mirror for the improvement log (HTTP webhook variant).
 //
 // Why this exists:
 //   The agent's `logImprovement()` helper writes a one-line entry into
 //   `update_log_entries` every time we ship a small user-visible change.
 //   Those writes go to whatever DATABASE_URL the running process has — which
-//   in dev is the workspace DB, NOT the live production DB. As a result the
-//   admin "Improvement Log" panel on the deployed site stays empty even
-//   though the dev panel fills up.
+//   in dev is the workspace DB, NOT the live production DB on Railway.
+//   As a result the admin "Improvement Log" panel on the deployed site
+//   stayed empty even though the dev panel filled up.
 //
-//   This module gives the dev process a second, narrowly-scoped Pool that
-//   points at the production DB so improvement-log entries can be mirrored
-//   there in real time as features ship.
+// How it works:
+//   When IMPROVEMENT_MIRROR_URL + IMPROVEMENT_MIRROR_SECRET are configured,
+//   each entry is also POSTed to the prod server's HMAC-authed mirror
+//   endpoint (`/api/internal/improvement-log/mirror`). The prod server
+//   verifies the signature and writes the entry into ITS OWN database.
+//   No prod database credentials are ever needed in dev — just a shared
+//   HMAC secret. This sidesteps the entire "what's the prod DATABASE_URL"
+//   problem.
 //
 // Safety guarantees:
-//   - Only used by `logImprovement()`. Nothing else in the app touches this
-//     pool — there's no general-purpose "write to prod" affordance here.
-//   - If PROD_DATABASE_URL is missing, this is a no-op (dev still works).
-//   - If PROD_DATABASE_URL === DATABASE_URL (i.e. we're already running in
-//     prod), this is a no-op so prod doesn't try to mirror onto itself.
-//   - Same 7-day dedupe as the local insert, evaluated against the prod DB,
-//     so retries / restarts don't create duplicate prod rows.
-//   - All failures are caught and logged. A broken prod-mirror never breaks
-//     the local insert, never bubbles up, never breaks the calling feature.
-//   - Pool size is capped tight (max 2) since this path is low-volume.
+//   - Best-effort: failures are caught and logged; never breaks the local
+//     insert, never bubbles up, never breaks the calling feature.
+//   - No-op when the URL or secret env vars are absent (dev still works).
+//   - 5s request timeout so a slow / unreachable prod can't stall callers.
+//   - Self-call guard: if the mirror URL points at this server's own host,
+//     the call is skipped (otherwise prod would mirror onto itself).
+//   - The receiving endpoint does its own 7-day dedupe, so retries / restarts
+//     don't create duplicate prod rows.
 
-import { Pool } from "pg";
-
-let prodPool: Pool | null = null;
-let initialized = false;
-
-function getProdPool(): Pool | null {
-  if (initialized) return prodPool;
-  initialized = true;
-
-  const url = process.env.PROD_DATABASE_URL;
-  if (!url) {
-    return null;
-  }
-  if (url === process.env.DATABASE_URL) {
-    console.log("[prod-mirror] PROD_DATABASE_URL == DATABASE_URL — already running in prod, mirror disabled");
-    return null;
-  }
-
-  try {
-    const useSSL = /sslmode=require/i.test(url) || /\.neon\.tech/i.test(url) || /\.replit\./i.test(url);
-    prodPool = new Pool({
-      connectionString: url,
-      max: 2,
-      ssl: useSSL ? { rejectUnauthorized: false } : undefined,
-    });
-    prodPool.on("error", (e: any) => {
-      console.warn("[prod-mirror] pool error:", e?.message || e);
-    });
-    console.log("[prod-mirror] enabled — improvement-log entries will mirror to prod DB");
-    return prodPool;
-  } catch (e: any) {
-    console.warn("[prod-mirror] failed to init prod pool:", e?.message || e);
-    prodPool = null;
-    return null;
-  }
-}
+import { createHmac } from "crypto";
 
 export interface MirrorInput {
   headline: string;
   detail: string | null;
   emoji: string | null;
   addedBy: string;
+  createdAt?: Date | string;
+}
+
+let warnedDisabled = false;
+let loggedSelfSkip = false;
+
+function isSelfCall(url: string): boolean {
+  // If the mirror URL host matches this process's own deploy host, skip
+  // (prevents prod from mirroring to itself).
+  try {
+    const u = new URL(url);
+    const ownHosts = [
+      process.env.RAILWAY_PUBLIC_DOMAIN,
+      process.env.RAILWAY_STATIC_URL,
+      process.env.REPLIT_DEPLOYMENT_DOMAIN,
+      process.env.REPL_URL,
+    ]
+      .filter(Boolean)
+      .map((h) => String(h).replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase());
+    return ownHosts.includes(u.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 export async function mirrorImprovementToProd(input: MirrorInput): Promise<void> {
-  const pool = getProdPool();
-  if (!pool) return;
+  const url = process.env.IMPROVEMENT_MIRROR_URL;
+  const secret = process.env.IMPROVEMENT_MIRROR_SECRET;
 
+  if (!url || !secret) {
+    if (!warnedDisabled) {
+      warnedDisabled = true;
+      console.log("[prod-mirror] IMPROVEMENT_MIRROR_URL or _SECRET not set — mirror disabled");
+    }
+    return;
+  }
+
+  if (isSelfCall(url)) {
+    if (!loggedSelfSkip) {
+      loggedSelfSkip = true;
+      console.log("[prod-mirror] mirror URL points at self — skipping (already running in prod)");
+    }
+    return;
+  }
+
+  const payload = {
+    headline: input.headline,
+    detail: input.detail,
+    emoji: input.emoji,
+    addedBy: input.addedBy,
+    createdAt:
+      input.createdAt instanceof Date
+        ? input.createdAt.toISOString()
+        : input.createdAt || undefined,
+  };
+  const raw = JSON.stringify(payload);
+  const sig = createHmac("sha256", secret).update(raw).digest("hex");
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 5000);
   try {
-    const dup = await pool.query(
-      `SELECT id FROM update_log_entries
-        WHERE headline = $1
-          AND created_at > NOW() - INTERVAL '7 days'
-        LIMIT 1`,
-      [input.headline],
-    );
-    if (dup.rowCount && dup.rowCount > 0) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-mirror-signature": sig,
+      },
+      body: raw,
+      signal: ctl.signal,
+    });
+    if (!r.ok) {
+      const txt = await r.text().catch(() => "");
+      console.warn(`[prod-mirror] HTTP ${r.status} for "${input.headline}" — ${txt.slice(0, 200)}`);
       return;
     }
-    await pool.query(
-      `INSERT INTO update_log_entries (headline, detail, emoji, added_by)
-       VALUES ($1, $2, $3, $4)`,
-      [input.headline, input.detail, input.emoji, input.addedBy],
-    );
-    console.log(`[prod-mirror] +${input.emoji || "•"} ${input.headline}`);
+    const data: any = await r.json().catch(() => ({}));
+    if (data?.action === "inserted") {
+      console.log(`[prod-mirror] +${input.emoji || "•"} ${input.headline}`);
+    }
   } catch (e: any) {
     console.warn(`[prod-mirror] mirror failed for "${input.headline}":`, e?.message || e);
+  } finally {
+    clearTimeout(timer);
   }
 }
