@@ -23,7 +23,7 @@ import { getUncachableResendClient } from "./resendClient";
 import { notifyAutoposter } from "./autoposterNotify";
 import multerLib from "multer";
 import sharpLib from "sharp";
-import { createHash as cryptoCreateHash } from "crypto";
+import { createHash as cryptoCreateHash, createHmac, timingSafeEqual } from "crypto";
 import { CLAUDE_MODEL } from "./config";
 import { CHARTAI_SCHEMA_VERSION, CHARTAI_FRAMEWORK_VERSION } from "./lib/chartAIVersions";
 import WebSocket from "ws";
@@ -5324,6 +5324,69 @@ Every level must be technically defensible. Return JSON only.`;
     } catch (e: any) {
       console.error("weekly-update ai-generate error:", e);
       res.status(500).json({ error: e?.message || "Failed to generate" });
+    }
+  });
+
+  // ── INTERNAL MIRROR ENDPOINT (HMAC-authed, no session) ───────────────────
+  // Lets the agent's dev workspace push improvement-log entries into THIS
+  // server's database (i.e. the production DB on Railway) without needing
+  // direct DB credentials. Authenticated via HMAC-SHA256 of the raw body
+  // using IMPROVEMENT_MIRROR_SECRET (must match the publisher's secret).
+  // Disabled (503) when the secret env var is not set.
+  app.post("/api/internal/improvement-log/mirror", express.json({ limit: "32kb" }), async (req, res) => {
+    try {
+      const secret = process.env.IMPROVEMENT_MIRROR_SECRET;
+      if (!secret) {
+        return res.status(503).json({ error: "mirror_disabled", reason: "IMPROVEMENT_MIRROR_SECRET not set on this server" });
+      }
+      const provided = String(req.headers["x-mirror-signature"] || "");
+      if (!provided) return res.status(401).json({ error: "missing_signature" });
+
+      const raw = JSON.stringify(req.body ?? {});
+      const expected = createHmac("sha256", secret).update(raw).digest("hex");
+
+      // constant-time compare
+      const a = Buffer.from(expected, "utf8");
+      const b = Buffer.from(provided, "utf8");
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        return res.status(401).json({ error: "bad_signature" });
+      }
+
+      const headline = String(req.body?.headline || "").trim();
+      if (!headline) return res.status(400).json({ error: "headline_required" });
+      const detail = req.body?.detail ? String(req.body.detail).trim() : null;
+      const emoji = req.body?.emoji ? String(req.body.emoji).trim().slice(0, 4) : null;
+      const addedBy = req.body?.addedBy ? String(req.body.addedBy).trim().slice(0, 64) : "agent-mirror";
+      const createdAt = req.body?.createdAt ? new Date(String(req.body.createdAt)) : null;
+
+      // 7-day dedupe so retries / restarts don't create duplicate prod rows
+      const dup = await pool.query(
+        `SELECT id FROM update_log_entries
+          WHERE headline = $1
+            AND created_at > NOW() - INTERVAL '7 days'
+          LIMIT 1`,
+        [headline],
+      );
+      if (dup.rowCount && dup.rowCount > 0) {
+        return res.json({ ok: true, action: "dedup", id: dup.rows[0].id });
+      }
+
+      const r = createdAt && !isNaN(createdAt.getTime())
+        ? await pool.query(
+            `INSERT INTO update_log_entries (headline, detail, emoji, added_by, created_at)
+             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            [headline, detail, emoji, addedBy, createdAt],
+          )
+        : await pool.query(
+            `INSERT INTO update_log_entries (headline, detail, emoji, added_by)
+             VALUES ($1, $2, $3, $4) RETURNING id`,
+            [headline, detail, emoji, addedBy],
+          );
+      console.log(`[mirror-in] +${emoji || "•"} ${headline}`);
+      res.json({ ok: true, action: "inserted", id: r.rows[0].id });
+    } catch (e: any) {
+      console.error("[mirror-in] error:", e?.message || e);
+      res.status(500).json({ error: e?.message || "internal_error" });
     }
   });
 

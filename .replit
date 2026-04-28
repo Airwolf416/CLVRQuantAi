@@ -46,6 +46,7 @@ waitForPort = 5000
 
 [userenv.shared]
 FINNHUB_KEY = "d6g6cohr01qt4931n620d6g6cohr01qt4931n62g"
+IMPROVEMENT_MIRROR_URL = "https://clvrquantai.com/api/internal/improvement-log/mirror"
 
 [agent]
 integrations = ["stripe:1.0.0", "resend:1.0.0", "github:1.0.0"]
