@@ -14,6 +14,7 @@
 import { db } from "../db";
 import { updateLogEntries } from "@shared/schema";
 import { and, eq, gt } from "drizzle-orm";
+import { mirrorImprovementToProd } from "./prodDbMirror";
 
 export interface LogImprovementInput {
   headline: string;          // short title, e.g. "Faster signal refresh on mobile"
@@ -48,6 +49,15 @@ export async function logImprovement(input: LogImprovementInput): Promise<void> 
       addedBy,
     });
     console.log(`[improvement-log] +${input.emoji || "•"} ${headline}`);
+
+    // Best-effort prod mirror. No-op when PROD_DATABASE_URL isn't set or
+    // when we're already running in prod. Never throws — see prodDbMirror.ts.
+    await mirrorImprovementToProd({
+      headline,
+      detail: input.detail?.trim() || null,
+      emoji: input.emoji?.trim() || null,
+      addedBy,
+    });
   } catch (e: any) {
     // Never bubble up — logging an improvement is best-effort.
     console.error(`[improvement-log] failed to log "${headline}":`, e?.message || e);
