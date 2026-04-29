@@ -319,6 +319,7 @@ function OwnerStatsPanel({ C, MONO, SERIF }) {
   const tiers = stats?.usersByTier || { free: 0, pro: 0, elite: 0 };
   const total = stats?.totalUsers || 0;
   const lists = stats?.emailLists || { dailyBriefOptIn: 0, weeklyActiveSubscribers: 0, verifiedUsers: 0, totalUsers: 0 };
+  const promo = stats?.promoEmails || { broadcastAudience: 0, activePromoHolders: 0, expiringIn14d: 0 };
   const windowMin = Math.round((live.windowMs || 120000) / 60000);
 
   return (
@@ -378,6 +379,31 @@ function OwnerStatsPanel({ C, MONO, SERIF }) {
           goes to anyone in the subscribers list with active=true.
           One-to-one emails (welcome, verify, Elite welcome, referral, owner alerts)
           go to a single recipient and are not counted here.
+        </div>
+      </div>
+
+      {/* ── PROMOTION EMAILS ───────────────────────────────────────────── */}
+      <div style={cardWrap} data-testid="card-promo-emails">
+        <div style={labelStyle}>PROMOTION EMAILS</div>
+        <div style={sectionTitle}>Promo blast audience + active promo holders</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          <Stat label="PROMO BLAST AUDIENCE" value={promo.broadcastAudience || 0} color={C.orange}
+                sub={`"Share & Earn" manual send`}
+                testId="stat-promo-blast" />
+          <Stat label="ACTIVE PROMO HOLDERS" value={promo.activePromoHolders || 0} color={C.gold2}
+                sub="Users on a live promo grant"
+                testId="stat-active-promo" />
+          <Stat label="EXPIRING IN 14D" value={promo.expiringIn14d || 0} color={C.red}
+                sub="Auto reminder queue"
+                testId="stat-promo-expiring" />
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.muted2, lineHeight: 1.7, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+          <strong style={{ color: C.text }}>Promo blast audience</strong> is what the manual
+          "Share & Earn 1 Week Free Pro" send hits — every registered user PLUS active
+          email-only subscribers (deduped). <strong style={{ color: C.text }}>Active promo holders</strong>
+          are users currently using a non-Stripe access code grant.
+          <strong style={{ color: C.text }}> Expiring in 14d</strong> will receive automatic
+          14-day, 3-day, and same-day expiry reminder emails (one per user, not a broadcast).
         </div>
       </div>
     </>

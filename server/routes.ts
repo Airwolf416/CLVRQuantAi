@@ -2058,6 +2058,38 @@ export async function registerRoutes(
         .from(usersTable).where(eq(usersTable.emailVerified, true));
       const verifiedUsers = Number(verifiedRows[0]?.c || 0);
 
+      // ── Promo email stats ──────────────────────────────────────────────
+      // The "Share & Earn 1 Week" broadcast (sendPromoEmail) targets every
+      // user + active subscriber — same audience as the apology brief —
+      // computed via FULL OUTER JOIN. Mirror that count here so the owner
+      // sees how big a manual promo blast actually goes.
+      const promoBlastRows = await pool.query(`
+        SELECT COUNT(DISTINCT COALESCE(u.email, s.email))::int AS c
+        FROM users u
+        FULL OUTER JOIN subscribers s ON LOWER(u.email) = LOWER(s.email)
+        WHERE (u.email IS NOT NULL OR (s.email IS NOT NULL AND s.active = true))
+          AND COALESCE(u.email, s.email) LIKE '%@%'
+      `);
+      const promoBlastAudience = Number(promoBlastRows.rows[0]?.c || 0);
+
+      // Active promo holders = users currently on a non-free tier whose
+      // promo grant hasn't expired yet (so they'll get expiry reminders).
+      const activePromoRows = await pool.query(`
+        SELECT COUNT(*)::int AS c FROM users
+        WHERE promo_expires_at IS NOT NULL AND promo_expires_at > NOW()
+      `);
+      const activePromoHolders = Number(activePromoRows.rows[0]?.c || 0);
+
+      // Expiring soon = will receive a 14d / 3d / same-day reminder email
+      // from checkPromoExpiryReminders() on the next scheduler tick.
+      const expiringRows = await pool.query(`
+        SELECT COUNT(*)::int AS c FROM users
+        WHERE promo_expires_at IS NOT NULL
+          AND promo_expires_at > NOW()
+          AND promo_expires_at <= NOW() + INTERVAL '14 days'
+      `);
+      const promoExpiringIn14d = Number(expiringRows.rows[0]?.c || 0);
+
       // Live-right-now from the in-memory tracker.
       const live = getLiveStats();
 
@@ -2068,6 +2100,11 @@ export async function registerRoutes(
           weeklyActiveSubscribers,
           totalUsers,
           verifiedUsers,
+        },
+        promoEmails: {
+          broadcastAudience: promoBlastAudience,
+          activePromoHolders,
+          expiringIn14d: promoExpiringIn14d,
         },
         usersByTier,
         totalUsers,
