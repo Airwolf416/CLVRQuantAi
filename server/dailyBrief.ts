@@ -7,6 +7,7 @@ import { enqueueDailyBrief } from "./workers/notifications";
 import { CLAUDE_MODEL } from "./config";
 import { selectDailyTrades, sliceForTier, hydrateCalibration, logTierDistribution, getTieredBriefMode, type CandidatePlan, type AssetClass } from "./lib/selectDailyTrades";
 import { runIntegrityCheck, filterDropList, type PriceRow } from "./lib/dataIntegrity";
+import { getBrainSummary } from "./lib/statisticalBrain";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -220,6 +221,39 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
     ? `\n⚠️ CRITICAL — PENDING HIGH-IMPACT EVENTS (NO OUTCOMES YET):\n${pendingHighEvents.map(e => `  - ${e}`).join("\n")}\nFor each of these events you MUST write only forward-looking language. NEVER state the outcome. NEVER write phrases like "Fed holds", "CPI came in at", "rate decision confirmed", or anything describing a result. Write what the market is pricing in and what to watch FOR. Violation of this rule produces misleading information that could cause financial harm.`
     : "";
 
+  // ── STATISTICAL BRAIN summary (top PREFERRED + top SUPPRESSED combos) ────
+  // Same empirical-edge engine that already gates /api/quant and /api/ai/analyze.
+  // Prepended to the brief prompt so topTrade + additionalTrades favour
+  // historically-winning (token, direction) combos and avoid the bleeders.
+  // Fail-open: if the DB query throws, the brief still generates without
+  // the brain context (just less informed).
+  let brainBlock = "";
+  try {
+    const summary = await getBrainSummary();
+    if (summary?.rows?.length) {
+      // Mirror the verdict thresholds in server/lib/statisticalBrain.ts.
+      // ComboStat doesn't carry a verdict field — it's derived per-call by
+      // getBrainFor — so we derive it locally with the same constants.
+      const SUPPRESS_WR = 0.25, PREFERRED_WR = 0.60;
+      const MIN_SAMPLE_SUPP = 15, MIN_SAMPLE_PREF = 20;
+      const isPreferred  = (r: typeof summary.rows[number]) => r.sampleSize >= MIN_SAMPLE_PREF && r.winRate >= PREFERRED_WR;
+      const isSuppressed = (r: typeof summary.rows[number]) => r.sampleSize >= MIN_SAMPLE_SUPP && r.winRate <  SUPPRESS_WR;
+
+      const preferred  = summary.rows.filter(isPreferred).sort((a, b) => b.winRate - a.winRate).slice(0, 6);
+      const suppressed = summary.rows.filter(isSuppressed).sort((a, b) => a.winRate - b.winRate).slice(0, 6);
+
+      const fmtRow = (r: typeof summary.rows[number]) => `  ${r.token} ${r.direction.padEnd(5)} → WR ${(r.winRate * 100).toFixed(0)}% over n=${r.sampleSize}, EV ${r.expectedR >= 0 ? "+" : ""}${r.expectedR.toFixed(2)}R, p90 winner ${Number.isFinite(r.p90WinR) ? r.p90WinR.toFixed(2) + "R" : "—"}`;
+      const lines: string[] = [];
+      if (preferred.length)  lines.push("PREFERRED (high empirical edge — bias toward these):", ...preferred.map(fmtRow));
+      if (suppressed.length) lines.push("SUPPRESSED (historical bleeders — AVOID; pick a different combo or skip):", ...suppressed.map(fmtRow));
+      if (lines.length) {
+        brainBlock = `\n\n═══ STATISTICAL BRAIN — empirical edge from ${summary.lookbackDays}d resolved-trade history ═══\n${lines.join("\n")}\n→ When choosing topTrade and additionalTrades, FAVOUR PREFERRED combos and AVOID SUPPRESSED combos. If a SUPPRESSED combo is the only setup you see, skip it and pick from the rest of the universe — do not fight the empirical edge.`;
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[daily-brief] brain summary failed (proceeding without): ${e?.message || e}`);
+  }
+
   const prompt = `You are CLVR AI — a senior markets correspondent (think Bloomberg / FT / Reuters) writing the morning brief for ${today}. Voice: clear, calm, authoritative economic-journalism prose. Short concrete sentences. No marketing fluff, no hedging clichés. Always name the WHY, not just the WHAT. ALL data below is REAL, LIVE, and TIMESTAMPED.
 
 ═══ CRITICAL RULES — READ BEFORE WRITING ═══
@@ -246,7 +280,7 @@ EQUITIES: ${eqStr || "Data unavailable"}
 ENERGY & COMMODITIES (use these exact prices in your Oil & Gas commentary):
   ${marketData.metals.filter(m => ["WTI Crude Oil","Brent Crude Oil","Natural Gas"].includes(m.symbol)).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
 METALS: ${marketData.metals.filter(m => ["Gold XAU/USD","Silver XAG/USD","Copper"].includes(m.symbol)).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
-FOREX: ${fxStr || "Data unavailable"}
+FOREX: ${fxStr || "Data unavailable"}${brainBlock}
 
 LAYER 3 — SESSION: ${sessionCtx}
 

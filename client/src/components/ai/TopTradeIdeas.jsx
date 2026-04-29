@@ -27,6 +27,12 @@ export default function TopTradeIdeas({
   const [timeframe, setTimeframe] = useState("today");
   const [todayMode, setTodayMode] = useState("hours"); // quick | hours | fullDay
   const [marketTypeFilter, setMarketTypeFilter] = useState("BOTH");
+  // Asset-class scope: ALL | CRYPTO | EQUITY | COMMODITY | FOREX. Picked
+  // BEFORE the market-type (PERP/SPOT/BOTH) toggle so the user can first
+  // narrow "I only care about FX today" then choose spot/perp within that.
+  // Forex has no perp market on HL — when FOREX is selected we auto-flip
+  // marketTypeFilter to SPOT (handled in the onClick below).
+  const [assetClass, setAssetClass] = useState("ALL");
   const [preflight, setPreflight] = useState(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
 
@@ -75,6 +81,7 @@ export default function TopTradeIdeas({
         storeMode, storeTotalMarkets, storeAlerts,
         marketTypeFilter,
         signalFilter: true,
+        assetClass,
       });
 
       const macroCtx = buildMacroPreflightContext(freshPreflight);
@@ -322,19 +329,59 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
       )}
 
       {isPro && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO, letterSpacing: "0.1em", marginRight: 2 }}>ASSET CLASS:</span>
+          {[
+            { k: "ALL",       l: "All",         col: "#e8c96d" },
+            { k: "CRYPTO",    l: "Crypto",      col: "#f7931a" },
+            { k: "EQUITY",    l: "Equities",    col: "#22c55e" },
+            { k: "COMMODITY", l: "Commodities", col: "#eab308" },
+            { k: "FOREX",     l: "Forex",       col: "#3b82f6" },
+          ].map(({ k, l, col }) => {
+            const sel = assetClass === k;
+            return (
+              <button key={k} data-testid={`btn-assetclass-${k.toLowerCase()}`} onClick={() => {
+                setAssetClass(k);
+                // FX has no perp market on HL — auto-flip to SPOT so the
+                // user doesn't sit in a permanently-empty PERP+FOREX state.
+                if (k === "FOREX" && marketTypeFilter === "PERP") setMarketTypeFilter("SPOT");
+              }} style={{
+                padding: "5px 10px", borderRadius: 6,
+                border: `1px solid ${sel ? col : "rgba(255,255,255,0.08)"}`,
+                background: sel ? `${col}15` : "transparent",
+                color: sel ? col : "rgba(255,255,255,0.4)",
+                fontFamily: MONO, fontSize: 9, cursor: "pointer", fontWeight: sel ? 700 : 400, letterSpacing: "0.06em",
+              }}>{l}</button>
+            );
+          })}
+        </div>
+      )}
+
+      {isPro && (
         <div style={{ display: "flex", gap: 4, marginBottom: 10, alignItems: "center" }}>
           <span style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO, letterSpacing: "0.1em", marginRight: 2 }}>MARKET:</span>
           {["PERP", "SPOT", "BOTH"].map(m => {
             const col = m === "PERP" ? "#00d4ff" : m === "SPOT" ? "#a855f7" : "#e8c96d";
             const sel = marketTypeFilter === m;
+            // FX has no perp listings on HL — disable PERP under FOREX class.
+            const disabled = assetClass === "FOREX" && m === "PERP";
             return (
-              <button key={m} data-testid={`btn-market-${m}`} onClick={() => setMarketTypeFilter(m)} style={{
-                padding: "5px 12px", borderRadius: 6,
-                border: `1px solid ${sel ? col : "rgba(255,255,255,0.08)"}`,
-                background: sel ? `${col}15` : "transparent",
-                color: sel ? col : "rgba(255,255,255,0.4)",
-                fontFamily: MONO, fontSize: 9, cursor: "pointer", fontWeight: sel ? 700 : 400, letterSpacing: "0.06em",
-              }}>{m}</button>
+              <button
+                key={m}
+                data-testid={`btn-market-${m}`}
+                onClick={() => { if (!disabled) setMarketTypeFilter(m); }}
+                disabled={disabled}
+                title={disabled ? "Forex has no perp market — use SPOT or BOTH" : ""}
+                style={{
+                  padding: "5px 12px", borderRadius: 6,
+                  border: `1px solid ${sel ? col : "rgba(255,255,255,0.08)"}`,
+                  background: sel ? `${col}15` : "transparent",
+                  color: disabled ? "rgba(255,255,255,0.15)" : sel ? col : "rgba(255,255,255,0.4)",
+                  fontFamily: MONO, fontSize: 9, cursor: disabled ? "not-allowed" : "pointer",
+                  fontWeight: sel ? 700 : 400, letterSpacing: "0.06em",
+                  opacity: disabled ? 0.5 : 1,
+                }}
+              >{m}</button>
             );
           })}
         </div>
