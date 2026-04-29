@@ -20,18 +20,78 @@ const REQUIRED_FIELDS = [
   "ts",
 ] as const;
 
+// ── In-memory ring buffer of recent autoposter attempts ────────────────────
+// Used by /api/admin/autoposter/status so the owner can self-diagnose why
+// Telegram isn't receiving signals (missing env, invalid payload, http error,
+// network error). Bounded at 50 to keep memory tiny.
+type AttemptRecord = {
+  ts: number;
+  token: string;
+  direction: string;
+  ok: boolean;
+  reason?: string;
+  status?: number;
+  detail?: string;
+};
+const recentAttempts: AttemptRecord[] = [];
+const MAX_RECENT_ATTEMPTS = 50;
+
+function recordAttempt(rec: AttemptRecord) {
+  recentAttempts.push(rec);
+  if (recentAttempts.length > MAX_RECENT_ATTEMPTS) {
+    recentAttempts.splice(0, recentAttempts.length - MAX_RECENT_ATTEMPTS);
+  }
+}
+
+export function getAutoposterStatus() {
+  const baseUrl = process.env.AUTOPOSTER_WEBHOOK_URL;
+  const secret = process.env.AUTOPOSTER_WEBHOOK_SECRET;
+  // Mask URL host so we can confirm it's set without leaking the full webhook.
+  let urlHostMasked: string | null = null;
+  if (baseUrl) {
+    try {
+      const u = new URL(baseUrl);
+      urlHostMasked = `${u.protocol}//${u.hostname}${u.pathname.replace(/\/[^/]+$/, "/***")}`;
+    } catch {
+      urlHostMasked = "<invalid URL>";
+    }
+  }
+  const successCount = recentAttempts.filter(a => a.ok).length;
+  const failCount = recentAttempts.filter(a => !a.ok).length;
+  const lastFailure = [...recentAttempts].reverse().find(a => !a.ok) || null;
+  const lastSuccess = [...recentAttempts].reverse().find(a => a.ok) || null;
+  return {
+    envConfigured: !!(baseUrl && secret),
+    urlSet: !!baseUrl,
+    secretSet: !!secret,
+    urlHostMasked,
+    totalAttempts: recentAttempts.length,
+    successCount,
+    failCount,
+    lastSuccess,
+    lastFailure,
+    recentAttempts: [...recentAttempts].reverse().slice(0, 20),
+  };
+}
+
 export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult> {
+  const attemptToken = (signal && typeof signal === "object" && signal.token) ? String(signal.token) : "?";
+  const attemptDir = (signal && typeof signal === "object" && signal.dir) ? String(signal.dir) : "?";
   try {
     const baseUrl = process.env.AUTOPOSTER_WEBHOOK_URL;
     const secret = process.env.AUTOPOSTER_WEBHOOK_SECRET;
 
     if (!baseUrl || !secret) {
-      return { ok: false, reason: "missing_env", detail: "AUTOPOSTER_WEBHOOK_URL or AUTOPOSTER_WEBHOOK_SECRET not set" };
+      const detail = "AUTOPOSTER_WEBHOOK_URL or AUTOPOSTER_WEBHOOK_SECRET not set";
+      recordAttempt({ ts: Date.now(), token: attemptToken, direction: attemptDir, ok: false, reason: "missing_env", detail });
+      return { ok: false, reason: "missing_env", detail };
     }
 
     if (!signal || typeof signal !== "object") {
-      console.warn("[AUTOPOSTER] Skipping notify: signal is missing or not an object");
-      return { ok: false, reason: "invalid_signal", detail: "signal is missing or not an object" };
+      const detail = "signal is missing or not an object";
+      console.warn(`[AUTOPOSTER] Skipping notify: ${detail}`);
+      recordAttempt({ ts: Date.now(), token: attemptToken, direction: attemptDir, ok: false, reason: "invalid_signal", detail });
+      return { ok: false, reason: "invalid_signal", detail };
     }
 
     for (const field of REQUIRED_FIELDS) {
@@ -39,6 +99,7 @@ export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult>
       if (value === undefined || value === null) {
         const msg = `required field "${field}" is missing or null on signal`;
         console.warn(`[AUTOPOSTER] Skipping notify: ${msg}`);
+        recordAttempt({ ts: Date.now(), token: attemptToken, direction: attemptDir, ok: false, reason: "invalid_signal", detail: msg });
         return { ok: false, reason: "invalid_signal", detail: msg };
       }
     }
@@ -46,6 +107,7 @@ export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult>
     if (!Array.isArray(signal.reasoning)) {
       const msg = '"reasoning" must be an array of strings';
       console.warn(`[AUTOPOSTER] Skipping notify: ${msg}`);
+      recordAttempt({ ts: Date.now(), token: attemptToken, direction: attemptDir, ok: false, reason: "invalid_signal", detail: msg });
       return { ok: false, reason: "invalid_signal", detail: msg };
     }
 
@@ -57,6 +119,7 @@ export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult>
     if (!Number.isFinite(entry) || !Number.isFinite(stopLoss) || !Number.isFinite(tp1)) {
       const msg = "entry/stopLoss/tp1 did not parse to finite numbers";
       console.warn(`[AUTOPOSTER] Skipping notify: ${msg}`);
+      recordAttempt({ ts: Date.now(), token: attemptToken, direction: attemptDir, ok: false, reason: "invalid_signal", detail: msg });
       return { ok: false, reason: "invalid_signal", detail: msg };
     }
 
@@ -97,14 +160,17 @@ export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult>
       console.warn(
         `[AUTOPOSTER] Webhook returned non-OK status ${res.status} for ${payload.token} ${payload.direction}`
       );
+      recordAttempt({ ts: Date.now(), token: String(payload.token), direction: String(payload.direction), ok: false, reason: "http_error", status: res.status });
       return { ok: false, reason: "http_error", status: res.status };
     }
 
     console.log(`[AUTOPOSTER] Notified for ${payload.token} ${payload.direction}`);
+    recordAttempt({ ts: Date.now(), token: String(payload.token), direction: String(payload.direction), ok: true, status: res.status });
     return { ok: true, status: res.status };
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
     console.warn(`[AUTOPOSTER] Notify failed (non-fatal): ${msg}`);
+    recordAttempt({ ts: Date.now(), token: attemptToken, direction: attemptDir, ok: false, reason: "network_error", detail: msg });
     return { ok: false, reason: "network_error", detail: msg };
   }
 }

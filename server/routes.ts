@@ -20,7 +20,7 @@ import { userPromotedAssets, newsItems } from "@shared/schema";
 import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
-import { notifyAutoposter } from "./autoposterNotify";
+import { notifyAutoposter, getAutoposterStatus } from "./autoposterNotify";
 import multerLib from "multer";
 import sharpLib from "sharp";
 import { createHash as cryptoCreateHash, createHmac, timingSafeEqual } from "crypto";
@@ -1965,6 +1965,18 @@ export async function registerRoutes(
       delete lastManualSendBySignal[id];
       return res.status(500).json({ ok: false, reason: "internal_error", detail: e?.message || String(e) });
     }
+  });
+
+  // ── /api/admin/autoposter/status ─────────────────────────────────────────
+  // Admin-only self-serve diagnostic for the Telegram autoposter pipeline.
+  // Returns whether env vars are set (without leaking values), the masked
+  // webhook URL host, and a ring buffer of the last 50 notify attempts with
+  // their outcome. Use this to figure out why Telegram isn't receiving
+  // signals (missing_env / invalid_signal / http_error / network_error).
+  app.get("/api/admin/autoposter/status", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    res.json(getAutoposterStatus());
   });
 
   // ── SIGNAL HISTORY (paid = full data, free = locked) ─────────────────────
