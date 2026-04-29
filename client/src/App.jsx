@@ -1372,6 +1372,8 @@ function AdminAutoposterStatus(){
   const[loading,setLoading]=useState(false);
   const[err,setErr]=useState(null);
   const[expanded,setExpanded]=useState(false);
+  const[testing,setTesting]=useState(false);
+  const[testMsg,setTestMsg]=useState(null); // {ok:bool, text:string}
   const fetchData=async()=>{
     setLoading(true);setErr(null);
     try{
@@ -1380,6 +1382,50 @@ function AdminAutoposterStatus(){
       const j=await r.json();setData(j);
     }catch(e){setErr(e.message||"Failed to load");}
     finally{setLoading(false);}
+  };
+  // Fire a single test trade idea to the Telegram autoposter. Honors the
+  // 60s server-side cooldown (returns 429 with cooldownRemainingMs).
+  const sendTest=async()=>{
+    if(testing)return;
+    if(!window.confirm("Send a test trade idea to the Telegram autoposter now?\n\nIf auto_publish=true on the autoposter (Railway), this will appear in your Telegram channel within ~30s.\n\nIf auto_publish=false, it will be queued for manual approval on the autoposter side."))return;
+    setTesting(true);setTestMsg(null);
+    try{
+      const r=await fetch("/api/admin/autoposter/test-send",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
+      // Tolerate empty/non-JSON bodies — distinguish "parsed but empty" from "parsed shape we expect".
+      let j=null,parseFailed=false;
+      try{j=await r.json();}catch{parseFailed=true;}
+      const hasShape=j&&typeof j==="object"&&("ok"in j||"reason"in j||"detail"in j||"payloadSent"in j||"result"in j);
+      // Cooldown — handled regardless of shape (server returns 429 with {ok:false, reason:'cooldown_active', cooldownRemainingMs}).
+      if(r.status===429){
+        const sec=Math.ceil((j?.cooldownRemainingMs||0)/1000);
+        setTestMsg({ok:false,text:`Cooldown active — wait ${sec}s before sending another test (1 send per 60s per admin).`});
+      // Malformed response — never falsely report success.
+      }else if(parseFailed||!hasShape){
+        setTestMsg({ok:false,text:`Unexpected server response (HTTP ${r.status}${parseFailed?", non-JSON body":", missing expected keys"}). Check the server logs.`});
+        if(r.ok)setTimeout(fetchData,800); // a 200 means the attempt likely happened — refresh ring buffer so DETAILS stays authoritative
+      // Explicit success — the only path that says "Test sent ✓".
+      }else if(r.ok&&j.ok===true){
+        const tok=j.payloadSent?.token||"BTC";
+        const dir=j.payloadSent?.dir||"";
+        const ap=j.result||{};
+        const httpStatus=ap.status;
+        const apOk=ap.ok!==false;
+        setTestMsg({ok:apOk,text:apOk?`Test sent: ${tok} ${dir}${httpStatus?` · autoposter HTTP ${httpStatus}`:""} · check Telegram in ~30s (or the autoposter queue if auto_publish is off)`:`Sent ${tok} ${dir} but autoposter rejected: ${ap.reason||"unknown"}${ap.status?` (HTTP ${ap.status})`:""}${ap.detail?` — ${String(ap.detail).slice(0,120)}`:""}`});
+        setTimeout(fetchData,800); // refresh ring buffer so the new attempt shows in DETAILS
+      // Explicit failure (top-level reason/detail or nested in result).
+      }else{
+        const reason=j.reason||j.result?.reason||j.error||"unknown_error";
+        const detail=j.detail||j.result?.detail||"";
+        setTestMsg({ok:false,text:`Failed (HTTP ${r.status}): ${reason}${detail?` — ${String(detail).slice(0,160)}`:""}`});
+        if(r.ok)setTimeout(fetchData,800); // an attempt was likely recorded — refresh DETAILS
+      }
+    }catch(e){
+      setTestMsg({ok:false,text:`Network error: ${e?.message||"failed to reach server"}`});
+    }finally{
+      setTesting(false);
+      // Auto-clear the inline status message after 12s so the banner stays clean.
+      setTimeout(()=>setTestMsg(null),12000);
+    }
   };
   useEffect(()=>{fetchData();const id=setInterval(fetchData,30000);return()=>clearInterval(id);},[]);
   // Health logic: green if env configured AND most recent attempt was a success
@@ -1409,9 +1455,11 @@ function AdminAutoposterStatus(){
       {data&&<span style={{color:C.textMuted,fontSize:10}}>{data.urlHostMasked||"<no url>"}</span>}
       <span style={{flex:1}}/>
       <button data-testid="button-autoposter-refresh" onClick={fetchData} disabled={loading} style={{padding:"3px 10px",fontSize:10,fontWeight:700,background:"transparent",color:C.text,border:`1px solid ${C.border}`,borderRadius:3,cursor:loading?"wait":"pointer",fontFamily:"monospace",letterSpacing:"0.04em"}}>{loading?"…":"REFRESH"}</button>
+      <button data-testid="button-autoposter-test-send" onClick={sendTest} disabled={testing||!data?.envConfigured} title={!data?.envConfigured?"Autoposter env not configured":"Fire one test trade idea to the Telegram pipeline"} style={{padding:"3px 10px",fontSize:10,fontWeight:700,background:testing?"transparent":"#22c55e22",color:!data?.envConfigured?C.textMuted:"#22c55e",border:`1px solid ${!data?.envConfigured?C.border:"#22c55e88"}`,borderRadius:3,cursor:testing?"wait":(!data?.envConfigured?"not-allowed":"pointer"),fontFamily:"monospace",letterSpacing:"0.04em",opacity:!data?.envConfigured?0.5:1}}>{testing?"SENDING…":"TEST SEND"}</button>
       <button data-testid="button-autoposter-expand" onClick={()=>setExpanded(!expanded)} style={{padding:"3px 10px",fontSize:10,fontWeight:700,background:"transparent",color:C.text,border:`1px solid ${C.border}`,borderRadius:3,cursor:"pointer",fontFamily:"monospace",letterSpacing:"0.04em"}}>{expanded?"HIDE":"DETAILS"}</button>
     </div>
     <div style={{marginTop:6,color:C.textMuted,fontSize:10,wordBreak:"break-word"}} data-testid="text-autoposter-msg">{err?`Error: ${err}`:msg}</div>
+    {testMsg&&<div data-testid="text-autoposter-test-result" style={{marginTop:6,padding:"6px 8px",background:testMsg.ok?"#22c55e15":"#ef444415",border:`1px solid ${testMsg.ok?"#22c55e55":"#ef444455"}`,borderRadius:3,fontSize:10,color:testMsg.ok?"#22c55e":"#ef4444",fontWeight:600,wordBreak:"break-word"}}>{testMsg.ok?"✓ ":"✗ "}{testMsg.text}</div>}
     {expanded&&data&&<div style={{marginTop:10,padding:10,background:"rgba(255,255,255,0.02)",border:`1px solid ${C.border}`,borderRadius:3}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(110px, 1fr))",gap:6,marginBottom:10,fontSize:10}}>
         <div><span style={{color:C.textMuted}}>env:</span> <span style={{color:data.envConfigured?"#22c55e":"#ef4444",fontWeight:700}}>{data.envConfigured?"OK":"MISSING"}</span></div>
