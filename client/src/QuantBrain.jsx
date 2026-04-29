@@ -203,11 +203,28 @@ Tasks:
 4. Tell me which correlated trades have the best risk-adjusted return today`;
 
     try {
+      // Surface Statistical Brain (LONG+SHORT empirical edge) AND a
+      // server-rendered 1h candlestick chart for the focus asset so Claude
+      // sees the same vision input + edge gates that /api/quant uses.
+      const focusAsset = String(tradeSetup.asset || "").toUpperCase();
+      const focusDir = tradeSetup.direction === "LONG" || tradeSetup.direction === "SHORT" ? tradeSetup.direction : undefined;
       const res = await fetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userPrompt, systemPrompt }),
+        body: JSON.stringify({
+          prompt: userPrompt,
+          systemPrompt,
+          tickers: focusAsset ? [focusAsset] : [],
+          attachBrainSummary: true,
+          attachVision: !!focusAsset,
+          visionTicker: focusAsset,
+          visionDirection: focusDir,
+          // Brain summary + per-ticker brain + 1h chart image inflate the
+          // context heavily; bump the response budget so the analysis isn't
+          // truncated.
+          maxTokens: 2500,
+        }),
       });
       const data = await res.json();
       setAiResponse(data.text || data.response || data.error || "No response.");
