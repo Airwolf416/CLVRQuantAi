@@ -2116,6 +2116,103 @@ export async function registerRoutes(
     }
   });
 
+  // ── /api/admin/shadow-inversions/summary ────────────────────────────────
+  // Returns the path-aware "Reverse Costanza" backtest: how the inverted
+  // version of every signal we've published since this feature shipped is
+  // doing, side-by-side with the real signals. Owner-only — the same gate
+  // as /api/admin/owner/stats.
+  app.get("/api/admin/shadow-inversions/summary", async (req, res) => {
+    const sessUid = (req.session as any)?.userId;
+    if (!sessUid) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const u = await storage.getUser(sessUid);
+      if (!u || (u.email || "").toLowerCase() !== OWNER_EMAIL.toLowerCase()) {
+        return res.status(403).json({ error: "Owner only" });
+      }
+    } catch {
+      return res.status(403).json({ error: "Owner only" });
+    }
+    res.set("Cache-Control", "no-store");
+    try {
+      // Real signals — but ONLY counting signals created at or after the
+      // first shadow row exists, so the comparison is apples-to-apples.
+      const firstShadowRow = await pool.query(
+        `SELECT MIN(created_at) AS min_created FROM signal_shadow_inversions`
+      );
+      const sinceTs: Date | null = firstShadowRow.rows?.[0]?.min_created ?? null;
+
+      const realParams: any[] = [];
+      let realWhere = `WHERE outcome <> 'PENDING'`;
+      if (sinceTs) {
+        realParams.push(sinceTs);
+        realWhere += ` AND created_at >= $${realParams.length}`;
+      }
+      const realStats = await pool.query(`
+        SELECT
+          COUNT(*)::int AS resolved,
+          COUNT(*) FILTER (WHERE outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN'))::int AS wins,
+          COUNT(*) FILTER (WHERE outcome IN ('SL_HIT','EXPIRED_LOSS'))::int AS losses,
+          ROUND(SUM(pnl_pct)::numeric, 2) AS total_pnl_pct,
+          ROUND(AVG(pnl_pct)::numeric, 4) AS avg_pnl_pct
+        FROM ai_signal_log
+        ${realWhere}
+      `, realParams);
+
+      const shadowStats = await pool.query(`
+        SELECT
+          COUNT(*)::int AS resolved,
+          COUNT(*) FILTER (WHERE outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN'))::int AS wins,
+          COUNT(*) FILTER (WHERE outcome IN ('SL_HIT','EXPIRED_LOSS'))::int AS losses,
+          ROUND(SUM(pnl_pct)::numeric, 2) AS total_pnl_pct,
+          ROUND(AVG(pnl_pct)::numeric, 4) AS avg_pnl_pct
+        FROM signal_shadow_inversions
+        WHERE outcome <> 'PENDING'
+      `);
+
+      const totalShadow = await pool.query(
+        `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE outcome = 'PENDING')::int AS pending FROM signal_shadow_inversions`
+      );
+
+      const realRow = realStats.rows[0] || {};
+      const shadowRow = shadowStats.rows[0] || {};
+      const totals = totalShadow.rows[0] || {};
+
+      const winRate = (w: any, r: any) => {
+        const ww = Number(w || 0);
+        const rr = Number(r || 0);
+        if (rr <= 0) return null;
+        return Math.round((ww / rr) * 1000) / 10;
+      };
+
+      res.json({
+        ok: true,
+        sinceTs,
+        shadow: {
+          totalLogged: Number(totals.total || 0),
+          pending: Number(totals.pending || 0),
+          resolved: Number(shadowRow.resolved || 0),
+          wins: Number(shadowRow.wins || 0),
+          losses: Number(shadowRow.losses || 0),
+          winRatePct: winRate(shadowRow.wins, shadowRow.resolved),
+          totalPnlPct: shadowRow.total_pnl_pct != null ? Number(shadowRow.total_pnl_pct) : null,
+          avgPnlPct: shadowRow.avg_pnl_pct != null ? Number(shadowRow.avg_pnl_pct) : null,
+        },
+        real: {
+          resolved: Number(realRow.resolved || 0),
+          wins: Number(realRow.wins || 0),
+          losses: Number(realRow.losses || 0),
+          winRatePct: winRate(realRow.wins, realRow.resolved),
+          totalPnlPct: realRow.total_pnl_pct != null ? Number(realRow.total_pnl_pct) : null,
+          avgPnlPct: realRow.avg_pnl_pct != null ? Number(realRow.avg_pnl_pct) : null,
+        },
+        note: "Shadow signals mirror SL/TP across entry. Forward-only since this feature shipped — historical signals are not backfilled.",
+      });
+    } catch (e: any) {
+      console.error("[/api/admin/shadow-inversions/summary] failed:", e?.message || e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
   // ── SIGNAL HISTORY (paid = full data, free = locked) ─────────────────────
   app.get("/api/signal-history", async (req, res) => {
     const userId = (req.session as any)?.userId;
