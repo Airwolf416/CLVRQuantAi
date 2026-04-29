@@ -4614,6 +4614,20 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       // Get live funding rate from HL data (crypto only)
       const fundingRate: number = cls === "crypto" ? (hlData[ticker]?.funding || 0) : 0;
 
+      // ── STATISTICAL BRAIN — empirical edge from resolved-trade history ────
+      // Pre-compute brain output for both directions so we can suppress on the
+      // trend-implied direction early AND check the AI's eventual direction in
+      // hardening regardless of which way it went.
+      const _brainMod = await import("./lib/statisticalBrain");
+      const [brainLong, brainShort] = await Promise.all([
+        _brainMod.getBrainFor(ticker, "LONG"),
+        _brainMod.getBrainFor(ticker, "SHORT"),
+      ]);
+      const brainForTrend = _trendDir === "LONG" ? brainLong : _trendDir === "SHORT" ? brainShort : null;
+      if (brainForTrend) {
+        console.log(`[Brain] ${ticker} ${_trendDir} → ${brainForTrend.verdict} | ${brainForTrend.reason}`);
+      }
+
       // ── GLOBAL CIRCUIT BREAKER (1h WR collapse) ─────────────────────────
       if (isHalted()) {
         const cb = getCircuitState();
@@ -4653,6 +4667,43 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
           suppression_message: `Adaptive learning: ${ticker} suppressed (LONG ${adaptLong.winRate}%, SHORT ${adaptShort.winRate}% — both below 30% Wilson lower bound over last 30d).`,
           suppression_rules: ["ADAPTIVE_LEARNING"],
           adaptive: { long: adaptLong, short: adaptShort },
+        });
+      }
+
+      // ── BRAIN SUPPRESS — both directions empirically dead (≥15 trades, <25% WR)
+      // If both LONG and SHORT have a SUPPRESS verdict, refuse to generate
+      // a signal in either direction. Keeps the engine from emitting
+      // -334%-style trades on combos like BTC SHORT (0% over 20) or
+      // DOGE SHORT (0% over 19).
+      if (brainLong.verdict === "SUPPRESS" && brainShort.verdict === "SUPPRESS") {
+        logRejection({
+          source: "ai_signal", token: ticker, direction: "BOTH",
+          reason: "BRAIN_SUPPRESSED_COMBO",
+          detail: `LONG ${(brainLong.stat?.winRate ?? 0)*100}% / SHORT ${(brainShort.stat?.winRate ?? 0)*100}% — both below 25% empirical floor`,
+        });
+        return res.json({
+          signal: "SUPPRESSED",
+          suppressed: true,
+          suppression_message: `Statistical Brain: ${ticker} has no demonstrated edge in either direction (${brainLong.reason}; ${brainShort.reason}).`,
+          suppression_rules: ["BRAIN_SUPPRESSED_COMBO"],
+          brain: { long: brainLong.reason, short: brainShort.reason },
+        });
+      }
+      // ── BRAIN SUPPRESS — single direction (the trend-implied one) is dead
+      // Don't even bother calling Claude — it'll just propose in the trend
+      // direction and we'd reject in hardening. Save the API call.
+      if (brainForTrend && brainForTrend.verdict === "SUPPRESS") {
+        logRejection({
+          source: "ai_signal", token: ticker, direction: _trendDir,
+          reason: "BRAIN_SUPPRESSED_COMBO",
+          detail: brainForTrend.reason,
+        });
+        return res.json({
+          signal: "SUPPRESSED",
+          suppressed: true,
+          suppression_message: `Statistical Brain: ${ticker} ${_trendDir} historically loses (${brainForTrend.reason}). Trend-implied direction has no edge — refusing to emit.`,
+          suppression_rules: ["BRAIN_SUPPRESSED_COMBO"],
+          brain: brainForTrend,
         });
       }
 
@@ -4874,9 +4925,15 @@ ${mtfStr}`;
 
       const adaptiveBlock = adaptiveNotes.length ? `\n\nADAPTIVE LEARNING NOTES FOR ${ticker}:\n${adaptiveNotes.join("\n")}\n${newsBlock}` : newsBlock;
 
+      // ── Statistical Brain block — empirical limits per direction ──────────
+      // These are STRICT — hardening will VETO any signal that violates them.
+      const brainBlock = `\n\n${brainLong.promptText}\n\n${brainShort.promptText}\n`;
+
       const system = `${perfCtx}
-${adaptiveBlock}
+${adaptiveBlock}${brainBlock}
 You are CLVRQuantAI Signal Engine — a precision trade signal generator for leveraged perpetual futures. Think like Paul Tudor Jones + Stan Druckenmiller. Capital preservation first. Never force a trade.
+
+A live candlestick chart is attached to this message — the last ${candles1h?.length ?? 0} 1h bars of ${ticker} with EMA20/EMA50 overlays and key support/resistance levels. Use it to validate visual structure (clean trends, fakeouts, wicks at levels, double tops/bottoms) before committing to a direction.
 
 PROFILE: ${risk.label}
 Leverage: ${Math.max(risk.leverage[0], tf.leverage[0])}x–${Math.min(risk.leverage[1], tf.leverage[1])}x (intersect risk × timeframe) | Risk/trade: ${risk.riskPct}% | Min win prob: ${risk.minWinProb}%
@@ -5028,10 +5085,45 @@ DATA SOURCES: HL candles (${candles.length} bars) + ${BINANCE_SYMBOLS[ticker] ? 
 Calculate the highest probability setup for the ${risk.label} profile.
 Every level must be technically defensible. Return JSON only.`;
 
+      // ── Render candlestick chart for Claude vision input ──────────────────
+      // Send the actual visual structure (not just indicator text) so Claude
+      // can confirm patterns: clean trends, fakeout wicks, double tops at S/R,
+      // failed breakouts. Falls open — if rendering fails, signal still ships.
+      let chartImageB64: string | null = null;
+      if (candles1h && candles1h.length > 0) {
+        try {
+          const { renderChartPng, computeEmaSeries } = await import("./lib/chartRenderer");
+          const closes1h = candles1h.map(c => c.c);
+          chartImageB64 = await renderChartPng({
+            token: ticker,
+            direction: _trendDir || undefined,
+            candles: candles1h,
+            ema20: computeEmaSeries(closes1h, 20),
+            ema50: computeEmaSeries(closes1h, 50),
+            support: ind.low24,        // 24h low as visual support reference
+            resistance: ind.high24,    // 24h high as visual resistance reference
+            entryZone: { low: Math.min(fibConserv, fibAggr), high: Math.max(fibConserv, fibAggr) },
+            timeframeLabel: "1h",
+          });
+        } catch (e: any) {
+          console.warn(`[chart-vision] ${ticker} render failed (continuing without):`, e?.message || e);
+        }
+      }
+
+      // Build content array — text always, image when rendered successfully.
+      // Claude messages API supports mixed content blocks for vision.
+      const contentBlocks: any[] = [{ type: "text", text: userMsg }];
+      if (chartImageB64) {
+        contentBlocks.unshift({
+          type: "image",
+          source: { type: "base64", media_type: "image/png", data: chartImageB64 },
+        });
+      }
+
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method:"POST",
         headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01" },
-        body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:3000, system, messages:[{ role:"user", content:userMsg }] }),
+        body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:3000, system, messages:[{ role:"user", content: contentBlocks }] }),
       });
       if (!aiRes.ok) { const e = await aiRes.text(); console.error("[/api/quant]", e); return res.status(502).json({ error:"AI Engine failed." }); }
 
@@ -5337,7 +5429,7 @@ Every level must be technically defensible. Return JSON only.`;
         const hdDir: "LONG" | "SHORT" = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
         const hdStart = Date.now();
         try {
-          const { applySignalHardening, recordOiSample, getOiChangePct } = await import("./lib/signalHardening");
+          const { applySignalHardening, applyBrainLimits, recordOiSample, getOiChangePct } = await import("./lib/signalHardening");
           const { getLiquidityClusters } = await import("./services/coinglass");
           const { rejectionExplanation } = await import("./lib/promptV2Runner");
           const hlCtx: any = (typeof hlData !== "undefined" ? (hlData as any)[ticker] : undefined);
@@ -5347,6 +5439,53 @@ Every level must be technically defensible. Return JSON only.`;
           const clusters = await getLiquidityClusters(ticker, entryPx, dayVolUsd);
           const hdHorizon: "scalp" | "swing" = tf.id === "scalp" ? "scalp" : "swing";
           const convIn = typeof parsed.conviction === "number" ? parsed.conviction : (bayesian?.probability ?? 60);
+
+          // ── Statistical Brain limits (STRICT) — gate BEFORE the standard
+          // hardening pass so we reject empirically-impossible TPs/SLs/timing
+          // before paying the cost of full hardening. Uses the actual AI-chosen
+          // direction (not the trend-implied one).
+          const brainForActual = hdDir === "LONG" ? brainLong : brainShort;
+          if (brainForActual.hasData && brainForActual.limits) {
+            // Planned hold in hours. parsed.hold.target_exit_min is in MINUTES.
+            // Fall back to horizon defaults only if both target/hard exits are missing.
+            const exitMin = Number(parsed.hold?.target_exit_min ?? parsed.hold?.hard_exit_min ?? 0);
+            const killClockHrs = exitMin > 0 ? exitMin / 60 : (hdHorizon === "scalp" ? 4 : 24);
+            // Translate brain's avgLossPct → minSlPct floor (spec: 0.80 × avg historical loss).
+            const minSlPctFromBrain = brainForActual.stat ? brainForActual.stat.avgLossPct * 0.80 : undefined;
+            const brainCheck = applyBrainLimits(
+              {
+                entry: entryPx,
+                stopLoss: Number(parsed.stopLoss.price),
+                tp1: Number(parsed.tp1.price),
+                killClockHrs,
+                direction: hdDir,
+              },
+              {
+                maxTpR: brainForActual.limits.maxTpR,
+                minSlPct: minSlPctFromBrain,
+                maxKillClockHours: brainForActual.limits.maxKillClockHours,
+              },
+            );
+            if (!brainCheck.ok) {
+              console.log(`[BRAIN] ${ticker} ${hdDir} REJECTED — ${brainCheck.reason}: ${brainCheck.detail}`);
+              logRejection({
+                source: "ai_signal", token: ticker, direction: hdDir,
+                reason: brainCheck.reason as any, detail: brainCheck.detail,
+              });
+              const explanation = rejectionExplanation(brainCheck.reason as any, brainCheck.detail, ticker);
+              // Use "SUPPRESSED" (not "NEUTRAL") to match the schema used by every
+              // other suppression path in /api/quant — keeps the frontend consistent.
+              parsed.signal = "SUPPRESSED";
+              parsed.suppressed = true;
+              parsed.suppression_message = explanation;
+              parsed.suppression_rules = [brainCheck.reason];
+              (parsed as any).rejection = { status: "rejected", reason_code: brainCheck.reason, explanation, detail: brainCheck.detail };
+              (parsed as any).brain = brainForActual;
+              // Skip the rest of hardening — we've already vetoed.
+              return res.json(parsed);
+            }
+          }
+
           console.log(`[HARDENING v1] ${ticker} ${hdDir} entry — entry=${entryPx} sl=${parsed.stopLoss.price} tp1=${parsed.tp1.price} conv=${convIn} horizon=${hdHorizon}`);
           const hard = applySignalHardening({
             token: ticker,

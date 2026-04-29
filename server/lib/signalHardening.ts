@@ -197,6 +197,68 @@ function gate_friction(input: HardeningInput, currentStop: number): { reject: { 
   return null;
 }
 
+// ── Statistical Brain limits gate (STRICT) ──────────────────────────────────
+// Empirical floor/ceiling on TP, SL, and kill clock derived from this combo's
+// historical resolved trades. Vetoes signals that violate physically-realistic
+// limits the engine has demonstrated in the wild.
+//
+// Returns { ok: true } when the proposal is within limits or the brain has
+// no data. Returns { reject } when STRICT mode trips a violation.
+//
+// Inputs in price units. Brain limits are in R-multiples — caller passes
+// limits and we convert against the proposal's own SL distance.
+// Note on minSlR: R is always 1.0 relative to the proposal's own SL by
+// definition, so a minSlR floor cannot be enforced from R alone. Caller must
+// translate the brain's avgLossPct into minSlPct and pass that.
+export interface BrainLimitsCheck {
+  entry:        number;
+  stopLoss:     number;
+  tp1:          number;
+  killClockHrs: number;
+  direction:    "LONG" | "SHORT";  // kept for log/debug context
+}
+export interface BrainLimitsInput {
+  maxTpR?:            number;     // strict cap on TP1 R-multiple
+  minSlPct?:          number;     // strict floor on SL distance as % of price
+  maxKillClockHours?: number;     // strict cap on planned hold duration
+}
+export type BrainLimitsResult =
+  | { ok: true }
+  | { ok: false; reason: RejectionReason; detail: string };
+
+export function applyBrainLimits(
+  proposal: BrainLimitsCheck,
+  limits:   BrainLimitsInput,
+): BrainLimitsResult {
+  const slDist = Math.abs(proposal.entry - proposal.stopLoss);
+  if (slDist <= 0 || !Number.isFinite(slDist)) return { ok: true };  // trust earlier gates
+  const tpDist = Math.abs(proposal.entry - proposal.tp1);
+  const tpR    = tpDist / slDist;
+
+  // 1) TP cap — can't exceed empirical winner reach × headroom
+  if (limits.maxTpR != null && tpR > limits.maxTpR) {
+    return { ok: false, reason: "TP_BEYOND_BRAIN_LIMIT" as RejectionReason,
+      detail: `TP1 R=${tpR.toFixed(2)} exceeds Brain max ${limits.maxTpR.toFixed(2)}R (historical winners cap here)` };
+  }
+
+  // 2) SL distance floor — can't be tighter than empirical noise band
+  if (limits.minSlPct != null) {
+    const slPct = (slDist / proposal.entry) * 100;
+    if (slPct < limits.minSlPct) {
+      return { ok: false, reason: "SL_TIGHTER_THAN_BRAIN_LIMIT" as RejectionReason,
+        detail: `SL distance ${slPct.toFixed(2)}% < Brain min ${limits.minSlPct.toFixed(2)}% (avg loser depth)` };
+    }
+  }
+
+  // 3) Kill clock cap — must resolve in empirically-observed window
+  if (limits.maxKillClockHours != null && proposal.killClockHrs > limits.maxKillClockHours) {
+    return { ok: false, reason: "KILL_CLOCK_BEYOND_BRAIN_LIMIT" as RejectionReason,
+      detail: `kill clock ${proposal.killClockHrs}h > Brain max ${limits.maxKillClockHours}h (median resolution time)` };
+  }
+
+  return { ok: true };
+}
+
 // ── Public entry point — runs all gates in order ────────────────────────────
 export function applySignalHardening(input: HardeningInput): HardeningResult {
   const adjustments: HardeningAdjustment[] = [];
