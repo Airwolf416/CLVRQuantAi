@@ -97,6 +97,26 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── promo_reminder_log ───────────────────────────────────────────────────
+    // Idempotency ledger so the promo-expiry reminder fires AT MOST once per
+    // (user, kind, expiry_date). Two reminders are sent per access-code grant:
+    //   kind = 'expiry_7d'  → ~one week before promo_expires_at
+    //   kind = 'expiry_0d'  → on the day of expiry (within 24h)
+    // Including expiry_date in the PK lets a user receive a fresh pair of
+    // reminders if they redeem a NEW code (later expiry). The PK constraint
+    // is the lock — claimPromoReminderSlot()/releasePromoReminderSlot() in
+    // storage.ts use INSERT ... ON CONFLICT DO NOTHING as the atomic claim.
+    // Mirrors the daily_brief_telegram_log pattern below.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS promo_reminder_log (
+        user_id     VARCHAR NOT NULL,
+        kind        VARCHAR NOT NULL,
+        expiry_date DATE    NOT NULL,
+        sent_at     TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (user_id, kind, expiry_date)
+      )
+    `);
+
     // ── push_subscriptions ───────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
