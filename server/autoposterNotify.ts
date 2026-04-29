@@ -1,3 +1,5 @@
+import { createHash } from "crypto";
+
 type AnySignal = Record<string, any>;
 
 export type NotifyResult =
@@ -146,27 +148,87 @@ export async function notifyAutoposter(signal: AnySignal): Promise<NotifyResult>
     const trimmed = baseUrl.replace(/\/+$/, "");
     const url = /\/webhook\/signal$/i.test(trimmed) ? trimmed : trimmed + "/webhook/signal";
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Signal-Secret": secret,
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5000),
-    });
+    // Stable idempotency key per logical signal — same value on retry so the
+    // downstream can dedupe if attempt 1 actually landed and only the
+    // response path failed. Built from token+direction+timestamp so two
+    // distinct signals never collide.
+    const idempotencyKey = createHash("sha1")
+      .update(`${payload.token}|${payload.direction}|${payload.timestamp}`)
+      .digest("hex");
 
-    if (!res.ok) {
-      console.warn(
-        `[AUTOPOSTER] Webhook returned non-OK status ${res.status} for ${payload.token} ${payload.direction}`
-      );
-      recordAttempt({ ts: Date.now(), token: String(payload.token), direction: String(payload.direction), ok: false, reason: "http_error", status: res.status });
-      return { ok: false, reason: "http_error", status: res.status };
+    // Two attempts with a 15s per-attempt timeout. Production was failing
+    // at the previous 5s ceiling on every single signal even though the
+    // downstream service responds in <500ms when probed directly — the
+    // extra slack covers Railway-to-Railway latency spikes, and a single
+    // retry on an abort/timeout keeps one bad packet from dropping a
+    // real signal.
+    const ATTEMPT_TIMEOUT_MS = 15_000;
+    const MAX_ATTEMPTS = 2;
+    let lastNetworkError: string | null = null;
+
+    // Decide whether a thrown fetch error is worth retrying. We retry on
+    // aborts (our own timeout firing) and on the well-known transient
+    // network class names. Everything else (TypeErrors from bad config,
+    // DNS failures that won't fix themselves in 500ms, etc.) fails fast
+    // so we don't waste time and don't risk surprising side effects.
+    const isRetryable = (e: unknown): boolean => {
+      const err = e as { name?: string; code?: string; cause?: { code?: string } } | null;
+      if (!err) return false;
+      if (err.name === "AbortError" || err.name === "TimeoutError") return true;
+      const code = err.code || err.cause?.code;
+      if (code && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(code)) return true;
+      return false;
+    };
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const startedAt = Date.now();
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Signal-Secret": secret,
+            "Idempotency-Key": idempotencyKey,
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+        });
+
+        if (!res.ok) {
+          // HTTP errors are not retried — 4xx is a payload/auth issue,
+          // 5xx means the downstream actually responded and rejected us.
+          console.warn(
+            `[AUTOPOSTER] Webhook returned non-OK status ${res.status} for ${payload.token} ${payload.direction} (attempt ${attempt}/${MAX_ATTEMPTS}, ${Date.now() - startedAt}ms)`
+          );
+          recordAttempt({ ts: Date.now(), token: String(payload.token), direction: String(payload.direction), ok: false, reason: "http_error", status: res.status });
+          return { ok: false, reason: "http_error", status: res.status };
+        }
+
+        console.log(`[AUTOPOSTER] Notified for ${payload.token} ${payload.direction} (attempt ${attempt}, ${Date.now() - startedAt}ms)`);
+        recordAttempt({ ts: Date.now(), token: String(payload.token), direction: String(payload.direction), ok: true, status: res.status });
+        return { ok: true, status: res.status };
+      } catch (innerErr) {
+        lastNetworkError = (innerErr as Error)?.message ?? String(innerErr);
+        const elapsed = Date.now() - startedAt;
+        const retryable = isRetryable(innerErr);
+        if (attempt < MAX_ATTEMPTS && retryable) {
+          console.warn(
+            `[AUTOPOSTER] Attempt ${attempt}/${MAX_ATTEMPTS} failed for ${payload.token} ${payload.direction} after ${elapsed}ms (retryable=true): ${lastNetworkError} — retrying`
+          );
+          // Tiny backoff so we don't immediately re-hit the same broken socket.
+          await new Promise((r) => setTimeout(r, 500));
+          continue;
+        }
+        console.warn(
+          `[AUTOPOSTER] Attempt ${attempt}/${MAX_ATTEMPTS} failed for ${payload.token} ${payload.direction} after ${elapsed}ms (retryable=${retryable}): ${lastNetworkError}` +
+          (retryable ? "" : " — not retrying")
+        );
+        break;
+      }
     }
 
-    console.log(`[AUTOPOSTER] Notified for ${payload.token} ${payload.direction}`);
-    recordAttempt({ ts: Date.now(), token: String(payload.token), direction: String(payload.direction), ok: true, status: res.status });
-    return { ok: true, status: res.status };
+    recordAttempt({ ts: Date.now(), token: String(payload.token), direction: String(payload.direction), ok: false, reason: "network_error", detail: lastNetworkError ?? "unknown" });
+    return { ok: false, reason: "network_error", detail: lastNetworkError ?? "unknown" };
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
     console.warn(`[AUTOPOSTER] Notify failed (non-fatal): ${msg}`);
