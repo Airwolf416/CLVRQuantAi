@@ -1,6 +1,14 @@
 import { type User, type InsertUser, type AccessCode, type InsertAccessCode, type Referral, type InsertReferral, type UserAlert, type InsertUserAlert, type WebAuthnCredential, type SignalHistoryRecord, type TradeJournalEntry, type WatchlistItem, users, accessCodes, referrals, userAlerts, webauthnCredentials, signalHistory, tradeJournal, watchlistItems } from "@shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { eq, sql, and, gt, lt, desc, ne } from "drizzle-orm";
+
+// Promo-reminder idempotency: kinds are 'expiry_7d' | 'expiry_0d'.
+// expiry_date is the user's promoExpiresAt as a UTC date (YYYY-MM-DD), so
+// re-redeeming a NEW access code with a later expiry date allows a fresh pair
+// of reminders to fire. Table is created in initDb.ts.
+export type PromoReminderKind = "expiry_7d" | "expiry_0d";
+const toExpiryDate = (d: Date | string): string =>
+  (typeof d === "string" ? new Date(d) : d).toISOString().slice(0, 10);
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -140,6 +148,42 @@ export class DatabaseStorage implements IStorage {
         lt(users.promoExpiresAt!, target)
       )
     );
+  }
+
+  // ── Promo-reminder idempotency ledger ───────────────────────────────────
+  // Atomic claim-before-send pattern: a single INSERT ... ON CONFLICT DO NOTHING
+  // is the lock. Returns true iff THIS caller won the claim and must send the
+  // email. On send failure the caller MUST release the slot so a future
+  // scheduler tick can retry. Mirrors claimTelegramSlot/releaseTelegramSlotOnFailure
+  // in dailyBrief.ts. This eliminates the read-then-write race that could
+  // let two concurrent workers (overlapping ticks, restart + 60s setTimeout,
+  // multiple replicas) both pass a `wasSent?` check and both send.
+  // Fail-CLOSED on DB error: if we cannot claim atomically we MUST NOT send,
+  // because we have no way to dedupe a successful send afterwards.
+  async claimPromoReminderSlot(userId: string, kind: PromoReminderKind, expiryDate: Date | string): Promise<boolean> {
+    try {
+      const r = await pool.query(
+        `INSERT INTO promo_reminder_log (user_id, kind, expiry_date)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, kind, expiry_date) DO NOTHING`,
+        [userId, kind, toExpiryDate(expiryDate)],
+      );
+      return (r.rowCount ?? 0) > 0;
+    } catch (e: any) {
+      console.error("[promo-reminder-log] claim error (skipping send):", e.message);
+      return false;
+    }
+  }
+
+  async releasePromoReminderSlot(userId: string, kind: PromoReminderKind, expiryDate: Date | string): Promise<void> {
+    try {
+      await pool.query(
+        "DELETE FROM promo_reminder_log WHERE user_id = $1 AND kind = $2 AND expiry_date = $3",
+        [userId, kind, toExpiryDate(expiryDate)],
+      );
+    } catch (e: any) {
+      console.error("[promo-reminder-log] release error:", e.message);
+    }
   }
 
   async getAccessCode(code: string): Promise<AccessCode | undefined> {

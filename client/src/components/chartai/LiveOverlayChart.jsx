@@ -36,13 +36,19 @@ function fmtTime(ms) {
   return `${hh}:${mm}`;
 }
 
-export default function LiveOverlayChart({ symbol }) {
+export default function LiveOverlayChart({ symbol, onSymbolChange, onLevelsChange }) {
   const [eligible, setEligible] = useState(null);   // {equity, fx, commodity}
   const [sym, setSym] = useState((symbol || "AAPL").toUpperCase());
   const [bars, setBars] = useState([]);
   const [levels, setLevels] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Notify parent of internal sym + levels changes so it can pass them to
+  // downstream consumers (e.g. the "Analyze this Live Chart" button which
+  // needs the active symbol AND a hint that data is loaded before submitting).
+  useEffect(() => { onSymbolChange?.(sym); }, [sym, onSymbolChange]);
+  useEffect(() => { onLevelsChange?.(levels, bars); }, [levels, bars, onLevelsChange]);
 
   // Load eligible symbol list once for the selector
   useEffect(() => {
@@ -69,9 +75,19 @@ export default function LiveOverlayChart({ symbol }) {
     let cancelled = false;
     let timer = null;
 
-    const load = async () => {
+    const load = async (isInitial = false) => {
       setLoading(true);
       setError("");
+      // On the FIRST load for a new sym (symbol switch / mount) clear bars +
+      // levels so the parent's `liveReady` flag goes false. This prevents the
+      // "Analyze Live <SYM> Chart" button from capturing the OLD chart while
+      // sym has already switched to the new ticker. We do NOT clear during
+      // the 30s background refresh — that would cause UI flicker on every
+      // tick. `isInitial` is true only on the immediate load() call below.
+      if (isInitial) {
+        setBars([]);
+        setLevels(null);
+      }
       try {
         const [barsRes, lvlRes] = await Promise.all([
           fetch(`/api/execution_levels/${sym}/bars`, { credentials: "include" }),
@@ -108,8 +124,8 @@ export default function LiveOverlayChart({ symbol }) {
       }
     };
 
-    load();
-    timer = setInterval(load, 30_000);
+    load(true); // initial = clear stale bars/levels so parent goes !liveReady
+    timer = setInterval(() => load(false), 30_000); // refresh = keep current data on screen
     return () => { cancelled = true; if (timer) clearInterval(timer); };
   }, [sym]);
 

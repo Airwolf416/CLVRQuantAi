@@ -1,9 +1,54 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   ScanLine, Upload, X, Zap, Clock, TrendingUp, Calendar,
-  Info, Share2, RotateCcw, AlertTriangle, Camera,
+  Info, Share2, RotateCcw, AlertTriangle, Camera, Sparkles,
 } from "lucide-react";
 import LiveOverlayChart from "../components/chartai/LiveOverlayChart.jsx";
+
+// AI provider tagline shown in the header so users know which model is
+// powering the analysis (matches server-side CLAUDE_MODEL = sonnet-4-6).
+const AI_PROVIDER_LABEL = "Powered by Anthropic Claude Sonnet 4.6";
+
+// Capture an SVG element (Recharts renders ONE svg per ResponsiveContainer)
+// and rasterize it to a PNG Blob. Returns null on failure so callers can
+// fall back to an error message. We draw a black background first so the
+// transparent recharts SVG matches the live chart's on-screen look.
+async function svgElementToPngBlob(svgEl, scale = 2) {
+  if (!svgEl) return null;
+  try {
+    const w = svgEl.clientWidth || svgEl.viewBox?.baseVal?.width || 800;
+    const h = svgEl.clientHeight || svgEl.viewBox?.baseVal?.height || 320;
+
+    // Clone + ensure xmlns so the serialized string is a standalone document
+    const clone = svgEl.cloneNode(true);
+    if (!clone.getAttribute("xmlns")) clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    if (!clone.getAttribute("width"))  clone.setAttribute("width",  String(w));
+    if (!clone.getAttribute("height")) clone.setAttribute("height", String(h));
+
+    const svgString = new XMLSerializer().serializeToString(clone);
+    const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(svgBlob);
+
+    return await new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width  = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        canvas.toBlob((b) => resolve(b), "image/png", 0.92);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  } catch {
+    return null;
+  }
+}
 
 const HORIZONS = [
   { id: "scalp",    label: "Scalp",    sub: "1–15m",         Icon: Zap },
@@ -44,6 +89,18 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+
+  // ── Live-chart capture state ──────────────────────────────────────────────
+  // We mirror LiveOverlayChart's internal sym + readiness so the "Analyze
+  // this Live Chart" button knows (a) what asset to send to Claude and (b)
+  // whether the chart's SVG is actually populated (skip if showing error/empty).
+  const liveChartRef = useRef(null);
+  const [liveSym, setLiveSym] = useState((asset || "AAPL").toUpperCase());
+  const [liveReady, setLiveReady] = useState(false);
+  const handleLiveSymChange = useCallback((s) => { if (s) setLiveSym(s.toUpperCase()); }, []);
+  const handleLiveLevelsChange = useCallback((levels, bars) => {
+    setLiveReady(!!(levels && Array.isArray(bars) && bars.length > 0));
+  }, []);
 
   // ── Usage counter ─────────────────────────────────────────────────────────
   const refreshUsage = useCallback(async () => {
@@ -98,6 +155,69 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
       fd.append("image", file);
       fd.append("horizon", horizon);
       if (asset.trim()) fd.append("asset", asset.trim());
+      const r = await fetch("/api/chart-ai/analyze", {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (data?.error === "daily_limit_reached") {
+          setError(`Daily limit reached — resets at ${new Date(data.resets_at).toUTCString().split(" ").slice(1, 5).join(" ")} UTC.`);
+          setUsage(u => ({ ...u, used_today: u.daily_limit, remaining_today: 0, resets_at: data.resets_at }));
+        } else if (data?.error === "service_temporarily_paused") {
+          setError("Chart AI is temporarily paused. Please try again later.");
+        } else {
+          setError(data?.error || "Analysis failed. Try again.");
+        }
+        return;
+      }
+      setResult(data.analysis);
+      setUsage(u => ({
+        ...u,
+        used_today: u.daily_limit - (data.remaining_today ?? 0),
+        remaining_today: data.remaining_today ?? Math.max(0, u.remaining_today - 1),
+        resets_at: data.resets_at,
+      }));
+    } catch (e) {
+      setError("Network error. Check connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Capture the LiveOverlayChart's SVG, rasterize it to a PNG Blob, and
+  // send it through the same /api/chart-ai/analyze endpoint as an uploaded
+  // file. No backend changes required — Claude treats it identically to a
+  // user-uploaded screenshot. Auto-fills `asset` with the live symbol so
+  // the prompt has the correct ticker context.
+  const analyzeLiveChart = async () => {
+    if (!horizon) { setError("Pick a trading horizon."); return; }
+    if (!liveReady) {
+      setError("Live chart isn't ready yet — wait for it to load and try again.");
+      return;
+    }
+    const svgEl = liveChartRef.current?.querySelector?.("svg");
+    if (!svgEl) {
+      setError("Could not capture the live chart. Try uploading a screenshot instead.");
+      return;
+    }
+    setError(""); setResult(null); setLoading(true);
+    try {
+      const blob = await svgElementToPngBlob(svgEl, 2);
+      if (!blob) {
+        setError("Chart capture failed. Try uploading a screenshot instead.");
+        return;
+      }
+      // The captured PNG is of `liveSym` (the LiveOverlayChart's internal
+      // selector), NOT the upload form's `asset` input. Prefer liveSym so the
+      // prompt always describes the chart we actually sent. Fall back to the
+      // manual `asset` only when liveSym is empty (e.g. very early mount).
+      const tickerForPrompt = (liveSym || asset.trim() || "").toUpperCase();
+      const fd = new FormData();
+      fd.append("image", new File([blob], `live-${liveSym || "chart"}.png`, { type: "image/png" }));
+      fd.append("horizon", horizon);
+      if (tickerForPrompt) fd.append("asset", tickerForPrompt);
       const r = await fetch("/api/chart-ai/analyze", {
         method: "POST",
         credentials: "include",
@@ -190,8 +310,17 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
             <div style={{ ...labelMono, marginTop: 2, color: C.muted2 }}>
               ELITE · UPLOAD CHART → AI TRADE PLAN
             </div>
+            <div data-testid="text-ai-provider" style={{
+              fontFamily: MONO, fontSize: 9, color: ACCENT,
+              letterSpacing: "0.14em", textTransform: "uppercase",
+              fontWeight: 600, marginTop: 3, opacity: 0.85,
+              display: "flex", alignItems: "center", gap: 5,
+            }}>
+              <Sparkles size={10} />
+              {AI_PROVIDER_LABEL}
+            </div>
           </div>
-          <div title="Upload a chart, get AI-analyzed entry, SL, and TP levels" style={{ display: "flex", alignItems: "center", marginLeft: 4, cursor: "help" }}>
+          <div title={`${AI_PROVIDER_LABEL} — Upload a chart OR analyze the live execution overlay below`} style={{ display: "flex", alignItems: "center", marginLeft: 4, cursor: "help" }}>
             <Info size={14} color={C.muted} />
           </div>
         </div>
@@ -204,7 +333,43 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
       </div>
 
       {/* ─── Live Execution Overlay (spot equities/FX/commodities only) ── */}
-      <LiveOverlayChart symbol={asset || "AAPL"} />
+      <div ref={liveChartRef} data-testid="wrap-live-chart">
+        <LiveOverlayChart
+          symbol={asset || "AAPL"}
+          onSymbolChange={handleLiveSymChange}
+          onLevelsChange={handleLiveLevelsChange}
+        />
+        <button
+          data-testid="btn-analyze-live-chart"
+          onClick={analyzeLiveChart}
+          disabled={loading || !liveReady || remaining === 0}
+          style={{
+            ...btnBase,
+            width: "100%",
+            marginTop: -6,
+            marginBottom: 4,
+            background: (loading || !liveReady || remaining === 0)
+              ? "rgba(155,89,255,0.18)"
+              : "transparent",
+            color: (loading || !liveReady || remaining === 0) ? C.muted2 : ACCENT,
+            border: `1px solid ${(loading || !liveReady || remaining === 0) ? "rgba(155,89,255,0.25)" : ACCENT_BORDER}`,
+            fontSize: 11,
+            letterSpacing: "0.12em",
+            cursor: (loading || !liveReady || remaining === 0) ? "not-allowed" : "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          }}
+          title={!liveReady ? "Waiting for live chart data…" : `Send the live ${liveSym} chart to Claude for analysis`}
+        >
+          <Sparkles size={13} />
+          {loading
+            ? "Analyzing…"
+            : remaining === 0
+              ? "Daily limit reached"
+              : !liveReady
+                ? "Loading live chart…"
+                : `Analyze Live ${liveSym} Chart`}
+        </button>
+      </div>
 
       {/* ─── Upload area ────────────────────────────────────────── */}
       <div

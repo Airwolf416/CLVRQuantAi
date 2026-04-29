@@ -498,10 +498,29 @@ async function checkAndGrantReferralReward(userId: string) {
 }
 
 async function sendPromoReminder(u: any, daysOut: number) {
+  const isSameDay = daysOut === 0;
+  const kind: "expiry_7d" | "expiry_0d" = isSameDay ? "expiry_0d" : "expiry_7d";
+
+  if (!u.promoExpiresAt) {
+    console.log(`[promo-reminder] skip ${u.email} — no promoExpiresAt`);
+    return;
+  }
+
+  // ATOMIC claim-before-send. The single INSERT ... ON CONFLICT DO NOTHING
+  // is the lock — if two concurrent workers (overlapping ticks, restart +
+  // 60s setTimeout, multiple replicas) race, only ONE wins the claim and
+  // sends. The loser sees rowCount=0 and skips. On send failure we release
+  // the claim so a future tick can retry. Mirrors claimTelegramSlot pattern
+  // in dailyBrief.ts.
+  const claimed = await storage.claimPromoReminderSlot(u.id, kind, u.promoExpiresAt);
+  if (!claimed) {
+    console.log(`[promo-reminder] skip ${kind} for ${u.email} — slot already claimed for expiry ${new Date(u.promoExpiresAt).toISOString().slice(0,10)}`);
+    return;
+  }
+
   try {
     const { client: resend, fromEmail } = await getUncachableResendClient();
-    const expiryDate = u.promoExpiresAt ? new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon";
-    const isSameDay = daysOut === 0;
+    const expiryDate = new Date(u.promoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
     const subject = isSameDay
       ? "CLVRQuant — Your Elite access expires today · upgrade to keep your edge"
       : daysOut <= 3
@@ -533,15 +552,24 @@ async function sendPromoReminder(u: any, daysOut: number) {
           <p style="font-size:9px;color:#2a3650;text-align:center;line-height:2">You are receiving this email because you have a CLVRQuant account. <a href="https://clvrquantai.com/api/unsubscribe?email=${encodeURIComponent(u.email)}" style="color:#4a5d80;text-decoration:underline">Unsubscribe</a></p>
         </div></div>`,
     });
+    // Claim already locked the slot atomically — nothing else to do on success.
     console.log(`[promo-reminder] Sent ${isSameDay ? "same-day expiry" : daysOut+"-day"} reminder to ${u.email}`);
   } catch (e: any) {
-    console.error(`[promo-reminder] send failed for ${u.email}:`, e.message);
+    // Release the slot so the next scheduler tick can retry. Without this,
+    // a transient Resend outage would permanently swallow the reminder.
+    console.error(`[promo-reminder] send failed for ${u.email} (releasing slot for retry):`, e.message);
+    await storage.releasePromoReminderSlot(u.id, kind, u.promoExpiresAt);
   }
 }
 
 async function checkPromoExpiryReminders() {
-  // 14d-warning, 3d-warning, same-day (expires in next 24h) reminder.
-  for (const days of [14, 3, 1]) {
+  // Exactly TWO reminders per access-code grant:
+  //   days=7 → label 7 (one week before expiry)
+  //   days=1 → label 0 (same-day, within next 24h)
+  // Idempotency guarded inside sendPromoReminder() via promo_reminder_log
+  // (PK on user_id+kind+expiry_date). Scheduler can fire every 24h or on
+  // every process restart without ever double-sending.
+  for (const days of [7, 1]) {
     try {
       const users = await storage.getUsersWithExpiringPromos(days);
       const dayLabel = days === 1 ? 0 : days; // surface 0 in template for same-day copy
