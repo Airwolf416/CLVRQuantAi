@@ -21,6 +21,8 @@ import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzl
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import { notifyAutoposter, getAutoposterStatus } from "./autoposterNotify";
+import { recordActivity as recordLiveActivity, getLiveStats } from "./liveUsers";
+import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
 import multerLib from "multer";
 import sharpLib from "sharp";
 import { createHash as cryptoCreateHash, createHmac, timingSafeEqual } from "crypto";
@@ -1506,6 +1508,33 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // ── Live-user activity tracker ──────────────────────────────────────────
+  // Records the userId/tier of every authenticated /api/* request so the
+  // owner stats panel can display "people on the site right now". Runs on
+  // every API request but bails out cheaply when there's no session, so
+  // unauthenticated traffic pays no DB cost. The actual user lookup is
+  // throttled to once per 60s per user via the in-memory cache below.
+  const liveLookupCache = new Map<string, number>(); // userId -> last lookup ts
+  app.use("/api", async (req: any, _res, next) => {
+    try {
+      const uid = req.session?.userId;
+      if (!uid) return next();
+      const now = Date.now();
+      const last = liveLookupCache.get(uid) || 0;
+      if (now - last < 60_000) return next();
+      liveLookupCache.set(uid, now);
+      // Fire-and-forget — never block the request on this.
+      storage.getUser(uid).then(async (u) => {
+        if (!u) return;
+        try {
+          const tier = await getEffectiveTier(u);
+          recordLiveActivity(u.id, u.email || "", tier);
+        } catch {}
+      }).catch(() => {});
+    } catch {}
+    next();
+  });
+
   // ── Phase 2A: quant service status + recent scores ──────────────────────────
   // Bulletproof health for Railway. Always 200 — confirms Express is up
   // and reports quant subprocess status without failing the probe.
@@ -1977,6 +2006,77 @@ export async function registerRoutes(
     const uid = await requireAdmin(req, res);
     if (!uid) return;
     res.json(getAutoposterStatus());
+  });
+
+  // ── /api/admin/owner/stats ──────────────────────────────────────────────
+  // Owner-facing dashboard data: how many people are signed up to each
+  // email list, how many users exist by tier, and how many are using the
+  // site live right now (active in the last 2 minutes via /api/auth/me
+  // polling). Powers the OwnerStatsPanel in client/src/AccountPage.jsx.
+  app.get("/api/admin/owner/stats", async (req, res) => {
+    // Owner-only (not just admin) — this dashboard exposes whole-base
+    // counts that should stay restricted to the founder.
+    const sessUid = (req.session as any)?.userId;
+    if (!sessUid) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      const u = await storage.getUser(sessUid);
+      if (!u || (u.email || "").toLowerCase() !== OWNER_EMAIL.toLowerCase()) {
+        return res.status(403).json({ error: "Owner only" });
+      }
+    } catch {
+      return res.status(403).json({ error: "Owner only" });
+    }
+    res.set("Cache-Control", "no-store");
+    try {
+      // Email-list counts: who's actually opted in to each broadcast.
+      const briefRows = await db.select({ c: dsql<number>`count(*)::int` })
+        .from(usersTable).where(eq(usersTable.subscribeToBrief, true));
+      const dailyBriefOptIn = Number(briefRows[0]?.c || 0);
+
+      const subRows = await db.select({ c: dsql<number>`count(*)::int` })
+        .from(subscribersTable).where(eq(subscribersTable.active, true));
+      const weeklyActiveSubscribers = Number(subRows[0]?.c || 0);
+
+      // Tier breakdown across the whole user base.
+      const tierRows = await db.select({
+        tier: usersTable.tier,
+        c: dsql<number>`count(*)::int`,
+      }).from(usersTable).groupBy(usersTable.tier);
+
+      const usersByTier: Record<string, number> = { free: 0, pro: 0, elite: 0 };
+      let totalUsers = 0;
+      for (const r of tierRows) {
+        const t = (r.tier || "free").toLowerCase();
+        const n = Number(r.c || 0);
+        usersByTier[t] = (usersByTier[t] || 0) + n;
+        totalUsers += n;
+      }
+
+      // Verified-email count is useful context for understanding
+      // deliverability of the broadcast lists above.
+      const verifiedRows = await db.select({ c: dsql<number>`count(*)::int` })
+        .from(usersTable).where(eq(usersTable.emailVerified, true));
+      const verifiedUsers = Number(verifiedRows[0]?.c || 0);
+
+      // Live-right-now from the in-memory tracker.
+      const live = getLiveStats();
+
+      res.json({
+        ok: true,
+        emailLists: {
+          dailyBriefOptIn,
+          weeklyActiveSubscribers,
+          totalUsers,
+          verifiedUsers,
+        },
+        usersByTier,
+        totalUsers,
+        live,
+      });
+    } catch (e: any) {
+      console.error("[/api/admin/owner/stats] failed:", e?.message || e);
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
   });
 
   // ── SIGNAL HISTORY (paid = full data, free = locked) ─────────────────────
@@ -7960,6 +8060,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (!user) return res.json({ user: null });
       const tier = await getEffectiveTier(user);
       const pendingVerification = !user.emailVerified && !!user.emailVerificationToken;
+      try { recordLiveActivity(user.id, user.email || "", tier); } catch {}
       res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification, isAdmin: !!(user as any).isAdmin } });
     } catch {
       res.json({ user: null });

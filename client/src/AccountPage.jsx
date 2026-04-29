@@ -235,6 +235,155 @@ const SYSTEM_EMAILS = [
   },
 ];
 
+// ── OwnerStatsPanel ────────────────────────────────────────────────────────
+// Owner-only dashboard showing:
+//   1. How many users are subscribed to each email broadcast list
+//      (Daily Brief opt-in vs. Weekly Update active subscribers)
+//   2. How many users exist on each tier (free / pro / elite)
+//   3. How many users are LIVE on the site right now (active in the last
+//      ~2 minutes, derived from /api/auth/me poll activity)
+// Auto-refreshes every 15 seconds while the Owner tab is open.
+function OwnerStatsPanel({ C, MONO, SERIF }) {
+  const [stats, setStats] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let stopped = false;
+    async function load() {
+      try {
+        const r = await fetch("/api/admin/owner/stats", { credentials: "include" });
+        const d = await r.json();
+        if (stopped) return;
+        if (!r.ok || !d.ok) {
+          setErr(d.error || `HTTP ${r.status}`);
+        } else {
+          setStats(d);
+          setErr(null);
+        }
+      } catch (e) {
+        if (!stopped) setErr(e?.message || String(e));
+      } finally {
+        if (!stopped) setLoading(false);
+      }
+    }
+    load();
+    const id = setInterval(load, 15000);
+    return () => { stopped = true; clearInterval(id); };
+  }, []);
+
+  const cardWrap = {
+    background: "rgba(155,89,182,0.04)",
+    border: "1px solid rgba(155,89,182,0.35)",
+    borderRadius: 6, padding: 18, marginBottom: 16,
+  };
+  const labelStyle = { fontFamily: MONO, fontSize: 9, color: C.purple, letterSpacing: "0.2em", marginBottom: 14 };
+  const sectionTitle = { fontFamily: SERIF, fontSize: 15, fontWeight: 700, color: C.white, marginBottom: 12 };
+
+  function Stat({ label, value, color = C.gold2, sub, testId }) {
+    return (
+      <div data-testid={testId} style={{
+        flex: 1, minWidth: 110,
+        background: "rgba(0,0,0,0.25)",
+        border: `1px solid ${C.border}`,
+        borderRadius: 4, padding: "12px 14px",
+      }}>
+        <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, letterSpacing: "0.18em", marginBottom: 6 }}>{label}</div>
+        <div style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
+        {sub && <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted2, marginTop: 6 }}>{sub}</div>}
+      </div>
+    );
+  }
+
+  if (loading && !stats) {
+    return (
+      <div style={cardWrap}>
+        <div style={labelStyle}>OWNER STATS</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, textAlign: "center", padding: 16 }}>
+          Loading stats…
+        </div>
+      </div>
+    );
+  }
+
+  if (err && !stats) {
+    return (
+      <div style={cardWrap}>
+        <div style={labelStyle}>OWNER STATS</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>Failed to load: {err}</div>
+      </div>
+    );
+  }
+
+  const live = stats?.live || { total: 0, byTier: { free: 0, pro: 0, elite: 0 }, windowMs: 120000 };
+  const tiers = stats?.usersByTier || { free: 0, pro: 0, elite: 0 };
+  const total = stats?.totalUsers || 0;
+  const lists = stats?.emailLists || { dailyBriefOptIn: 0, weeklyActiveSubscribers: 0, verifiedUsers: 0, totalUsers: 0 };
+  const windowMin = Math.round((live.windowMs || 120000) / 60000);
+
+  return (
+    <>
+      {/* ── LIVE RIGHT NOW ─────────────────────────────────────────────── */}
+      <div style={cardWrap} data-testid="card-live-users">
+        <div style={labelStyle}>LIVE ON SITE · LAST {windowMin} MIN</div>
+        <div style={sectionTitle}>
+          {live.total} {live.total === 1 ? "person" : "people"} active right now
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Stat label="FREE LIVE"  value={live.byTier?.free  || 0} color={C.muted2} testId="stat-live-free" />
+          <Stat label="PRO LIVE"   value={live.byTier?.pro   || 0} color={C.gold2}  testId="stat-live-pro" />
+          <Stat label="ELITE LIVE" value={live.byTier?.elite || 0} color={C.purple} testId="stat-live-elite" />
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginTop: 12, lineHeight: 1.6 }}>
+          "Live" = users whose browser pinged the server within the last {windowMin} minutes.
+          Refreshes every 15s. {stats?.live?.trackedUsersInMemory || 0} sessions tracked in memory.
+        </div>
+      </div>
+
+      {/* ── USER BASE BY TIER ──────────────────────────────────────────── */}
+      <div style={cardWrap} data-testid="card-users-by-tier">
+        <div style={labelStyle}>TOTAL USERS BY TIER</div>
+        <div style={sectionTitle}>{total} total registered {total === 1 ? "user" : "users"}</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Stat label="FREE"  value={tiers.free  || 0} color={C.muted2}
+                sub={total ? `${Math.round(100*(tiers.free||0)/total)}% of base` : null}
+                testId="stat-tier-free" />
+          <Stat label="PRO"   value={tiers.pro   || 0} color={C.gold2}
+                sub={total ? `${Math.round(100*(tiers.pro||0)/total)}% of base` : null}
+                testId="stat-tier-pro" />
+          <Stat label="ELITE" value={tiers.elite || 0} color={C.purple}
+                sub={total ? `${Math.round(100*(tiers.elite||0)/total)}% of base` : null}
+                testId="stat-tier-elite" />
+        </div>
+      </div>
+
+      {/* ── EMAIL LIST SUBSCRIBERS ─────────────────────────────────────── */}
+      <div style={cardWrap} data-testid="card-email-lists">
+        <div style={labelStyle}>EMAIL BROADCAST LISTS</div>
+        <div style={sectionTitle}>Who actually receives your broadcasts</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          <Stat label="DAILY BRIEF OPT-IN" value={lists.dailyBriefOptIn || 0} color={C.cyan}
+                sub="Sent 6:00 AM ET daily"
+                testId="stat-daily-brief" />
+          <Stat label="WEEKLY UPDATE" value={lists.weeklyActiveSubscribers || 0} color={C.cyan}
+                sub="Sent Sat 10 AM ET"
+                testId="stat-weekly-update" />
+          <Stat label="VERIFIED USERS" value={lists.verifiedUsers || 0} color={C.green}
+                sub={lists.totalUsers ? `${Math.round(100*(lists.verifiedUsers||0)/lists.totalUsers)}% of base` : null}
+                testId="stat-verified-users" />
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.muted2, lineHeight: 1.7, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+          <strong style={{ color: C.text }}>Daily Brief</strong> goes only to users with the
+          "Subscribe to morning brief" box ticked at signup. <strong style={{ color: C.text }}>Weekly Update</strong>
+          goes to anyone in the subscribers list with active=true.
+          One-to-one emails (welcome, verify, Elite welcome, referral, owner alerts)
+          go to a single recipient and are not counted here.
+        </div>
+      </div>
+    </>
+  );
+}
+
 function AdminTab({ C, MONO, SANS, SERIF }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -2046,6 +2195,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
 
       {tab === "owner" && acct.isOwner && (
         <div>
+          <OwnerStatsPanel C={C} MONO={MONO} SERIF={SERIF} />
+
           <div style={{ ...S.card, borderColor:"rgba(155,89,182,.35)" }}>
             <div style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.2em", marginBottom:14 }}>OWNER CONTROL CENTER</div>
             <div style={{ fontFamily:SERIF, fontSize:15, fontWeight:700, color:C.white, marginBottom:4 }}>Rotating 7-Day Trial Code</div>
