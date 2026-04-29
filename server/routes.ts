@@ -21,6 +21,7 @@ import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzl
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import { notifyAutoposter, getAutoposterStatus } from "./autoposterNotify";
+import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
 import { recordActivity as recordLiveActivity, getLiveStats } from "./liveUsers";
 import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
 import multerLib from "multer";
@@ -2006,6 +2007,208 @@ export async function registerRoutes(
     const uid = await requireAdmin(req, res);
     if (!uid) return;
     res.json(getAutoposterStatus());
+  });
+
+  // ── /api/admin/autoposter/test-send ──────────────────────────────────────
+  // Admin-only: fire a single TEST trade idea to the autoposter webhook so
+  // the owner can verify the Telegram pipeline end-to-end (caption, hashtags,
+  // 15-second video render) without waiting for the morning brief or for a
+  // live signal to fire on its own.
+  //
+  // Auth: standard admin session (same gate as every other /api/admin/*
+  // endpoint). To trigger from outside a browser, log in as admin and
+  // curl with the session cookie attached.
+  //
+  // Body (all optional):
+  //   - `token`: ticker to use (defaults to "BTC")
+  //   - `dir`:   "LONG" | "SHORT" — overrides the auto-derived direction
+  //   - `useLiveSignal`: boolean — when true and the live buffer has at
+  //     least one signal, use liveSignals[0] as the source instead of
+  //     deriving a synthetic setup from current market data
+  //   - `marketContext`: free-form string appended to the caption (e.g. a
+  //     news catalyst or macro note the owner wants on the post)
+  //
+  // The endpoint responds with the FULL payload that was sent + the
+  // autoposter result, so the owner can see exactly what landed in
+  // Telegram (caption text, hashtags, levels) without leaving the API.
+  //
+  // Per-admin 60-second cooldown to prevent accidental double-clicks
+  // spamming the Telegram channel.
+  const lastTestSendByAdmin: Record<string, number> = {};
+  const TEST_SEND_COOLDOWN_MS = 60 * 1000;
+  app.post("/api/admin/autoposter/test-send", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return; // requireAdmin already wrote the 403
+
+    // Opportunistic prune of stale cooldown entries to keep the map bounded.
+    const now = Date.now();
+    for (const k of Object.keys(lastTestSendByAdmin)) {
+      if (now - lastTestSendByAdmin[k] > TEST_SEND_COOLDOWN_MS) {
+        delete lastTestSendByAdmin[k];
+      }
+    }
+    const last = lastTestSendByAdmin[uid] || 0;
+    const remaining = TEST_SEND_COOLDOWN_MS - (now - last);
+    if (remaining > 0) {
+      return res.status(429).json({
+        ok: false,
+        reason: "cooldown_active",
+        cooldownRemainingMs: remaining,
+        detail: `Test send is rate-limited to once per ${TEST_SEND_COOLDOWN_MS / 1000}s per admin to prevent accidental Telegram spam.`,
+      });
+    }
+    lastTestSendByAdmin[uid] = now;
+
+    const body = (req.body && typeof req.body === "object") ? req.body : {};
+    const explicitToken = typeof body.token === "string" ? body.token.trim().toUpperCase() : "";
+    const explicitDir   = typeof body.dir === "string" && /^(LONG|SHORT)$/i.test(body.dir) ? body.dir.toUpperCase() as "LONG" | "SHORT" : null;
+    const useLiveSignal = body.useLiveSignal === true;
+    const extraContext  = typeof body.marketContext === "string" ? body.marketContext.trim() : "";
+
+    type BuiltSignal = {
+      token: string; dir: "LONG" | "SHORT";
+      entry: number; stopLoss: number; tp1: number; tp2?: number;
+      lev: string; conf: number; advancedScore: number;
+      currentPrice?: number; thesis: string; marketContext?: string;
+      source: "live-signal" | "synthetic-from-live-data";
+    };
+
+    let built: BuiltSignal | null = null;
+
+    // ── Path A: use an existing live signal if requested and available ──
+    if (useLiveSignal && liveSignals.length > 0) {
+      const sig = explicitToken
+        ? liveSignals.find((s: any) => String(s?.token || "").toUpperCase() === explicitToken) || liveSignals[0]
+        : liveSignals[0];
+      built = {
+        token:         String(sig.token).toUpperCase(),
+        dir:           String(sig.dir).toUpperCase() === "SHORT" ? "SHORT" : "LONG",
+        entry:         parseFloat(String(sig.entry)),
+        stopLoss:      parseFloat(String(sig.stopLoss)),
+        tp1:           parseFloat(String(sig.tp1)),
+        tp2:           sig.tp2 != null ? parseFloat(String(sig.tp2)) : undefined,
+        lev:           String(sig.lev || "3x"),
+        conf:          Number(sig.conf || 70),
+        advancedScore: Math.max(75, Math.min(100, Number(sig.advancedScore || sig.conf || 75))),
+        currentPrice:  (priceHistory[String(sig.token).toUpperCase()] || []).slice(-1)[0]?.price,
+        thesis:        Array.isArray(sig.reasoning) && sig.reasoning.length > 0 ? String(sig.reasoning[0]) : "Live signal pulled from active buffer.",
+        marketContext: `From live signal buffer · advancedScore=${sig.advancedScore} · ts=${new Date(sig.ts).toISOString()}`,
+        source:        "live-signal",
+      };
+    }
+
+    // ── Path B: derive a synthetic setup from current live market data ──
+    if (!built) {
+      const token = explicitToken || "BTC";
+      const hist  = priceHistory[token];
+      if (!hist || hist.length < 5) {
+        return res.status(422).json({
+          ok: false,
+          reason: "no_live_data",
+          detail: `No price history available for ${token}. Tracked symbols include: ${Object.keys(priceHistory).slice(0, 12).join(", ")}`,
+        });
+      }
+      const currentPrice = hist[hist.length - 1].price;
+      const fivePriorIdx = Math.max(0, hist.length - 6);
+      const fivePrior    = hist[fivePriorIdx].price;
+      const momentumPct  = ((currentPrice - fivePrior) / fivePrior) * 100;
+
+      // Direction: if explicitly set, use it. Else simple mean-reversion bias —
+      // recent dip > 0.5% suggests a LONG bounce setup, recent rally > 0.5%
+      // suggests a SHORT fade. Flat tape defaults to LONG (most common).
+      const dir: "LONG" | "SHORT" = explicitDir
+        ? explicitDir
+        : (momentumPct > 0.5 ? "SHORT" : "LONG");
+
+      // Crypto-style levels (this is a TEST post — sized for a typical
+      // 3x perp risk profile). Entry slightly inside current price, stop
+      // ~1.5%, TP1 ~2.5% (RR ≈ 1.67:1), TP2 ~4% (RR ≈ 2.67:1).
+      const entry    = dir === "LONG" ? currentPrice * 0.997 : currentPrice * 1.003;
+      const stopLoss = dir === "LONG" ? entry * 0.985        : entry * 1.015;
+      const tp1      = dir === "LONG" ? entry * 1.025        : entry * 0.975;
+      const tp2      = dir === "LONG" ? entry * 1.040        : entry * 0.960;
+
+      const isCrypto = /^(BTC|ETH|SOL|DOGE|XRP|ADA|AVAX|LINK|MATIC|HYPE|TIA|OP|ARB|UNI|AAVE|NEAR|WIF|TRUMP|BNB|APT|DOT|HBAR|PENDLE|TAO|ONDO|SUI|INJ|SEI|JUP|RUNE|FET|RENDER|ATOM)$/.test(token);
+      const lev = isCrypto ? "3x" : "1x";
+
+      // Confidence ranges from 78 (flat tape) to 88 (clear momentum signal).
+      const conf = Math.round(78 + Math.min(10, Math.abs(momentumPct) * 2));
+
+      const momentumStr = momentumPct >= 0 ? `+${momentumPct.toFixed(2)}%` : `${momentumPct.toFixed(2)}%`;
+      const thesis = dir === "LONG"
+        ? `Recent ${Math.abs(momentumPct).toFixed(2)}% pullback presents a bounce opportunity off the short-term low.`
+        : `Recent ${momentumPct.toFixed(2)}% rally is extended — fading the move toward the prior range.`;
+      const marketContext = `Live snapshot: ${token} ${currentPrice >= 1 ? currentPrice.toFixed(2) : currentPrice.toPrecision(4)} (5-bar momentum ${momentumStr})${extraContext ? ` · ${extraContext}` : ""}`;
+
+      built = {
+        token,
+        dir,
+        entry,
+        stopLoss,
+        tp1,
+        tp2,
+        lev,
+        conf,
+        advancedScore: Math.max(80, Math.min(100, conf + 5)),
+        currentPrice,
+        thesis,
+        marketContext,
+        source: "synthetic-from-live-data",
+      };
+    }
+
+    // Build the enriched caption + hashtags via the shared helper.
+    const reasoning = buildEnrichedReasoning({
+      token:         built.token,
+      dir:           built.dir,
+      entry:         built.entry,
+      stopLoss:      built.stopLoss,
+      tp1:           built.tp1,
+      tp2:           built.tp2,
+      conf:          built.conf,
+      currentPrice:  built.currentPrice,
+      thesis:        built.thesis,
+      marketContext: built.marketContext,
+      source:        "manual-test",
+    });
+
+    // Use a per-test-call timestamp so each test fire has a unique
+    // idempotency key downstream — otherwise two tests within the same
+    // minute on the same token+dir would dedupe and the second would
+    // appear to vanish.
+    const ts = Date.now();
+    const signalPayload = {
+      token:          built.token,
+      dir:            built.dir,
+      entry:          built.entry,
+      stopLoss:       built.stopLoss,
+      tp1:            built.tp1,
+      tp2:            built.tp2,
+      lev:            built.lev,
+      conf:           built.conf,
+      advancedScore:  built.advancedScore,
+      reasoning,
+      isStrongSignal: false, // never claim "STRONG" on a test post
+      ts,
+    };
+
+    try {
+      const result = await notifyAutoposter(signalPayload);
+      return res.json({
+        ok:          result.ok,
+        source:      built.source,
+        payloadSent: signalPayload,
+        captionPreview: reasoning.join("\n"),
+        result,
+      });
+    } catch (e: any) {
+      return res.status(500).json({
+        ok: false,
+        reason: "internal_error",
+        detail: e?.message || String(e),
+        payloadSent: signalPayload,
+      });
+    }
   });
 
   // ── /api/admin/owner/stats ──────────────────────────────────────────────
