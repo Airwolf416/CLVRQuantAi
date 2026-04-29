@@ -389,6 +389,108 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_update_log_pending ON update_log_entries (created_at DESC) WHERE included_in_update_id IS NULL`);
 
+    // ── weekly_updates (published weekly digest entries) ──────────────────────
+    // Each row is one published weekly update. The Saturday scheduler / admin
+    // "Generate & Publish Now" writes here and the digest email reads from here.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS weekly_updates (
+        id                     SERIAL PRIMARY KEY,
+        version                TEXT,
+        title                  TEXT NOT NULL,
+        summary                TEXT NOT NULL,
+        items                  JSONB NOT NULL,
+        email_sent_at          TIMESTAMP,
+        email_recipient_count  INTEGER DEFAULT 0,
+        created_by             TEXT,
+        created_at             TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_weekly_updates_created ON weekly_updates (created_at DESC)`);
+
+    // ── news_items (deduped news feed) ────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS news_items (
+        id           SERIAL PRIMARY KEY,
+        external_id  TEXT NOT NULL UNIQUE,
+        title        TEXT NOT NULL,
+        source       TEXT,
+        tickers      TEXT,
+        sentiment    VARCHAR(16),
+        severity     VARCHAR(16),
+        url          TEXT,
+        created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS news_items_created_at_idx ON news_items (created_at)`);
+
+    // ── user_promoted_assets (Elite Promote-to-Scanner) ───────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_promoted_assets (
+        id             SERIAL PRIMARY KEY,
+        user_id        VARCHAR(64) NOT NULL,
+        asset_symbol   VARCHAR(32) NOT NULL,
+        asset_class    VARCHAR(16) NOT NULL,
+        yahoo_symbol   VARCHAR(32) NOT NULL,
+        promoted_at    TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS user_promoted_assets_user_idx ON user_promoted_assets (user_id)`);
+
+    // ── quant_scores (composite quant scoring per symbol) ─────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS quant_scores (
+        id            SERIAL PRIMARY KEY,
+        symbol        TEXT NOT NULL,
+        composite_z   DOUBLE PRECISION NOT NULL,
+        side          TEXT,
+        regime        TEXT NOT NULL,
+        passes        BOOLEAN NOT NULL,
+        gates_failed  TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+        factors       JSONB NOT NULL,
+        ts            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS quant_scores_symbol_ts_idx ON quant_scores (symbol, ts)`);
+
+    // ── microstructure_snapshots (orderbook/CVD/OFI snapshots) ───────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS microstructure_snapshots (
+        id        SERIAL PRIMARY KEY,
+        symbol    TEXT NOT NULL,
+        mid       DOUBLE PRECISION,
+        obi       DOUBLE PRECISION,
+        wobi      DOUBLE PRECISION,
+        cvd       DOUBLE PRECISION,
+        cvd_z     DOUBLE PRECISION,
+        ofi_1m    DOUBLE PRECISION,
+        ofi_z     DOUBLE PRECISION,
+        funding   DOUBLE PRECISION,
+        oi        DOUBLE PRECISION,
+        ts        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS micro_snapshots_symbol_ts_idx ON microstructure_snapshots (symbol, ts)`);
+
+    // ── signal_rejections (durable rejection log for admin tuning) ───────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS signal_rejections (
+        id              SERIAL PRIMARY KEY,
+        ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        source          TEXT NOT NULL,
+        token           TEXT NOT NULL,
+        direction       TEXT,
+        reason          TEXT NOT NULL,
+        detail          TEXT NOT NULL,
+        proposed_entry  DOUBLE PRECISION,
+        proposed_sl     DOUBLE PRECISION,
+        proposed_tp1    DOUBLE PRECISION,
+        conviction      INTEGER
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS signal_rejections_ts_idx     ON signal_rejections (ts)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS signal_rejections_reason_idx ON signal_rejections (reason)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS signal_rejections_token_idx  ON signal_rejections (token)`);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
 
