@@ -214,6 +214,32 @@ export async function initializeDatabase(): Promise<void> {
     // Performance context aggregation index — covers the hot per-(token,direction,resolved-window) query
     await client.query(`CREATE INDEX IF NOT EXISTS idx_perf_combo ON ai_signal_log (token, direction, created_at DESC) WHERE outcome IS NOT NULL AND outcome <> 'PENDING'`);
 
+    // ── signal_shadow_inversions (the "Reverse Costanza" backtest) ────────────
+    // For every real signal we publish, a mirrored twin (opposite direction,
+    // SL/TP reflected across entry) is logged here and resolved against the
+    // same live price feed. Used to measure what flipping the system would
+    // actually have earned, without changing live behavior. Forward-only.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS signal_shadow_inversions (
+        id                  SERIAL PRIMARY KEY,
+        source_signal_id    INTEGER NOT NULL REFERENCES ai_signal_log(id) ON DELETE CASCADE,
+        token               VARCHAR(20) NOT NULL,
+        inverted_direction  VARCHAR(10) NOT NULL,
+        entry_price         DECIMAL(20,8) NOT NULL,
+        tp1_price           DECIMAL(20,8),
+        tp2_price           DECIMAL(20,8),
+        tp3_price           DECIMAL(20,8),
+        stop_loss           DECIMAL(20,8),
+        kill_clock_expires  TIMESTAMP,
+        outcome             VARCHAR(20) DEFAULT 'PENDING',
+        pnl_pct             DECIMAL(10,4),
+        resolved_at         TIMESTAMP,
+        created_at          TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_source_signal ON signal_shadow_inversions (source_signal_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_outcome       ON signal_shadow_inversions (outcome)`);
+
     // ── adaptive_thresholds (auto-tuning per token + direction) ───────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS adaptive_thresholds (
