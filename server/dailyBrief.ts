@@ -9,6 +9,7 @@ import { selectDailyTrades, sliceForTier, hydrateCalibration, logTierDistributio
 import { runIntegrityCheck, filterDropList, type PriceRow } from "./lib/dataIntegrity";
 import { getBrainSummary } from "./lib/statisticalBrain";
 import { notifyAutoposter } from "./autoposterNotify";
+import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -832,11 +833,23 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       const isCrypto = /^(BTC|ETH|SOL|DOGE|XRP|ADA|AVAX|LINK|MATIC|HYPE|TIA|OP|ARB|UNI|AAVE|NEAR|WIF|TRUMP|BNB|APT|DOT|HBAR|PENDLE|TAO|ONDO|SUI|INJ|SEI|JUP|RUNE|FET|RENDER|ATOM)$/.test(pick.token);
       const lev = isCrypto ? "3x" : "1x";
 
-      const reasoning = [
-        pick.thesis || "Pre-market top trade idea from CLVRQuant statistical brain.",
-        `Selection: ${pick.source === "elite" ? "calibrated daily winner" : "Claude top pick"} · RR ${pick.rr.toFixed(2)}` + (pick.n > 0 ? ` · n=${pick.n}` : ""),
-        `Source: morning brief 6:00 AM ET · ${today}`,
-      ];
+      // Enriched caption + hashtags via the shared helper so morning-brief
+      // posts have the same on-brand format as live signals and manual
+      // test sends. The autoposter renders the reasoning array as the
+      // post body, so this IS the caption Mike sees in Telegram.
+      const selectionLine = `Selection: ${pick.source === "elite" ? "calibrated daily winner" : "Claude top pick"} · RR ${pick.rr.toFixed(2)}` + (pick.n > 0 ? ` · n=${pick.n}` : "") + ` · Morning Brief ${today}`;
+      const reasoning = buildEnrichedReasoning({
+        token:         pick.token,
+        dir:           pick.dir,
+        entry:         pick.entry,
+        stopLoss:      pick.stop,
+        tp1:           pick.tp1,
+        tp2:           pick.tp2,
+        conf:          pick.conf,
+        thesis:        pick.thesis,
+        marketContext: selectionLine,
+        source:        "morning-brief",
+      });
 
       // STABLE per-day timestamp — autoposter's idempotency-key is sha1 of
       // token|direction|timestamp, so anchoring `ts` to the brief's date
