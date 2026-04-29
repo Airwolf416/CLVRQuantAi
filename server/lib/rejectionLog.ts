@@ -17,6 +17,11 @@ export type RejectionReason =
   | "SHORTS_CROWDED"
   | "LONGS_CROWDED"
   | "RR_TOO_LOW_AFTER_FRICTION"
+  // ── Statistical Brain (empirical limits from resolved trade history) ──────
+  | "BRAIN_SUPPRESSED_COMBO"
+  | "TP_BEYOND_BRAIN_LIMIT"
+  | "SL_TIGHTER_THAN_BRAIN_LIMIT"
+  | "KILL_CLOCK_BEYOND_BRAIN_LIMIT"
   // ── News / rate-limit gates ───────────────────────────────────────────────
   | "NEWS_CONFLICT_HIGH"
   | "RATE_LIMIT_ASSET"
