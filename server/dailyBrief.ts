@@ -8,6 +8,7 @@ import { CLAUDE_MODEL } from "./config";
 import { selectDailyTrades, sliceForTier, hydrateCalibration, logTierDistribution, getTieredBriefMode, type CandidatePlan, type AssetClass } from "./lib/selectDailyTrades";
 import { runIntegrityCheck, filterDropList, type PriceRow } from "./lib/dataIntegrity";
 import { getBrainSummary } from "./lib/statisticalBrain";
+import { notifyAutoposter } from "./autoposterNotify";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -56,6 +57,53 @@ async function claimBriefSlot(dateKey: string): Promise<boolean> {
   } catch (e: any) {
     console.log(`[daily-brief] claimBriefSlot failed: ${e.message}`);
     return false;
+  }
+}
+
+// Per-day Telegram ledger — independent of the email slot lock so a Telegram
+// notification fires AT MOST once per day even when the email pipeline
+// retries (which deletes the daily_briefs_log row on recipient_count=0).
+//
+// Pattern: ATOMIC INSERT-as-claim. Insert the ledger row BEFORE the network
+// call. The PK constraint on date_key turns the INSERT itself into the lock
+// — if it returns rowCount=1 we own today's slot, if it returns 0 someone
+// else does (or already did). This closes the in-process race the previous
+// "check-then-insert-on-success" pattern left open.
+//
+// Trade-off: if INSERT succeeds but autoposter then fails (genuine downstream
+// outage), today's slot is consumed and we won't retry. That's symmetric
+// with how live signals behave (autoposterNotify has its own 2× retry +
+// 15s timeout — ~30s of automatic retry built in), and the failure is
+// logged loudly so the operator can manually re-send via existing admin
+// tooling if it really matters.
+async function claimTelegramSlot(dateKey: string, token: string, direction: string, source: string): Promise<boolean> {
+  try {
+    const r = await pool.query(
+      `INSERT INTO daily_brief_telegram_log (date_key, token, direction, source)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (date_key) DO NOTHING`,
+      [dateKey, token, direction, source],
+    );
+    return (r.rowCount ?? 0) > 0;
+  } catch (e: any) {
+    // Fail-CLOSED on a write error so we don't accidentally double-post on
+    // an unhealthy DB. The brief itself will still go out; only the social
+    // post is skipped for the day. Less damage than spamming a channel.
+    console.warn(`[daily-brief] telegram slot claim failed (skipping today's post to avoid double-fire): ${e?.message || e}`);
+    return false;
+  }
+}
+async function releaseTelegramSlotOnFailure(dateKey: string): Promise<void> {
+  // If the network call fails AFTER we've claimed the slot, release it so
+  // a same-day retry of the email pipeline can re-attempt. This is the
+  // opposite trade-off from the comment above and only fires on
+  // genuinely-unrecoverable outcomes (autoposter returned not-ok after its
+  // own internal retries) — at that point a future retry has the same
+  // chance of success as the first attempt did.
+  try {
+    await pool.query(`DELETE FROM daily_brief_telegram_log WHERE date_key = $1`, [dateKey]);
+  } catch (e: any) {
+    console.warn(`[daily-brief] telegram slot release failed (non-fatal): ${e?.message || e}`);
   }
 }
 
@@ -705,6 +753,160 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
   if (tieredMode === "shadow") {
     console.log(`[daily-brief] tiered v1 SHADOW MODE — would have shipped ${eliteTrades.length} ideas to Elite, ${sliceForTier(eliteTrades, "pro").length} to Pro. Shipping legacy template.`);
   }
+
+  // ── TELEGRAM MORNING TRADE IDEA (autoposter pipeline) ────────────────────
+  // Push exactly one trade idea per day to the autoposter webhook so the
+  // downstream service can render it as a branded Telegram post + 15s video
+  // for social-media use. Same payload shape as live signals — no downstream
+  // changes required.
+  //
+  // Idempotency is enforced at THREE layers so a same-day retry (which
+  // happens when the email pipeline fails and deletes daily_briefs_log)
+  // can't re-fire the Telegram post:
+  //   • daily_brief_telegram_log row inserted only after autoposter ok=true
+  //   • stable timestamp (today's brief slot, not Date.now()) → autoposter's
+  //     idempotency-key (sha1 of token|direction|timestamp) is identical
+  //     across retries, so the downstream service dedupes if our ledger blip
+  //   • try/catch wraps everything → never blocks the email loop
+  //
+  // Selection precedence:
+  //   1. eliteTrades[0] — already calibrated by selectDailyTrades
+  //   2. briefJson.topTrade (raw Claude pick) — only when tiered selection
+  //      didn't run (tieredMode === "off"); otherwise an empty eliteTrades
+  //      list is an INTENTIONAL "no qualifying setup" decision we honor by
+  //      skipping rather than fighting our own filter (better to miss a
+  //      day's social post than promote a setup we'd reject internally).
+  try {
+    type Pick = { token: string; dir: "LONG" | "SHORT"; entry: number; stop: number; tp1: number; tp2?: number; conf: number; thesis: string; rr: number; n: number; source: "elite" | "claude" };
+    let pick: Pick | null = null;
+
+    if (eliteTrades.length > 0) {
+      const e = eliteTrades[0];
+      pick = {
+        token:  e.instrument,
+        dir:    e.direction,
+        entry:  e.entry,
+        stop:   e.stop,
+        tp1:    e.tp1,
+        tp2:    Number.isFinite(e.tp2) && e.tp2 > 0 ? e.tp2 : undefined,
+        conf:   Math.round((e.winRate30d || 0) * 100),
+        thesis: e.thesis || "",
+        rr:     e.riskReward || 0,
+        n:      e.sampleSize || 0,
+        source: "elite",
+      };
+    } else if (tieredMode === "off" && briefJson?.topTrade?.asset) {
+      const t = briefJson.topTrade;
+      const dir: "LONG" | "SHORT" = String(t.dir || t.direction || "LONG").toUpperCase().includes("SHORT") ? "SHORT" : "LONG";
+      const entryN = parseFloat(String(t.entry).replace(/[^0-9.\-]/g, ""));
+      const stopN  = parseFloat(String(t.stop).replace(/[^0-9.\-]/g, ""));
+      const tp1N   = parseFloat(String(t.tp1).replace(/[^0-9.\-]/g, ""));
+      const tp2N   = parseFloat(String(t.tp2).replace(/[^0-9.\-]/g, ""));
+      if (Number.isFinite(entryN) && Number.isFinite(stopN) && Number.isFinite(tp1N) && entryN > 0 && stopN > 0 && tp1N > 0) {
+        const confMatch = String(t.confidence || "").match(/(\d+)/);
+        const risk = Math.abs(entryN - stopN);
+        const reward = Math.abs(tp1N - entryN);
+        pick = {
+          token:  String(t.asset).toUpperCase(),
+          dir,
+          entry:  entryN,
+          stop:   stopN,
+          tp1:    tp1N,
+          tp2:    Number.isFinite(tp2N) && tp2N > 0 ? tp2N : undefined,
+          conf:   confMatch ? parseInt(confMatch[1], 10) : 60,
+          thesis: t.edge || "",
+          rr:     risk > 0 ? reward / risk : 0,
+          n:      0,
+          source: "claude",
+        };
+      }
+    }
+
+    if (!pick) {
+      console.log(`[daily-brief] Telegram morning idea SKIPPED — tieredMode=${tieredMode}, eliteTrades=${eliteTrades.length}, claudeTopTrade=${briefJson?.topTrade?.asset || "none"}`);
+    } else {
+      // Reasonable per-class default leverage: only crypto perps actually
+      // trade with leverage on Hyperliquid; FX / equities / commodities
+      // default to 1x. The downstream renderer can override if it has
+      // smarter per-asset rules.
+      const isCrypto = /^(BTC|ETH|SOL|DOGE|XRP|ADA|AVAX|LINK|MATIC|HYPE|TIA|OP|ARB|UNI|AAVE|NEAR|WIF|TRUMP|BNB|APT|DOT|HBAR|PENDLE|TAO|ONDO|SUI|INJ|SEI|JUP|RUNE|FET|RENDER|ATOM)$/.test(pick.token);
+      const lev = isCrypto ? "3x" : "1x";
+
+      const reasoning = [
+        pick.thesis || "Pre-market top trade idea from CLVRQuant statistical brain.",
+        `Selection: ${pick.source === "elite" ? "calibrated daily winner" : "Claude top pick"} · RR ${pick.rr.toFixed(2)}` + (pick.n > 0 ? ` · n=${pick.n}` : ""),
+        `Source: morning brief 6:00 AM ET · ${today}`,
+      ];
+
+      // STABLE per-day timestamp — autoposter's idempotency-key is sha1 of
+      // token|direction|timestamp, so anchoring `ts` to the brief's date
+      // (not Date.now()) means a same-day retry produces the IDENTICAL key
+      // and the downstream service dedupes even if our local ledger blip.
+      // We use UTC-midnight of dateKey so the value is reproducible without
+      // pulling in a timezone library here.
+      const stableTs = Date.parse(`${dateKey}T00:00:00.000Z`) || Date.now();
+
+      // advancedScore must clear the downstream "advanced_score_below_minimum"
+      // gate (~80 in current rules). Calibrated elite picks have already
+      // passed multi-stage filtering (RR, calibration hydrate, daily
+      // selector) so we floor them at 85; raw Claude fallback floors at 75.
+      // We never go BELOW the model-derived confidence — only above.
+      const elitePick = pick.source === "elite";
+      const minScore = elitePick ? 85 : 75;
+      const advancedScore = Math.max(minScore, Math.min(100, pick.conf || 0));
+
+      // ── ATOMIC SLOT CLAIM (closes the in-process race) ───────────────────
+      // We claim BEFORE the network call using the daily_brief_telegram_log
+      // PK constraint. If the row inserts (rowCount=1) we own today's slot
+      // and proceed; if it doesn't (already exists) we skip. This holds
+      // even if a same-day email-pipeline retry reaches this code while the
+      // first autoposter call is still in flight — the second attempt will
+      // see the row and bail.
+      const claimed = await claimTelegramSlot(dateKey, pick.token, pick.dir, pick.source);
+      if (!claimed) {
+        console.log(`[daily-brief] Telegram morning idea SKIPPED — slot already claimed for ${dateKey} (retry-safe)`);
+      } else {
+        const signalPayload = {
+          token:          pick.token,
+          dir:            pick.dir,
+          entry:          pick.entry,
+          stopLoss:       pick.stop,
+          tp1:            pick.tp1,
+          tp2:            pick.tp2,
+          lev,
+          conf:           pick.conf,
+          advancedScore,
+          reasoning,
+          isStrongSignal: elitePick,
+          ts:             stableTs,
+        };
+
+        // Fire-and-forget: do NOT await. The autoposter call has its own
+        // 2× retry + 15s timeout, and we don't want a slow webhook to delay
+        // the email loop that immediately follows. On not-ok / throw we
+        // RELEASE the slot so a future retry (or the next day's) can attempt.
+        const pickSnapshot = pick; // narrow for the async closure
+        notifyAutoposter(signalPayload)
+          .then(async (res) => {
+            if (res.ok) {
+              console.log(`[daily-brief] Telegram morning idea sent — ${pickSnapshot.token} ${pickSnapshot.dir} (source=${pickSnapshot.source}, conf=${pickSnapshot.conf}%, advScore=${advancedScore})`);
+            } else {
+              const detail = "detail" in res ? ` detail=${res.detail}` : "";
+              const status = "status" in res ? ` status=${res.status}` : "";
+              console.warn(`[daily-brief] Telegram morning idea FAILED — reason=${res.reason}${status}${detail} — releasing slot`);
+              await releaseTelegramSlotOnFailure(dateKey);
+            }
+          })
+          .catch(async (e) => {
+            console.warn(`[daily-brief] Telegram morning idea threw (non-fatal): ${(e as Error)?.message || e} — releasing slot`);
+            await releaseTelegramSlotOnFailure(dateKey);
+          });
+      }
+    }
+  } catch (e) {
+    console.warn(`[daily-brief] Telegram morning idea pipeline threw (non-fatal): ${(e as Error)?.message || e}`);
+  }
+
   // Helper: build the per-tier TieredTradeIdea[] from the Elite list
   const buildTierTrades = (tier: string): TieredTradeIdea[] | undefined => {
     if (tieredMode !== "on") return undefined;

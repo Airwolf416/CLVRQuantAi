@@ -79,6 +79,24 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── daily_brief_telegram_log ─────────────────────────────────────────────
+    // Independent ledger so the morning Telegram trade idea fires AT MOST
+    // once per day, even when the email pipeline retries (which deletes the
+    // daily_briefs_log row on recipient_count=0). The PK constraint on
+    // date_key acts as the lock — see claimTelegramSlot() in dailyBrief.ts:
+    // INSERT ... ON CONFLICT DO NOTHING is used as an atomic claim BEFORE
+    // the autoposter network call, and releaseTelegramSlotOnFailure() DELETEs
+    // the row on a hard failure so a future retry can re-attempt.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS daily_brief_telegram_log (
+        date_key   VARCHAR PRIMARY KEY,
+        sent_at    TIMESTAMP DEFAULT NOW(),
+        token      VARCHAR,
+        direction  VARCHAR,
+        source     VARCHAR
+      )
+    `);
+
     // ── push_subscriptions ───────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
