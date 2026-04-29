@@ -1361,6 +1361,81 @@ function AdminRejectionsTab(){
   </div>);
 }
 
+// ── Admin-only autoposter (Telegram) status banner ─────────────────────────
+// Renders at the top of the Radar tab when isAdmin. Auto-refreshes every 30s
+// to show whether notifyAutoposter() is reaching the Telegram webhook, and if
+// not, why (missing_env / invalid_signal / http_error / network_error). Pulls
+// from /api/admin/autoposter/status which carries the in-memory ring buffer.
+function AdminAutoposterStatus(){
+  const{C}=useContext(ThemeCtx);
+  const[data,setData]=useState(null);
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState(null);
+  const[expanded,setExpanded]=useState(false);
+  const fetchData=async()=>{
+    setLoading(true);setErr(null);
+    try{
+      const r=await fetch("/api/admin/autoposter/status",{credentials:"include"});
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const j=await r.json();setData(j);
+    }catch(e){setErr(e.message||"Failed to load");}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{fetchData();const id=setInterval(fetchData,30000);return()=>clearInterval(id);},[]);
+  // Health logic: green if env configured AND most recent attempt was a success
+  // (or no attempts yet but env is configured). Red if env missing OR last
+  // attempt failed. Yellow if env ok but mixed history.
+  const lastAttempt=data?.recentAttempts?.[0]||null;
+  let status="unknown",color="#888",msg="Loading…";
+  if(data){
+    if(!data.envConfigured){
+      status="DOWN";color="#ef4444";
+      msg=`ENV MISSING — ${!data.urlSet?"AUTOPOSTER_WEBHOOK_URL ":""}${!data.secretSet?"AUTOPOSTER_WEBHOOK_SECRET":""} not set on Railway`;
+    }else if(data.totalAttempts===0){
+      status="IDLE";color="#f59e0b";
+      msg="Env OK · no signals attempted yet (waiting for next emission)";
+    }else if(lastAttempt?.ok){
+      status="OK";color="#22c55e";
+      msg=`Last: ${lastAttempt.token} ${lastAttempt.direction} ✓ · ${data.successCount}/${data.totalAttempts} succeeded`;
+    }else if(lastAttempt){
+      status="FAIL";color="#ef4444";
+      msg=`Last: ${lastAttempt.token} ${lastAttempt.direction} ✗ ${lastAttempt.reason}${lastAttempt.detail?` — ${lastAttempt.detail.slice(0,80)}`:""}${lastAttempt.status?` (HTTP ${lastAttempt.status})`:""}`;
+    }
+  }
+  return(<div data-testid="banner-autoposter-status" style={{margin:"8px 12px",padding:"10px 12px",background:"rgba(0,0,0,0.4)",border:`1px solid ${color}55`,borderLeft:`3px solid ${color}`,borderRadius:4,fontFamily:"monospace",fontSize:11,color:C.text}}>
+    <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      <span style={{color,fontWeight:800,letterSpacing:"0.06em"}} data-testid="text-autoposter-status">TG · {status}</span>
+      {data&&<span style={{color:C.textMuted}}>·</span>}
+      {data&&<span style={{color:C.textMuted,fontSize:10}}>{data.urlHostMasked||"<no url>"}</span>}
+      <span style={{flex:1}}/>
+      <button data-testid="button-autoposter-refresh" onClick={fetchData} disabled={loading} style={{padding:"3px 10px",fontSize:10,fontWeight:700,background:"transparent",color:C.text,border:`1px solid ${C.border}`,borderRadius:3,cursor:loading?"wait":"pointer",fontFamily:"monospace",letterSpacing:"0.04em"}}>{loading?"…":"REFRESH"}</button>
+      <button data-testid="button-autoposter-expand" onClick={()=>setExpanded(!expanded)} style={{padding:"3px 10px",fontSize:10,fontWeight:700,background:"transparent",color:C.text,border:`1px solid ${C.border}`,borderRadius:3,cursor:"pointer",fontFamily:"monospace",letterSpacing:"0.04em"}}>{expanded?"HIDE":"DETAILS"}</button>
+    </div>
+    <div style={{marginTop:6,color:C.textMuted,fontSize:10,wordBreak:"break-word"}} data-testid="text-autoposter-msg">{err?`Error: ${err}`:msg}</div>
+    {expanded&&data&&<div style={{marginTop:10,padding:10,background:"rgba(255,255,255,0.02)",border:`1px solid ${C.border}`,borderRadius:3}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(110px, 1fr))",gap:6,marginBottom:10,fontSize:10}}>
+        <div><span style={{color:C.textMuted}}>env:</span> <span style={{color:data.envConfigured?"#22c55e":"#ef4444",fontWeight:700}}>{data.envConfigured?"OK":"MISSING"}</span></div>
+        <div><span style={{color:C.textMuted}}>attempts:</span> <span style={{fontWeight:700}}>{data.totalAttempts}</span></div>
+        <div><span style={{color:C.textMuted}}>ok:</span> <span style={{color:"#22c55e",fontWeight:700}}>{data.successCount}</span></div>
+        <div><span style={{color:C.textMuted}}>fail:</span> <span style={{color:"#ef4444",fontWeight:700}}>{data.failCount}</span></div>
+      </div>
+      <div style={{fontSize:10,color:C.textMuted,marginBottom:4,letterSpacing:"0.04em"}}>RECENT 20</div>
+      <div style={{maxHeight:240,overflow:"auto"}}>
+        {(data.recentAttempts||[]).length===0?<div style={{padding:8,color:C.textMuted,fontStyle:"italic",fontSize:10}}>No attempts recorded yet</div>:
+        (data.recentAttempts||[]).map((a,i)=>(
+          <div key={i} data-testid={`row-autoposter-attempt-${i}`} style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}33`,fontSize:10,display:"flex",gap:8,alignItems:"baseline"}}>
+            <span style={{color:C.textMuted,minWidth:130}}>{new Date(a.ts).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>
+            <span style={{fontWeight:700,minWidth:60}}>{a.token}</span>
+            <span style={{color:a.direction==="LONG"?"#22c55e":"#ef4444",minWidth:50}}>{a.direction}</span>
+            <span style={{color:a.ok?"#22c55e":"#ef4444",fontWeight:700,minWidth:40}}>{a.ok?"OK":"FAIL"}</span>
+            <span style={{color:a.ok?C.textMuted:"#ef4444",flex:1,wordBreak:"break-word"}}>{a.ok?`HTTP ${a.status}`:`${a.reason}${a.status?` ${a.status}`:""}${a.detail?` — ${a.detail}`:""}`}</span>
+          </div>
+        ))}
+      </div>
+    </div>}
+  </div>);
+}
+
 function TrackRecordTab({isPro,onUpgrade}){
   const{C}=useContext(ThemeCtx);
   const[stats,setStats]=useState(null);
@@ -5177,6 +5252,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             ))}
             <div style={{fontFamily:MONO,fontSize:8,color:C.muted,padding:"3px 0"}}>Tap card for full breakdown →</div>
           </div>
+
+          {/* Admin-only Telegram autoposter health banner — auto-refreshes every 30s */}
+          {isAdmin&&<AdminAutoposterStatus/>}
 
           {/* Signal feed */}
           {(()=>{
