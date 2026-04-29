@@ -385,6 +385,36 @@ app.post(
         }
       }
 
+      // ── Subscription lifecycle: keep users.tier in sync with Stripe ────
+      // We do NOT downgrade on `cancel_at_period_end=true` — paid users
+      // keep access until the period actually ends. Stripe fires
+      // `customer.subscription.deleted` at that point and we downgrade
+      // there. We also catch `customer.subscription.updated` transitions
+      // to `canceled / unpaid / incomplete_expired / paused`.
+      if (
+        event.type === 'customer.subscription.deleted' ||
+        event.type === 'customer.subscription.updated'
+      ) {
+        try {
+          const sub = event.data.object as any;
+          const subId = sub?.id;
+          // For .deleted Stripe always sets status='canceled'. For .updated
+          // we read the live status field.
+          const status = event.type === 'customer.subscription.deleted'
+            ? 'canceled'
+            : (sub?.status || 'unknown');
+          const cape = !!sub?.cancel_at_period_end;
+          const { applyStripeSubscriptionStatus } = await import('./lib/effectiveTier');
+          const result = await applyStripeSubscriptionStatus(subId, status);
+          console.log(
+            `[stripe] sub event=${event.type} sub=${subId} status=${status} cancelAtPeriodEnd=${cape} downgraded=${result.downgraded}` +
+            (result.userId ? ` user=${result.userId}` : '')
+          );
+        } catch (subErr: any) {
+          console.error('[stripe] subscription event handling failed:', subErr.message);
+        }
+      }
+
       // Step 3: Sync event data to DB via stripe-replit-sync (non-fatal if it fails)
       try {
         await WebhookHandlers.processWebhook(req.body as Buffer, sig);
