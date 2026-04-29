@@ -1,11 +1,14 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db";
-import { aiSignalLog } from "@shared/schema";
+import { aiSignalLog, signalShadowInversions } from "@shared/schema";
 import { livePrices, hlData } from "../state";
 
 const INTERVAL_MS = 60 * 1000;
 let started = false;
 let timer: NodeJS.Timeout | null = null;
+// Single-flight guard so a tick that overruns 60s can't race the next tick
+// and double-resolve the same row.
+let tickInFlight = false;
 
 function getLivePrice(token: string): number | null {
   const sym = (token || "").toUpperCase();
@@ -92,9 +95,11 @@ async function resolveOnce(): Promise<void> {
 
       if (outcome && exitPrice != null) {
         const pnl = computePnlPct(entry, exitPrice, dir);
+        // Compare-and-set on outcome='PENDING' so a slow tick that races the
+        // next tick (or any future concurrent worker) can never double-resolve.
         await db.update(aiSignalLog)
           .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
-          .where(eq(aiSignalLog.id, row.id));
+          .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")));
         resolvedCount++;
         continue;
       }
@@ -107,7 +112,7 @@ async function resolveOnce(): Promise<void> {
       const outcome = pnl >= 0 ? "EXPIRED_WIN" : "EXPIRED_LOSS";
       await db.update(aiSignalLog)
         .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
-        .where(eq(aiSignalLog.id, row.id));
+        .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")));
       resolvedCount++;
     }
   }
@@ -117,17 +122,122 @@ async function resolveOnce(): Promise<void> {
   }
 }
 
+// ── Shadow-inverted resolver ────────────────────────────────────────────────
+// Runs against signal_shadow_inversions using the SAME live-price feed and
+// SAME hit-detection logic as the real resolver, so the shadow outcomes are
+// path-aware and directly comparable to the real ones.
+interface PendingShadowRow {
+  id: number;
+  token: string;
+  invertedDirection: string;
+  entryPrice: string;
+  invertedTp1: string | null;
+  invertedTp2: string | null;
+  invertedTp3: string | null;
+  invertedSl: string | null;
+  killClockExpires: Date | null;
+}
+
+async function resolveShadowsOnce(): Promise<void> {
+  const pending = (await db
+    .select({
+      id: signalShadowInversions.id,
+      token: signalShadowInversions.token,
+      invertedDirection: signalShadowInversions.invertedDirection,
+      entryPrice: signalShadowInversions.entryPrice,
+      invertedTp1: signalShadowInversions.invertedTp1,
+      invertedTp2: signalShadowInversions.invertedTp2,
+      invertedTp3: signalShadowInversions.invertedTp3,
+      invertedSl: signalShadowInversions.invertedSl,
+      killClockExpires: signalShadowInversions.killClockExpires,
+    })
+    .from(signalShadowInversions)
+    .where(eq(signalShadowInversions.outcome, "PENDING"))
+    .limit(500)) as PendingShadowRow[];
+
+  if (!pending.length) return;
+
+  const now = new Date();
+  let resolvedCount = 0;
+
+  for (const row of pending) {
+    const entry = parseFloat(row.entryPrice);
+    if (!Number.isFinite(entry) || entry <= 0) continue;
+
+    const price = getLivePrice(row.token);
+
+    if (price != null && Number.isFinite(price)) {
+      const dir = row.invertedDirection;
+      const tp1 = row.invertedTp1 != null ? parseFloat(row.invertedTp1) : null;
+      const tp2 = row.invertedTp2 != null ? parseFloat(row.invertedTp2) : null;
+      const tp3 = row.invertedTp3 != null ? parseFloat(row.invertedTp3) : null;
+      const sl  = row.invertedSl  != null ? parseFloat(row.invertedSl)  : null;
+
+      const hit = (target: number | null) => {
+        if (target == null || !Number.isFinite(target)) return false;
+        return dir === "LONG" ? price >= target : price <= target;
+      };
+      const stopHit = (target: number | null) => {
+        if (target == null || !Number.isFinite(target)) return false;
+        return dir === "LONG" ? price <= target : price >= target;
+      };
+
+      let outcome: string | null = null;
+      let exitPrice: number | null = null;
+      if (hit(tp3)) { outcome = "TP3_HIT"; exitPrice = tp3; }
+      else if (hit(tp2)) { outcome = "TP2_HIT"; exitPrice = tp2; }
+      else if (hit(tp1)) { outcome = "TP1_HIT"; exitPrice = tp1; }
+      else if (stopHit(sl)) { outcome = "SL_HIT"; exitPrice = sl; }
+
+      if (outcome && exitPrice != null) {
+        const pnl = computePnlPct(entry, exitPrice, dir);
+        await db.update(signalShadowInversions)
+          .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
+          .where(and(eq(signalShadowInversions.id, row.id), eq(signalShadowInversions.outcome, "PENDING")));
+        resolvedCount++;
+        continue;
+      }
+    }
+
+    if (row.killClockExpires && row.killClockExpires <= now) {
+      const cur = price != null && Number.isFinite(price) ? price : entry;
+      const pnl = computePnlPct(entry, cur, row.invertedDirection);
+      const outcome = pnl >= 0 ? "EXPIRED_WIN" : "EXPIRED_LOSS";
+      await db.update(signalShadowInversions)
+        .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
+        .where(and(eq(signalShadowInversions.id, row.id), eq(signalShadowInversions.outcome, "PENDING")));
+      resolvedCount++;
+    }
+  }
+
+  if (resolvedCount > 0) {
+    console.log(`[outcomeResolver] resolved ${resolvedCount}/${pending.length} shadow inversions`);
+  }
+}
+
 export function startOutcomeResolver(): void {
   if (started) return;
   started = true;
-  // Initial run after 30s to let price feeds warm up
+  // Initial run after 30s to let price feeds warm up. Single-flight guard
+  // prevents an overrunning tick from racing the next interval.
+  const tick = async () => {
+    if (tickInFlight) {
+      console.warn("[outcomeResolver] previous tick still in flight — skipping this interval");
+      return;
+    }
+    tickInFlight = true;
+    try {
+      try { await resolveOnce(); } catch (e) { console.error("[outcomeResolver] tick failed:", e); }
+      try { await resolveShadowsOnce(); } catch (e) { console.error("[outcomeResolver] shadow tick failed:", e); }
+    } finally {
+      tickInFlight = false;
+    }
+  };
   setTimeout(() => {
-    resolveOnce().catch((e) => console.error("[outcomeResolver] tick failed:", e));
-    timer = setInterval(() => {
-      resolveOnce().catch((e) => console.error("[outcomeResolver] tick failed:", e));
-    }, INTERVAL_MS);
+    void tick();
+    timer = setInterval(() => { void tick(); }, INTERVAL_MS);
   }, 30_000);
-  console.log("[outcomeResolver] started (60s interval)");
+  console.log("[outcomeResolver] started (60s interval, real + shadow)");
 }
 
 export function stopOutcomeResolver(): void {

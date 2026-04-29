@@ -509,3 +509,33 @@ export const insertUpdateLogEntrySchema = createInsertSchema(updateLogEntries).o
   id: true, createdAt: true, includedInUpdateId: true,
 });
 export type InsertUpdateLogEntry = z.infer<typeof insertUpdateLogEntrySchema>;
+
+// ── Shadow-inverted signals ("Reverse Costanza" backtest table) ─────────────
+// For every real signal we publish, we mirror its direction and price levels
+// across the entry price (so risk/reward distances are preserved) and resolve
+// the shadow against the same live price feed. This lets us see, with proper
+// path-aware resolution, what flipping the system would have actually made
+// — without changing live behavior. Forward-only: historical signals are NOT
+// backfilled because we lack minute-by-minute price snapshots needed for an
+// honest replay.
+export const signalShadowInversions = pgTable("signal_shadow_inversions", {
+  id: serial("id").primaryKey(),
+  sourceSignalId: integer("source_signal_id").notNull(),       // FK -> ai_signal_log.id
+  token: varchar("token", { length: 20 }).notNull(),
+  originalDirection: varchar("original_direction", { length: 10 }).notNull(), // 'LONG' | 'SHORT'
+  invertedDirection: varchar("inverted_direction", { length: 10 }).notNull(),
+  entryPrice: decimal("entry_price", { precision: 20, scale: 8 }).notNull(),
+  invertedSl: decimal("inverted_sl", { precision: 20, scale: 8 }),
+  invertedTp1: decimal("inverted_tp1", { precision: 20, scale: 8 }),
+  invertedTp2: decimal("inverted_tp2", { precision: 20, scale: 8 }),
+  invertedTp3: decimal("inverted_tp3", { precision: 20, scale: 8 }),
+  killClockExpires: timestamp("kill_clock_expires"),
+  outcome: varchar("outcome", { length: 20 }).default("PENDING").notNull(),
+  pnlPct: decimal("pnl_pct", { precision: 10, scale: 4 }),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => ({
+  bySource: index("idx_shadow_source_signal").on(t.sourceSignalId),
+  byOutcome: index("idx_shadow_outcome").on(t.outcome),
+}));
+export type SignalShadowInversion = typeof signalShadowInversions.$inferSelect;

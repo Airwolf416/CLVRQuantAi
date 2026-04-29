@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { aiSignalLog, type InsertAiSignalLog } from "@shared/schema";
+import { aiSignalLog, signalShadowInversions, type InsertAiSignalLog } from "@shared/schema";
 
 export type SignalSource = "trade_ideas" | "quant_scanner" | "signals_tab" | "basket";
 
@@ -74,7 +74,52 @@ export async function logSignal(input: LogSignalInput): Promise<number | null> {
     };
 
     const [inserted] = await db.insert(aiSignalLog).values(row).returning({ id: aiSignalLog.id });
-    return inserted?.id ?? null;
+    const insertedId = inserted?.id ?? null;
+
+    // ── Shadow-inverted twin ("Reverse Costanza" backtest) ─────────────────
+    // For every real signal, write a mirror with the opposite direction and
+    // SL/TP levels reflected across the entry price. Risk and reward
+    // distances are preserved, so this measures what flipping the system
+    // would actually have made — resolved by the same live-price feed used
+    // for the real signal. Failure here is non-fatal: the shadow is a
+    // diagnostic, never blocks signal publication.
+    if (insertedId != null) {
+      try {
+        const entryNum = Number(entry);
+        const mirror = (lvl: string | null): string | null => {
+          if (lvl == null) return null;
+          const n = parseFloat(lvl);
+          if (!Number.isFinite(n)) return null;
+          const mirrored = 2 * entryNum - n;
+          // A target more than 1× entry away on the original side mirrors to
+          // a non-positive price on the opposite side. We can't trade or
+          // resolve that meaningfully, so skip the level — the resolver
+          // already null-skips per-target.
+          if (!Number.isFinite(mirrored) || mirrored <= 0) return null;
+          return mirrored.toString();
+        };
+        await db.insert(signalShadowInversions).values({
+          sourceSignalId: insertedId,
+          token: row.token,
+          originalDirection: row.direction,
+          invertedDirection: row.direction === "LONG" ? "SHORT" : "LONG",
+          entryPrice: entry,
+          invertedSl: mirror(row.stopLoss ?? null),
+          invertedTp1: mirror(row.tp1Price ?? null),
+          invertedTp2: mirror(row.tp2Price ?? null),
+          invertedTp3: mirror(row.tp3Price ?? null),
+          killClockExpires: row.killClockExpires ?? null,
+          outcome: "PENDING",
+        });
+      } catch (shadowErr) {
+        console.warn(
+          `[signalLogger] shadow inversion insert failed for signal ${insertedId} (non-fatal):`,
+          (shadowErr as Error)?.message ?? shadowErr
+        );
+      }
+    }
+
+    return insertedId;
   } catch (err) {
     console.error(`[signalLogger] failed to log ${input.source}/${input.token}:`, err);
     return null;
