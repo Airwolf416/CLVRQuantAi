@@ -3834,6 +3834,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
   const isGuest=!!user?.guest;
   const isAdmin=!!user?.isAdmin;
+  // Owner-only diagnostic gate: even stricter than isAdmin. Used for the
+  // Telegram autoposter status banner so no other admin/staff sees it.
+  const isOwnerOnly=(user?.email||"").toLowerCase()==="mikeclaver@gmail.com";
   const GUEST_TABS=["radar","prices","macro","about","help"];
   const NAV_ALL=[
     {k:"radar",icon:"📡",label:i18n.radar},
@@ -4341,8 +4344,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
-          {/* Admin-only Telegram autoposter health banner — auto-refreshes every 30s */}
-          {isAdmin&&<AdminAutoposterStatus/>}
+          {/* Owner-only Telegram autoposter health banner — auto-refreshes every 30s */}
+          {isOwnerOnly&&<AdminAutoposterStatus/>}
           <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
           <PerformanceHighlights/>
           <TwitterMarketModeStrip onSpikeClick={(tk)=>setSpikeFilter(tk)} activeSpike={spikeFilter}/>
@@ -5255,8 +5258,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             <div style={{fontFamily:MONO,fontSize:8,color:C.muted,padding:"3px 0"}}>Tap card for full breakdown →</div>
           </div>
 
-          {/* Admin-only Telegram autoposter health banner — auto-refreshes every 30s */}
-          {isAdmin&&<AdminAutoposterStatus/>}
+          {/* Owner-only Telegram autoposter health banner — auto-refreshes every 30s */}
+          {isOwnerOnly&&<AdminAutoposterStatus/>}
 
           {/* Signal feed */}
           {(()=>{
