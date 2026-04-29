@@ -1,5 +1,6 @@
 import { pool } from "./db";
 import { getUncachableResendClient } from "./resendClient";
+import { effectiveTierSql, recomputeExpiredPromos } from "./lib/effectiveTier";
 import { renderDailyBriefEmail, renderServiceApologyEmail, renderPromoEmail, type TieredTradeIdea } from "./services/emailTemplates";
 import { chunkArray } from "./services/ta";
 import { enqueueDailyBrief } from "./workers/notifications";
@@ -570,9 +571,16 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
     };
   }
 
-  // Join subscribers with users table to get tier
+  // Sweep expired-promo users to free BEFORE we query subscribers, so anyone
+  // whose promo lapsed since yesterday's send gets the free version of the
+  // brief today instead of stale Pro/Elite content.
+  try { await recomputeExpiredPromos(); } catch {}
+
+  // Join subscribers with users table to get tier — using effectiveTierSql so
+  // expired promos and ended Stripe subs always resolve to 'free' regardless
+  // of the stored u.tier value.
   const subsResult = await pool.query(`
-    SELECT s.email, s.name, COALESCE(u.tier, 'free') AS tier
+    SELECT s.email, s.name, ${effectiveTierSql("u")} AS tier
     FROM subscribers s
     LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
     WHERE s.active = true
@@ -887,7 +895,7 @@ async function sendApologyBriefEmails() {
 
   // Get all active subscribers + always include owner (join with users for tier)
   const subsResult = await pool.query(`
-    SELECT s.email, s.name, COALESCE(u.tier, 'free') AS tier
+    SELECT s.email, s.name, ${effectiveTierSql("u")} AS tier
     FROM subscribers s
     LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
     WHERE s.active = true
