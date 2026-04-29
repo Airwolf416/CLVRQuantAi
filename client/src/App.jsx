@@ -4341,6 +4341,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
+          {/* Admin-only Telegram autoposter health banner — auto-refreshes every 30s */}
+          {isAdmin&&<AdminAutoposterStatus/>}
           <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
           <PerformanceHighlights/>
           <TwitterMarketModeStrip onSpikeClick={(tk)=>setSpikeFilter(tk)} activeSpike={spikeFilter}/>
