@@ -410,6 +410,152 @@ function OwnerStatsPanel({ C, MONO, SERIF }) {
   );
 }
 
+// ── ShadowInversionsPanel ─────────────────────────────────────────────────
+// Shows the "Reverse Costanza" backtest: for every real signal we publish,
+// we log a mirrored shadow (opposite direction, SL/TP reflected across entry)
+// and resolve it against the same live price feed. This panel compares the
+// two side-by-side so we can see what flipping the system would actually do.
+// Renders in two flavors via the `variant` prop:
+//   - "owner" / default: purple-tinted card matching OwnerStatsPanel
+//   - "admin2": tighter dark-blue card matching AdminTab2 sections
+function ShadowInversionsPanel({ C, MONO, SERIF, variant = "owner" }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let stopped = false;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/admin/shadow-inversions/summary", { credentials: "include" });
+        const d = await r.json();
+        if (stopped) return;
+        if (!r.ok || !d.ok) {
+          setErr(d.error || `HTTP ${r.status}`);
+        } else {
+          setData(d); setErr(null);
+        }
+      } catch (e) {
+        if (!stopped) setErr(e?.message || String(e));
+      } finally {
+        if (!stopped) setLoading(false);
+      }
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { stopped = true; clearInterval(id); };
+  }, []);
+
+  const isAdmin2 = variant === "admin2";
+  const wrap = isAdmin2
+    ? { background:"#0c1220", border:"1px solid #9b59b633", borderRadius:6, padding:18, marginBottom:16 }
+    : { background:"rgba(155,89,182,0.04)", border:"1px solid rgba(155,89,182,0.35)", borderRadius:6, padding:18, marginBottom:16 };
+  const labelStyle = isAdmin2
+    ? { fontFamily:MONO, fontSize:9, color:"#9b59b6", letterSpacing:"0.2em", marginBottom:14 }
+    : { fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.2em", marginBottom:14 };
+  const sectionTitle = { fontFamily:SERIF, fontSize:15, fontWeight:700, color:C?.white || "#e8eef9", marginBottom:8 };
+  const muted = isAdmin2 ? "#4a5d80" : (C?.muted || "#6b7fa8");
+  const muted2 = isAdmin2 ? "#6b7fa8" : (C?.muted2 || "#8895b3");
+  const borderC = isAdmin2 ? "#1c2b4a" : (C?.border || "#1c2b4a");
+  const goldC = C?.gold2 || "#d4b95a";
+  const greenC = "#00e57a";
+  const redC = "#ff6680";
+
+  function Stat({ label, value, color = goldC, sub, testId }) {
+    return (
+      <div data-testid={testId} style={{
+        flex: 1, minWidth: 110,
+        background: "rgba(0,0,0,0.25)",
+        border: `1px solid ${borderC}`,
+        borderRadius: 4, padding: "12px 14px",
+      }}>
+        <div style={{ fontFamily: MONO, fontSize: 8, color: muted, letterSpacing: "0.18em", marginBottom: 6 }}>{label}</div>
+        <div style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
+        {sub && <div style={{ fontFamily: MONO, fontSize: 9, color: muted2, marginTop: 6 }}>{sub}</div>}
+      </div>
+    );
+  }
+
+  if (loading && !data) {
+    return (
+      <div style={wrap} data-testid="card-shadow-inversions">
+        <div style={labelStyle}>🌓 SHADOW INVERSION BACKTEST</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: muted, textAlign: "center", padding: 16 }}>
+          Loading shadow stats…
+        </div>
+      </div>
+    );
+  }
+
+  if (err && !data) {
+    return (
+      <div style={wrap} data-testid="card-shadow-inversions">
+        <div style={labelStyle}>🌓 SHADOW INVERSION BACKTEST</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: redC }}>Failed to load: {err}</div>
+      </div>
+    );
+  }
+
+  const real = data?.real || { resolved: 0, wins: 0, losses: 0, winRatePct: 0, totalPnlPct: 0, avgPnlPct: 0 };
+  const shadow = data?.shadow || { resolved: 0, wins: 0, losses: 0, winRatePct: 0, totalPnlPct: 0, avgPnlPct: 0 };
+  const sinceTs = data?.sinceTs ? new Date(data.sinceTs) : null;
+  const sinceLabel = sinceTs ? sinceTs.toLocaleString() : "—";
+  const fmtPct = (n) => `${(typeof n === "number" ? n : 0).toFixed(2)}%`;
+  const pnlColor = (n) => (typeof n === "number" && n >= 0 ? greenC : redC);
+
+  // Simple verdict banner — only meaningful once both sides have ≥5 resolved signals
+  let verdict = null;
+  if (shadow.resolved >= 5 && real.resolved >= 5) {
+    if (shadow.totalPnlPct > 0 && real.totalPnlPct < 0) {
+      verdict = { text: "⚡ Shadow is profitable while real is losing — flipping the system is showing edge.", color: greenC };
+    } else if (shadow.totalPnlPct > real.totalPnlPct) {
+      verdict = { text: "Shadow is outperforming real — but neither side has clear edge yet.", color: goldC };
+    } else {
+      verdict = { text: "Real is outperforming shadow — flipping would not help. The bias isn't directional.", color: muted2 };
+    }
+  } else {
+    verdict = { text: `Need at least 5 resolved on each side to call it. Real resolved: ${real.resolved}, Shadow resolved: ${shadow.resolved}.`, color: muted2 };
+  }
+
+  return (
+    <div style={wrap} data-testid="card-shadow-inversions">
+      <div style={labelStyle}>🌓 SHADOW INVERSION BACKTEST · "REVERSE COSTANZA"</div>
+      <div style={sectionTitle}>What if we flipped every signal?</div>
+      <div style={{ fontFamily: MONO, fontSize: 9.5, color: muted2, lineHeight: 1.7, marginBottom: 14 }}>
+        For every real signal we publish, a mirrored twin (opposite direction, SL/TP reflected across entry) is
+        logged silently and resolved against the same live price feed. No live behavior changes — this is purely
+        observational. Forward-only since {sinceLabel}.
+      </div>
+
+      {/* Real row */}
+      <div style={{ fontFamily: MONO, fontSize: 9, color: muted, letterSpacing: "0.18em", marginBottom: 6 }}>REAL (what actually shipped)</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <Stat label="WIN RATE"  value={`${(real.winRatePct ?? 0).toFixed(1)}%`} color={goldC}            testId="stat-real-winrate" />
+        <Stat label="TOTAL P&L" value={fmtPct(real.totalPnlPct)}                color={pnlColor(real.totalPnlPct)} testId="stat-real-totalpnl" />
+        <Stat label="AVG P&L"   value={fmtPct(real.avgPnlPct)}                  color={pnlColor(real.avgPnlPct)}   testId="stat-real-avgpnl" />
+        <Stat label="WINS"      value={real.wins ?? 0}                          color={greenC}           testId="stat-real-wins" />
+        <Stat label="LOSSES"    value={real.losses ?? 0}                        color={redC}             testId="stat-real-losses" />
+        <Stat label="RESOLVED"  value={real.resolved ?? 0}                      color={C?.cyan || "#00d4ff"} testId="stat-real-resolved" />
+      </div>
+
+      {/* Shadow row */}
+      <div style={{ fontFamily: MONO, fontSize: 9, color: muted, letterSpacing: "0.18em", marginBottom: 6 }}>SHADOW (mirrored — what flipping would do)</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <Stat label="WIN RATE"  value={`${(shadow.winRatePct ?? 0).toFixed(1)}%`} color={goldC}              testId="stat-shadow-winrate" />
+        <Stat label="TOTAL P&L" value={fmtPct(shadow.totalPnlPct)}                color={pnlColor(shadow.totalPnlPct)} testId="stat-shadow-totalpnl" />
+        <Stat label="AVG P&L"   value={fmtPct(shadow.avgPnlPct)}                  color={pnlColor(shadow.avgPnlPct)}   testId="stat-shadow-avgpnl" />
+        <Stat label="WINS"      value={shadow.wins ?? 0}                          color={greenC}             testId="stat-shadow-wins" />
+        <Stat label="LOSSES"    value={shadow.losses ?? 0}                        color={redC}               testId="stat-shadow-losses" />
+        <Stat label="RESOLVED"  value={shadow.resolved ?? 0}                      color={C?.cyan || "#00d4ff"} testId="stat-shadow-resolved" />
+      </div>
+
+      <div style={{ fontFamily: MONO, fontSize: 10, color: verdict.color, lineHeight: 1.6, paddingTop: 12, borderTop: `1px solid ${borderC}` }}>
+        {verdict.text}
+      </div>
+    </div>
+  );
+}
+
 function AdminTab({ C, MONO, SANS, SERIF }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -504,6 +650,11 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
 
   return (
     <div>
+      {/* Shadow-inverted backtest — surfaced at the top so it's the first thing
+          you see when you open the Admin tab. Same panel also lives on the
+          Maintenance tab, so it's reachable from both places. */}
+      <ShadowInversionsPanel C={C} MONO={MONO} SERIF={SERIF} variant="owner" />
+
       {/* Email Catalog */}
       <div style={{ background:"#0c1220", border:`1px solid rgba(155,89,182,.3)`, borderRadius:6, padding:18, marginBottom:16 }}>
         <div style={{ fontFamily:MONO, fontSize:9, color:"#9b59b6", letterSpacing:"0.2em", marginBottom:14 }}>📬 SYSTEM EMAIL CATALOG</div>
@@ -1369,6 +1520,11 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
           Indicators derived from live API responses. A stale worker in production usually means the signal generator interval isn't running or the DB connection dropped.
         </div>
       </Section>
+
+      {/* Shadow-inverted backtest — also rendered on the Admin tab. Placed
+          right under System Health so the comparison is one of the first
+          things visible on the Maintenance tab. */}
+      <ShadowInversionsPanel C={C} MONO={MONO} SERIF={SERIF} variant="admin2" />
 
       {/* Track Record Aggregate */}
       <Section title="🏆 TRACK RECORD (AGGREGATE)" color="#c9a84c">
