@@ -174,11 +174,31 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
       const userMsg = `Generate ${tfLabel} TOP ${tradeCount} TRADE IDEAS. Return ONLY valid JSON matching the structure. No markdown, no text. Use live prices.`;
 
+      // Focus tickers — server uses these to attach per-ticker Statistical
+      // Brain blocks (LONG+SHORT empirical edge from resolved-trade history)
+      // AND intraday execution context (VWAP / ORH / ORL) for eligible spot
+      // tickers (equities / FX / commodities — crypto/perps are skipped by
+      // the eligibility check). Capped at 10 server-side. attachBrainSummary
+      // additionally pulls the global top-combos table so the AI sees which
+      // (token, direction) combos are PREFERRED vs SUPPRESSED across the
+      // entire 957-trade history.
+      const focusTickers = [
+        "BTC", "ETH", "SOL", "HYPE", "DOGE",
+        "NVDA", "TSLA", "MSTR",
+        "XAU", "CL",
+      ];
+
       const res = await fetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system: sys, userMessage: userMsg, maxTokens }),
+        body: JSON.stringify({
+          system: sys,
+          userMessage: userMsg,
+          maxTokens,
+          attachBrainSummary: true,
+          tickers: focusTickers,
+        }),
       });
 
       const data = await res.json();

@@ -6139,10 +6139,162 @@ Every level must be technically defensible. Return JSON only.`;
     const userMessageRaw = req.body.userMessage || req.body.prompt || "";
     if (!userMessageRaw) return res.status(400).json({ error: "userMessage is required" });
 
+    // ── Optional brain / vision / exec-level injection (Trade Ideas, QuantBrain) ──
+    // Callers can opt-in to surface the same Statistical Brain + Chart Vision +
+    // VWAP/ORH/ORL execution context that /api/quant uses. Falls open on every
+    // sub-call: any failure here logs and continues without that block.
+    //
+    // SECURITY: tickers are concatenated into the system prompt — we therefore
+    // hard-validate them as 1–10 char A-Z0-9 only. Anything else is dropped to
+    // prevent a caller from injecting "\nNew system instructions: ..." via the
+    // ticker field.
+    const TICKER_RE = /^[A-Z0-9]{1,10}$/;
+    const reqTickers: string[] = Array.isArray(req.body.tickers)
+      ? Array.from(new Set(
+          req.body.tickers
+            .filter((t: any) => typeof t === "string")
+            .map((t: string) => t.trim().toUpperCase())
+            .filter((t: string) => TICKER_RE.test(t))
+        )).slice(0, 10) as string[]
+      : [];
+    const attachBrainSummary: boolean = req.body.attachBrainSummary === true;
+    const attachVision: boolean = req.body.attachVision === true;
+    const visionTicker: string = typeof req.body.visionTicker === "string" ? req.body.visionTicker.trim().toUpperCase() : "";
+    const visionDirection: "LONG" | "SHORT" | undefined =
+      req.body.visionDirection === "LONG" || req.body.visionDirection === "SHORT" ? req.body.visionDirection : undefined;
+
     // Inject performance context into the system prompt (adaptive learning)
     const perfCtx = await buildPerformanceContext().catch(() => "");
-    const system = perfCtx ? `${perfCtx}\n\n${systemRaw}` : systemRaw;
-    const userMessage = userMessageRaw;
+
+    // ── 1. Per-ticker statistical brain blocks (LONG + SHORT for each requested ticker) ──
+    let brainBlock = "";
+    if (reqTickers.length > 0) {
+      try {
+        const _brainMod = await import("./lib/statisticalBrain");
+        const perTicker: string[] = [];
+        for (const tkr of reqTickers) {
+          try {
+            const [bL, bS] = await Promise.all([
+              _brainMod.getBrainFor(tkr, "LONG"),
+              _brainMod.getBrainFor(tkr, "SHORT"),
+            ]);
+            const parts: string[] = [];
+            if (bL?.hasData) parts.push(bL.promptText);
+            if (bS?.hasData) parts.push(bS.promptText);
+            if (parts.length) perTicker.push(parts.join("\n\n"));
+          } catch {}
+        }
+        if (perTicker.length) {
+          brainBlock = `══════════════ STATISTICAL EDGE BRAIN — REQUESTED TICKERS ══════════════\nEmpirical edge per (token, direction) from resolved-trade history. STRICT LIMITS\nare advisory here (no veto), but SUPPRESS verdicts mean the combo has no\ndemonstrated edge — DO NOT recommend that direction unless confluence is\noverwhelming.\n\n${perTicker.join("\n\n")}\n══════════════════════════════════════════════════════════════════════\n`;
+        }
+      } catch (e: any) {
+        console.warn("[ai/analyze] per-ticker brain failed:", e?.message || e);
+      }
+    }
+
+    // ── 2. Global brain summary table (top combos across the whole universe) ──
+    let brainSummaryBlock = "";
+    if (attachBrainSummary) {
+      try {
+        const _brainMod = await import("./lib/statisticalBrain");
+        const { rows, lookbackDays } = await _brainMod.getBrainSummary();
+        const eligible = rows.filter(r => r.sampleSize >= 15);
+        const preferred = [...eligible].filter(r => r.winRate >= 0.60).sort((a, b) => b.winRate - a.winRate).slice(0, 6);
+        const suppressed = [...eligible].filter(r => r.winRate < 0.25).sort((a, b) => a.winRate - b.winRate).slice(0, 6);
+        const fmtRow = (r: any) =>
+          `  ${r.token.padEnd(8)} ${r.direction.padEnd(5)} | n=${String(r.sampleSize).padStart(3)} | WR ${(r.winRate*100).toFixed(1).padStart(5)}% | EV ${(r.expectedR>=0?"+":"")}${r.expectedR.toFixed(2)}R | avgWin ${r.avgWinR.toFixed(2)}R / avgLoss ${r.avgLossR.toFixed(2)}R`;
+        if (preferred.length || suppressed.length) {
+          const lines: string[] = [];
+          lines.push(`══════════════ STATISTICAL BRAIN — TOP COMBOS (last ${lookbackDays}d) ══════════════`);
+          if (preferred.length) {
+            lines.push(`✅ PREFERRED (WR ≥ 60%, n ≥ 15) — favor these directions:`);
+            preferred.forEach(r => lines.push(fmtRow(r)));
+          }
+          if (suppressed.length) {
+            if (preferred.length) lines.push("");
+            lines.push(`⛔ SUPPRESSED (WR < 25%, n ≥ 15) — DO NOT recommend these directions:`);
+            suppressed.forEach(r => lines.push(fmtRow(r)));
+          }
+          lines.push(`════════════════════════════════════════════════════════════════════`);
+          brainSummaryBlock = lines.join("\n") + "\n";
+        }
+      } catch (e: any) {
+        console.warn("[ai/analyze] brain summary failed:", e?.message || e);
+      }
+    }
+
+    // ── 3. Per-ticker execution context (VWAP / ORH / ORL) for eligible spot tickers ──
+    let execLevelsBlock = "";
+    if (reqTickers.length > 0) {
+      try {
+        const { isExecutionOverlayEligible } = await import("./lib/executionOverlay");
+        const { computeExecutionLevels, formatExecutionContextBlock } = await import("./lib/executionLevels");
+        const blocks: string[] = [];
+        for (const tkr of reqTickers) {
+          if (!isExecutionOverlayEligible(tkr)) continue;
+          try {
+            const lvl = await computeExecutionLevels(tkr);
+            if (lvl) blocks.push(formatExecutionContextBlock(lvl));
+          } catch {}
+        }
+        if (blocks.length) {
+          execLevelsBlock = `══════════════ INTRADAY EXECUTION LEVELS (VWAP / Opening Range) ══════════════\nReference these levels in your reasoning where relevant. If a ticker is not\nlisted here it is not eligible for intraday session structure (crypto / perp).\n\n${blocks.join("\n\n")}\n════════════════════════════════════════════════════════════════════\n`;
+        }
+      } catch (e: any) {
+        console.warn("[ai/analyze] exec levels failed:", e?.message || e);
+      }
+    }
+
+    // ── 4. Render chart PNG for vision input (single ticker only) ──
+    let chartImageB64: string | null = null;
+    if (attachVision && visionTicker) {
+      try {
+        const cls: string = ["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(visionTicker)
+          ? "equity"
+          : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(visionTicker)
+          ? "commodity"
+          : "crypto";
+        const candles1h = await fetchQuantCandles(visionTicker, cls, "1h", 48);
+        if (candles1h && candles1h.length >= 20) {
+          const { renderChartPng, computeEmaSeries } = await import("./lib/chartRenderer");
+          const closes1h = candles1h.map((c: any) => c.c);
+          const highs = candles1h.map((c: any) => c.h);
+          const lows = candles1h.map((c: any) => c.l);
+          chartImageB64 = await renderChartPng({
+            token: visionTicker,
+            direction: visionDirection,
+            candles: candles1h,
+            ema20: computeEmaSeries(closes1h, 20),
+            ema50: computeEmaSeries(closes1h, 50),
+            support: Math.min(...lows.slice(-24)),
+            resistance: Math.max(...highs.slice(-24)),
+            timeframeLabel: "1h",
+          });
+        }
+      } catch (e: any) {
+        console.warn(`[ai/analyze] chart vision render failed for ${visionTicker}:`, e?.message || e);
+      }
+    }
+
+    // Compose the final system prompt: perf ctx → brain summary → per-ticker
+    // brain → exec levels → caller's system prompt. All injected blocks are
+    // omitted entirely when empty so callers that don't opt in are unaffected.
+    const sysParts: string[] = [];
+    if (perfCtx) sysParts.push(perfCtx);
+    if (brainSummaryBlock) sysParts.push(brainSummaryBlock);
+    if (brainBlock) sysParts.push(brainBlock);
+    if (execLevelsBlock) sysParts.push(execLevelsBlock);
+    if (systemRaw) sysParts.push(systemRaw);
+    const system = sysParts.join("\n\n");
+
+    // If we rendered a chart, the user message becomes a mixed content array
+    // (image + text). Otherwise stays a plain string for backward compat.
+    const userMessage: any = chartImageB64
+      ? [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: chartImageB64 } },
+          { type: "text", text: `A live 1h candlestick chart of ${visionTicker} with EMA20/EMA50 overlays and S/R levels is attached above. Use it to confirm visual structure (clean trends, fakeout wicks, double tops/bottoms at key levels) before answering.\n\n${userMessageRaw}` },
+        ]
+      : userMessageRaw;
 
     // Auth check — AI is Pro-only
     const userId = (req.session as any)?.userId;
@@ -6167,7 +6319,21 @@ Every level must be technically defensible. Return JSON only.`;
     }
 
     // Check shared response cache — same prompt for any user = cached response
-    const cacheKey = hashPrompt(system, userMessage);
+    // The cache key must distinguish callers using different brain/vision/exec
+    // flags or different ticker focus lists, otherwise (because hashPrompt
+    // truncates to 200/600 chars and Trade Ideas uses a fixed time-bucket key
+    // that ignores `system` entirely) two users with different `tickers` could
+    // share a cache entry — leaking BTC analysis to an ETH request, etc.
+    // hashPrompt receives the typeof-string user message body for legacy
+    // routing (TOP N TRADE IDEAS, macro), and the flags get appended.
+    const userMessageStr = typeof userMessageRaw === "string" ? userMessageRaw : JSON.stringify(userMessageRaw);
+    const flagSuffix =
+      `|abs:${attachBrainSummary ? 1 : 0}` +
+      `|av:${attachVision ? 1 : 0}` +
+      `|vt:${visionTicker || "-"}` +
+      `|vd:${visionDirection || "-"}` +
+      `|tk:${reqTickers.join(",")}`;
+    const cacheKey = hashPrompt(system, userMessageStr) + flagSuffix;
     const cached = aiCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < AI_CACHE_TTL) {
       return res.json({ text: cached.text, response: cached.text, cached: true });
@@ -6417,7 +6583,35 @@ Every level must be technically defensible. Return JSON only.`;
       // ── Inject adaptive-learning performance context (last 30d win rates, losing combos) ──
       const kronosPerfCtx = await buildPerformanceContext().catch(() => "");
 
-      const system = `${kronosPerfCtx ? kronosPerfCtx + "\n\n" : ""}You are the Kronos Forecast Engine — a probabilistic K-line sequence model inspired by the Kronos foundation model (AAAI 2026, arXiv:2508.02739). You analyze OHLCV sequences using autoregressive pattern recognition to generate multi-trajectory price forecasts.
+      // ── Statistical Brain (advisory only — Kronos is forecast, not signal-gen) ──
+      // Surface empirical edge for both directions so the forecast can lean
+      // toward / away from sides that historically win or fail. NO veto here:
+      // Kronos must always emit a forecast (the trade_plan can still be NO_TRADE).
+      let kronosBrainCtx = "";
+      try {
+        const _brainMod = await import("./lib/statisticalBrain");
+        const [bL, bS] = await Promise.all([
+          _brainMod.getBrainFor(ticker, "LONG"),
+          _brainMod.getBrainFor(ticker, "SHORT"),
+        ]);
+        const parts: string[] = [];
+        if (bL?.hasData) parts.push(bL.promptText);
+        if (bS?.hasData) parts.push(bS.promptText);
+        if (parts.length) {
+          kronosBrainCtx =
+            `══════════════ STATISTICAL EDGE BRAIN (advisory) ══════════════\n` +
+            `Empirical edge for ${ticker} from resolved-trade history. ADVISORY only — Kronos is\n` +
+            `a forecast engine, not a signal gate. Use these stats to bias ensemble_signal\n` +
+            `confidence and to inform the trade_plan side: SUPPRESS direction → strongly\n` +
+            `prefer NO_TRADE or the opposite side. PREFERRED direction → up-weight that side.\n\n` +
+            `${parts.join("\n\n")}\n` +
+            `═══════════════════════════════════════════════════════════════\n`;
+        }
+      } catch (e: any) {
+        console.warn(`[kronos] brain context failed for ${ticker}:`, e?.message || e);
+      }
+
+      const system = `${kronosPerfCtx ? kronosPerfCtx + "\n\n" : ""}${kronosBrainCtx ? kronosBrainCtx + "\n\n" : ""}You are the Kronos Forecast Engine — a probabilistic K-line sequence model inspired by the Kronos foundation model (AAAI 2026, arXiv:2508.02739). You analyze OHLCV sequences using autoregressive pattern recognition to generate multi-trajectory price forecasts.
 
 Your methodology:
 1. Analyze the K-line sequence for momentum, mean-reversion pressure, volatility regime, and structural pivot levels
