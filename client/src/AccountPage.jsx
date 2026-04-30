@@ -410,6 +410,226 @@ function OwnerStatsPanel({ C, MONO, SERIF }) {
   );
 }
 
+// ── UserDirectoryPanel ────────────────────────────────────────────────────
+// Owner-only "who exactly is using my website" view. Two sections:
+//   1. LIVE NOW — the actual list of authenticated users whose browser
+//      pinged the server in the last 2 minutes (auto-refreshes every 15s).
+//      Powered by GET /api/admin/owner/live-users (in-memory tracker).
+//   2. ALL USERS — every signed-up user, with email + tier + verified +
+//      signup date. Includes a search box and a manual refresh.
+//      Powered by GET /api/admin/users/list (DB query).
+function UserDirectoryPanel({ C, MONO, SERIF }) {
+  const [live, setLive]         = useState(null);
+  const [liveErr, setLiveErr]   = useState(null);
+  const [allUsers, setAllUsers] = useState(null);
+  const [allErr, setAllErr]     = useState(null);
+  const [allLoading, setAllLoading] = useState(true);
+  const [filter, setFilter]     = useState("");
+
+  // Live users — poll every 15s while the panel is open.
+  useEffect(() => {
+    let stopped = false;
+    async function load() {
+      try {
+        const r = await fetch("/api/admin/owner/live-users", { credentials: "include" });
+        const d = await r.json();
+        if (stopped) return;
+        if (!r.ok || !d.ok) setLiveErr(d.error || `HTTP ${r.status}`);
+        else { setLive(d); setLiveErr(null); }
+      } catch (e) { if (!stopped) setLiveErr(e?.message || String(e)); }
+    }
+    load();
+    const id = setInterval(load, 15000);
+    return () => { stopped = true; clearInterval(id); };
+  }, []);
+
+  // All users — load once, refresh on demand.
+  async function loadAll() {
+    setAllLoading(true);
+    try {
+      const r = await fetch("/api/admin/users/list", { credentials: "include" });
+      const d = await r.json();
+      if (!r.ok) setAllErr(d.error || `HTTP ${r.status}`);
+      else { setAllUsers(d.users || []); setAllErr(null); }
+    } catch (e) { setAllErr(e?.message || String(e)); }
+    finally { setAllLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  const cardWrap = {
+    background: "rgba(155,89,182,0.04)",
+    border: "1px solid rgba(155,89,182,0.35)",
+    borderRadius: 6, padding: 18, marginBottom: 16,
+  };
+  const labelStyle   = { fontFamily: MONO, fontSize: 9, color: C.purple, letterSpacing: "0.2em", marginBottom: 14 };
+  const sectionTitle = { fontFamily: SERIF, fontSize: 15, fontWeight: 700, color: C.white, marginBottom: 12 };
+  const tableWrap    = { maxHeight: 360, overflowY: "auto", border: `1px solid ${C.border}`, borderRadius: 4, background: "rgba(0,0,0,0.25)" };
+  const th = { textAlign: "left", padding: "8px 12px", fontFamily: MONO, fontSize: 8.5, color: C.muted, letterSpacing: "0.18em", borderBottom: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", position: "sticky", top: 0 };
+  const td = { padding: "8px 12px", fontFamily: MONO, fontSize: 11, color: C.text, borderBottom: `1px solid ${C.border}` };
+
+  function tierColor(t) {
+    const x = (t || "free").toLowerCase();
+    if (x === "elite") return C.purple;
+    if (x === "pro")   return C.gold2;
+    return C.muted2;
+  }
+  function fmtAgo(ms) {
+    const sec = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (sec < 60) return `${sec}s ago`;
+    const m = Math.floor(sec / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    return `${h}h ago`;
+  }
+  function fmtDate(d) {
+    if (!d) return "—";
+    try { return new Date(d).toLocaleDateString(); } catch { return String(d).slice(0, 10); }
+  }
+
+  const liveUsers = live?.users || [];
+  const filtered  = (allUsers || []).filter(u => {
+    if (!filter) return true;
+    const f = filter.toLowerCase();
+    return (u.email || "").toLowerCase().includes(f) ||
+           (u.name  || "").toLowerCase().includes(f) ||
+           (u.tier  || "").toLowerCase().includes(f);
+  });
+
+  return (
+    <>
+      {/* ── WHO IS ON THE SITE RIGHT NOW ──────────────────────────────── */}
+      <div style={cardWrap} data-testid="card-live-user-list">
+        <div style={labelStyle}>WHO IS ON THE SITE RIGHT NOW</div>
+        <div style={sectionTitle}>
+          {liveUsers.length} {liveUsers.length === 1 ? "person" : "people"} active in the last 2 minutes
+        </div>
+        {liveErr && (
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.red, marginBottom: 10 }} data-testid="text-live-error">
+            Failed to load: {liveErr}
+          </div>
+        )}
+        {liveUsers.length === 0 && !liveErr ? (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, padding: "14px 4px" }} data-testid="text-no-live-users">
+            No one is on the site right now. (You'll appear here too on your next session ping.)
+          </div>
+        ) : (
+          <div style={tableWrap}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={th}>EMAIL</th>
+                  <th style={th}>TIER</th>
+                  <th style={{ ...th, textAlign: "right" }}>LAST SEEN</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveUsers.map((u) => (
+                  <tr key={u.userId} data-testid={`row-live-${u.userId}`}>
+                    <td style={td} data-testid={`text-live-email-${u.userId}`}>{u.email || <span style={{ color: C.muted }}>(no email)</span>}</td>
+                    <td style={{ ...td, color: tierColor(u.tier), textTransform: "uppercase", fontWeight: 700, fontSize: 10 }}>{u.tier || "free"}</td>
+                    <td style={{ ...td, textAlign: "right", color: C.muted2 }}>{fmtAgo(u.lastSeenAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginTop: 10, lineHeight: 1.6 }}>
+          Refreshes every 15 seconds. "Last seen" is when the user's browser last polled the session check.
+        </div>
+      </div>
+
+      {/* ── ALL SIGNED-UP USERS ───────────────────────────────────────── */}
+      <div style={cardWrap} data-testid="card-all-users">
+        <div style={labelStyle}>ALL SIGNED-UP USERS</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+          <div style={sectionTitle}>
+            {allLoading ? "Loading…" : `${filtered.length}${filter ? ` of ${allUsers?.length || 0}` : ""} ${(allUsers?.length === 1 ? "registered user" : "registered users")}`}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="text"
+              placeholder="Search email, name, tier…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              data-testid="input-user-search"
+              style={{
+                fontFamily: MONO, fontSize: 11, padding: "6px 10px",
+                background: "rgba(0,0,0,0.35)", color: C.text,
+                border: `1px solid ${C.border}`, borderRadius: 4, minWidth: 220,
+              }}
+            />
+            <button
+              onClick={loadAll}
+              disabled={allLoading}
+              data-testid="button-refresh-users"
+              style={{
+                fontFamily: MONO, fontSize: 10, padding: "6px 14px",
+                background: "rgba(155,89,182,0.15)", color: C.purple,
+                border: `1px solid ${C.purple}`, borderRadius: 4, cursor: "pointer",
+                letterSpacing: "0.15em", textTransform: "uppercase",
+              }}
+            >
+              {allLoading ? "…" : "Refresh"}
+            </button>
+            <a
+              href="/api/admin/users/export"
+              data-testid="link-export-users"
+              style={{
+                fontFamily: MONO, fontSize: 10, padding: "6px 14px",
+                background: "rgba(0,0,0,0.25)", color: C.gold2,
+                border: `1px solid ${C.gold2}`, borderRadius: 4,
+                textDecoration: "none", letterSpacing: "0.15em", textTransform: "uppercase",
+                display: "inline-flex", alignItems: "center",
+              }}
+            >
+              CSV
+            </a>
+          </div>
+        </div>
+        {allErr && (
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.red, marginBottom: 10 }} data-testid="text-all-error">
+            Failed to load: {allErr}
+          </div>
+        )}
+        {!allLoading && !allErr && (allUsers?.length || 0) === 0 ? (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, padding: "14px 4px" }}>
+            No registered users yet.
+          </div>
+        ) : (
+          <div style={tableWrap}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={th}>EMAIL</th>
+                  <th style={th}>TIER</th>
+                  <th style={th}>VERIFIED</th>
+                  <th style={{ ...th, textAlign: "right" }}>SIGNED UP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((u) => (
+                  <tr key={u.id} data-testid={`row-user-${u.id}`}>
+                    <td style={td} data-testid={`text-user-email-${u.id}`}>
+                      {u.email || <span style={{ color: C.muted }}>(no email)</span>}
+                      {u.name ? <span style={{ color: C.muted2, fontSize: 9.5, marginLeft: 6 }}>({u.name})</span> : null}
+                    </td>
+                    <td style={{ ...td, color: tierColor(u.tier), textTransform: "uppercase", fontWeight: 700, fontSize: 10 }}>{u.tier || "free"}</td>
+                    <td style={{ ...td, color: u.email_verified ? C.green : C.muted, fontSize: 10 }}>
+                      {u.email_verified ? "✓ yes" : "—"}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", color: C.muted2 }}>{fmtDate(u.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 // ── ShadowInversionsPanel ─────────────────────────────────────────────────
 // Shows the "Reverse Costanza" backtest: for every real signal we publish,
 // we log a mirrored shadow (opposite direction, SL/TP reflected across entry)
@@ -2378,6 +2598,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       {tab === "owner" && acct.isOwner && (
         <div>
           <OwnerStatsPanel C={C} MONO={MONO} SERIF={SERIF} />
+          <UserDirectoryPanel C={C} MONO={MONO} SERIF={SERIF} />
 
           <div style={{ ...S.card, borderColor:"rgba(155,89,182,.35)" }}>
             <div style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.2em", marginBottom:14 }}>OWNER CONTROL CENTER</div>

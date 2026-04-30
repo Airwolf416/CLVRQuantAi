@@ -22,7 +22,7 @@ import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import { notifyAutoposter, getAutoposterStatus } from "./autoposterNotify";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
-import { recordActivity as recordLiveActivity, getLiveStats } from "./liveUsers";
+import { recordActivity as recordLiveActivity, getLiveStats, getLiveUserList } from "./liveUsers";
 import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
 import multerLib from "multer";
 import sharpLib from "sharp";
@@ -8714,6 +8714,26 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       res.send(csv);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Admin: Live users right now (owner only) ─────────────────────────────
+  // Returns the actual *list* of authenticated users whose browser pinged the
+  // server within the live window (default 2 min). The owner stats panel
+  // already shows aggregate counts; this surfaces the per-user emails so the
+  // founder can answer "who exactly is on the site right now?".
+  app.get("/api/admin/owner/live-users", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId || !(await isOwner(userId))) return res.status(403).json({ error: "Unauthorized" });
+    try {
+      const windowMs = Math.min(
+        Math.max(parseInt(String(req.query.windowMs || ""), 10) || 0, 0) || (2 * 60 * 1000),
+        60 * 60 * 1000, // hard cap at 1h to avoid surprise huge payloads
+      );
+      const data = getLiveUserList(windowMs);
+      res.json({ ok: true, ...data });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
     }
   });
 
