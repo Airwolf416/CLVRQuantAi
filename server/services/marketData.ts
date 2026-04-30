@@ -11,6 +11,7 @@ import {
 import { hlData, metalsRef, recordPrice } from "../state";
 import { fmpQuoteBatch, fmpQuoteSafe as _fmpQuoteSafe, fmpForex, fmpCommodities } from "./fmp";
 import { yahooQuoteBatch, yahooForex, yahooCommodities } from "./yahoo";
+import { stooqForex, stooqEnergy } from "./stooq";
 
 export const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -29,11 +30,23 @@ export async function fhQuoteSafe(
 export const quoteSafe = fhQuoteSafe;
 export { fmpQuoteBatch };
 
-// ── Forex rates (Yahoo primary → ExchangeRate-API fallback) ──────────────────
+// ── Forex rates (Stooq primary → Yahoo → ExchangeRate-API) ───────────────────
+// Stooq.com is the primary feed: free, real-time intraday CSV (~5-min refresh)
+// with no API key. Yahoo Finance's FX feed is kept as a fallback because its
+// `regularMarketTime` is frequently 24h+ stale (observed in prod) which makes
+// EURUSD / USDMXN drift 5-15 pips off Bloomberg interbank quotes. ER-API is a
+// further daily-refresh fallback for any pair both Stooq and Yahoo missed.
 export async function fetchForex(): Promise<Record<string, any>> {
-  const fx = await yahooForex();
-  // Fall back to ExchangeRate-API for any pair Yahoo returned as not-live.
-  const missing = Object.entries(fx).filter(([_, q]) => !q.live).map(([s]) => s);
+  // Run Stooq + Yahoo in parallel; latency dominated by the slower of the two.
+  const [stooq, yf] = await Promise.all([stooqForex(), yahooForex()]);
+  // Start from Yahoo (gives us a base quote shape for any pair Stooq misses)
+  // then overlay Stooq prices on top. Stooq covers all 14 of our FX pairs.
+  const fx: Record<string, any> = { ...yf };
+  for (const [s, q] of Object.entries(stooq)) {
+    if (q && q.live && Number.isFinite(q.price) && q.price > 0) fx[s] = q;
+  }
+  // Fall back to ExchangeRate-API for any pair still not live.
+  const missing = Object.entries(fx).filter(([_, q]) => !q?.live).map(([s]) => s);
   if (missing.length === 0) return fx;
   try {
     const r = await fetch("https://api.exchangerate-api.com/v4/latest/USD",
@@ -123,13 +136,25 @@ export async function fetchMetals(_legacyKey = ""): Promise<Record<string, any>>
   return out;
 }
 
-// ── Energy commodities (now handled by fmpCommodities; kept for compat) ──────
+// ── Energy commodities (Stooq primary → Yahoo fallback) ─────────────────────
 // Returns ONLY the energy subset so callers can ...spread merge into metals.
+//
+// Stooq's CL.F / CB.F / NG.F are clean continuous-contract series. Yahoo's
+// BZ=F (Brent) in particular is unreliable: when ICE rolls the front month,
+// `chartPreviousClose` lingers on the expired contract for hours, producing
+// fake −10 %+ "moves" and a price that lags real ICE Brent by $5–10. Stooq
+// tracks the active contract correctly. Yahoo stays as a fallback for any
+// energy ticker Stooq fails to return.
 export async function fetchEnergyCommodities(_legacyKey = ""): Promise<Record<string, any>> {
-  const all = await yahooCommodities();
+  const [stooq, all] = await Promise.all([stooqEnergy(), yahooCommodities()]);
   const energy: Record<string, any> = {};
   for (const k of ["WTI", "BRENT", "NATGAS"] as const) {
-    energy[k] = all[k] || { price: METALS_BASE[k] || 0, chg: 0, live: false };
+    const s = stooq[k];
+    if (s && s.live && Number.isFinite(s.price) && s.price > 0) {
+      energy[k] = s;
+    } else {
+      energy[k] = all[k] || { price: METALS_BASE[k] || 0, chg: 0, live: false };
+    }
   }
 
   // Yahoo fallback for any energy contract FMP missed
