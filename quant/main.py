@@ -9,7 +9,7 @@ from .models import ScoreRequest, ScoreResponse, CostRequest, CostResponse
 from .state import STATE
 from .hl_ws import ws_consumer
 from .regime import classify_regime, regime_allows
-from .scorer import compute_composite
+from .scorer import compute_composite, compute_dual_score, dual_score_thresholds_for
 from .garch import sigma_daily_decimal
 from .sizing import vol_target_size
 from .costs import total_cost_bps, ev_pass
@@ -172,6 +172,22 @@ async def score(req: ScoreRequest):
     if not allowed and regime_reason and regime_reason not in gates_failed:
         gates_failed.append(regime_reason)
 
+    # Signal Engine v1 §2: Dual Score (direction_probability + conviction).
+    # Computed AFTER regime gate so regime_fit is populated, but BEFORE the
+    # R:R / noise gates so those don't double-count (alignment already
+    # captures conflict). Threshold lookup is per-asset-class — alts get a
+    # higher bar (per spec §2 footnote re: fee/slippage drag). Replaces
+    # the legacy `z_threshold` single-knob gate (removed from compute_composite)
+    # with finer, asset-aware bounds. `below_thresholds` is now produced by
+    # ONE source only — no double-mapping ambiguity in gates_failed.
+    dual = compute_dual_score(comp, gates_failed, allowed, len(df))
+    direction_probability = dual["direction_probability"]
+    conviction_score = dual["conviction"]
+    dp_min, cv_min = dual_score_thresholds_for(req.asset_class)
+    if (direction_probability < dp_min or conviction_score < cv_min) \
+            and "below_thresholds" not in gates_failed:
+        gates_failed.append("below_thresholds")
+
     dr = pd.Series(req.daily_returns or [], dtype=float)
     req.ohlcv = ohlcv  # so downstream code uses fallback path
     sigma_d = sigma_daily_decimal(req.symbol, dr) if len(dr) > 0 else float(df["close"].pct_change().std() or 0.02)
@@ -193,18 +209,18 @@ async def score(req: ScoreRequest):
     # (matches server/prompts/shared.ts NO_TRADE_REASONS). Priority order
     # mirrors the Signal Engine v1 integration order: regime first, then
     # below_thresholds, then liquidity / wilson / micro, then R:R sanity.
+    # Phase 2.2 (post-architect-review): the legacy `z_threshold` gate is
+    # gone — compute_composite no longer emits it; the per-asset-class
+    # dual-score gate above is the sole source of `below_thresholds`.
     _REASON_PRIORITY = [
-        "regime_chop", "regime_mismatch", "below_thresholds", "z_threshold",
+        "regime_chop", "regime_mismatch", "below_thresholds",
         "wilson_lb", "cvd_contradict", "ivrv_block", "ofi_sign",
         "rr_not_viable", "noise_band",
     ]
     no_signal_reason = None
     for r in _REASON_PRIORITY:
         if r in gates_failed:
-            # z_threshold is the legacy scorer name for the same gate the
-            # spec calls "below_thresholds" — surface the spec name in the
-            # API response for downstream consumers.
-            no_signal_reason = "below_thresholds" if r == "z_threshold" else r
+            no_signal_reason = r
             break
     if no_signal_reason is None and gates_failed:
         no_signal_reason = gates_failed[0]
@@ -241,6 +257,8 @@ async def score(req: ScoreRequest):
         entry_ref=_f(entry_ref), ts=int(time.time() * 1000),
         signal_type=signal_type,
         no_signal_reason=no_signal_reason,
+        direction_probability=_f(direction_probability),
+        conviction=_f(conviction_score),
     )
 
 

@@ -5431,7 +5431,7 @@ Every level must be technically defensible. Return JSON only.`;
             // SCORER PREPASS line and the prompt falls back to the
             // in-prompt regime math (same legacy behavior as before this
             // change). This is the spec's documented fail-open posture.
-            let quantPrepass: { regime?: any; signal_type?: any; no_signal_reason?: any } | undefined;
+            let quantPrepass: { regime?: any; signal_type?: any; no_signal_reason?: any; direction_probability?: number; conviction?: number } | undefined;
             try {
               const { quantScore, normalizeAssetClass } = await import("./quantClient");
               const _ps = await quantScore({
@@ -5452,8 +5452,13 @@ Every level must be technically defensible. Return JSON only.`;
                 asset_class: normalizeAssetClass(cls === "crypto" ? undefined : cls, ticker),
               });
               if (_ps?.regime) {
+                // Phase 2.2: include direction_probability + conviction
+                // when the scorer returned them so the AI can defer to
+                // the deterministic Dual Score values via SCORER PREPASS.
                 quantPrepass = {
                   regime: _ps.regime,
+                  direction_probability: typeof _ps.direction_probability === "number" ? _ps.direction_probability : undefined,
+                  conviction: typeof _ps.conviction === "number" ? _ps.conviction : undefined,
                   signal_type: _ps.signal_type ?? null,
                   no_signal_reason: _ps.no_signal_reason ?? null,
                 };
