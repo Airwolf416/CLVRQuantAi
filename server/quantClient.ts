@@ -55,8 +55,32 @@ export interface QuantScoreResponse {
   // quant/scorer.py DUAL_SCORE_THRESHOLDS), no_signal_reason is set to
   // "below_thresholds" — the same canonical reason the legacy z_threshold
   // gate produces. AI defers to these via the SCORER PREPASS line.
+  // Phase 2.5 note: these values are POST-microstructure adjustment
+  // (CVD/OBI deltas already folded in by the scorer).
   direction_probability?: number;
   conviction?: number;
+  // Signal Engine v1 §3 (Phase 2.3) — Vol-Percentile-Adjusted R:R.
+  // vol_percentile is the percentile rank of ATR(14)/close over the last
+  // 90 bars (0.0–1.0). rr_multiplier is the spec-bucket scaling factor
+  // (0.70 / 1.00 / 1.30 / 1.60), capped at 1.00 in RANGE regime.
+  vol_percentile?: number;
+  rr_multiplier?: number;
+  // Signal Engine v1 §4 (Phase 2.4) — Meta-label proxy.
+  // p_loss_meta is currently 1 - direction_probability (deterministic
+  // proxy). Server uses it to compute kelly_fraction_applied =
+  // min(0.25, kelly_base * (1 - p_loss_meta) * regime_mod * conviction)
+  // BEFORE prompt build, then transmits the final value via PREPASS so
+  // the AI emits it verbatim without re-computing. See routes.ts.
+  p_loss_meta?: number;
+  // Signal Engine v1 §5 (Phase 2.5) — Crypto microstructure features.
+  // Crypto only; non-crypto returns {cvd_state: "n/a", obi: null,
+  // ivrv_spread: null}. ivrv_spread is always null today (Deribit feed
+  // pending — field exists for forward compat).
+  microstructure?: {
+    cvd_state?:   "confirm" | "bullish_div" | "bearish_div" | "contradict" | "n/a";
+    obi?:         number | null;
+    ivrv_spread?: number | null;
+  };
   suggested_size_usd: number;
   sl_atr_mult: number;
   tp_atr_mult: number;

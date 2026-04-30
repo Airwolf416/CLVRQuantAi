@@ -9,7 +9,10 @@ from .models import ScoreRequest, ScoreResponse, CostRequest, CostResponse
 from .state import STATE
 from .hl_ws import ws_consumer
 from .regime import classify_regime, regime_allows
-from .scorer import compute_composite, compute_dual_score, dual_score_thresholds_for
+from .scorer import (
+    compute_composite, compute_dual_score, dual_score_thresholds_for,
+    compute_vol_adjusted_rr, compute_p_loss_meta_proxy, compute_microstructure,
+)
 from .garch import sigma_daily_decimal
 from .sizing import vol_target_size
 from .costs import total_cost_bps, ev_pass
@@ -183,6 +186,24 @@ async def score(req: ScoreRequest):
     dual = compute_dual_score(comp, gates_failed, allowed, len(df))
     direction_probability = dual["direction_probability"]
     conviction_score = dual["conviction"]
+
+    # Signal Engine v1 §5 (Phase 2.5): Microstructure adjustments — applied
+    # AFTER the base dual score and BEFORE the per-asset-class threshold
+    # check, so the threshold gate sees the microstructure-adjusted
+    # direction_probability + conviction (matching spec integration order).
+    # Crypto only — non-crypto returns the null block and contributes
+    # nothing. Bounds match compute_dual_score: dir_prob ∈ [0.50, 0.85];
+    # conviction ∈ [0.40, 0.95]. Any gate names returned (e.g.
+    # cvd_contradict) are pushed BEFORE the threshold check so the
+    # _REASON_PRIORITY ordering still picks the most specific reason.
+    micro = compute_microstructure(req.symbol, comp["side"], df,
+                                   conviction_score, req.asset_class)
+    direction_probability = max(0.50, min(0.85, direction_probability + float(micro["dir_prob_delta"])))
+    conviction_score      = max(0.40, min(0.95, conviction_score      + float(micro["conv_delta"])))
+    for _g in micro.get("extra_gates", []) or []:
+        if _g not in gates_failed:
+            gates_failed.append(_g)
+
     dp_min, cv_min = dual_score_thresholds_for(req.asset_class)
     if (direction_probability < dp_min or conviction_score < cv_min) \
             and "below_thresholds" not in gates_failed:
@@ -247,6 +268,22 @@ async def score(req: ScoreRequest):
 
     safe_factors = {k: _f(v, 0.0) for k, v in comp["factors"].items()}
 
+    # Signal Engine v1 §3 / §4 — vol-adjusted R:R + meta-label proxy.
+    # Computed at the response boundary (no gate dependency, pure emit).
+    vol_percentile, rr_multiplier = compute_vol_adjusted_rr(df, regime)
+    p_loss_meta = compute_p_loss_meta_proxy(direction_probability)
+
+    # Microstructure block matches the TradePlan microstructure schema:
+    # {cvd_state, obi, ivrv_spread}. Extra fields used internally by the
+    # scorer (dir_prob_delta, conv_delta, extra_gates) are NOT emitted —
+    # the deltas are already folded into direction_probability/conviction
+    # above and the gates into gates_failed.
+    micro_out = {
+        "cvd_state":   micro["cvd_state"],
+        "obi":         (None if micro["obi"]         is None else _f(micro["obi"])),
+        "ivrv_spread": (None if micro["ivrv_spread"] is None else _f(micro["ivrv_spread"])),
+    }
+
     return ScoreResponse(
         passes=passes, side=comp["side"], composite_z=_f(comp["composite_z"]),
         regime=regime, suggested_size_usd=_f(sz["size_usd"]),
@@ -259,6 +296,10 @@ async def score(req: ScoreRequest):
         no_signal_reason=no_signal_reason,
         direction_probability=_f(direction_probability),
         conviction=_f(conviction_score),
+        vol_percentile=_f(vol_percentile),
+        rr_multiplier=_f(rr_multiplier),
+        p_loss_meta=_f(p_loss_meta),
+        microstructure=micro_out,
     )
 
 

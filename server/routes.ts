@@ -5431,7 +5431,18 @@ Every level must be technically defensible. Return JSON only.`;
             // SCORER PREPASS line and the prompt falls back to the
             // in-prompt regime math (same legacy behavior as before this
             // change). This is the spec's documented fail-open posture.
-            let quantPrepass: { regime?: any; signal_type?: any; no_signal_reason?: any; direction_probability?: number; conviction?: number } | undefined;
+            // Phase 2.3 / 2.4 / 2.5 fields added: vol_percentile, rr_multiplier
+            // (§3); p_loss_meta + kelly_fraction_applied (§4 — applied here,
+            // not in the scorer, since kelly_base requires per-(token,
+            // direction) calibration the scorer has no access to);
+            // microstructure (§5: cvd_state / obi / ivrv_spread).
+            let quantPrepass: {
+              regime?: any; signal_type?: any; no_signal_reason?: any;
+              direction_probability?: number; conviction?: number;
+              vol_percentile?: number; rr_multiplier?: number;
+              p_loss_meta?: number; kelly_fraction_applied?: number;
+              microstructure?: { cvd_state?: any; obi?: number | null; ivrv_spread?: number | null };
+            } | undefined;
             try {
               const { quantScore, normalizeAssetClass } = await import("./quantClient");
               const _ps = await quantScore({
@@ -5452,17 +5463,65 @@ Every level must be technically defensible. Return JSON only.`;
                 asset_class: normalizeAssetClass(cls === "crypto" ? undefined : cls, ticker),
               });
               if (_ps?.regime) {
-                // Phase 2.2: include direction_probability + conviction
-                // when the scorer returned them so the AI can defer to
-                // the deterministic Dual Score values via SCORER PREPASS.
+                // Phase 2.2/2.3/2.5: include all deterministic Signal Engine
+                // v1 fields the scorer can produce so the AI defers to them
+                // via SCORER PREPASS rather than recomputing.
+                //
+                // Phase 2.4: kelly_fraction_applied is computed HERE (not in
+                // the Python scorer) because it depends on kelly_base from
+                // the per-(token, direction) calibration block, which lives
+                // in this route. Formula matches spec §4:
+                //   kelly_fraction_applied = min(0.25,
+                //                                kelly_base,
+                //                                kelly_base * (1 - p_loss_meta)
+                //                                  * regime_size_modifier
+                //                                  * conviction)
+                // regime_size_modifier = 0.5 in HIGH_VOL, 1.0 elsewhere.
+                // The double-cap (0.25 AND kelly_base) enforces "never size
+                // up because p_loss_meta is low — kelly_base is the ceiling".
+                // Computed lazily so we only run when scorer actually emits
+                // p_loss_meta + dual-score fields.
+                let _kellyApplied: number | undefined;
+                try {
+                  if (typeof _ps.p_loss_meta === "number" && typeof _ps.conviction === "number") {
+                    const { computeKellyFraction } = await import("./prompts/shared");
+                    const _kellyBase = computeKellyFraction((pWin || 0), tp1DistPct, slDistPct, 25);
+                    const _regMod = (_ps.regime === "HIGH_VOL") ? 0.5 : 1.0;
+                    const _shrunk = _kellyBase * (1 - _ps.p_loss_meta) * _regMod * _ps.conviction;
+                    _kellyApplied = Math.max(0, Math.min(0.25, Math.min(_kellyBase, _shrunk)));
+                  }
+                } catch (e: any) {
+                  console.warn(`[PROMPT_V2 prepass] kelly_fraction_applied calc failed for ${ticker}:`, e?.message || e);
+                }
+
                 quantPrepass = {
                   regime: _ps.regime,
                   direction_probability: typeof _ps.direction_probability === "number" ? _ps.direction_probability : undefined,
                   conviction: typeof _ps.conviction === "number" ? _ps.conviction : undefined,
                   signal_type: _ps.signal_type ?? null,
                   no_signal_reason: _ps.no_signal_reason ?? null,
+                  vol_percentile: typeof _ps.vol_percentile === "number" ? _ps.vol_percentile : undefined,
+                  rr_multiplier: typeof _ps.rr_multiplier === "number" ? _ps.rr_multiplier : undefined,
+                  p_loss_meta: typeof _ps.p_loss_meta === "number" ? _ps.p_loss_meta : undefined,
+                  kelly_fraction_applied: _kellyApplied,
+                  microstructure: _ps.microstructure
+                    ? {
+                        cvd_state:   _ps.microstructure.cvd_state,
+                        obi:         _ps.microstructure.obi ?? null,
+                        ivrv_spread: _ps.microstructure.ivrv_spread ?? null,
+                      }
+                    : undefined,
                 };
-                console.log(`[PROMPT_V2 prepass] ${ticker} regime=${_ps.regime} signal_type=${_ps.signal_type ?? "n/a"} no_signal_reason=${_ps.no_signal_reason ?? "n/a"}`);
+                console.log(
+                  `[PROMPT_V2 prepass] ${ticker} regime=${_ps.regime}` +
+                  ` signal_type=${_ps.signal_type ?? "n/a"}` +
+                  ` no_signal_reason=${_ps.no_signal_reason ?? "n/a"}` +
+                  ` rr_mult=${typeof _ps.rr_multiplier === "number" ? _ps.rr_multiplier.toFixed(2) : "n/a"}` +
+                  ` p_loss_meta=${typeof _ps.p_loss_meta === "number" ? _ps.p_loss_meta.toFixed(3) : "n/a"}` +
+                  ` kelly_applied=${typeof _kellyApplied === "number" ? _kellyApplied.toFixed(4) : "n/a"}` +
+                  ` cvd=${_ps.microstructure?.cvd_state ?? "n/a"}` +
+                  ` obi=${_ps.microstructure?.obi != null ? _ps.microstructure.obi.toFixed(3) : "null"}`
+                );
               }
             } catch (e: any) {
               console.warn(`[PROMPT_V2 prepass] quantScore failed for ${ticker} — proceeding without prepass:`, e?.message || e);

@@ -280,3 +280,208 @@ def dual_score_thresholds_for(asset_class: str) -> Tuple[float, float]:
     to BTC/ETH bar (0.58, 0.60) if the class is unknown — safer than
     waving signals through on an unrecognized routing key."""
     return DUAL_SCORE_THRESHOLDS.get(asset_class, (0.58, 0.60))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal Engine v1 §3 (Phase 2.3) — Vol-Percentile-Adjusted R:R.
+# Replaces the prompt-side spec block ("vol_pct = percentile_rank(ATR(14), 90);
+# rr_multiplier = bucket-select") with a deterministic implementation.
+# Bucket boundaries are spec-literal:
+#   vol_pct <  0.20 → 0.70  (compressed vol — tighter targets)
+#   vol_pct <  0.60 → 1.00  (normal — baseline)
+#   vol_pct <  0.85 → 1.30  (expanded — modest stretch)
+#   vol_pct ≥  0.85 → 1.60  (high vol — full stretch)
+# RANGE-regime override: cap at 1.00 (mean-reversion TPs shouldn't extend).
+# Inputs:
+#   df     : full OHLCV frame (uses high/low/close for ATR(14)).
+#   regime : current regime string from classify_regime().
+# Returns (vol_percentile, rr_multiplier). Both clamped; safe under degenerate
+# input — returns the (0.50, 1.00) baseline when not enough bars or NaN ATR.
+# ─────────────────────────────────────────────────────────────────────────────
+def compute_vol_adjusted_rr(df: pd.DataFrame, regime: str) -> Tuple[float, float]:
+    if len(df) < 90:
+        return 0.50, 1.00
+    high  = df["high"].astype(float)
+    low   = df["low"].astype(float)
+    close = df["close"].astype(float)
+    prev_close = close.shift(1)
+    # True Range = max(H-L, |H-prevC|, |L-prevC|). Pandas idiom for ATR.
+    tr = pd.concat(
+        [(high - low).abs(),
+         (high - prev_close).abs(),
+         (low  - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr14 = tr.rolling(14).mean()
+    # Use ATR-as-fraction-of-price (atr/close) instead of raw ATR. Naive
+    # raw-ATR percentile rank breaks when price drifts materially across
+    # the 90-bar window — e.g. BTC 60k → 70k would inflate ATR even with
+    # the SAME relative volatility. Dividing by close normalizes that out.
+    atr_pct = (atr14 / close).dropna()
+    if len(atr_pct) < 30:
+        return 0.50, 1.00
+    cur = float(atr_pct.iloc[-1])
+    if not (cur == cur) or cur in (float("inf"), float("-inf")):
+        return 0.50, 1.00
+    window = atr_pct.iloc[-90:] if len(atr_pct) >= 90 else atr_pct
+    rank = float((window <= cur).sum()) / float(len(window))
+    rank = max(0.0, min(1.0, rank))
+    if rank < 0.20:
+        mult = 0.70
+    elif rank < 0.60:
+        mult = 1.00
+    elif rank < 0.85:
+        mult = 1.30
+    else:
+        mult = 1.60
+    if regime == "RANGE":
+        mult = min(mult, 1.00)
+    return rank, mult
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal Engine v1 §4 (Phase 2.4) — Meta-label → p_loss_meta proxy.
+# Spec defines p_loss_meta as the calibrated probability that this exact
+# setup hits SL before TP1, sourced from a trained meta-classifier (typically
+# gradient-boosted on labelled (entry, SL, TP1) triples). That model is
+# not yet wired. Until then we use the cleanest available proxy:
+#     p_loss_meta := 1 - direction_probability
+# Rationale: direction_probability already encodes "P(price reaches TP1
+# before SL within horizon)", so its complement is the natural placeholder
+# for the meta-classifier output. Documented on the ScoreResponse so the
+# proxy is auditable and a future trained model is a one-line swap here.
+# kelly_fraction_applied is computed server-side in routes.ts (the only
+# place that knows kelly_base from per-(token, direction) calibration).
+# ─────────────────────────────────────────────────────────────────────────────
+def compute_p_loss_meta_proxy(direction_probability: float) -> float:
+    return max(0.0, min(1.0, 1.0 - float(direction_probability)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal Engine v1 §5 (Phase 2.5) — Crypto microstructure features.
+# Splits into:
+#   §5a CVD divergence / confirm / contradict — adjusts direction_probability
+#       and (when contradicting at low conviction) emits cvd_contradict gate.
+#   §5b Order Book Imbalance (top-10 levels) — adjusts conviction. Treated
+#       as null when the per-coin trade/book stream is stale (>30s).
+#   §5c IV-RV spread — DEFERRED: Deribit IV feed not yet wired. Always
+#       emits ivrv_spread = None today; field exists so the prompt can
+#       carry "n/a" without schema breakage when the feed lands.
+#
+# For non-crypto symbols (FOREX / METAL / STOCK) the entire block is null.
+# This matches the spec intent — equities/FX/metals have neither HL CVD
+# nor a useful Deribit-style options vol surface from this scorer.
+#
+# CVD divergence detection — pragmatic approximation:
+#   - cvd_slope is the cvd_z (signed deviation from rolling mean), used as
+#     a directional proxy for accumulation/distribution.
+#   - price_ret  is the 20-bar return.
+#   - "weak" thresholds: |cvd_slope|<0.5 OR |price_ret|<0.5% → "n/a"
+#     (not enough signal in either to call divergence vs noise).
+#   - Per-side state matrix (LONG):
+#       cvd>0 + price≥0 → confirm     (+0.03 to dir_prob)
+#       cvd>0 + price<0 → bullish_div (+0.06)
+#       cvd<0 + price>0 → contradict  (-0.08; cvd_contradict gate if conv<0.65)
+#       cvd<0 + price≤0 → n/a         (both bearish — no useful info for LONG)
+#     SHORT mirrors.
+# ─────────────────────────────────────────────────────────────────────────────
+def compute_microstructure(coin: str, side: Optional[str], df: pd.DataFrame,
+                           base_conviction: float, asset_class: str) -> dict:
+    null_block = {
+        "cvd_state": "n/a", "dir_prob_delta": 0.0,
+        "obi": None, "conv_delta": 0.0,
+        "ivrv_spread": None, "extra_gates": [],
+    }
+    if asset_class in ("FOREX", "METAL", "STOCK"):
+        return null_block
+    if side is None:
+        return null_block
+
+    # ── 5a CVD divergence / confirm / contradict ─────────────────────────
+    cvd_dq = STATE.cvd.get(coin)
+    cvd_slope = 0.0
+    if cvd_dq and len(cvd_dq) >= 30:
+        try:
+            cvd_slope = float(cvd_z(cvd_dq))
+        except Exception:
+            cvd_slope = 0.0
+    if len(df) >= 21:
+        try:
+            price_ret = float(df["close"].iloc[-1] / df["close"].iloc[-21] - 1.0)
+        except Exception:
+            price_ret = 0.0
+    else:
+        price_ret = 0.0
+    if not (price_ret == price_ret) or price_ret in (float("inf"), float("-inf")):
+        price_ret = 0.0
+    weak_cvd = abs(cvd_slope) < 0.5
+    weak_pr  = abs(price_ret) < 0.005  # 0.5% over 20 bars
+
+    cvd_state = "n/a"
+    dir_prob_delta = 0.0
+    extra_gates: List[str] = []
+    if not (weak_cvd or weak_pr):
+        if side == "long":
+            if cvd_slope > 0 and price_ret >= 0:
+                cvd_state, dir_prob_delta = "confirm", +0.03
+            elif cvd_slope > 0 and price_ret < 0:
+                cvd_state, dir_prob_delta = "bullish_div", +0.06
+            elif cvd_slope < 0 and price_ret > 0:
+                cvd_state, dir_prob_delta = "contradict", -0.08
+                if base_conviction < 0.65:
+                    extra_gates.append("cvd_contradict")
+            # cvd<0 + price≤0 stays "n/a" (both bearish — not informative for LONG)
+        else:  # side == "short"
+            if cvd_slope < 0 and price_ret <= 0:
+                cvd_state, dir_prob_delta = "confirm", +0.03
+            elif cvd_slope < 0 and price_ret > 0:
+                cvd_state, dir_prob_delta = "bearish_div", +0.06
+            elif cvd_slope > 0 and price_ret < 0:
+                cvd_state, dir_prob_delta = "contradict", -0.08
+                if base_conviction < 0.65:
+                    extra_gates.append("cvd_contradict")
+
+    # ── 5b OBI — staleness-aware (>30s → null) ───────────────────────────
+    # Per-coin freshness: latest CVD entry's timestamp (CVD updates with
+    # every trade, so its tip mirrors live data flow for THAT coin).
+    # `STATE.last_update_ts` is GLOBAL (last WS message across ALL coins)
+    # — we use it as a "now" reference, never to decide per-coin freshness.
+    obi_val: Optional[float] = None
+    conv_delta = 0.0
+    book = STATE.books.get(coin)
+    fresh = False
+    if cvd_dq and len(cvd_dq) > 0:
+        last_ts_ms = float(cvd_dq[-1][0])
+        now_ms = STATE.last_update_ts * 1000.0 if STATE.last_update_ts else last_ts_ms
+        fresh = (now_ms - last_ts_ms) <= 30_000.0
+    if book and fresh:
+        try:
+            bids, asks = parse_levels(book, 10)
+            o = float(obi(bids, asks))
+            if o == o and o not in (float("inf"), float("-inf")):
+                obi_val = max(-1.0, min(1.0, o))
+        except Exception:
+            obi_val = None
+    if obi_val is not None:
+        # Spec §5b: ±0.20 thresholds. Direction-aligned OBI helps,
+        # opposed OBI hurts (asymmetric: +0.05 / -0.10 — bigger penalty
+        # for fighting the book than reward for going with it).
+        if side == "long":
+            if obi_val >= 0.20:
+                conv_delta = +0.05
+            elif obi_val <= -0.20:
+                conv_delta = -0.10
+        else:  # short
+            if obi_val <= -0.20:
+                conv_delta = +0.05
+            elif obi_val >= 0.20:
+                conv_delta = -0.10
+
+    return {
+        "cvd_state":      cvd_state,
+        "dir_prob_delta": dir_prob_delta,
+        "obi":            obi_val,
+        "conv_delta":     conv_delta,
+        "ivrv_spread":    None,            # §5c deferred — Deribit feed pending
+        "extra_gates":    extra_gates,
+    }
