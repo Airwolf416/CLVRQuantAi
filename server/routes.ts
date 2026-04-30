@@ -1456,8 +1456,8 @@ async function generateTrialCode(): Promise<string> {
   const code = `CLVR-TRIAL-${rand}`;
   const expires = new Date(); expires.setDate(expires.getDate() + 7);
   await pool.query(
-    `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses)
-     VALUES ($1, 'Owner Trial — 7 Days Free Pro', 'trial', true, $2, 1)
+    `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses, redemption_type)
+     VALUES ($1, 'Owner Trial — 7 Days Free Pro', 'trial', true, $2, 1, 'single_use_global')
      ON CONFLICT (code) DO NOTHING`,
     [code, expires]
   );
@@ -1509,19 +1509,23 @@ async function seedAccessCodes() {
       const expiresAt = new Date();
       expiresAt.setMonth(expiresAt.getMonth() + (isFF ? 1 : 3));
       await pool.query(
-        `INSERT INTO access_codes (code, label, type, active, expires_at)
-         VALUES ($1, $2, 'vip', true, $3)
+        `INSERT INTO access_codes (code, label, type, active, expires_at, redemption_type)
+         VALUES ($1, $2, 'vip', true, $3, 'single_use_global')
          ON CONFLICT (code) DO NOTHING`,
         [c.code, c.label, expiresAt]
       );
     }
-    // VIP group code — unlimited uses, shared by a group (max_uses = -1 means unlimited)
+    // VIP group code — shared by many users but each user can redeem only ONCE.
+    // max_uses=-1 means "no global cap"; redemption_type='single_use_per_user'
+    // is the per-user dedup that closes the multi-redeem exploit at /api/verify-code.
+    // ON CONFLICT DO UPDATE force-resets the redemption_type so an existing row
+    // (e.g. from before the security fix) gets corrected on every boot.
     const groupExpiry = new Date();
     groupExpiry.setMonth(groupExpiry.getMonth() + 1);
     await pool.query(
-      `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses)
-       VALUES ('CLVR-VIP-GROUP2026', 'Group VIP — Shared Code (1 month)', 'vip', true, $1, -1)
-       ON CONFLICT (code) DO UPDATE SET active = true, expires_at = $1`,
+      `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses, redemption_type)
+       VALUES ('CLVR-VIP-GROUP2026', 'Group VIP — Shared Code (1 month)', 'vip', true, $1, -1, 'single_use_per_user')
+       ON CONFLICT (code) DO UPDATE SET active = true, expires_at = $1, redemption_type = 'single_use_per_user', max_uses = -1`,
       [groupExpiry]
     );
     // Ensure an initial trial code exists
@@ -8219,12 +8223,20 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     } catch { return false; }
   }
 
-  app.post("/api/verify-code", async (req, res) => {
-    const rawCode = req.body.code;
+  // Tier ordering for the no-downgrade rule. Owner stays Elite forever (per
+  // getEffectiveTier hardcode), and anyone already on a higher paid tier
+  // can still redeem successfully — they just won't be downgraded.
+  const TIER_RANK: Record<string, number> = { free: 0, pro: 1, elite: 2, vip_group: 3 };
+
+  app.post("/api/verify-code", async (req: any, res) => {
+    const rawCode = req.body?.code;
     const userId = (req.session as any)?.userId || null;
-    if (!rawCode) return res.status(400).json({ error: "Code required" });
+    const ipAddress = (req.ip || req.headers["x-forwarded-for"] || "").toString().slice(0, 45) || null;
+    const userAgent = (req.headers["user-agent"] || "").toString().slice(0, 500) || null;
+    if (!rawCode) return res.status(400).json({ valid: false, error: "Code required" });
     const code = rawCode.trim().toUpperCase();
 
+    // OWNER_CODE bypass — pure read, no state mutation, no audit row.
     if (code === OWNER_CODE) {
       if (!userId || !(await isOwner(userId))) {
         return res.json({ valid: false, error: "This code is reserved" });
@@ -8233,51 +8245,146 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
 
     if (!userId) {
-      console.log(`[verify-code] No session userId for code=${code}`);
-      return res.json({ valid: false, error: "You must be signed in to use an access code" });
+      await storage.logRedemptionAttempt(null, code, ipAddress, "unauthenticated");
+      return res.json({ valid: false, code: "unauthenticated", error: "You must be signed in to use an access code" });
     }
 
+    // Verified-email gate. Phone OTP is deferred (per scope decision); email
+    // verification is the closest thing we have to a real-person check today.
+    let user;
+    try { user = await storage.getUser(userId); } catch {}
+    if (!user) {
+      await storage.logRedemptionAttempt(userId, code, ipAddress, "user_not_found");
+      return res.json({ valid: false, code: "user_not_found", error: "Sign in again to redeem this code" });
+    }
+    if (!user.emailVerified) {
+      await storage.logRedemptionAttempt(userId, code, ipAddress, "unverified");
+      return res.json({
+        valid: false,
+        code: "email_unverified",
+        error: "Please verify your email address before redeeming an access code. Open your inbox for the verification link, or use the Resend button on your Account page.",
+      });
+    }
+
+    // Per-user rate limit: 5 attempts/hour. Counts ALL attempts (success or
+    // fail) so a user can't bypass it by chaining invalid codes between real
+    // tries. We check BEFORE writing the current attempt so the 5th valid
+    // request still goes through.
+    const recent = await storage.countRecentRedemptionAttempts(userId, 1);
+    if (recent >= 5) {
+      await storage.logRedemptionAttempt(userId, code, ipAddress, "rate_limited");
+      return res.json({ valid: false, code: "rate_limited", error: "Too many redemption attempts. Try again in an hour." });
+    }
+
+    // Atomic redemption transaction. Row-locking access_codes serializes
+    // concurrent /api/verify-code calls per code, and INSERT into
+    // code_redemptions with UNIQUE(code, user_id) is the canonical kill of
+    // the multi-redeem exploit (handles even the case where two requests
+    // bypass the lock via separate connections).
+    //
+    // CRITICAL: every code path below MUST hit the finally{} so that
+    // client.release() runs — leaking a connection per attempt would DoS the
+    // pool. The catch{} also runs ROLLBACK so an uncaught error before
+    // COMMIT can't hold the access_codes row lock until pg kills the
+    // connection.
+    const client = await pool.connect();
+    let committed = false;
     try {
-      const acRes = await pool.query("SELECT * FROM access_codes WHERE code = $1", [code]);
+      await client.query("BEGIN");
+
+      const acRes = await client.query("SELECT * FROM access_codes WHERE code = $1 FOR UPDATE", [code]);
       const ac = acRes.rows[0];
       if (!ac || !ac.active) {
-        console.log(`[verify-code] Code not found or inactive: ${code}`);
-        return res.json({ valid: false, error: "Code not found" });
+        await client.query("ROLLBACK");
+        await storage.logRedemptionAttempt(userId, code, ipAddress, ac ? "inactive" : "not_found");
+        return res.json({ valid: false, code: "not_found", error: "Code not found or no longer active" });
       }
       if (ac.expires_at && new Date(ac.expires_at) < new Date()) {
-        return res.json({ valid: false, error: "This code has expired" });
+        await client.query("ROLLBACK");
+        await storage.logRedemptionAttempt(userId, code, ipAddress, "expired");
+        return res.json({ valid: false, code: "expired", error: "This code has expired" });
       }
-      const maxUses = ac.max_uses; // null = single use, -1 = unlimited, N = up to N uses
+
+      const redemptionType = (ac.redemption_type || "single_use_per_user") as string;
+      const tierGranted = "elite"; // current product rule: every access code grants Elite
       const useCount = ac.use_count || 0;
-      const isMultiUse = maxUses !== null;
-      // For single-use codes: block if claimed by someone else
-      if (!isMultiUse && ac.used_by && ac.used_by !== userId) {
-        return res.json({ valid: false, error: "This code has already been claimed by another user" });
-      }
-      // For multi-use codes with a limit: check if limit reached
-      if (isMultiUse && maxUses > 0 && useCount >= maxUses) {
-        return res.json({ valid: false, error: "This code has reached its maximum number of uses" });
-      }
-      // Mark usage
-      if (!isMultiUse) {
-        // Single-use: mark the used_by field
-        if (!ac.used_by) {
-          await pool.query("UPDATE access_codes SET used_by = $1, used_at = NOW(), use_count = COALESCE(use_count,0)+1 WHERE code = $2", [userId, code]);
+
+      if (redemptionType === "single_use_global") {
+        // Hard cap: one total redemption ever. Once burned, the code is dead.
+        if (useCount >= 1) {
+          await client.query("ROLLBACK");
+          await storage.logRedemptionAttempt(userId, code, ipAddress, "already_redeemed");
+          return res.json({ valid: false, code: "already_redeemed_global", error: "This code has already been claimed" });
         }
       } else {
-        // Multi-use: only increment count (unlimited or limited)
-        await pool.query("UPDATE access_codes SET use_count = COALESCE(use_count,0)+1 WHERE code = $1", [code]);
+        // single_use_per_user: optional global cap still applies (max_uses>0).
+        // -1 (unlimited) and NULL skip this check.
+        if (ac.max_uses && ac.max_uses > 0 && useCount >= ac.max_uses) {
+          await client.query("ROLLBACK");
+          await storage.logRedemptionAttempt(userId, code, ipAddress, "global_limit_reached");
+          return res.json({ valid: false, code: "global_limit_reached", error: "This code has reached its maximum redemptions" });
+        }
       }
+
+      // The lock-the-exploit INSERT. ON CONFLICT DO NOTHING returns 0 rows
+      // for: (a) this user has already redeemed this code, OR (b) a
+      // concurrent request beat us to the unique slot. Both are "already
+      // redeemed by you" from the user's perspective.
+      const insertRes = await client.query(
+        `INSERT INTO code_redemptions (code, user_id, ip_address, user_agent, tier_granted)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (code, user_id) DO NOTHING
+         RETURNING id`,
+        [code, userId, ipAddress, userAgent, tierGranted],
+      );
+      if (insertRes.rowCount === 0) {
+        await client.query("ROLLBACK");
+        await storage.logRedemptionAttempt(userId, code, ipAddress, "already_redeemed");
+        return res.json({ valid: false, code: "already_redeemed_user", error: "You have already redeemed this code" });
+      }
+
+      // Bump use_count + (legacy) used_by/used_at for backward compat with
+      // the listAccessCodes admin view. used_by stays first-claimer-wins.
+      await client.query(
+        `UPDATE access_codes
+            SET use_count = COALESCE(use_count, 0) + 1,
+                used_by   = COALESCE(used_by, $2),
+                used_at   = COALESCE(used_at, NOW())
+          WHERE code = $1`,
+        [code, userId],
+      );
+      if (redemptionType === "single_use_global") {
+        await client.query("UPDATE access_codes SET active = false WHERE code = $1", [code]);
+      }
+
+      // Tier upgrade with no-downgrade. Re-read the user row inside the txn
+      // so we don't race a concurrent Stripe webhook that just bumped tier.
+      const userTierRow = await client.query("SELECT tier FROM users WHERE id = $1", [userId]);
+      const currentTier = (userTierRow.rows[0]?.tier as string) || "free";
       const promoExpiry = ac.expires_at || null;
-      await storage.updateUserPromoCode(userId, code, promoExpiry ? new Date(promoExpiry) : null);
-      await pool.query("UPDATE users SET tier = 'elite' WHERE id = $1", [userId]);
-      checkAndGrantReferralReward(userId).catch(() => {});
-      // If it was a trial code, auto-generate a new one for the owner
-      if (ac.type === "trial") {
-        getCurrentTrialCode().catch(() => {}); // ensure next trial code exists
+      if ((TIER_RANK[tierGranted] ?? 0) > (TIER_RANK[currentTier] ?? 0)) {
+        await client.query("UPDATE users SET tier = $1 WHERE id = $2", [tierGranted, userId]);
       }
-      console.log(`[verify-code] SUCCESS: ${code} redeemed by user ${userId}, tier=elite, expires ${promoExpiry}`);
-      // Send Elite activation email asynchronously
+      // Always refresh promo_code/promo_expires_at so the user's account
+      // page shows the most recent grant and the expiry-reminder scheduler
+      // has the right date.
+      await client.query(
+        "UPDATE users SET promo_code = $1, promo_expires_at = $2 WHERE id = $3",
+        [code, promoExpiry, userId],
+      );
+
+      await client.query("COMMIT");
+      committed = true;
+
+      // Post-commit side effects (fire-and-forget — never block the response).
+      await storage.logRedemptionAttempt(userId, code, ipAddress, "success");
+      checkAndGrantReferralReward(userId).catch(() => {});
+      if (ac.type === "trial") getCurrentTrialCode().catch(() => {});
+
+      console.log(`[verify-code] SUCCESS: ${code} redeemed by user ${userId}, type=${redemptionType}, tier=${tierGranted} (was ${currentTier}), expires ${promoExpiry}`);
+
+      // Elite activation email — now ONLY fires on first successful redemption
+      // per user/code pair (because re-redeems are blocked above).
       storage.getUser(userId).then(async (activatedUser) => {
         if (!activatedUser?.email) return;
         try {
@@ -8320,8 +8427,15 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }).catch(() => {});
       return res.json({ valid: true, tier: "elite", type: ac.type, label: ac.label, expiresAt: promoExpiry });
     } catch (err: any) {
+      // Best-effort rollback so we don't hold the access_codes row lock past
+      // the request lifecycle. release() in finally{} returns the connection
+      // to the pool either way (rolling back any open txn implicitly).
+      try { if (!committed) await client.query("ROLLBACK"); } catch {}
+      await storage.logRedemptionAttempt(userId, code, ipAddress, "claim_error");
       console.error(`[verify-code] ERROR for code=${code}:`, err.message);
-      res.json({ valid: false, error: "Verification failed — please try again" });
+      return res.json({ valid: false, error: "Verification failed — please try again" });
+    } finally {
+      client.release();
     }
   });
 
@@ -8422,8 +8536,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const expiresAt = new Date(Date.now() + months * 30 * 86400000).toISOString();
       const label = rawLabel?.trim() || `${months}-month Pro code`;
       await pool.query(
-        `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses)
-         VALUES ($1, $2, 'pro', true, $3, 1)`,
+        `INSERT INTO access_codes (code, label, type, active, expires_at, max_uses, redemption_type)
+         VALUES ($1, $2, 'pro', true, $3, 1, 'single_use_global')`,
         [code, label, expiresAt]
       );
       res.json({ code, expiresAt, durationMonths: months, label });

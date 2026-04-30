@@ -186,6 +186,45 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  // ── Redemption audit log ────────────────────────────────────────────────
+  // Append-only audit of every /api/verify-code attempt. Drives the per-user
+  // 5/hour rate limit and gives ops a queryable feed for brute-force patterns.
+  // Fail-open (errors are logged but never bubble to the caller) — this is a
+  // monitoring channel, not a correctness mechanism. The kill-the-exploit
+  // dedup is enforced by code_redemptions' UNIQUE(code, user_id), not here.
+  async logRedemptionAttempt(
+    userId: string | null,
+    codeAttempted: string | null,
+    ipAddress: string | null,
+    result: string,
+  ): Promise<void> {
+    try {
+      await pool.query(
+        `INSERT INTO redemption_attempts (user_id, code_attempted, ip_address, result)
+         VALUES ($1, $2, $3, $4)`,
+        [userId, codeAttempted, ipAddress || null, result],
+      );
+    } catch (e: any) {
+      console.error("[redemption-attempts] log error:", e.message);
+    }
+  }
+
+  async countRecentRedemptionAttempts(userId: string, hoursBack: number): Promise<number> {
+    try {
+      const r = await pool.query(
+        `SELECT COUNT(*)::int AS n
+           FROM redemption_attempts
+          WHERE user_id = $1
+            AND attempted_at > NOW() - ($2 || ' hours')::INTERVAL`,
+        [userId, String(hoursBack)],
+      );
+      return r.rows[0]?.n ?? 0;
+    } catch (e: any) {
+      console.error("[redemption-attempts] count error:", e.message);
+      return 0;
+    }
+  }
+
   async getAccessCode(code: string): Promise<AccessCode | undefined> {
     const [ac] = await db.select().from(accessCodes).where(eq(accessCodes.code, code));
     return ac;
@@ -193,6 +232,18 @@ export class DatabaseStorage implements IStorage {
 
   async createAccessCode(data: InsertAccessCode): Promise<AccessCode> {
     const [ac] = await db.insert(accessCodes).values(data).returning();
+    // The redemption_type column was added via raw SQL in initDb.ts and is NOT
+    // part of the Drizzle schema, so the INSERT above never sets it and the
+    // column default ('single_use_per_user') would kick in. For admin-created
+    // codes via /api/access-codes (private VIP/FF style) the correct semantic
+    // is single-use globally — force it explicitly so a future admin code can
+    // never be silently turned into a per-user-reusable code.
+    if (ac?.code) {
+      await pool.query(
+        `UPDATE access_codes SET redemption_type = 'single_use_global' WHERE code = $1`,
+        [ac.code]
+      );
+    }
     return ac;
   }
 
