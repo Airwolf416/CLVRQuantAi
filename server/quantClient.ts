@@ -49,6 +49,14 @@ export interface QuantScoreResponse {
   // directional trend split). Was previously lowercase 4-state; downstream
   // consumers only stringify this for logs so the change is non-breaking.
   regime: "TREND_UP" | "TREND_DOWN" | "RANGE" | "HIGH_VOL" | "CHOP";
+  // Signal Engine v1 §2 (Phase 2.2) — Dual Score.
+  // Both bounded [0.50, 0.85] (dir_prob) / [0.40, 0.95] (conviction).
+  // When either falls below the per-asset-class threshold (see
+  // quant/scorer.py DUAL_SCORE_THRESHOLDS), no_signal_reason is set to
+  // "below_thresholds" — the same canonical reason the legacy z_threshold
+  // gate produces. AI defers to these via the SCORER PREPASS line.
+  direction_probability?: number;
+  conviction?: number;
   suggested_size_usd: number;
   sl_atr_mult: number;
   tp_atr_mult: number;

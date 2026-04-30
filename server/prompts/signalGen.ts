@@ -42,6 +42,14 @@ export interface SignalGenPromptInput {
     regime?:           "TREND_UP" | "TREND_DOWN" | "RANGE" | "HIGH_VOL" | "CHOP";
     signal_type?:      "momentum" | "mean_reversion" | null;
     no_signal_reason?: string | null;
+    // Phase 2.2 — Dual Score (Signal Engine v1 §2). When supplied, AI
+    // emits these exact values into TradePlanSchema.direction_probability
+    // and .conviction (no recomputation). When BOTH are present the AI
+    // can also infer that the per-asset-class threshold gate has been
+    // checked by the scorer — if scorer_no_signal_reason is
+    // "below_thresholds", the dual-score gate already fired.
+    direction_probability?: number;
+    conviction?:            number;
   };
 }
 
@@ -83,13 +91,23 @@ export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {
 
   // Phase 2.1: surface scorer-supplied regime/signal_type as a SCORER PREPASS
   // line so SIGNAL_ENGINE_V1 §1 can defer to it rather than recomputing.
+  // Phase 2.2: extend with direction_probability + conviction (Dual Score).
   // Omitted entirely when no prepass is supplied — keeps legacy callers and
-  // prompt-snapshot diffs identical when the feature isn't used.
-  const prepassLine = input.quantPrepass?.regime
-    ? `SCORER PREPASS: regime=${input.quantPrepass.regime}` +
-      `, signal_type=${input.quantPrepass.signal_type ?? "n/a"}` +
-      (input.quantPrepass.no_signal_reason
-        ? `, scorer_no_signal_reason=${input.quantPrepass.no_signal_reason}`
+  // prompt-snapshot diffs identical when the feature isn't used. Numeric
+  // formatting is fixed at 4 decimals so deterministic snapshot tests
+  // remain stable across runs.
+  const _pp = input.quantPrepass;
+  const prepassLine = _pp?.regime
+    ? `SCORER PREPASS: regime=${_pp.regime}` +
+      `, signal_type=${_pp.signal_type ?? "n/a"}` +
+      (typeof _pp.direction_probability === "number"
+        ? `, direction_probability=${_pp.direction_probability.toFixed(4)}`
+        : "") +
+      (typeof _pp.conviction === "number"
+        ? `, conviction=${_pp.conviction.toFixed(4)}`
+        : "") +
+      (_pp.no_signal_reason
+        ? `, scorer_no_signal_reason=${_pp.no_signal_reason}`
         : "")
     : null;
 

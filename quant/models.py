@@ -37,6 +37,16 @@ class ScoreResponse(BaseModel):
     #                    NO_TRADE_REASONS in server/prompts/shared.ts).
     signal_type: Optional[str] = None
     no_signal_reason: Optional[str] = None
+    # Signal Engine v1 §2 (Phase 2.2) additions — Dual Score.
+    # direction_probability : P(price reaches TP1 before SL within trade
+    #                         horizon). 0.50 = no edge, asymptote ~0.85.
+    # conviction            : model certainty about the signal as a whole.
+    #                         Floor 0.40, ceiling 0.95. Drives Kelly later.
+    # When both are below the per-asset-class threshold table in
+    # quant/scorer.py DUAL_SCORE_THRESHOLDS, no_signal_reason is set to
+    # "below_thresholds" (same name the legacy z_threshold gate uses).
+    direction_probability: Optional[float] = None
+    conviction: Optional[float] = None
 
 
 class CostRequest(BaseModel):

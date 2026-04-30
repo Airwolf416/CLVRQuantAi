@@ -1,8 +1,9 @@
+import math
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Tuple
 from .config import (W_MOMENTUM, W_MEANREV, W_CARRY, W_FLOW, W_VOLGATE,
-                     W_SENTIMENT, Z_THRESHOLD, WILSON_LB_THRESHOLD, OFI_Z_MIN_ABS)
+                     W_SENTIMENT, WILSON_LB_THRESHOLD, OFI_Z_MIN_ABS)
 from .indicators import rsi, bollinger_z
 from .microstructure import parse_levels, obi, wobi, cvd_z, ofi_z
 from .state import STATE
@@ -96,11 +97,12 @@ def compute_composite(coin: str, df: pd.DataFrame, ctx: dict,
     composite = (W_MOMENTUM * mom + W_MEANREV * mr + W_CARRY * carry
                  + W_FLOW * flow + W_VOLGATE * vol + W_SENTIMENT * sent)
     # Phase 2.1 hardening (post-review): NaN composite would silently bypass
-    # the abs(composite) < Z_THRESHOLD gate (NaN < anything = False) and
-    # produce a None side that would then default to "long" downstream.
-    # Coerce non-finite composites to exactly 0.0 so the z_threshold gate
-    # fires and side correctly resolves to None. Common cause: zero-variance
-    # input where each factor's z-score divides by std=0.
+    # the directional check (NaN < anything = False) and produce a None side
+    # that would then default to "long" downstream. Coerce non-finite
+    # composites to exactly 0.0 so side correctly resolves to None and
+    # |composite_z|=0 forces dir_prob to 0.50 (fails every threshold bar).
+    # Common cause: zero-variance input where each factor's z-score divides
+    # by std=0.
     try:
         _c = float(composite)
         if not (_c == _c) or _c in (float("inf"), float("-inf")):
@@ -112,8 +114,13 @@ def compute_composite(coin: str, df: pd.DataFrame, ctx: dict,
     side = "long" if composite > 0 else "short" if composite < 0 else None
 
     gates_failed: List[str] = []
-    if abs(composite) < Z_THRESHOLD:
-        gates_failed.append("z_threshold")
+    # Phase 2.2 (post-architect-review): the legacy single-knob `z_threshold`
+    # gate (|composite| < Z_THRESHOLD) is REMOVED. The Signal Engine v1 §2
+    # Dual-Score gate in main.py — direction_probability + conviction with
+    # per-asset-class thresholds — supersedes it with finer-grained, asset-
+    # aware bounds. Keeping both ran false rejections in the |z|≈1.06–1.50
+    # band where dual-score passes but the legacy 1.5 floor still blocked,
+    # surfacing as `below_thresholds` on signals the new spec considers OK.
     if wilson_lb is not None and wilson_lb < WILSON_LB_THRESHOLD:
         gates_failed.append("wilson_lb")
     if abs(ofi_z_val) > OFI_Z_MIN_ABS and side is not None:
@@ -152,3 +159,124 @@ def compute_composite(coin: str, df: pd.DataFrame, ctx: dict,
                     "ofi_z": ofi_z_val},
         "gates_failed": gates_failed,
     }
+
+
+# Signal Engine v1 §2 — Dual Score (direction_probability + conviction).
+# Both bounded [0, 1]; the per-asset-class threshold table lives in main.py
+# and emits the canonical `below_thresholds` no_signal_reason when either
+# bound fails. Keeping the math here (alongside compute_composite) so the
+# scorer stays the single source of truth for everything that feeds the
+# SCORER PREPASS line — main.py only does threshold lookup + dispatch.
+def compute_dual_score(comp: dict, gates_failed_so_far: List[str],
+                       regime_allowed: bool, df_len: int) -> dict:
+    """Deterministic dual-score derived from compute_composite output.
+
+    direction_probability = P(price reaches TP1 before SL within trade
+    horizon). Bounded logistic over the DIRECTIONAL sub-composite — per
+    spec §2 "driven PURELY by directional features (momentum, structure,
+    OI delta, CVD, order book imbalance)". Carry and volgate are
+    excluded: carry is a positional cost, volgate is a regime modifier.
+    Mean_reversion IS directional (predicts an opposing move) and stays
+    in. Sentiment is a directional sentiment signal and stays in.
+
+    Multiplier 0.30 / divisor 3.0 chosen so the formula has meaningful
+    range up to its 0.85 ceiling: |z|=0 → 0.50; |z|=1 → ~0.595; |z|=2
+    → ~0.679; |z|=5 → ~0.779; asymptote ~0.80. The 0.85 ceiling is a
+    forward-looking cap for future stronger directional features (IV-RV,
+    multi-timeframe momentum stack) without changing the bounds today.
+
+    conviction = model certainty about the signal as a whole. Sums four
+    standardized inputs:
+      - alignment      : how concentrated the FULL composite is in one
+                         direction (1.0 = all factors agree, 0.0 =
+                         perfect cancellation). Captures "feature
+                         alignment" + "absence of conflicting signals".
+      - regime_fit     : 1.0 if regime_allows() returned True for this
+                         (regime, side, signal_type), else 0.0.
+      - no_conflicts   : 1.0 if no gates have already failed (regime,
+                         wilson, ofi, rr, noise). Else 0.5.
+      - data_freshness : len(df) / 200, capped at 1.0. Most production
+                         calls are >= 200 bars so this is effectively a
+                         baseline; the divisor is the soak-in floor.
+
+    NOTE: The IV-RV term that the spec lists under conviction inputs is
+    deferred to Phase 2.5 (microstructure wiring) when the Deribit IV
+    feed lands. Until then conviction is regime+alignment-anchored.
+    """
+    factors = comp.get("factors") or {}
+
+    # ─── directional sub-composite (spec §2: directional features ONLY) ──
+    f_mom  = float(factors.get("momentum",  0.0) or 0.0)
+    f_mr   = float(factors.get("meanrev",   0.0) or 0.0)
+    f_flow = float(factors.get("flow",      0.0) or 0.0)
+    f_sent = float(factors.get("sentiment", 0.0) or 0.0)
+    directional_z = (W_MOMENTUM  * f_mom
+                     + W_MEANREV   * f_mr
+                     + W_FLOW      * f_flow
+                     + W_SENTIMENT * f_sent)
+    # NaN-safe (matches the same defensive coercion in compute_composite).
+    if not (directional_z == directional_z) \
+            or directional_z in (float("inf"), float("-inf")):
+        directional_z = 0.0
+
+    abs_dz = abs(directional_z)
+    dir_prob = 0.50 + 0.30 * math.tanh(abs_dz / 3.0)
+    dir_prob = max(0.50, min(0.85, dir_prob))
+
+    # ─── conviction inputs (use FULL composite for alignment) ────────────
+    composite = float(comp.get("composite_z") or 0.0)
+    contribs = [
+        W_MOMENTUM  * f_mom,
+        W_MEANREV   * f_mr,
+        W_CARRY     * float(factors.get("carry",   0.0) or 0.0),
+        W_FLOW      * f_flow,
+        W_VOLGATE   * float(factors.get("volgate", 0.0) or 0.0),
+        W_SENTIMENT * f_sent,
+    ]
+    total_abs = sum(abs(c) for c in contribs)
+    alignment = (abs(composite) / total_abs) if total_abs > 0 else 0.0
+    alignment = max(0.0, min(1.0, alignment))
+
+    regime_fit = 1.0 if regime_allowed else 0.0
+
+    # Phase 2.2 (post-architect-review): with z_threshold removed from
+    # compute_composite, gates_failed_so_far now contains only genuine
+    # non-threshold failures (regime / wilson / ofi / rr / noise). No
+    # exclusion list needed — every entry is a real conflict.
+    no_conflicts = 1.0 if len(gates_failed_so_far) == 0 else 0.5
+
+    data_freshness = min(1.0, max(0.0, float(df_len) / 200.0))
+
+    conviction = (0.40
+                  + 0.25 * alignment
+                  + 0.15 * regime_fit
+                  + 0.10 * no_conflicts
+                  + 0.10 * data_freshness)
+    conviction = max(0.40, min(0.95, conviction))
+
+    return {
+        "direction_probability": float(dir_prob),
+        "conviction": float(conviction),
+        "alignment": float(alignment),
+        "directional_z": float(directional_z),
+    }
+
+
+# Signal Engine v1 §2 — per-asset-class dual-score thresholds.
+# BOTH bounds must clear or main.py emits NO_SIGNAL: below_thresholds.
+# Alts get a higher bar because of fee/slippage drag (per spec).
+DUAL_SCORE_THRESHOLDS: dict = {
+    "BTC":             (0.58, 0.60),
+    "ETH":             (0.58, 0.60),
+    "MID_CAP_DEFAULT": (0.62, 0.68),
+    "FOREX":           (0.55, 0.55),
+    "METAL":           (0.57, 0.60),
+    "STOCK":           (0.56, 0.58),
+}
+
+
+def dual_score_thresholds_for(asset_class: str) -> Tuple[float, float]:
+    """Return (dir_prob_min, conviction_min) for asset_class. Defaults
+    to BTC/ETH bar (0.58, 0.60) if the class is unknown — safer than
+    waving signals through on an unrecognized routing key."""
+    return DUAL_SCORE_THRESHOLDS.get(asset_class, (0.58, 0.60))
