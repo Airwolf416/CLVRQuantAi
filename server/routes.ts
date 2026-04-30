@@ -8359,19 +8359,47 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
 
       // Tier upgrade with no-downgrade. Re-read the user row inside the txn
       // so we don't race a concurrent Stripe webhook that just bumped tier.
-      const userTierRow = await client.query("SELECT tier FROM users WHERE id = $1", [userId]);
-      const currentTier = (userTierRow.rows[0]?.tier as string) || "free";
-      const promoExpiry = ac.expires_at || null;
+      const userRow = await client.query(
+        "SELECT tier, promo_code, promo_expires_at FROM users WHERE id = $1",
+        [userId],
+      );
+      const currentTier = (userRow.rows[0]?.tier as string) || "free";
+      const currentPromoCode = (userRow.rows[0]?.promo_code as string | null) || null;
+      const currentExpiry = (userRow.rows[0]?.promo_expires_at as Date | null) || null;
+      const newExpiry = (ac.expires_at as Date | null) || null;
+
       if ((TIER_RANK[tierGranted] ?? 0) > (TIER_RANK[currentTier] ?? 0)) {
         await client.query("UPDATE users SET tier = $1 WHERE id = $2", [tierGranted, userId]);
       }
-      // Always refresh promo_code/promo_expires_at so the user's account
-      // page shows the most recent grant and the expiry-reminder scheduler
-      // has the right date.
-      await client.query(
-        "UPDATE users SET promo_code = $1, promo_expires_at = $2 WHERE id = $3",
-        [code, promoExpiry, userId],
-      );
+
+      // No-shorten rule: never reduce the user's existing access window. A
+      // NULL expiry means "no expiry" (permanent) and always wins over any
+      // finite date. We only refresh promo_code/promo_expires_at when the
+      // new code STRICTLY EXTENDS the user's current access (or there is no
+      // active promo to preserve). This blocks the subtle exploit where a
+      // user with elite-1-year could redeem an elite-1-month code and get
+      // their access shortened.
+      let effectiveExpiry: Date | null;
+      let effectivePromoCode: string;
+      const newStrictlyBetter =
+        currentExpiry == null
+          ? false                                          // existing is permanent — nothing extends infinity
+          : newExpiry == null
+          ? true                                           // new is permanent — strictly extends any finite expiry
+          : new Date(newExpiry).getTime() > new Date(currentExpiry).getTime();
+      if (!currentPromoCode || newStrictlyBetter) {
+        effectiveExpiry = newExpiry;
+        effectivePromoCode = code;
+        await client.query(
+          "UPDATE users SET promo_code = $1, promo_expires_at = $2 WHERE id = $3",
+          [code, newExpiry, userId],
+        );
+      } else {
+        // Keep the longer existing window — do not touch promo_* fields.
+        effectiveExpiry = currentExpiry;
+        effectivePromoCode = currentPromoCode;
+      }
+      const promoExpiry = effectiveExpiry; // downstream alias (response, email, log)
 
       await client.query("COMMIT");
       committed = true;
