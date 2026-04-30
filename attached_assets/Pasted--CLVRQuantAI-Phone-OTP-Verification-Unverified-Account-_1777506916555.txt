@@ -1,0 +1,212 @@
+# CLVRQuantAI — Phone OTP Verification & Unverified Account Cleanup
+
+**Replit Implementation Prompt**
+
+## Objective
+
+Add phone-based one-time-passcode (OTP) verification on first signup, and automatically delete accounts that never complete verification within 24 hours. Goal: prevent fraudulent, bulk, or bot account creation, and stop bad actors from exploiting the free tier.
+
+## Tech context
+
+- Backend: FastAPI (existing CLVRQuantAI architecture, singleton data bus)
+- Frontend: React (existing tabs: Markets, Signals, Radar, Morning Brief, Alerts, AI/Quant Brain)
+- DB: Postgres (adjust if different)
+- SMS provider: **Twilio Verify** (strongly recommended over rolling our own OTP — it handles OTP generation, hashing, expiry, retry limits, and fraud telemetry)
+- CAPTCHA: hCaptcha or Cloudflare Turnstile (Turnstile is free)
+
+-----
+
+## Signup flow (end-to-end)
+
+1. User submits **email + password + phone (E.164 format) + CAPTCHA token**
+1. Server validates:
+- CAPTCHA token (reject if invalid → no SMS sent)
+- Email format + not on disposable-domain blocklist
+- Phone format + Twilio Lookup confirms `line_type_intelligence.type == "mobile"` (reject VoIP / landline / fixed-VoIP)
+- Phone hash not already in `users` table (one phone = one account, verified or not)
+- Rate limits not exceeded
+1. Server creates `users` row with:
+- `verified = false`
+- `verification_expires_at = now() + 24h`
+1. Server calls `Twilio Verify → start(phone, channel="sms")`
+1. User enters 6-digit code on frontend
+1. Server calls `Twilio Verify → check(phone, code)`
+- On approved: set `verified = true`, issue JWT, redirect to dashboard
+- On failed: return error, let Twilio handle attempt limits
+1. Background job runs hourly: `DELETE FROM users WHERE verified = false AND verification_expires_at < now()`
+
+-----
+
+## Required security controls
+
+### Pre-OTP (signup endpoint) — CRITICAL
+
+|Control                         |Why                                                  |Implementation                                                             |
+|--------------------------------|-----------------------------------------------------|---------------------------------------------------------------------------|
+|**CAPTCHA before SMS send**     |Blocks SMS pumping attacks (biggest financial threat)|hCaptcha / Turnstile token verified server-side; reject signup if invalid  |
+|**Disposable email blocklist**  |Stops throwaway-mail bot signups                     |Use `disposable-email-domains` npm/PyPI package; refuse if domain matches  |
+|**VoIP number rejection**       |Google Voice / TextNow bypass phone verification     |Twilio Lookup `line_type_intelligence`; only accept `mobile`               |
+|**Phone uniqueness**            |Stops one fraudster opening N accounts on one number |Hash phone (HMAC-SHA256 + server pepper), unique constraint on `phone_hash`|
+|**IP rate limiting**            |Stops bulk signup floods                             |Max 3 signups / IP / hour, max 10 / IP / day                               |
+|**Email rate limiting**         |Stops retry abuse                                    |Max 1 signup attempt per email / 24h                                       |
+|**Country allowlist (optional)**|Cuts fraud surface                                   |Twilio Lookup returns country code; reject countries you don’t serve       |
+
+### OTP handling
+
+Use **Twilio Verify** — do NOT generate, store, or compare codes yourself. Twilio Verify gives you:
+
+- 10-min code expiry
+- Max 5 verify attempts before lockout
+- 60s cooldown between resends
+- Built-in fraud signals (toll fraud detection, geo-permissions)
+
+If you absolutely must roll your own:
+
+- 6 digits, generated with `secrets.randbelow(1_000_000)` (NEVER `random.randint`)
+- Store only `hmac_sha256(code, OTP_PEPPER)` — never plaintext
+- Expiry: 10 min, max 5 attempts, 60s resend cooldown, max 3 resends per signup
+- Constant-time comparison (`hmac.compare_digest`)
+
+### Post-verification
+
+- JWT / session is only issued when `verified = true`
+- All gated endpoints (Alert History, paid features) check `verified` flag in middleware
+- Login endpoint rejects `verified = false` users with clear error message
+
+-----
+
+## Database schema (Postgres)
+
+```sql
+ALTER TABLE users ADD COLUMN phone_e164 VARCHAR(20) NOT NULL;
+ALTER TABLE users ADD COLUMN phone_hash VARCHAR(64) NOT NULL UNIQUE;
+ALTER TABLE users ADD COLUMN verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN verification_expires_at TIMESTAMPTZ NOT NULL;
+ALTER TABLE users ADD COLUMN signup_ip INET;
+ALTER TABLE users ADD COLUMN signup_country CHAR(2);
+ALTER TABLE users ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX idx_users_unverified_expiry
+  ON users (verification_expires_at)
+  WHERE verified = false;
+
+CREATE TABLE signup_rate_limit (
+  ip INET NOT NULL,
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_rate_limit_ip_time ON signup_rate_limit (ip, attempted_at);
+```
+
+-----
+
+## Endpoints to implement
+
+```
+POST /auth/signup
+  Body: { email, password, phone_e164, captcha_token }
+  Steps: verify CAPTCHA → check rate limits → check disposable email
+         → Twilio Lookup (mobile only) → check phone uniqueness
+         → create user (verified=false) → Twilio Verify start
+  Returns: { user_id, message: "OTP sent" }
+
+POST /auth/verify-otp
+  Body: { user_id, code }
+  Steps: Twilio Verify check → if approved, set verified=true, issue JWT
+  Returns: { token, user }
+
+POST /auth/resend-otp
+  Body: { user_id, captcha_token }
+  Steps: re-verify CAPTCHA → enforce 60s cooldown → Twilio Verify start
+  Returns: { message: "OTP resent" }
+
+POST /auth/login (existing — modify)
+  Add check: if user.verified == false → return 403 with
+  message "Please verify your phone number to access your account"
+```
+
+-----
+
+## Cleanup job (APScheduler)
+
+```python
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime, timezone
+
+def cleanup_unverified_accounts():
+    cutoff = datetime.now(timezone.utc)
+    deleted = db.execute(
+        "DELETE FROM users "
+        "WHERE verified = false AND verification_expires_at < :cutoff "
+        "RETURNING id",
+        {"cutoff": cutoff}
+    ).fetchall()
+    logger.info(f"Cleanup: deleted {len(deleted)} unverified accounts")
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(cleanup_unverified_accounts, 'interval', hours=1)
+scheduler.start()
+```
+
+Also clean the rate-limit table:
+
+```python
+def cleanup_rate_limit_table():
+    db.execute(
+        "DELETE FROM signup_rate_limit "
+        "WHERE attempted_at < now() - INTERVAL '24 hours'"
+    )
+```
+
+-----
+
+## Environment variables (Replit Secrets / Railway)
+
+```
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_VERIFY_SERVICE_SID=
+TURNSTILE_SECRET_KEY=     # or HCAPTCHA_SECRET
+OTP_PEPPER=               # 32-byte random hex string, only if NOT using Twilio Verify
+JWT_SECRET=
+ALLOWED_COUNTRIES=CA,US   # optional country allowlist
+```
+
+-----
+
+## Frontend changes (React)
+
+1. **Signup screen**: add phone field (E.164 with country selector — use `react-phone-number-input`) + Turnstile widget
+1. **OTP entry screen**: 6-digit input, “Resend code” button (disabled for 60s after send), expires in 10 min countdown
+1. **Login screen**: handle 403 “verify your phone” response → redirect to OTP entry
+1. **Loading/error states**: clear messaging when Twilio rejects (invalid number, VoIP, etc.)
+
+-----
+
+## Deliverables checklist
+
+- [ ] Migration: `users` table additions + `signup_rate_limit` table
+- [ ] `services/sms.py` — Twilio Verify wrapper (start, check, resend)
+- [ ] `services/captcha.py` — Turnstile/hCaptcha verification
+- [ ] `services/lookup.py` — Twilio Lookup (mobile-only check)
+- [ ] `services/email_validator.py` — disposable domain check
+- [ ] `services/rate_limit.py` — IP + email rate limiter
+- [ ] Updated `routes/auth.py` — signup, verify-otp, resend-otp, modified login
+- [ ] `jobs/cleanup.py` — APScheduler hourly cleanup
+- [ ] Frontend: signup form, OTP entry screen, login error handling
+- [ ] Tests:
+  - signup rejected without valid CAPTCHA
+  - signup rejected for disposable email domain
+  - signup rejected for VoIP number
+  - signup rejected when phone already exists
+  - OTP verify works happy path
+  - cleanup deletes only unverified accounts past 24h
+  - login rejects unverified user
+
+-----
+
+## Security notes Mike should review
+
+1. **Twilio Verify pricing**: ~$0.05 per verification in North America. Budget for it.
+1. **Toll fraud**: even with Twilio Verify, set geo-permissions in Twilio console to only allow SMS to countries you serve.
+1. **Logging**: log signup attempts, verification successes/failures, and cleanup deletions to a separate audit table — useful for spotting attack patterns.
+1. **Future hardening to consider**: device fingerprinting (FingerprintJS), email + phone fuzzy matching to detect the same person making N accounts, manual review queue for high-risk signups (new country, new IP range, suspicious email patterns).

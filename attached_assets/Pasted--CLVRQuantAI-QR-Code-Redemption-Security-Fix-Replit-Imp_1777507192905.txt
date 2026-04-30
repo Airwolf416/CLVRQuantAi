@@ -1,0 +1,284 @@
+# CLVRQuantAI — QR Code / Redemption Security Fix
+
+**Replit Implementation Prompt — Addendum**
+
+## The exploit being closed
+
+Currently a user can scan/submit the same QR code multiple times and receive Elite/Pro tier upgrades each time. Root causes typically:
+
+1. Redemption check happens client-side (trivially bypassed)
+1. No per-user uniqueness constraint in the DB
+1. Race condition: rapid-fire requests pass the “already redeemed?” check before any of them write
+
+## Required behavior
+
+|Rule                                                                              |Enforcement                                                                  |
+|----------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+|Only **verified** users can redeem any code                                       |Reject with 403 if `users.verified = false`                                  |
+|Each code has a defined redemption type (global single-use OR single-use per user)|Stored in DB, evaluated server-side                                          |
+|`CLVR-VIP-GROUP2026` is `single_use_per_user`                                     |Each verified user can redeem once, ever                                     |
+|Redemption is atomic — no race conditions                                         |DB transaction + row lock + UNIQUE constraint                                |
+|All redemptions and failed attempts are logged                                    |Separate audit table                                                         |
+|Tier downgrades are NOT possible via code redemption                              |If user is already on equal/higher tier, redemption succeeds but no downgrade|
+
+-----
+
+## Database schema
+
+```sql
+-- Master code registry
+CREATE TABLE redemption_codes (
+  code VARCHAR(64) PRIMARY KEY,
+  tier_granted VARCHAR(32) NOT NULL,         -- 'pro', 'elite', 'vip_group'
+  redemption_type VARCHAR(32) NOT NULL
+    CHECK (redemption_type IN ('single_use_global', 'single_use_per_user')),
+  max_global_uses INT,                        -- NULL = unlimited (only meaningful for per-user codes)
+  current_uses INT NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  active BOOLEAN NOT NULL DEFAULT true,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Per-redemption ledger (the source of truth)
+CREATE TABLE code_redemptions (
+  id BIGSERIAL PRIMARY KEY,
+  code VARCHAR(64) NOT NULL REFERENCES redemption_codes(code),
+  user_id UUID NOT NULL REFERENCES users(id),
+  redeemed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ip_address INET,
+  user_agent TEXT,
+  tier_granted VARCHAR(32) NOT NULL,
+  UNIQUE (code, user_id)                      -- ⬅ THIS is what kills the exploit
+);
+
+CREATE INDEX idx_redemptions_user ON code_redemptions (user_id);
+CREATE INDEX idx_redemptions_code ON code_redemptions (code);
+
+-- Failed attempt log (for fraud detection + rate limiting)
+CREATE TABLE redemption_attempts (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID,
+  code_attempted VARCHAR(64),
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ip_address INET,
+  result VARCHAR(32) NOT NULL                 -- 'success', 'already_redeemed', 'unverified',
+                                              -- 'expired', 'not_found', 'rate_limited',
+                                              -- 'global_limit_reached'
+);
+
+CREATE INDEX idx_attempts_user_time ON redemption_attempts (user_id, attempted_at);
+CREATE INDEX idx_attempts_ip_time ON redemption_attempts (ip_address, attempted_at);
+```
+
+## Seed the existing code
+
+```sql
+INSERT INTO redemption_codes
+  (code, tier_granted, redemption_type, max_global_uses, expires_at, notes)
+VALUES
+  ('CLVR-VIP-GROUP2026', 'vip_group', 'single_use_per_user', NULL,
+   '2026-12-31 23:59:59+00', 'VIP Group access — 2026 cohort, one-time per verified user');
+```
+
+-----
+
+## Redemption endpoint (FastAPI)
+
+```python
+from fastapi import APIRouter, Depends, HTTPException, Request
+from datetime import datetime, timezone
+from sqlalchemy.exc import IntegrityError
+
+router = APIRouter()
+
+@router.post("/redeem")
+async def redeem_code(
+    request: Request,
+    payload: RedeemRequest,                    # { code: str }
+    user = Depends(get_current_user),           # JWT-authenticated
+    db = Depends(get_db),
+):
+    code = payload.code.strip().upper()
+    ip = request.client.host
+    ua = request.headers.get("user-agent", "")[:500]
+
+    # 1. Verified-email gate
+    if not user.verified:
+        await log_attempt(db, user.id, code, ip, "unverified")
+        raise HTTPException(403, "Please verify your email and phone before redeeming codes.")
+
+    # 2. Rate limit: max 5 redemption attempts per user per hour
+    recent = await db.scalar(
+        "SELECT COUNT(*) FROM redemption_attempts "
+        "WHERE user_id = :uid AND attempted_at > now() - INTERVAL '1 hour'",
+        {"uid": user.id}
+    )
+    if recent >= 5:
+        await log_attempt(db, user.id, code, ip, "rate_limited")
+        raise HTTPException(429, "Too many redemption attempts. Try again later.")
+
+    # 3. Atomic redemption transaction
+    async with db.begin():
+        # Row-lock the code so concurrent requests serialize
+        code_row = await db.fetch_one(
+            "SELECT * FROM redemption_codes "
+            "WHERE code = :code AND active = true "
+            "FOR UPDATE",
+            {"code": code}
+        )
+
+        if not code_row:
+            await log_attempt(db, user.id, code, ip, "not_found")
+            raise HTTPException(404, "Invalid or inactive code.")
+
+        if code_row.expires_at and code_row.expires_at < datetime.now(timezone.utc):
+            await log_attempt(db, user.id, code, ip, "expired")
+            raise HTTPException(410, "This code has expired.")
+
+        # Type-specific checks
+        if code_row.redemption_type == "single_use_global":
+            if code_row.current_uses >= 1:
+                await log_attempt(db, user.id, code, ip, "already_redeemed")
+                raise HTTPException(409, "This code has already been used.")
+
+        elif code_row.redemption_type == "single_use_per_user":
+            already = await db.scalar(
+                "SELECT 1 FROM code_redemptions "
+                "WHERE code = :code AND user_id = :uid",
+                {"code": code, "uid": user.id}
+            )
+            if already:
+                await log_attempt(db, user.id, code, ip, "already_redeemed")
+                raise HTTPException(409, "You have already redeemed this code.")
+
+            if code_row.max_global_uses and code_row.current_uses >= code_row.max_global_uses:
+                await log_attempt(db, user.id, code, ip, "global_limit_reached")
+                raise HTTPException(409, "This code has reached its maximum redemptions.")
+
+        # Insert redemption — UNIQUE(code, user_id) catches any race that slipped through
+        try:
+            await db.execute(
+                "INSERT INTO code_redemptions "
+                "(code, user_id, ip_address, user_agent, tier_granted) "
+                "VALUES (:code, :uid, :ip, :ua, :tier)",
+                {"code": code, "uid": user.id, "ip": ip, "ua": ua,
+                 "tier": code_row.tier_granted}
+            )
+        except IntegrityError:
+            await log_attempt(db, user.id, code, ip, "already_redeemed")
+            raise HTTPException(409, "You have already redeemed this code.")
+
+        # Increment counter
+        await db.execute(
+            "UPDATE redemption_codes SET current_uses = current_uses + 1 "
+            "WHERE code = :code",
+            {"code": code}
+        )
+
+        # Deactivate global single-use codes
+        if code_row.redemption_type == "single_use_global":
+            await db.execute(
+                "UPDATE redemption_codes SET active = false WHERE code = :code",
+                {"code": code}
+            )
+
+        # Apply tier upgrade (NEVER downgrade)
+        await upgrade_user_tier_if_higher(db, user.id, code_row.tier_granted)
+
+        await log_attempt(db, user.id, code, ip, "success")
+
+    return {
+        "status": "success",
+        "tier_granted": code_row.tier_granted,
+        "message": f"Successfully unlocked {code_row.tier_granted}."
+    }
+```
+
+## Tier upgrade helper (no downgrade)
+
+```python
+TIER_RANK = {"free": 0, "pro": 1, "elite": 2, "vip_group": 3}
+
+async def upgrade_user_tier_if_higher(db, user_id, new_tier):
+    user = await db.fetch_one("SELECT tier FROM users WHERE id = :id", {"id": user_id})
+    if TIER_RANK.get(new_tier, 0) > TIER_RANK.get(user.tier, 0):
+        await db.execute(
+            "UPDATE users SET tier = :t, tier_updated_at = now() WHERE id = :id",
+            {"t": new_tier, "id": user_id}
+        )
+```
+
+-----
+
+## QR code generation (admin side)
+
+The QR code embedded should resolve to:
+
+```
+https://clvrquantai.com/redeem?code=CLVR-VIP-GROUP2026
+```
+
+The `/redeem` page on the frontend:
+
+1. Pulls `code` from query string
+1. Requires the user to be logged in (else redirect to login, then back)
+1. POSTs to `/redeem` endpoint above
+1. Displays success/failure response
+
+**Critical**: never trust the client to do the “already redeemed” check. The button can be visible always — the server is the only authority.
+
+-----
+
+## Frontend changes (React)
+
+```jsx
+// /redeem page
+async function handleRedeem() {
+  const res = await fetch('/api/redeem', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ code })
+  });
+  const data = await res.json();
+
+  if (res.status === 200) toast.success(data.message);
+  else if (res.status === 403) toast.error("Please verify your account first.");
+  else if (res.status === 409) toast.error(data.detail);  // already redeemed / limit reached
+  else if (res.status === 410) toast.error("This code has expired.");
+  else if (res.status === 429) toast.error("Too many attempts. Try later.");
+  else toast.error("Invalid code.");
+}
+```
+
+-----
+
+## Test cases (must all pass before deploy)
+
+- [ ] Unverified user attempts redemption → 403, no tier change
+- [ ] Verified user redeems `CLVR-VIP-GROUP2026` → success, tier upgraded
+- [ ] Same verified user attempts `CLVR-VIP-GROUP2026` again → 409 “already redeemed”
+- [ ] Different verified user redeems `CLVR-VIP-GROUP2026` → success
+- [ ] **Race condition test**: same user fires 50 concurrent requests for `CLVR-VIP-GROUP2026` → exactly 1 succeeds, 49 return 409
+- [ ] **Race condition test**: 50 different users fire concurrent requests for a `single_use_global` code → exactly 1 succeeds, 49 return 409
+- [ ] User already on `elite` redeems a `pro` code → success but tier NOT downgraded
+- [ ] Expired code → 410
+- [ ] Unknown code → 404
+- [ ] User exceeds 5 attempts/hour → 429
+- [ ] Audit table records every attempt with correct `result` value
+
+-----
+
+## Operational hardening
+
+1. **Run a one-time data audit**: query `code_redemptions` for any user with multiple redemptions of the same code. These are the users who exploited the loophole. Decide whether to revoke their tier or grandfather them.
+   
+   ```sql
+   SELECT user_id, code, COUNT(*) FROM code_redemptions
+   GROUP BY user_id, code HAVING COUNT(*) > 1;
+   ```
+   
+   *(If the old table doesn’t exist yet, audit by checking which users have higher tiers than their payment records justify.)*
+1. **Migrate any existing “code redeemed” data into the new tables** before deploying — otherwise legitimate prior redemptions look like fresh ones.
+1. **Code naming**: `CLVR-VIP-GROUP2026` is human-readable, which is fine for a shared group code by design. For private/single-use codes, generate unguessable tokens (e.g., `secrets.token_urlsafe(16)`) so people can’t guess valid codes.
+1. **Monitoring**: alert on any IP with >10 failed redemption attempts per hour — that’s a brute-force pattern.
