@@ -44,6 +44,26 @@ function evictStale() {
   }
 }
 
+// Returns the actual list of live users (email + tier + lastSeenAt) within
+// the given window, sorted most-recent-first. Used by the owner-only
+// "Who's on the site right now" panel — counts alone aren't enough to
+// answer "who exactly is using my website?".
+export function getLiveUserList(windowMs: number = DEFAULT_LIVE_WINDOW_MS) {
+  evictStale();
+  const cutoff = Date.now() - windowMs;
+  const out: LiveRecord[] = [];
+  for (const r of liveByUser.values()) {
+    if (r.lastSeenAt >= cutoff) out.push(r);
+  }
+  out.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  return {
+    users: out,
+    total: out.length,
+    windowMs,
+    asOf: Date.now(),
+  };
+}
+
 export function getLiveStats(windowMs: number = DEFAULT_LIVE_WINDOW_MS) {
   evictStale();
   const cutoff = Date.now() - windowMs;
