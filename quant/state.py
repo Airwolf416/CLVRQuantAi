@@ -6,6 +6,12 @@ class MarketState:
     def __init__(self, window: int = 4000):
         self.mids: Dict[str, float] = {}
         self.books: Dict[str, dict] = {}
+        # Per-book ingest timestamp in unix milliseconds. Stamped at the
+        # WS handler the moment a fresh l2Book frame is written into
+        # `books[coin]`. The Phase 2.5 OBI staleness gate (>30s → null)
+        # reads this — NOT the CVD/trade tip — so a coin with fresh trades
+        # but a frozen book correctly degrades to null OBI.
+        self.books_ts: Dict[str, float] = {}
         self.trades: Dict[str, Deque[Tuple[int, float, float, str]]] = defaultdict(lambda: deque(maxlen=window))
         self.cvd: Dict[str, Deque[Tuple[int, float]]] = defaultdict(lambda: deque(maxlen=window))
         self.ofi_events: Dict[str, Deque[Tuple[int, float]]] = defaultdict(lambda: deque(maxlen=window))

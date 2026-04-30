@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 import websockets
 from .config import HL_WS_URL, DEFAULT_COINS
 from .state import STATE
@@ -33,6 +34,11 @@ async def _handle(msg: dict):
         if not coin:
             return
         STATE.books[coin] = data
+        # Stamp per-book freshness for the OBI >30s staleness gate
+        # (quant/scorer.py compute_microstructure §5b). HL sends `time`
+        # in unix ms; if absent (rare), fall back to wall clock.
+        _book_t = data.get("time")
+        STATE.books_ts[coin] = float(_book_t) if isinstance(_book_t, (int, float)) else time.time() * 1000.0
         tracker = _ofi.setdefault(coin, OFITracker())
         tracker.on_book(data, STATE.ofi_events[coin])
         levels = data.get("levels") or [[], []]

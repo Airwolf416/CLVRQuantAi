@@ -1342,13 +1342,45 @@ async function _attemptBrief(reason: string, dateKey: string): Promise<void> {
   _briefInFlight = true;
   console.log(`[daily-brief] ${reason} → attempt ${dateKey} — ${briefTag()}`);
   try {
-    await enqueueDailyBrief();
-    // Mark this process as having attempted today's send. The DB-side
-    // atomic claim is the cross-process guard; this in-memory flag only
-    // stops THIS process from re-attempting today.
-    lastBriefDate = dateKey;
+    const res = await enqueueDailyBrief();
+    // Inspect the structured BriefSendResult — NOT just "did it throw".
+    // sendDailyBriefEmails() returns ran=true / sent=0 (without throwing)
+    // for genuine failures (pre-send exception, data integrity abort) and
+    // releases the DB slot in those cases — so we MUST leave lastBriefDate
+    // unstamped to allow the next 15-min heartbeat / 6 ET tick to retry.
+    // Stamp only when the outcome is terminal-for-today:
+    //   • res === null              → BullMQ queued (Redis dev path); the
+    //                                 worker is the source of truth, stamp
+    //                                 to avoid re-enqueueing the same day.
+    //   • res.ran === false         → slot already claimed by another
+    //                                 process (cross-process race winner) —
+    //                                 brief is going out, stamp.
+    //   • res.sent > 0              → real successful send.
+    //   • "no active subscribers"   → outcome is identical on retry today,
+    //                                 stamp to avoid an infinite retry loop.
+    // Anything else (ran=true / sent=0 with a non-empty-recipients reason
+    // such as "Pre-send exception" or "Data integrity gate") is a
+    // recoverable failure and is left UNSTAMPED.
+    let shouldStamp = false;
+    let stampReason = "";
+    if (res === null) {
+      shouldStamp = true; stampReason = "queued via BullMQ";
+    } else if (res.ran === false) {
+      shouldStamp = true; stampReason = `claimed-elsewhere: ${res.reason}`;
+    } else if (res.sent > 0) {
+      shouldStamp = true; stampReason = `sent=${res.sent}/${res.total}`;
+    } else if (/no active subscribers/i.test(res.reason || "")) {
+      shouldStamp = true; stampReason = "no subscribers (no point retrying today)";
+    }
+    if (shouldStamp) {
+      lastBriefDate = dateKey;
+      console.log(`[daily-brief] ${reason} ${dateKey}: STAMPED — ${stampReason} — ${briefTag()}`);
+    } else {
+      const r = res ? `ran=${res.ran} sent=${res.sent}/${res.total} reason="${res.reason}"` : "null";
+      console.warn(`[daily-brief] ${reason} ${dateKey}: NOT stamped (recoverable) — ${r} — ${briefTag()}`);
+    }
   } catch (e: any) {
-    // DO NOT stamp lastBriefDate on failure — leave the door open for the
+    // DO NOT stamp lastBriefDate on throw — leave the door open for the
     // next tick to retry. enqueueDailyBrief on Railway runs sendDailyBrief-
     // Emails inline (no Redis), so any throw here means the brief did not
     // go out. Log the full stack so future debugging has signal.

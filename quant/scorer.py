@@ -1,4 +1,5 @@
 import math
+import time
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Tuple
@@ -442,18 +443,21 @@ def compute_microstructure(coin: str, side: Optional[str], df: pd.DataFrame,
                     extra_gates.append("cvd_contradict")
 
     # ── 5b OBI — staleness-aware (>30s → null) ───────────────────────────
-    # Per-coin freshness: latest CVD entry's timestamp (CVD updates with
-    # every trade, so its tip mirrors live data flow for THAT coin).
-    # `STATE.last_update_ts` is GLOBAL (last WS message across ALL coins)
-    # — we use it as a "now" reference, never to decide per-coin freshness.
+    # Per-BOOK freshness (NOT per-trade): we read STATE.books_ts[coin],
+    # which is stamped in quant/hl_ws.py the moment a fresh l2Book frame
+    # is written into STATE.books[coin]. Using book ts (instead of the
+    # CVD/trade tip we used pre-fix) prevents the failure mode where a
+    # coin still has fresh trades but the book stream has stalled — that
+    # path would have leaked stale OBI into conviction. "Now" is wall
+    # clock in ms (consistent unit with books_ts).
     obi_val: Optional[float] = None
     conv_delta = 0.0
     book = STATE.books.get(coin)
+    book_ts = STATE.books_ts.get(coin)
     fresh = False
-    if cvd_dq and len(cvd_dq) > 0:
-        last_ts_ms = float(cvd_dq[-1][0])
-        now_ms = STATE.last_update_ts * 1000.0 if STATE.last_update_ts else last_ts_ms
-        fresh = (now_ms - last_ts_ms) <= 30_000.0
+    if book is not None and book_ts is not None:
+        now_ms = time.time() * 1000.0
+        fresh = (now_ms - float(book_ts)) <= 30_000.0
     if book and fresh:
         try:
             bids, asks = parse_levels(book, 10)
