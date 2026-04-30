@@ -10,34 +10,69 @@ import { getUncachableResendClient } from "./resendClient";
 import type { WeeklyUpdate } from "@shared/schema";
 import { CLAUDE_MODEL } from "./config";
 import { execSync } from "child_process";
+import { getRecentCommitsViaApi } from "./githubClient";
 
 const ET_TZ = "America/New_York";
 
+// In production deployments there is no .git directory and no git binary, so
+// the local CLI returns nothing. Falling back to the GitHub REST API via the
+// Replit GitHub connector lets the digest still find commits in prod. The
+// repo can be overridden with GITHUB_REPO if it ever moves.
+const GITHUB_REPO = process.env.GITHUB_REPO || "Airwolf416/CLVRQuantAi";
+
 // Read git commit subjects from the last N days. Returns one subject per line,
-// de-duplicated, with checkpoint/auto-merge noise filtered out.
-export function getRecentCommitSubjects(days: number = 7): string[] {
+// de-duplicated, with checkpoint/auto-merge noise filtered out. Tries the
+// local git CLI first (fast, no network); if that fails or returns nothing,
+// falls back to the GitHub API so this works in production too.
+export async function getRecentCommitSubjects(days: number = 7): Promise<string[]> {
+  let raw = "";
+  let usedFallback = false;
+
+  // 1) Local git CLI (works in dev / Replit workspace).
   try {
-    const raw = execSync(
+    raw = execSync(
       `git log --since="${days} days ago" --no-merges --pretty=format:"%s" -n 200`,
       { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
     );
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const line of raw.split("\n")) {
-      const s = line.trim();
-      if (!s) continue;
-      if (/^(checkpoint|wip|chore: bump|merge)/i.test(s)) continue;
-      const k = s.toLowerCase();
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(s);
-      if (out.length >= 60) break;
-    }
-    return out;
   } catch (e: any) {
     console.log("[weekly-update] git log unavailable:", e?.message || e);
-    return [];
   }
+
+  // 2) GitHub API fallback (production — no .git directory, no git binary).
+  if (!raw.trim()) {
+    try {
+      const commits = await getRecentCommitsViaApi(GITHUB_REPO, days);
+      raw = commits
+        .map((c) => (c.message || "").split("\n")[0].trim())
+        .filter(Boolean)
+        .join("\n");
+      usedFallback = true;
+      console.log(
+        `[weekly-update] used GitHub API fallback for ${GITHUB_REPO} — ${commits.length} commits in last ${days}d`
+      );
+    } catch (e: any) {
+      console.log("[weekly-update] GitHub API fallback failed:", e?.message || e);
+      return [];
+    }
+  }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of raw.split("\n")) {
+    const s = line.trim();
+    if (!s) continue;
+    if (/^(checkpoint|wip|chore: bump|merge)/i.test(s)) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+    if (out.length >= 60) break;
+  }
+  if (!usedFallback) {
+    // Tag local-git results too so we can correlate the source in logs.
+    console.log(`[weekly-update] used local git CLI — ${out.length} unique subjects in last ${days}d`);
+  }
+  return out;
 }
 
 // Read curated update-log entries that haven't been shipped yet. These are
@@ -157,7 +192,7 @@ ${commits.map((c) => "- " + c).join("\n")}`;
 // Returns the new update or null if nothing to ship.
 export async function generateWeeklyUpdateWithAI(): Promise<WeeklyUpdate | null> {
   const pending = await getPendingUpdateLogEntries();
-  const commits = getRecentCommitSubjects(7);
+  const commits = await getRecentCommitSubjects(7);
   console.log(`[weekly-update] AI generation: ${pending.length} pending log entries + ${commits.length} commits from last 7d`);
 
   // Build the input the AI will distill. Prefer the curated buffer entries —

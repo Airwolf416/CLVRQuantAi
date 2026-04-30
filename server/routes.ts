@@ -6013,7 +6013,7 @@ Every level must be technically defensible. Return JSON only.`;
       // Mirror generateWeeklyUpdateWithAI's input-building logic exactly so
       // the preview matches what publish would actually produce. Never write to DB.
       const pending = await (mod as any).getPendingUpdateLogEntries?.() || [];
-      const commits = (mod as any).getRecentCommitSubjects?.(7) || [];
+      const commits = (await (mod as any).getRecentCommitSubjects?.(7)) || [];
       let inputs: string[] = [];
       let source: "log" | "commits" | "both" | "none" = "none";
       if (pending.length > 0 && commits.length > 0) {
