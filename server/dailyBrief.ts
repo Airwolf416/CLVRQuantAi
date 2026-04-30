@@ -1323,23 +1323,71 @@ function getETComponents(): { hour: number; minute: number; dateKey: string } {
   };
 }
 
+// ── Single attempt helper — used by boot catch-up + scheduled tick ───────────
+// Critical rule: only stamp `lastBriefDate` AFTER enqueueDailyBrief() returns
+// without throwing. The previous code pre-stamped before the await, which
+// meant any silent throw (BullMQ down, AI generation crash, Resend outage,
+// missing daily_brief_telegram_log table on prod) permanently blocked the
+// same process from retrying that day even though the DB-side slot got
+// released. That bug was the root cause of the long brief outage we
+// debugged in Apr 2026 — the scheduler "tried", failed quietly, then
+// refused to try again until the next process restart that happened to
+// land before the next 6 ET tick (which on Railway never reliably did).
+let _briefInFlight = false;
+async function _attemptBrief(reason: string, dateKey: string): Promise<void> {
+  if (_briefInFlight) {
+    console.log(`[daily-brief] ${reason} skipped (${dateKey}): another attempt already in flight — ${briefTag()}`);
+    return;
+  }
+  _briefInFlight = true;
+  console.log(`[daily-brief] ${reason} → attempt ${dateKey} — ${briefTag()}`);
+  try {
+    await enqueueDailyBrief();
+    // Mark this process as having attempted today's send. The DB-side
+    // atomic claim is the cross-process guard; this in-memory flag only
+    // stops THIS process from re-attempting today.
+    lastBriefDate = dateKey;
+  } catch (e: any) {
+    // DO NOT stamp lastBriefDate on failure — leave the door open for the
+    // next tick to retry. enqueueDailyBrief on Railway runs sendDailyBrief-
+    // Emails inline (no Redis), so any throw here means the brief did not
+    // go out. Log the full stack so future debugging has signal.
+    console.error(
+      `[daily-brief] ${reason} attempt threw — leaving lastBriefDate unset for retry — ${briefTag()}: ${e?.stack || e?.message || e}`
+    );
+  } finally {
+    _briefInFlight = false;
+  }
+}
+
 export function startDailyBriefScheduler() {
-  console.log(`[daily-brief] Scheduler started — briefs at 6:00 AM ET daily — ${briefTag()}`);
+  console.log(`[daily-brief] Scheduler started — briefs at ${BRIEF_HOUR_ET}:00 AM ET daily — ${briefTag()}`);
+
+  // ── Heartbeat ───────────────────────────────────────────────────────────────
+  // Emits one line every 15 minutes regardless of activity so production logs
+  // (Railway, etc.) always confirm the in-process scheduler is alive. Without
+  // this, a multi-day silent failure looks identical to a healthy day on
+  // which no brief was due.
+  setInterval(() => {
+    const { hour, minute, dateKey } = getETComponents();
+    const mm = String(minute).padStart(2, "0");
+    console.log(
+      `[daily-brief] heartbeat ${dateKey} ${hour}:${mm} ET — lastBriefDate=${lastBriefDate || "(none)"} — ${briefTag()}`
+    );
+  }, 15 * 60 * 1000);
 
   // ── Startup catch-up ────────────────────────────────────────────────────────
-  // If the server boots after 6 AM ET and today's brief was never claimed,
-  // attempt the brief NOW. The atomic claimBriefSlot() inside
-  // sendDailyBriefEmails() guarantees that only one of (catch-up, scheduled
-  // tick, parallel replica restart) actually sends.
+  // If the server boots after 6 AM ET and today's brief slot is unclaimed,
+  // attempt the brief NOW. Atomic claimBriefSlot() guarantees only one
+  // process actually sends.
   setTimeout(async () => {
     try {
       const { hour, dateKey } = getETComponents();
       if (hour >= BRIEF_HOUR_ET) {
         const alreadySent = await getTodayBriefKey();
         if (!alreadySent) {
-          console.log(`[daily-brief] Missed 6 AM brief on boot (now ${hour}:xx ET) — running catch-up — ${briefTag()}`);
-          lastBriefDate = dateKey; // pre-stamp so scheduled tick won't also enqueue
-          await enqueueDailyBrief();
+          console.log(`[daily-brief] Missed ${BRIEF_HOUR_ET}:00 brief on boot (now ${hour}:xx ET) — running catch-up — ${briefTag()}`);
+          await _attemptBrief("Boot catch-up", dateKey);
         } else {
           lastBriefDate = dateKey;
           console.log(`[daily-brief] Today's brief already claimed — skipping catch-up — ${briefTag()}`);
@@ -1353,16 +1401,36 @@ export function startDailyBriefScheduler() {
   }, 10_000);
 
   // ── Daily tick ──────────────────────────────────────────────────────────────
-  // Polls every 30s; fires at 6:00 ET. The in-memory `lastBriefDate` blocks
-  // re-fire within the same process; the DB-backed atomic claim blocks
-  // re-fire across processes / restarts. Defense in depth.
+  // Polls every 30s. Two firing modes:
+  //   (a) Primary window — hour === BRIEF_HOUR_ET && minute <= 1: send if
+  //       this process hasn't yet sent today.
+  //   (b) Self-healing catch-up — any time AFTER 6 ET (until midnight): send
+  //       only if the DB confirms today's slot is unclaimed AND this process
+  //       hasn't yet attempted today. Recovers from restarts that land
+  //       outside the 90-second primary window AND from previous failed
+  //       attempts that released the slot. The atomic claim makes this
+  //       safe across replicas — losers see ON CONFLICT DO NOTHING and bail.
   setInterval(async () => {
+    if (_briefInFlight) return;
     const { hour, minute, dateKey } = getETComponents();
-    if (hour === BRIEF_HOUR_ET && minute <= 1 && dateKey !== lastBriefDate) {
-      lastBriefDate = dateKey;
-      console.log(`[daily-brief] Scheduled tick → enqueue ${dateKey} — ${briefTag()}`);
-      enqueueDailyBrief().catch(e => console.log("[daily-brief] Enqueue error:", e.message));
+    if (dateKey === lastBriefDate) return;
+
+    const inPrimaryWindow = hour === BRIEF_HOUR_ET && minute <= 1;
+    const inCatchUpWindow = hour > BRIEF_HOUR_ET; // 7 ET through 23 ET
+
+    if (!inPrimaryWindow && !inCatchUpWindow) return;
+
+    // Outside primary window, only fire when DB confirms today's slot is
+    // genuinely unclaimed. Saves a DB roundtrip during the 6 ET burst.
+    if (!inPrimaryWindow) {
+      const already = await getTodayBriefKey();
+      if (already) {
+        lastBriefDate = dateKey; // another process or earlier attempt won
+        return;
+      }
     }
+
+    await _attemptBrief(inPrimaryWindow ? "Scheduled tick" : "Self-healing catch-up", dateKey);
   }, 30_000);
 }
 

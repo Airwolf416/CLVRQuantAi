@@ -47,9 +47,36 @@ export interface SignalGenPromptInput {
     // and .conviction (no recomputation). When BOTH are present the AI
     // can also infer that the per-asset-class threshold gate has been
     // checked by the scorer — if scorer_no_signal_reason is
-    // "below_thresholds", the dual-score gate already fired.
+    // "below_thresholds", the dual-score gate already fired. Phase 2.5
+    // note: these values arrive POST-microstructure-adjustment.
     direction_probability?: number;
     conviction?:            number;
+    // Phase 2.3 — Vol-Percentile-Adjusted R:R (Signal Engine v1 §3).
+    // When supplied, AI emits these exact values into TradePlanSchema.
+    // vol_percentile and .rr_multiplier (no recomputation). The
+    // SCORER-AUTHORITATIVE block in shared.ts tells the model to defer.
+    vol_percentile?: number;
+    rr_multiplier?: number;
+    // Phase 2.4 — Meta-label → Kelly Scaling (Signal Engine v1 §4).
+    // p_loss_meta is the scorer's calibrated loss probability (today a
+    // deterministic 1 - direction_probability proxy). kelly_fraction_applied
+    // is computed SERVER-SIDE in routes.ts using kelly_base from
+    // calibration: min(0.25, min(kelly_base, kelly_base *
+    // (1 - p_loss_meta) * regime_mod * conviction)). AI emits both
+    // verbatim into the schema's p_loss_meta and kelly_fraction_applied
+    // fields. position_sizing.kelly_fraction stays the BASE.
+    p_loss_meta?: number;
+    kelly_fraction_applied?: number;
+    // Phase 2.5 — Microstructure block (Signal Engine v1 §5). When
+    // supplied, AI emits this exact object into TradePlanSchema.
+    // microstructure (no recomputation). Crypto only — for non-crypto
+    // the scorer returns {cvd_state: "n/a", obi: null, ivrv_spread: null}.
+    // ivrv_spread is always null today (Deribit IV feed deferred).
+    microstructure?: {
+      cvd_state?:   "confirm" | "bullish_div" | "bearish_div" | "contradict" | "n/a";
+      obi?:         number | null;
+      ivrv_spread?: number | null;
+    };
   };
 }
 
@@ -97,6 +124,19 @@ export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {
   // formatting is fixed at 4 decimals so deterministic snapshot tests
   // remain stable across runs.
   const _pp = input.quantPrepass;
+  // Phase 2.3/2.4/2.5: extend with vol_percentile + rr_multiplier (§3),
+  // p_loss_meta + kelly_fraction_applied (§4), and a stringified
+  // microstructure block (§5: cvd_state/obi/ivrv_spread). All four
+  // additions follow the existing typeof-number guard so the line stays
+  // omittable per-field (deterministic snapshot tests stay stable for
+  // legacy callers that don't pass the prepass at all). Numeric
+  // formatting is fixed at 4 decimals for stability across runs.
+  const _micro = _pp?.microstructure;
+  const _microStr = _micro
+    ? `{cvd_state:${_micro.cvd_state ?? "n/a"}` +
+      `,obi:${_micro.obi == null ? "null" : _micro.obi.toFixed(4)}` +
+      `,ivrv_spread:${_micro.ivrv_spread == null ? "null" : _micro.ivrv_spread.toFixed(4)}}`
+    : null;
   const prepassLine = _pp?.regime
     ? `SCORER PREPASS: regime=${_pp.regime}` +
       `, signal_type=${_pp.signal_type ?? "n/a"}` +
@@ -105,6 +145,21 @@ export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {
         : "") +
       (typeof _pp.conviction === "number"
         ? `, conviction=${_pp.conviction.toFixed(4)}`
+        : "") +
+      (typeof _pp.vol_percentile === "number"
+        ? `, vol_percentile=${_pp.vol_percentile.toFixed(4)}`
+        : "") +
+      (typeof _pp.rr_multiplier === "number"
+        ? `, rr_multiplier=${_pp.rr_multiplier.toFixed(4)}`
+        : "") +
+      (typeof _pp.p_loss_meta === "number"
+        ? `, p_loss_meta=${_pp.p_loss_meta.toFixed(4)}`
+        : "") +
+      (typeof _pp.kelly_fraction_applied === "number"
+        ? `, kelly_fraction_applied=${_pp.kelly_fraction_applied.toFixed(4)}`
+        : "") +
+      (_microStr
+        ? `, microstructure=${_microStr}`
         : "") +
       (_pp.no_signal_reason
         ? `, scorer_no_signal_reason=${_pp.no_signal_reason}`

@@ -47,6 +47,40 @@ class ScoreResponse(BaseModel):
     # "below_thresholds" (same name the legacy z_threshold gate uses).
     direction_probability: Optional[float] = None
     conviction: Optional[float] = None
+    # Signal Engine v1 §3 (Phase 2.3) — Vol-Percentile-Adjusted R:R.
+    # vol_percentile : percentile rank of ATR(14)/close over last 90 bars,
+    #                  bounded [0.0, 1.0].
+    # rr_multiplier  : R:R scaling factor selected from spec §3 buckets;
+    #                  capped at 1.00 in RANGE regime per spec.
+    # Both are deterministic — emit-only here; the AI defers via the
+    # SCORER PREPASS line and uses these to pick TP locations on Fib.
+    vol_percentile: Optional[float] = None
+    rr_multiplier: Optional[float] = None
+    # Signal Engine v1 §4 (Phase 2.4) — Meta-label → Kelly Scaling.
+    # p_loss_meta : calibrated probability that this exact setup hits SL
+    #               before TP1. Until a trained meta-classifier lands,
+    #               this is a deterministic proxy: 1 - direction_probability
+    #               (so a dir_prob of 0.62 → p_loss_meta = 0.38). Documented
+    #               on the response so the proxy is auditable, and so a
+    #               future trained model can drop in by changing this one
+    #               field's source. The kelly_fraction_applied math runs
+    #               server-side in routes.ts (it's the only place that
+    #               knows the per-(token, direction) kelly_base from
+    #               calibration).
+    p_loss_meta: Optional[float] = None
+    # Signal Engine v1 §5 (Phase 2.5) — Crypto microstructure features.
+    # Populated only for crypto perps where STATE has live HL data. For
+    # non-crypto (FOREX / METAL / STOCK) every field is null and AI emits
+    # microstructure = {cvd_state: "n/a", obi: null, ivrv_spread: null}.
+    #   cvd_state    : "confirm" / "bullish_div" / "bearish_div" /
+    #                  "contradict" / "n/a"
+    #   obi          : top-10-level order book imbalance ∈ [-1, +1]; null
+    #                  when the book is stale (>30s) per spec §5b.
+    #   ivrv_spread  : Deferred — Deribit IV feed not yet wired. Always
+    #                  null today; the field exists so the prompt can
+    #                  carry "n/a" without schema breakage when the feed
+    #                  lands. (See spec §5c.)
+    microstructure: Optional[Dict[str, Any]] = None
 
 
 class CostRequest(BaseModel):

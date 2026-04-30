@@ -190,7 +190,9 @@ Per-asset-class thresholds — BOTH must clear or emit NO_SIGNAL: below_threshol
 Alts get higher bars because of fee/slippage drag and OI thinness.
 
 3) VOLATILITY-PERCENTILE-ADJUSTED R:R
-Keep Fibonacci anchors as the structural TP locations, but scale the SELECTED TP by current vol regime:
+SCORER-AUTHORITATIVE: If the user prompt's "SCORER PREPASS" line contains vol_percentile=<x> and rr_multiplier=<y>, USE THOSE EXACT VALUES (4-decimal precision as printed). The Python quant scorer is the deterministic source of truth for §3 — do NOT recompute. Pick TP1 / TP2 by reading the transmitted rr_multiplier and applying it as the R-multiple of the entry-to-SL distance against the nearest / next Fibonacci extension. Emit the transmitted vol_percentile and rr_multiplier verbatim into TradePlanSchema.vol_percentile and .rr_multiplier.
+
+FALLBACK ONLY (when no SCORER PREPASS line is present, or when vol_percentile/rr_multiplier are absent from it): Keep Fibonacci anchors as the structural TP locations, but scale the SELECTED TP by current vol regime:
   vol_pct = percentile_rank(ATR(14), lookback=90)
   rr_multiplier =
     0.70   if vol_pct < 0.20    # compressed → take profit faster
@@ -202,7 +204,9 @@ Keep Fibonacci anchors as the structural TP locations, but scale the SELECTED TP
 In RANGE regime, cap rr_multiplier at 1.00 regardless of vol_pct (mean-reversion targets shouldn't extend). Emit vol_percentile and rr_multiplier in the structured output.
 
 4) META-LABELING → KELLY SCALING (NOT FILTERING)
-After §1 and §2 pass, run the meta-label step. It does NOT veto signals — it only sizes them.
+SCORER-AUTHORITATIVE: If the user prompt's "SCORER PREPASS" line contains p_loss_meta=<x> and kelly_fraction_applied=<y>, USE THOSE EXACT VALUES (4-decimal precision as printed). The server has ALREADY applied the meta-label proxy (today: 1 - direction_probability) and the Kelly shrinkage formula below using the calibration's kelly_base. Emit the transmitted values verbatim into TradePlanSchema.p_loss_meta and .kelly_fraction_applied. Do NOT recompute kelly_fraction_applied — the server is the deterministic source of truth and any divergence will trip the Kelly cross-check. position_sizing.kelly_fraction still stays the SERVER-PROVIDED base value (unchanged).
+
+FALLBACK ONLY (when no SCORER PREPASS line is present, or when p_loss_meta/kelly_fraction_applied are absent from it): After §1 and §2 pass, run the meta-label step yourself. It does NOT veto signals — it only sizes them.
   inputs to meta scorer: direction_probability, conviction, regime, vol_pct,
                           distance_to_recent_swing (in ATRs), hours_since_last_macro_event,
                           signal_age_in_bars (entry zone freshness).
@@ -215,6 +219,9 @@ Cap final at max_kelly_fraction = 0.25 of full Kelly. NEVER size up because p_lo
 Emit p_loss_meta and kelly_fraction_applied (= position_size after all shrinkage) in the structured output. position_sizing.kelly_fraction stays the SERVER-PROVIDED base value (do not change it).
 
 5) CRYPTO MICROSTRUCTURE FEATURES (apply only to crypto perps; emit "n/a" otherwise)
+SCORER-AUTHORITATIVE: If the user prompt's "SCORER PREPASS" line contains microstructure={cvd_state:<s>,obi:<o>,ivrv_spread:<i>}, USE THOSE EXACT VALUES. The Python quant scorer is the deterministic source of truth for §5a (CVD state), §5b (OBI snapshot, with >30s staleness → null), and §5c (IV-RV — currently always null until the Deribit feed is wired). The scorer has ALREADY folded the CVD direction_probability adjustment and the OBI conviction adjustment into the transmitted direction_probability and conviction values from §2 — do NOT add those deltas a second time. If scorer_no_signal_reason is "cvd_contradict" in the SCORER PREPASS, the §5a contradiction-at-low-conviction shutoff has ALREADY FIRED and you must emit NO_SIGNAL with that reason. Emit the transmitted microstructure object verbatim into TradePlanSchema.microstructure.
+
+FALLBACK ONLY (when no SCORER PREPASS line is present, or when microstructure is absent from it):
 
 5a. CVD (Cumulative Volume Delta) — feeds direction_probability
   CVD = rolling_sum(buy_volume - sell_volume, window=session)
