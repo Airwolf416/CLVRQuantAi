@@ -4,7 +4,7 @@
 // three surfaces. Temperature 0.2 (deterministic).
 // ============================================================================
 
-import { HARD_RULES, TECHNICAL_FRAMEWORK, computeKellyFraction } from "./shared";
+import { HARD_RULES, TECHNICAL_FRAMEWORK, SIGNAL_ENGINE_V1, computeKellyFraction } from "./shared";
 
 export interface SignalGenPromptInput {
   token: string;
@@ -65,9 +65,11 @@ export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {
     `  - Historical win rate (last 30d): ${(input.calibration.winRate*100).toFixed(1)}%`,
     `  - Sample size: ${input.calibration.sampleSize}`,
     `  - Suppression status: ${input.calibration.suppressionStatus}`,
-    `  - Pre-computed kelly_fraction (server-side): ${kelly.toFixed(4)} (use this exact value in position_sizing.kelly_fraction)`,
+    `  - Pre-computed kelly_fraction (server-side): ${kelly.toFixed(4)} (use this exact value in position_sizing.kelly_fraction; kelly_fraction_applied may be smaller after meta-shrinkage per §4)`,
     "",
-    "RESPONSE FORMAT — return a single JSON object conforming to TRADE_PLAN_SCHEMA. If the hard rules force NO_TRADE, set direction = \"NO_TRADE\" and populate kill_switches_triggered with the reason codes.",
+    SIGNAL_ENGINE_V1,
+    "",
+    "RESPONSE FORMAT — return a single JSON object conforming to TRADE_PLAN_SCHEMA (extended with the Signal Engine v1 fields: signal_status, regime, direction_probability, conviction, p_loss_meta, vol_percentile, rr_multiplier, kelly_fraction_applied, microstructure, gates_passed, no_signal_reason). If ANY hard rule or HARD gate forces a stand-down: set direction = \"NO_TRADE\", set signal_status = \"NO_SIGNAL\", set no_signal_reason to the failed gate name, AND append the same name to kill_switches_triggered (so legacy consumers keyed on kill_switches_triggered still work). On a published trade, set signal_status = \"SIGNAL\" and leave no_signal_reason = null.",
   ].join("\n");
 
   const user = [
