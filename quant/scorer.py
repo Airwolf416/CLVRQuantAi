@@ -95,6 +95,20 @@ def compute_composite(coin: str, df: pd.DataFrame, ctx: dict,
 
     composite = (W_MOMENTUM * mom + W_MEANREV * mr + W_CARRY * carry
                  + W_FLOW * flow + W_VOLGATE * vol + W_SENTIMENT * sent)
+    # Phase 2.1 hardening (post-review): NaN composite would silently bypass
+    # the abs(composite) < Z_THRESHOLD gate (NaN < anything = False) and
+    # produce a None side that would then default to "long" downstream.
+    # Coerce non-finite composites to exactly 0.0 so the z_threshold gate
+    # fires and side correctly resolves to None. Common cause: zero-variance
+    # input where each factor's z-score divides by std=0.
+    try:
+        _c = float(composite)
+        if not (_c == _c) or _c in (float("inf"), float("-inf")):
+            composite = 0.0
+        else:
+            composite = _c
+    except (TypeError, ValueError):
+        composite = 0.0
     side = "long" if composite > 0 else "short" if composite < 0 else None
 
     gates_failed: List[str] = []
@@ -111,8 +125,22 @@ def compute_composite(coin: str, df: pd.DataFrame, ctx: dict,
     # weighted contribution dominates determines whether this is a momentum
     # play or a mean-reversion play. The scorer's regime gate then checks
     # if that type is allowed in the current regime.
-    mom_contrib = abs(W_MOMENTUM * mom)
-    mr_contrib = abs(W_MEANREV * mr)
+    #
+    # Phase 2.1 hardening (post-review): NaN-safe + tied-zero defensive case.
+    # If both factors are NaN or both are exactly zero, there is no dominant
+    # contribution — fall back to "momentum" (the more common type) AND let
+    # the side==None composite check below handle the no-trade case via
+    # `passes`. We deliberately do NOT emit None for signal_type because
+    # downstream consumers (regime_allows + ScoreResponse) treat None as
+    # an unknown-type mismatch which would mask the real reason.
+    def _safe_abs(x: float) -> float:
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return 0.0
+        return abs(v) if (v == v and v not in (float("inf"), float("-inf"))) else 0.0
+    mom_contrib = _safe_abs(W_MOMENTUM * mom)
+    mr_contrib = _safe_abs(W_MEANREV * mr)
     signal_type = "momentum" if mom_contrib >= mr_contrib else "mean_reversion"
 
     return {

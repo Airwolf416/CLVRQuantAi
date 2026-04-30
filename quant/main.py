@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 import logging
 import pandas as pd
@@ -214,14 +215,30 @@ async def score(req: ScoreRequest):
         "gates_failed": gates_failed, "factors": comp["factors"],
     })
 
+    # Phase 2.1 fix: NaN/Inf in any numeric field would crash JSON encoding
+    # at the FastAPI response layer ("Out of range float values are not JSON
+    # compliant"). Degenerate input (all-flat synthetic bars, zero-vol price
+    # series) historically reached the response with NaN sigma / sl / size
+    # and produced HTTP 500. Sanitize once at the boundary so the client
+    # always sees a well-formed envelope (degenerate trades show as 0/0/0
+    # and naturally fail downstream gates rather than returning 500).
+    def _f(x, default=0.0):
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return default
+        return v if math.isfinite(v) else default
+
+    safe_factors = {k: _f(v, 0.0) for k, v in comp["factors"].items()}
+
     return ScoreResponse(
-        passes=passes, side=comp["side"], composite_z=comp["composite_z"],
-        regime=regime, suggested_size_usd=sz["size_usd"],
-        sl_atr_mult=sltp["sl_atr_mult"], tp_atr_mult=sltp["tp_atr_mult"],
-        sl_pct=sltp["sl_pct"], sigma_ann=sz["sigma_ann"],
-        gates_failed=gates_failed, factors=comp["factors"],
-        sl=sltp["sl"], tp=sltp["target"],
-        entry_ref=entry_ref, ts=int(time.time() * 1000),
+        passes=passes, side=comp["side"], composite_z=_f(comp["composite_z"]),
+        regime=regime, suggested_size_usd=_f(sz["size_usd"]),
+        sl_atr_mult=_f(sltp["sl_atr_mult"]), tp_atr_mult=_f(sltp["tp_atr_mult"]),
+        sl_pct=_f(sltp["sl_pct"]), sigma_ann=_f(sz["sigma_ann"]),
+        gates_failed=gates_failed, factors=safe_factors,
+        sl=_f(sltp["sl"]), tp=_f(sltp["target"]),
+        entry_ref=_f(entry_ref), ts=int(time.time() * 1000),
         signal_type=signal_type,
         no_signal_reason=no_signal_reason,
     )
