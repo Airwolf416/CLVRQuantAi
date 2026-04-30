@@ -56,6 +56,91 @@ export async function initializeDatabase(): Promise<void> {
         created_at  TIMESTAMP DEFAULT NOW()
       )
     `);
+    // Idempotent migration — adds the new redemption_type column to existing
+    // DBs. Drives the kill-the-exploit logic in /api/verify-code:
+    //   single_use_global   → ONE total redemption ever; the existing
+    //                          single-use codes (CLVR-FF-*, individual VIPs)
+    //                          where max_uses IS NULL or = 1.
+    //   single_use_per_user → each verified user can redeem ONCE; shared
+    //                          group codes like CLVR-VIP-GROUP2026 (max_uses
+    //                          = -1) and any limited multi-use code.
+    // Backfill existing rows so prod doesn't end up with NULL after the ALTER.
+    await client.query(`
+      ALTER TABLE access_codes
+        ADD COLUMN IF NOT EXISTS redemption_type VARCHAR(32) NOT NULL DEFAULT 'single_use_per_user'
+    `);
+    await client.query(`
+      UPDATE access_codes
+         SET redemption_type = 'single_use_global'
+       WHERE redemption_type IS NULL OR (max_uses IS NULL OR max_uses = 1)
+    `);
+    await client.query(`
+      UPDATE access_codes
+         SET redemption_type = 'single_use_per_user'
+       WHERE max_uses = -1 OR max_uses > 1
+    `);
+
+    // ── code_redemptions ─────────────────────────────────────────────────────
+    // Per-redemption ledger — the source of truth for who redeemed what and
+    // the SOLE mechanism preventing the QR/group-code spam exploit. The
+    // UNIQUE(code, user_id) constraint is the lock: any concurrent INSERT
+    // race serializes through Postgres, only one wins, the rest get a
+    // unique-violation. Replaces the old "users.promo_code = X means done"
+    // implicit dedup, which had no race protection AND only tracked the
+    // user's MOST RECENT code (so re-redeeming overwrote the prior promo
+    // and silently re-fired Elite emails + reset the expiry).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS code_redemptions (
+        id            BIGSERIAL PRIMARY KEY,
+        code          TEXT NOT NULL,
+        user_id       VARCHAR NOT NULL,
+        redeemed_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+        ip_address    TEXT,
+        user_agent    TEXT,
+        tier_granted  TEXT NOT NULL,
+        UNIQUE (code, user_id)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_code_redemptions_user ON code_redemptions (user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_code_redemptions_code ON code_redemptions (code)`);
+
+    // ── redemption_attempts ──────────────────────────────────────────────────
+    // Append-only audit log of every redemption attempt (success AND failure).
+    // Drives the per-user 5/hour rate limit AND gives ops a queryable signal
+    // for brute-force / scraping patterns. NOT a dedup mechanism — that's
+    // strictly code_redemptions' job. Result is one of: success, unverified,
+    // unauthenticated, user_not_found, not_found, inactive, expired,
+    // already_redeemed, global_limit_reached, rate_limited, claim_error.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS redemption_attempts (
+        id              BIGSERIAL PRIMARY KEY,
+        user_id         VARCHAR,
+        code_attempted  TEXT,
+        attempted_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+        ip_address      TEXT,
+        result          VARCHAR(32) NOT NULL
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_redemption_attempts_user_time ON redemption_attempts (user_id, attempted_at)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_redemption_attempts_ip_time  ON redemption_attempts (ip_address, attempted_at)`);
+
+    // One-time backfill: grandfather every user who currently has a promo_code
+    // pointing at a known access_code into the new code_redemptions ledger.
+    // We CANNOT retroactively "audit and revoke" past CLVR-VIP-GROUP2026 spam
+    // because the old flow only ever stored the user's MOST RECENT code on
+    // users.promo_code (a single TEXT field, not a per-redemption row), so
+    // there's no historical multi-redemption data to audit against. Going
+    // forward the UNIQUE(code, user_id) constraint kills the exploit. This
+    // backfill ensures existing users keep access AND can't re-redeem.
+    await client.query(`
+      INSERT INTO code_redemptions (code, user_id, tier_granted, redeemed_at)
+      SELECT u.promo_code, u.id, COALESCE(NULLIF(u.tier, ''), 'elite'),
+             COALESCE(u.created_at, NOW())
+        FROM users u
+        JOIN access_codes ac ON ac.code = u.promo_code
+       WHERE u.promo_code IS NOT NULL AND u.id IS NOT NULL
+      ON CONFLICT (code, user_id) DO NOTHING
+    `);
 
     // ── user_sessions (connect-pg-simple) ────────────────────────────────────
     await client.query(`
