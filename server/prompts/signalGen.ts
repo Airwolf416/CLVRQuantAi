@@ -34,6 +34,15 @@ export interface SignalGenPromptInput {
     volume24hUsd?:   number;
     holdHorizon?:    "scalp" | "swing";
   };
+  // ── Phase 2.1: scorer prepass for the Signal Engine v1 §1 regime gate ────
+  // When supplied, the AI defers to these values instead of recomputing
+  // regime/signal_type itself. Sourced from a quantScore() call before
+  // runSignalGenV2 — see SIGNAL_ENGINE_V1 §1 "SCORER-AUTHORITATIVE" block.
+  quantPrepass?: {
+    regime?:           "TREND_UP" | "TREND_DOWN" | "RANGE" | "HIGH_VOL" | "CHOP";
+    signal_type?:      "momentum" | "mean_reversion" | null;
+    no_signal_reason?: string | null;
+  };
 }
 
 export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {
@@ -72,6 +81,18 @@ export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {
     "RESPONSE FORMAT — return a single JSON object conforming to TRADE_PLAN_SCHEMA (extended with the Signal Engine v1 fields: signal_status, regime, direction_probability, conviction, p_loss_meta, vol_percentile, rr_multiplier, kelly_fraction_applied, microstructure, gates_passed, no_signal_reason). If ANY hard rule or HARD gate forces a stand-down: set direction = \"NO_TRADE\", set signal_status = \"NO_SIGNAL\", set no_signal_reason to the failed gate name, AND append the same name to kill_switches_triggered (so legacy consumers keyed on kill_switches_triggered still work). On a published trade, set signal_status = \"SIGNAL\" and leave no_signal_reason = null.",
   ].join("\n");
 
+  // Phase 2.1: surface scorer-supplied regime/signal_type as a SCORER PREPASS
+  // line so SIGNAL_ENGINE_V1 §1 can defer to it rather than recomputing.
+  // Omitted entirely when no prepass is supplied — keeps legacy callers and
+  // prompt-snapshot diffs identical when the feature isn't used.
+  const prepassLine = input.quantPrepass?.regime
+    ? `SCORER PREPASS: regime=${input.quantPrepass.regime}` +
+      `, signal_type=${input.quantPrepass.signal_type ?? "n/a"}` +
+      (input.quantPrepass.no_signal_reason
+        ? `, scorer_no_signal_reason=${input.quantPrepass.no_signal_reason}`
+        : "")
+    : null;
+
   const user = [
     `LIVE DATA — ${input.token}:`,
     input.liveData,
@@ -79,6 +100,7 @@ export function buildSignalGenV2Prompt(input: SignalGenPromptInput): {
     `KRONOS OUTPUT: ${input.kronosOutput || "n/a"}`,
     `QUANT SCORE: ${input.quantScore ?? "n/a"}`,
     `OI-ADJUSTED SCORE: ${input.oiAdjustedScore ?? "n/a"}`,
+    ...(prepassLine ? ["", prepassLine] : []),
     "",
     `Evaluate whether to publish a ${input.direction} signal on ${input.token} right now. Apply hard rules strictly.`,
   ].join("\n");

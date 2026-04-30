@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from .models import ScoreRequest, ScoreResponse, CostRequest, CostResponse
 from .state import STATE
 from .hl_ws import ws_consumer
-from .regime import classify_regime
+from .regime import classify_regime, regime_allows
 from .scorer import compute_composite
 from .garch import sigma_daily_decimal
 from .sizing import vol_target_size
@@ -161,8 +161,15 @@ async def score(req: ScoreRequest):
     comp = compute_composite(req.symbol, df, ctx, req.wilson_lb, req.stocktwits_score)
 
     gates_failed = list(comp["gates_failed"])
-    if regime == "chop":
-        gates_failed.append("regime_chop")
+
+    # Signal Engine v1 §1: regime gate. classify_regime now returns one of
+    # TREND_UP / TREND_DOWN / RANGE / HIGH_VOL / CHOP (uppercase). regime_allows
+    # checks the candidate signal_type vs the current regime's allowed-types
+    # matrix and emits regime_chop / regime_mismatch when blocked.
+    signal_type = comp.get("signal_type", "momentum")
+    allowed, regime_reason = regime_allows(regime, comp["side"], signal_type)
+    if not allowed and regime_reason and regime_reason not in gates_failed:
+        gates_failed.append(regime_reason)
 
     dr = pd.Series(req.daily_returns or [], dtype=float)
     req.ohlcv = ohlcv  # so downstream code uses fallback path
@@ -181,6 +188,26 @@ async def score(req: ScoreRequest):
 
     passes = len(gates_failed) == 0 and comp["side"] is not None
 
+    # Map the first failing gate to the canonical NO_SIGNAL reason code
+    # (matches server/prompts/shared.ts NO_TRADE_REASONS). Priority order
+    # mirrors the Signal Engine v1 integration order: regime first, then
+    # below_thresholds, then liquidity / wilson / micro, then R:R sanity.
+    _REASON_PRIORITY = [
+        "regime_chop", "regime_mismatch", "below_thresholds", "z_threshold",
+        "wilson_lb", "cvd_contradict", "ivrv_block", "ofi_sign",
+        "rr_not_viable", "noise_band",
+    ]
+    no_signal_reason = None
+    for r in _REASON_PRIORITY:
+        if r in gates_failed:
+            # z_threshold is the legacy scorer name for the same gate the
+            # spec calls "below_thresholds" — surface the spec name in the
+            # API response for downstream consumers.
+            no_signal_reason = "below_thresholds" if r == "z_threshold" else r
+            break
+    if no_signal_reason is None and gates_failed:
+        no_signal_reason = gates_failed[0]
+
     await log_quant_score({
         "symbol": req.symbol, "composite_z": comp["composite_z"],
         "side": comp["side"], "regime": regime, "passes": passes,
@@ -195,6 +222,8 @@ async def score(req: ScoreRequest):
         gates_failed=gates_failed, factors=comp["factors"],
         sl=sltp["sl"], tp=sltp["target"],
         entry_ref=entry_ref, ts=int(time.time() * 1000),
+        signal_type=signal_type,
+        no_signal_reason=no_signal_reason,
     )
 
 

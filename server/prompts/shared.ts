@@ -151,7 +151,9 @@ export const NO_TRADE_REASONS = [
 export const SIGNAL_ENGINE_V1 = `SIGNAL ENGINE v1 UPGRADE — apply ALL of the gates below in the integration order at the bottom. If any HARD gate fails, set direction = "NO_TRADE" AND signal_status = "NO_SIGNAL", populate no_signal_reason with the failed gate name, and append the same gate name to kill_switches_triggered. Leave entry/invalidation/targets numeric fields unchanged from your best estimate, but understand the trade is not published.
 
 1) REGIME GATE (HARD FILTER — runs first)
-Classify current regime using the last 90 bars of the signal timeframe:
+SCORER-AUTHORITATIVE: If the user prompt contains a "SCORER PREPASS" line with regime=<value>, USE THAT REGIME VALUE. The Python quant scorer is the deterministic source of truth for regime classification — do NOT recompute. If scorer_no_signal_reason is "regime_chop" or "regime_mismatch" in the SCORER PREPASS, that gate has ALREADY FIRED and you must emit NO_SIGNAL with that reason (do not attempt to override).
+
+FALLBACK ONLY (when no SCORER PREPASS line is present): Classify current regime yourself using the last 90 bars of the signal timeframe:
   atr_pct      = percentile_rank(ATR(14), lookback=90)
   adx          = ADX(14)
   bb_width_pct = percentile_rank(BB_width(20,2), lookback=90)
@@ -162,7 +164,7 @@ Classify current regime using the last 90 bars of the signal timeframe:
     TREND_DOWN  if adx >= 22 and EMA20 < EMA50 < EMA200
     RANGE       otherwise
 
-Allowed signal types per regime:
+Allowed signal types per regime (applies whether scorer-supplied or fallback-computed):
   TREND_UP   : LONG momentum/breakout only          (mean-reversion BLOCKED)        — normal sizing
   TREND_DOWN : SHORT momentum/breakout only         (mean-reversion BLOCKED)        — normal sizing
   RANGE      : mean-reversion both sides OK         (momentum/breakout BLOCKED)     — tighter TPs (see §3)
