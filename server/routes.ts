@@ -5414,6 +5414,55 @@ Every level must be technically defensible. Return JSON only.`;
             const { runSignalGenV2 } = await import("./lib/promptV2Runner");
             const perfCtxStr = await buildPerformanceContext().catch(() => "");
             const dirGuess: "LONG" | "SHORT" = (String(shadowCtx.signal || "").toUpperCase().includes("SHORT") ? "SHORT" : "LONG");
+
+            // ── Phase 2.1 wiring — final mile ─────────────────────────────
+            // Phase 2.1 moved the Regime Gate from prompt math into the
+            // deterministic Python scorer, and signalGen.ts learned to read
+            // a quantPrepass and emit a `SCORER PREPASS:` line that the
+            // SIGNAL_ENGINE_V1 §1 SCORER-AUTHORITATIVE block defers to.
+            // What was missing: nobody actually called the scorer here, so
+            // the prepass was always empty and the AI kept recomputing
+            // regime itself. This block fixes that — it asks the Python
+            // scorer for its regime/signal_type/no_signal_reason verdict
+            // BEFORE we hand the prompt to Claude.
+            //
+            // Wrapped in its own try/catch so a quant-service hiccup does
+            // NOT cancel the whole V2 shadow comparison — we just omit the
+            // SCORER PREPASS line and the prompt falls back to the
+            // in-prompt regime math (same legacy behavior as before this
+            // change). This is the spec's documented fail-open posture.
+            let quantPrepass: { regime?: any; signal_type?: any; no_signal_reason?: any } | undefined;
+            try {
+              const { quantScore, normalizeAssetClass } = await import("./quantClient");
+              const _ps = await quantScore({
+                symbol: ticker,
+                timeframe: "1m",
+                // Don't ship Node-side bars — the Python scorer pulls real
+                // candles internally (HL for perps, Binance/Yahoo for the
+                // rest). Same convention as generateSignalPhase2A above.
+                equity_usd: 10000,
+                conviction: Math.max(0.1, Math.min(1.0, (Number(adjScore) || 60) / 100)),
+                // Use the route's known asset class (`cls`) so commodities
+                // and FX route to the right scorer data source (METAL /
+                // FOREX) instead of falling through to STOCK. Subtlety:
+                // for crypto we pass `undefined` so normalizeAssetClass's
+                // symbol heuristic can promote BTC → "BTC" and ETH →
+                // "ETH" (otherwise the raw "CRYPTO" branch fires first
+                // and lumps BTC/ETH into MID_CAP_DEFAULT).
+                asset_class: normalizeAssetClass(cls === "crypto" ? undefined : cls, ticker),
+              });
+              if (_ps?.regime) {
+                quantPrepass = {
+                  regime: _ps.regime,
+                  signal_type: _ps.signal_type ?? null,
+                  no_signal_reason: _ps.no_signal_reason ?? null,
+                };
+                console.log(`[PROMPT_V2 prepass] ${ticker} regime=${_ps.regime} signal_type=${_ps.signal_type ?? "n/a"} no_signal_reason=${_ps.no_signal_reason ?? "n/a"}`);
+              }
+            } catch (e: any) {
+              console.warn(`[PROMPT_V2 prepass] quantScore failed for ${ticker} — proceeding without prepass:`, e?.message || e);
+            }
+
             // Pass hardening context so the V2 path applies the same
             // mechanical gates as the auto-scanner once mode flips to "on".
             // Today (mode=shadow) the value is logged but the gate is skipped
@@ -5438,6 +5487,10 @@ Every level must be technically defensible. Return JSON only.`;
                 volume24hUsd: Number(hlData[ticker]?.volume) || 0,
                 holdHorizon: "scalp",
               },
+              // undefined when quant unreachable — signalGen.ts already
+              // tests `input.quantPrepass?.regime` and only emits the
+              // SCORER PREPASS line when present, so this is safe.
+              quantPrepass,
             }, apiKey, JSON.stringify({ signal: shadowCtx.signal, ev: evPct }).slice(0, 500));
           } catch (e: any) { console.warn("[PROMPT_V2 signalGen shadow]", e?.message || e); }
         })();
