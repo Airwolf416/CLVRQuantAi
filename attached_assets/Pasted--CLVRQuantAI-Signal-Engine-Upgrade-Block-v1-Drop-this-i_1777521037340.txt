@@ -1,0 +1,206 @@
+# CLVRQuantAI — Signal Engine Upgrade Block (v1)
+
+Drop this into the system prompt **after** existing macro/volatility-suppression sections and **before** the structured output formatter. All gates are evaluated top-down. If any HARD gate fails, return `signal_status: NO_SIGNAL` with the gate name as the reason.
+
+-----
+
+## 1. REGIME GATE (HARD FILTER — runs first)
+
+Classify current regime using last 90 bars of the signal timeframe:
+
+```
+inputs:
+  atr_pct      = percentile_rank(ATR(14), lookback=90)
+  adx          = ADX(14)
+  bb_width_pct = percentile_rank(BB_width(20,2), lookback=90)
+
+regime =
+  CHOP        if adx < 18 and bb_width_pct < 0.30
+  HIGH_VOL    if atr_pct > 0.90 or bb_width_pct > 0.95
+  TREND_UP    if adx >= 22 and EMA20 > EMA50 > EMA200
+  TREND_DOWN  if adx >= 22 and EMA20 < EMA50 < EMA200
+  RANGE       otherwise
+```
+
+**Allowed signal types per regime:**
+
+|Regime    |Momentum/Breakout|Mean-Reversion|Action                     |
+|----------|-----------------|--------------|---------------------------|
+|TREND_UP  |LONG only        |blocked       |normal sizing              |
+|TREND_DOWN|SHORT only       |blocked       |normal sizing              |
+|RANGE     |blocked          |both sides OK |tighter TPs (see §3)       |
+|HIGH_VOL  |both sides OK    |blocked       |widen SL 1.5×, halve sizing|
+|CHOP      |blocked          |blocked       |`NO_SIGNAL`                |
+
+If candidate signal type is not in the allowed set for the current regime → `NO_SIGNAL: regime_mismatch`.
+
+-----
+
+## 2. DUAL-SCORE OUTPUT (replaces single conviction score)
+
+Every signal must emit **two independent scores**, both 0.00–1.00:
+
+- **`direction_probability`** — P(price reaches TP1 before SL within trade horizon). Driven purely by directional features (momentum, structure, OI delta, CVD, order book imbalance).
+- **`conviction`** — model certainty about the signal as a whole. Driven by feature alignment, regime fit, IV-RV environment, data freshness, and absence of conflicting signals.
+
+**Per-asset-class thresholds (both must clear to fire):**
+
+|Asset class   |min `direction_probability`|min `conviction`|
+|--------------|--------------------------:|---------------:|
+|BTC/ETH perps |0.58                       |0.60            |
+|Alt perps     |0.62                       |0.68            |
+|FX majors     |0.55                       |0.55            |
+|Commodities   |0.57                       |0.60            |
+|Equity indices|0.56                       |0.58            |
+
+Alts get higher bars because of fee/slippage drag and OI thinness.
+
+-----
+
+## 3. VOLATILITY-PERCENTILE-ADJUSTED R:R
+
+Keep Fibonacci anchors as the **structural** TP locations, but scale the *selected* TP by current vol regime so we don’t leave expansion-regime moves on the table or overshoot in compression.
+
+```
+vol_pct = percentile_rank(ATR(14), lookback=90)
+
+rr_multiplier =
+  0.70   if vol_pct < 0.20    # compressed → take profit faster
+  1.00   if 0.20 <= vol_pct < 0.60
+  1.30   if 0.60 <= vol_pct < 0.85
+  1.60   if vol_pct >= 0.85   # expansion → ride further
+
+TP1 = nearest Fib extension >= entry + rr_multiplier * 1.0R
+TP2 = next Fib extension     >= entry + rr_multiplier * 2.0R
+```
+
+In `RANGE` regime, cap `rr_multiplier` at 1.00 regardless of vol_pct (mean-reversion targets shouldn’t extend).
+
+-----
+
+## 4. META-LABELING → KELLY SCALING (not filtering)
+
+After a signal clears §1 and §2, run the meta-label scorer. It does **not** veto signals — it only sizes them.
+
+```
+inputs to meta-scorer:
+  - direction_probability
+  - conviction
+  - regime
+  - vol_pct
+  - distance_to_recent_swing (in ATRs)
+  - hours_since_last_macro_event
+  - signal_age_in_bars (entry zone freshness)
+
+output:
+  p_loss = calibrated probability that this exact setup hits SL before TP1
+
+position_size = kelly_base(direction_probability, R:R)
+              * (1 - p_loss)
+              * regime_size_modifier   # 0.5 in HIGH_VOL, 1.0 elsewhere
+              * conviction              # additional shrinkage on weak conviction
+```
+
+Cap final size at `max_kelly_fraction = 0.25` of full Kelly. **Never** size up because `p_loss` is low — Kelly base is the ceiling.
+
+-----
+
+## 5. CRYPTO MICROSTRUCTURE FEATURES
+
+Apply only to crypto perps. Each feeds into either `direction_probability` or `conviction` as marked.
+
+### 5a. CVD (Cumulative Volume Delta) — feeds `direction_probability`
+
+```
+CVD = rolling_sum(buy_volume - sell_volume, window=session)
+
+CVD_divergence_check (over last 20 bars):
+  bullish_div = price_LL and CVD_HL   →  +0.06 to direction_prob (if signal LONG)
+  bearish_div = price_HH and CVD_LH   →  +0.06 to direction_prob (if signal SHORT)
+  confirmation = price and CVD same direction → +0.03
+  contradiction = price up, CVD down on LONG  → -0.08 (or block if conviction < 0.65)
+```
+
+### 5b. Order Book Imbalance — feeds `conviction`
+
+```
+OBI = (sum(bid_size, top_10) - sum(ask_size, top_10))
+    / (sum(bid_size, top_10) + sum(ask_size, top_10))
+
+OBI ranges -1.0 (full ask) to +1.0 (full bid).
+
+For LONG signals:
+  OBI > +0.20  → conviction += 0.05
+  OBI < -0.20  → conviction -= 0.10
+For SHORT signals: mirror.
+
+Snapshot OBI at signal generation time. Do NOT use stale order book data
+(>30s old → flag and skip OBI adjustment entirely).
+```
+
+### 5c. IV-RV Spread — feeds `conviction` and regime nuance
+
+```
+IV  = ATM 7-day implied vol from Deribit (BTC/ETH) or nearest liquid surrogate
+RV  = realized vol over trailing 7 days, annualized
+IVRV_spread = IV - RV
+
+interpretation:
+  IVRV_spread > +15 vol points  → vol expensive, fade-prone
+                                  → conviction -= 0.05 on momentum/breakout signals
+                                  → conviction += 0.05 on mean-reversion (RANGE only)
+  IVRV_spread < -5  vol points  → vol underpriced, expansion-prone
+                                  → conviction += 0.05 on momentum/breakout
+                                  → block mean-reversion signals
+  -5 <= IVRV_spread <= +15      → neutral, no adjustment
+```
+
+For non-BTC/ETH perps with no liquid options market, skip §5c entirely (do not attempt to infer IV from funding rate — it’s a poor proxy and adds noise).
+
+-----
+
+## 6. INTEGRATION ORDER (strict)
+
+Every signal candidate runs through this pipeline. Stop and emit `NO_SIGNAL` at the first failure.
+
+```
+1. Macro event override   (existing)
+2. Volatility suppression (existing)
+3. Regime gate            (§1)         ← new hard filter
+4. Compute base direction_probability and conviction from existing feature stack
+5. Apply CVD adjustment   (§5a, crypto only)
+6. Apply OBI adjustment   (§5b, crypto only)
+7. Apply IVRV adjustment  (§5c, BTC/ETH only)
+8. Threshold check        (§2)
+9. Set TP1/TP2 with vol-adjusted R:R (§3)
+10. Meta-label → Kelly size (§4)
+11. Hard exit timer       (existing)
+12. Emit structured signal
+```
+
+-----
+
+## 7. STRUCTURED OUTPUT (extends existing schema)
+
+Add these fields to the existing entry/SL/TP1/TP2 payload:
+
+```json
+{
+  "regime": "TREND_UP | TREND_DOWN | RANGE | HIGH_VOL | CHOP",
+  "direction_probability": 0.00,
+  "conviction": 0.00,
+  "p_loss_meta": 0.00,
+  "vol_percentile": 0.00,
+  "rr_multiplier": 0.00,
+  "kelly_fraction_applied": 0.00,
+  "microstructure": {
+    "cvd_state": "confirm | bullish_div | bearish_div | contradict | n/a",
+    "obi": 0.00,
+    "ivrv_spread": 0.00
+  },
+  "gates_passed": ["macro", "vol_suppression", "regime", "thresholds"],
+  "no_signal_reason": null
+}
+```
+
+When `signal_status == NO_SIGNAL`, populate `no_signal_reason` with the failed gate name and leave entry/SL/TP fields null.
