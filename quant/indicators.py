@@ -96,5 +96,35 @@ def wick_stats(df: pd.DataFrame, n: int = 50) -> dict:
     }
 
 
+def ema(close: pd.Series, span: int) -> pd.Series:
+    """Exponential moving average. Used by the v1 regime classifier for
+    EMA20/EMA50/EMA200 trend-direction alignment."""
+    return close.ewm(span=span, adjust=False).mean()
+
+
+def bb_width(close: pd.Series, period: int = 20, k: float = 2.0) -> pd.Series:
+    """Bollinger Band width as a fraction of the mid-band (price-normalized
+    so it can be percentile-ranked across coins/assets without scale bias)."""
+    mu = close.rolling(period).mean()
+    sd = close.rolling(period).std(ddof=0)
+    upper = mu + k * sd
+    lower = mu - k * sd
+    return (upper - lower) / mu.replace(0, np.nan)
+
+
+def percentile_rank(series, lookback: int = 90) -> float:
+    """Returns the percentile rank (0..1) of the most recent value within
+    the trailing `lookback` window. Returns 0.5 when the window is too short
+    to be meaningful (so ambiguous bars default to neutral, not extreme)."""
+    s = pd.Series(series).dropna()
+    if len(s) < max(10, lookback // 4):
+        return 0.5
+    window = s.tail(lookback)
+    last = float(window.iloc[-1])
+    n = int(len(window))
+    rank = float((window <= last).sum())
+    return max(0.0, min(1.0, rank / n))
+
+
 def update_ofi_from_book(*args, **kwargs):
     pass

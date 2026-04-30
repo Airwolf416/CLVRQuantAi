@@ -106,9 +106,19 @@ def compute_composite(coin: str, df: pd.DataFrame, ctx: dict,
         want_sign = 1 if side == "long" else -1
         if (ofi_z_val > 0 and want_sign < 0) or (ofi_z_val < 0 and want_sign > 0):
             gates_failed.append("ofi_sign")
+    # Signal-type classification (Signal Engine v1 §1 — feeds regime_allows).
+    # The composite blends momentum and mean-reversion factors; whichever
+    # weighted contribution dominates determines whether this is a momentum
+    # play or a mean-reversion play. The scorer's regime gate then checks
+    # if that type is allowed in the current regime.
+    mom_contrib = abs(W_MOMENTUM * mom)
+    mr_contrib = abs(W_MEANREV * mr)
+    signal_type = "momentum" if mom_contrib >= mr_contrib else "mean_reversion"
+
     return {
         "composite_z": float(composite),
         "side": side,
+        "signal_type": signal_type,
         "factors": {"momentum": mom, "meanrev": mr, "carry": carry,
                     "flow": flow, "volgate": vol, "sentiment": sent,
                     "ofi_z": ofi_z_val},

@@ -45,7 +45,10 @@ export interface QuantScoreResponse {
   passes: boolean;
   side: "long" | "short" | null;
   composite_z: number;
-  regime: "trend" | "range" | "high_vol" | "chop";
+  // Signal Engine v1 §1 regime states (Phase 2.1 — uppercase, 5-state with
+  // directional trend split). Was previously lowercase 4-state; downstream
+  // consumers only stringify this for logs so the change is non-breaking.
+  regime: "TREND_UP" | "TREND_DOWN" | "RANGE" | "HIGH_VOL" | "CHOP";
   suggested_size_usd: number;
   sl_atr_mult: number;
   tp_atr_mult: number;
@@ -57,6 +60,10 @@ export interface QuantScoreResponse {
   tp: number | null;
   entry_ref: number;
   ts: number;
+  // Signal Engine v1 (Phase 2.1) additions — both optional for backward compat
+  // with any consumer that pre-dates this rollout.
+  signal_type?: "momentum" | "mean_reversion" | null;
+  no_signal_reason?: string | null;
 }
 
 export interface QuantCostRequest {

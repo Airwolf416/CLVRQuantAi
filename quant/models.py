@@ -31,6 +31,12 @@ class ScoreResponse(BaseModel):
     tp: Optional[float]
     entry_ref: float
     ts: int
+    # Signal Engine v1 (Phase 2.1) additions — backward-compatible (Optional).
+    # signal_type      : "momentum" | "mean_reversion" — feeds the regime gate.
+    # no_signal_reason : canonical first-failing gate name (matches
+    #                    NO_TRADE_REASONS in server/prompts/shared.ts).
+    signal_type: Optional[str] = None
+    no_signal_reason: Optional[str] = None
 
 
 class CostRequest(BaseModel):
