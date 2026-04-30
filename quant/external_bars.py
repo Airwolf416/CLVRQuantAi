@@ -32,6 +32,21 @@ _CCXT_OVERRIDE = {
     "HYPE":  "HYPE/USDT",
 }
 
+# Yahoo's crypto USD pair tickers don't always follow the simple "{COIN}-USD"
+# pattern — newer/colliding tokens get a numeric coin-id suffix (e.g. SUI is
+# listed as "SUI20947-USD" because "SUI-USD" pre-existed for an older asset).
+# Used by the CCXT-failure → Yahoo fallback path in fetch_external_bars().
+_YAHOO_CRYPTO_USD_OVERRIDE = {
+    "APT":   "APT21794-USD",
+    "SUI":   "SUI20947-USD",
+    "POL":   "POL28321-USD",
+    "TAO":   "TAO22974-USD",
+    "UNI":   "UNI7083-USD",
+    "PEPE":  "PEPE24478-USD",
+    "JUP":   "JUP29210-USD",
+    "HYPE":  "HYPE32196-USD",
+}
+
 # Yahoo Finance ticker map. Equities/ETFs are usually as-is.
 _YAHOO_MAP = {
     # Metals
@@ -228,7 +243,11 @@ async def fetch_external_bars(
                 # kPEPE / kSHIB / kBONK are HL ×1000 wrappers — strip 'k' for Yahoo.
                 if not rows:
                     base = symbol[1:] if (len(symbol) > 1 and symbol[0] == "k" and symbol[1].isupper()) else symbol
-                    yt = f"{base.upper()}-USD"
+                    base_u = base.upper()
+                    # Honour the per-coin numeric-suffix override (Yahoo lists
+                    # newer tokens as e.g. "SUI20947-USD" because plain "SUI-USD"
+                    # already exists for an older asset).
+                    yt = _YAHOO_CRYPTO_USD_OVERRIDE.get(base_u, f"{base_u}-USD")
                     rows = await _fetch_yahoo(yt, interval, limit)
             else:
                 rows = await _fetch_yahoo(ticker, interval, limit)

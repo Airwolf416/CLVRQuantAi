@@ -2,6 +2,7 @@ import asyncio
 import math
 import time
 import logging
+from collections import deque
 import pandas as pd
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -25,13 +26,91 @@ log = logging.getLogger("quant")
 logging.basicConfig(level=logging.INFO)
 
 
+# Number of historical 1m bars to prefill on startup. Comfortably above the
+# 120-bar readiness threshold in /quant/readiness so the scanner is READY
+# immediately instead of waiting ~2h for the HL websocket to accumulate enough
+# bars after every restart/redeploy.
+_BACKFILL_BARS = 200
+
+
+async def _backfill_bars_for(coin: str) -> bool:
+    """Seed STATE.bars[coin] from the external provider. We pass
+    asset_class="CRYPTO" — not the coin symbol — so the call routes
+    through provider_for() into the CCXT chain (binance → binanceusdm →
+    bybit) and, on geo-restricted environments where CCXT fails, falls
+    back to Yahoo with the proper "{COIN}-USD" crypto ticker rather than
+    a bare symbol (which would hit unrelated equities listings).
+    Safe to run concurrently with the HL WS consumer: we only seed when
+    the in-memory deque is still effectively empty, and we drop any
+    bar whose minute-open timestamp is the *current* wall-clock minute,
+    so the WS consumer's first complete bar lands cleanly without a
+    duplicate timestamp.
+
+    NOTE: kPEPE is intentionally skipped. HL trades it as kPEPE = PEPE×1000,
+    so the WS feed delivers prices in HL coordinates (~$0.011), while the
+    external providers (Binance PEPE/USDT, Yahoo PEPE-USD) return PEPE
+    coordinates (~$0.0000115). Mixing the two scales in the same deque
+    would corrupt every indicator. Let kPEPE accumulate via WS only."""
+    if coin == "kPEPE":
+        return False
+    try:
+        rows = await fetch_external_bars(coin, "CRYPTO", "1m", _BACKFILL_BARS)
+        if not rows or len(rows) < 60:
+            return False
+        # Strip any bar whose 1m-open timestamp matches the current minute
+        # (that's the in-progress candle). Yahoo/CCXT always return
+        # minute-aligned timestamps so a modulo check is useless here.
+        cur_min_ms = (int(time.time() * 1000) // 60000) * 60000
+        while rows and int(rows[-1][0]) >= cur_min_ms:
+            rows = rows[:-1]
+        if len(rows) < 60:
+            return False
+        existing = STATE.bars.get(coin)
+        if existing is not None and len(existing) >= 60:
+            return False  # WS got there first — don't clobber live data
+        STATE.bars[coin] = deque(rows, maxlen=2000)
+        return True
+    except Exception as e:
+        log.warning("quant: backfill %s failed: %s", coin, e)
+        return False
+
+
+async def _run_backfill():
+    """Background task: fetch ~200 bars per coin in small concurrent batches
+    and seed STATE.bars so /quant/readiness flips to READY within ~30s of
+    startup instead of after the ~2h soak the HL WS feed alone would need.
+    Uses a small concurrency window because firing all 32 calls at once
+    trips Binance's burst limits and most calls return empty."""
+    BATCH_SIZE = 4  # Binance is happy with ~5 req/s for fetch_ohlcv
+    BATCH_GAP_S = 0.6
+    seeded = 0
+    coins = list(DEFAULT_COINS)
+    for i in range(0, len(coins), BATCH_SIZE):
+        batch = coins[i : i + BATCH_SIZE]
+        results = await asyncio.gather(
+            *[_backfill_bars_for(c) for c in batch],
+            return_exceptions=True,
+        )
+        seeded += sum(1 for r in results if r is True)
+        if i + BATCH_SIZE < len(coins):
+            await asyncio.sleep(BATCH_GAP_S)
+    log.info(
+        "quant: bar backfill complete — %d/%d coins seeded with up to %d 1m bars",
+        seeded, len(coins), _BACKFILL_BARS,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     stop = asyncio.Event()
     task = asyncio.create_task(ws_consumer(stop), name="hl-ws")
     app.state.stop = stop
     app.state.task = task
-    # ── Boot-time health log: which CCXT exchanges are reachable ─────────
+    # ── Boot-time health log: which CCXT exchanges are reachable. This
+    # MUST run before the backfill task is started — health_probe calls
+    # ex.load_markets() on each exchange, and if backfill threads try to
+    # call fetch_ohlcv on the same instance concurrently they'll race
+    # each other into a half-loaded state and most fetches return empty.
     try:
         probe = await asyncio.to_thread(health_probe)
         log.info("┌─ quant: live data sources ─────────────────────────")
@@ -42,6 +121,11 @@ async def lifespan(app: FastAPI):
         log.info("└────────────────────────────────────────────────────")
     except Exception as e:
         log.warning("quant: ccxt health probe failed: %s", e)
+    # ── Warm-start: fire bar backfill in background so readiness doesn't
+    # block the scanner for ~2h after every restart. Non-blocking — the
+    # service is already up and the backfill resolves in ~30s.
+    backfill_task = asyncio.create_task(_run_backfill(), name="bar-backfill")
+    app.state.backfill_task = backfill_task
     log.info("quant service started")
     try:
         yield
@@ -51,6 +135,9 @@ async def lifespan(app: FastAPI):
             await asyncio.wait_for(task, timeout=5)
         except Exception:
             task.cancel()
+        # Best-effort cancel of the backfill task if shutdown beats it.
+        if not backfill_task.done():
+            backfill_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
