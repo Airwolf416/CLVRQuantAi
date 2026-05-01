@@ -22,6 +22,7 @@ import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
 import { notifyAutoposter, getAutoposterStatus } from "./autoposterNotify";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
+import { computeRegimeGate } from "./lib/regimeGate";
 import { recordActivity as recordLiveActivity, getLiveStats, getLiveUserList } from "./liveUsers";
 import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
 import multerLib from "multer";
@@ -1048,6 +1049,43 @@ async function detectMoves() {
       detectedPatterns.forEach(p => tags.push({ l: p.replace("pattern_", "").replace(/_/g, " ").toUpperCase(), c: "purple" }));
     }
 
+    // ── REGIME ALIGNMENT GATE (live auto-scanner) ───────────────────────────
+    // Auto-scanner runs in module scope and cannot reach the local quant
+    // indicator helpers defined inside registerRoutes (computeQuant-
+    // Indicators/Confluence/Bayesian live in the /api/quant request scope
+    // for sound reasons — they close over per-request caches). What we
+    // CAN evaluate here without that machinery is:
+    //   • the macro kill-switch (BTC -3%/4h risk-off block), and
+    //   • the funding rate crowding check (crypto perps only).
+    // Both are first-class regime-gate checks. The remaining 5 ind-driven
+    // checks gracefully no-op via the gate's "skip on missing input"
+    // policy. Result is attached to the signal so it propagates to the
+    // SignalCard UI AND to the Telegram caption (via buildEnrichedReasoning).
+    let _liveRegimeGate: any = null;
+    try {
+      _liveRegimeGate = computeRegimeGate(
+        null,
+        null,
+        null,
+        { safe: !macroRisk.highRisk, warning: macroRisk.highRisk ? "BTC -3%/4h macro risk-off" : null },
+        dir,
+        { assetClass: "crypto", funding: typeof hl?.funding === "number" ? hl.funding : null },
+      );
+    } catch (e) {
+      console.warn(`[regime-gate live] ${sym} compute failed (non-fatal): ${(e as Error)?.message || e}`);
+    }
+
+    // Compose the reasoning lines that the Telegram autoposter renders as
+    // the post body. Prepend the regime-gate summary line when present so
+    // every Telegram post mirrors what the in-app SignalCard displays.
+    const _liveReasoning: string[] = Array.isArray(master.reasoning) ? [...master.reasoning] : [];
+    if (_liveRegimeGate) {
+      const fail = _liveRegimeGate.checks.filter((c: any) => !c.pass).map((c: any) => c.name);
+      const icon = _liveRegimeGate.action === "BLOCK" ? "🛑" : _liveRegimeGate.action === "DOWNGRADE" ? "⚠️" : "✅";
+      const failTxt = fail.length > 0 ? ` · failing: ${fail.join(", ")}` : "";
+      _liveReasoning.unshift(`${icon} Regime Gate: ${_liveRegimeGate.verdict} (${_liveRegimeGate.score}%)${failTxt}`);
+    }
+
     const signal = {
       id: nextSignalId(),
       icon,
@@ -1074,7 +1112,7 @@ async function detectMoves() {
       atr: +atr.toFixed(6),
       masterScore: master.score,
       riskOn: master.riskOn,
-      reasoning: master.reasoning,
+      reasoning: _liveReasoning,
       riskLabel,
       timeframe: "DAY",
       session: sessionInfo.label,
@@ -1087,6 +1125,7 @@ async function detectMoves() {
       isStrongSignal: advanced.isStrong,
       scoreBreakdown: advanced.scoreBreakdown,
       detectedPatterns,
+      regime_gate: _liveRegimeGate,
     };
 
     // ── PHASE 2A GATE (opt-in via env) ────────────────────────────────────
@@ -2189,6 +2228,20 @@ export async function registerRoutes(
       };
     }
 
+    // If the source signal carries a regime_gate (live-buffer path), pass
+    // a concise summary through to the caption builder so the test post
+    // mirrors what the in-app SignalCard shows. Synthetic-from-live-data
+    // builds don't have this field — gate line is simply omitted.
+    const _testGate = (built as any).regime_gate || null;
+    const _testRegimeSummary = _testGate ? {
+      verdict: _testGate.verdict,
+      action:  _testGate.action,
+      score:   _testGate.score,
+      failingChecks: Array.isArray(_testGate.checks)
+        ? _testGate.checks.filter((c: any) => !c.pass).map((c: any) => c.name)
+        : [],
+    } : undefined;
+
     // Build the enriched caption + hashtags via the shared helper.
     const reasoning = buildEnrichedReasoning({
       token:         built.token,
@@ -2202,6 +2255,7 @@ export async function registerRoutes(
       thesis:        built.thesis,
       marketContext: built.marketContext,
       source:        "manual-test",
+      regimeGate:    _testRegimeSummary,
     });
 
     // Use a per-test-call timestamp so each test fire has a unique

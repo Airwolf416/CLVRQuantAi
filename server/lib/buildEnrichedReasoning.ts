@@ -11,14 +11,22 @@
 //   [0]  banner (e.g. "TEST POST" or "Morning Brief 6:00 AM ET")
 //   [1]  setup line — "📈 BTC LONG setup — <thesis>"
 //   [2]  optional broader market context (CLVR regime, news catalyst)
-//   [3]  levels — "Entry: X | Stop: Y (Z% risk) | TP1: A | TP2: B"
-//   [4]  R:R + confidence line
-//   [5]  current price line (above / below entry)
-//   [6]  risk disclaimer
-//   [7]  hashtags joined with single spaces
+//   [3]  optional REGIME ALIGNMENT GATE summary — when supplied
+//   [4]  levels — "Entry: X | Stop: Y (Z% risk) | TP1: A | TP2: B"
+//   [5]  R:R + confidence line
+//   [6]  current price line (above / below entry)
+//   [7]  risk disclaimer
+//   [8]  hashtags joined with single spaces
 //
 // Numeric formatting: prices preserve 4 sig figs for sub-$1 tokens and
 // up to 2 decimals for everything ≥ $1. We round percentages to 2 d.p.
+
+export type RegimeGateSummary = {
+  verdict: "ALIGNED" | "PARTIAL" | "MISALIGNED" | "BLOCK" | "PASS_THROUGH";
+  action:  "PUBLISH" | "DOWNGRADE" | "BLOCK";
+  score:   number;              // 0..100
+  failingChecks?: string[];     // names of checks that did NOT pass
+};
 
 export type ReasoningOpts = {
   token: string;
@@ -34,6 +42,7 @@ export type ReasoningOpts = {
   banner?: string;              // optional override (defaults derived from `source`)
   source: "morning-brief" | "live-signal" | "manual-test";
   assetClass?: "crypto" | "equity" | "commodity" | "forex" | "unknown";
+  regimeGate?: RegimeGateSummary; // optional regime alignment gate output
 };
 
 function fmtPrice(n: number): string {
@@ -84,7 +93,7 @@ function hashtagsFor(token: string, dir: "LONG" | "SHORT", assetClass: "crypto" 
 export function buildEnrichedReasoning(opts: ReasoningOpts): string[] {
   const {
     token, dir, entry, stopLoss, tp1, tp2, conf,
-    currentPrice, thesis, marketContext, banner, source,
+    currentPrice, thesis, marketContext, banner, source, regimeGate,
   } = opts;
 
   const assetClass = opts.assetClass || inferAssetClass(token);
@@ -103,6 +112,21 @@ export function buildEnrichedReasoning(opts: ReasoningOpts): string[] {
   if (marketContext && marketContext.trim().length > 0) {
     lines.push(marketContext.trim());
   }
+
+  // Regime alignment gate summary — surfaces the deterministic gate
+  // verdict (ALIGNED / PARTIAL / MISALIGNED / PASS_THROUGH) and the
+  // failing checks so anyone reading the Telegram post understands why
+  // leverage may have been halved or why a setup was downgraded.
+  if (regimeGate && (regimeGate.verdict || regimeGate.action)) {
+    const icon =
+      regimeGate.action === "BLOCK"     ? "🛑" :
+      regimeGate.action === "DOWNGRADE" ? "⚠️" :
+                                          "✅";
+    const fail = (regimeGate.failingChecks || []).filter(Boolean);
+    const failTxt = fail.length > 0 ? ` · failing: ${fail.join(", ")}` : "";
+    lines.push(`${icon} Regime Gate: ${regimeGate.verdict} (${regimeGate.score}%)${failTxt}`);
+  }
+
   const tp2Part = tp2 && Number.isFinite(tp2) && tp2 > 0 ? ` | TP2: ${fmtPrice(tp2)}` : "";
   lines.push(
     `Entry: ${fmtPrice(entry)} | Stop: ${fmtPrice(stopLoss)} (${stopPct.toFixed(2)}% risk) | TP1: ${fmtPrice(tp1)}${tp2Part}`

@@ -9,6 +9,7 @@ import { selectDailyTrades, sliceForTier, hydrateCalibration, logTierDistributio
 import { runIntegrityCheck, filterDropList, type PriceRow } from "./lib/dataIntegrity";
 import { getBrainSummary } from "./lib/statisticalBrain";
 import { notifyAutoposter } from "./autoposterNotify";
+import { computeRegimeGate } from "./lib/regimeGate";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
 
 const BATCH_SIZE = 50;
@@ -847,6 +848,55 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       // test sends. The autoposter renders the reasoning array as the
       // post body, so this IS the caption Mike sees in Telegram.
       const selectionLine = `Selection: ${pick.source === "elite" ? "calibrated daily winner" : "Claude top pick"} · RR ${pick.rr.toFixed(2)}` + (pick.n > 0 ? ` · n=${pick.n}` : "") + ` · Morning Brief ${today}`;
+      // Compute a regime alignment gate for the morning pick so the
+      // Telegram caption mirrors what /api/quant + the in-app SignalCard
+      // show. The brief's pick has already cleared the calibration +
+      // composite scoring layers, so the only NEW signal we can usefully
+      // add here is the crypto-perp funding crowding check. For
+      // non-crypto picks the gate has nothing to evaluate and harmlessly
+      // returns PASS_THROUGH (which we omit from the caption to avoid
+      // adding a meaningless line). Failure is non-fatal — the post
+      // ships either way.
+      let _briefRegimeSummary: any = null;
+      try {
+        const isCryptoTok = /^(BTC|ETH|SOL|DOGE|XRP|ADA|AVAX|LINK|MATIC|HYPE|TIA|OP|ARB|UNI|AAVE|NEAR|WIF|TRUMP|BNB|APT|DOT|HBAR|PENDLE|TAO|ONDO|SUI|INJ|SEI|JUP|RUNE|FET|RENDER|ATOM)$/.test(pick.token);
+        if (isCryptoTok) {
+          // hlData is populated by the live HL websocket in routes.ts and
+          // hung off globalThis specifically so background jobs (this file
+          // is one of them) can read it without circular imports.
+          let briefFunding: number | null = null;
+          try {
+            const hlSnap: any = (globalThis as any).hlData;
+            if (hlSnap && typeof hlSnap[pick.token]?.funding === "number") {
+              briefFunding = hlSnap[pick.token].funding;
+            }
+          } catch { /* hlData not available — silently skip funding */ }
+
+          if (typeof briefFunding === "number") {
+            const gate = computeRegimeGate(
+              null,
+              null,
+              null,
+              { safe: true, warning: null },
+              pick.dir,
+              { assetClass: "crypto", funding: briefFunding },
+            );
+            // Skip if PASS_THROUGH — adds no info to the caption.
+            if (gate.verdict !== "PASS_THROUGH") {
+              _briefRegimeSummary = {
+                verdict: gate.verdict,
+                action:  gate.action,
+                score:   gate.score,
+                failingChecks: gate.checks.filter((c: any) => !c.pass).map((c: any) => c.name),
+              };
+            }
+            console.log(`[daily-brief] regime gate for ${pick.token} ${pick.dir}: ${gate.verdict} (${gate.score}%) funding=${briefFunding}`);
+          }
+        }
+      } catch (e) {
+        console.warn(`[daily-brief] regime gate compute failed (non-fatal): ${(e as Error)?.message || e}`);
+      }
+
       const reasoning = buildEnrichedReasoning({
         token:         pick.token,
         dir:           pick.dir,
@@ -858,6 +908,7 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
         thesis:        pick.thesis,
         marketContext: selectionLine,
         source:        "morning-brief",
+        regimeGate:    _briefRegimeSummary || undefined,
       });
 
       // STABLE per-day timestamp — autoposter's idempotency-key is sha1 of
