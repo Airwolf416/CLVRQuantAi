@@ -15,6 +15,14 @@ const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
 
 const BRIEF_HOUR_ET = 6;
+// Hard upper bound on catch-up attempts. The "morning" brief is by definition
+// a morning artefact — sending it at 2 PM ET is worse than skipping a day.
+// More importantly: every restart between 6 AM ET and 11 PM ET used to fire a
+// "Boot catch-up" if today's daily_briefs_log row was missing for any reason
+// (and there are 5+ code paths that DELETE that row when recipient_count=0).
+// That meant every git push during the working day potentially blasted users.
+// Catch-up is now bounded to a tight morning window.
+const BRIEF_CATCHUP_END_HOUR_ET = 9; // catch-up allowed only when 6 ≤ hour ≤ 8 ET
 const BRIEF_MINUTE_ET = 0;
 const APP_URL = "https://clvrquantai.com";
 
@@ -1409,13 +1417,22 @@ export function startDailyBriefScheduler() {
   }, 15 * 60 * 1000);
 
   // ── Startup catch-up ────────────────────────────────────────────────────────
-  // If the server boots after 6 AM ET and today's brief slot is unclaimed,
-  // attempt the brief NOW. Atomic claimBriefSlot() guarantees only one
-  // process actually sends.
+  // If the server boots in the morning catch-up window (6:00 ≤ hour < 9 ET)
+  // and today's brief slot is unclaimed, attempt the brief NOW. Atomic
+  // claimBriefSlot() guarantees only one process actually sends.
+  //
+  // Outside that window we DO NOT attempt the brief, even if today's slot
+  // looks unclaimed. Reasons:
+  //   • A "morning brief" delivered at 3 PM ET is worse than no brief.
+  //   • daily_briefs_log gets DELETEd by ~5 paths when recipient_count=0,
+  //     so "slot unclaimed" is not a reliable signal that no email went out.
+  //   • Boot catch-up firing at arbitrary hours = every redeploy blasts
+  //     subscribers, which is what we explicitly want to prevent.
   setTimeout(async () => {
     try {
       const { hour, dateKey } = getETComponents();
-      if (hour >= BRIEF_HOUR_ET) {
+      const inCatchUpWindow = hour >= BRIEF_HOUR_ET && hour < BRIEF_CATCHUP_END_HOUR_ET;
+      if (inCatchUpWindow) {
         const alreadySent = await getTodayBriefKey();
         if (!alreadySent) {
           console.log(`[daily-brief] Missed ${BRIEF_HOUR_ET}:00 brief on boot (now ${hour}:xx ET) — running catch-up — ${briefTag()}`);
@@ -1424,6 +1441,12 @@ export function startDailyBriefScheduler() {
           lastBriefDate = dateKey;
           console.log(`[daily-brief] Today's brief already claimed — skipping catch-up — ${briefTag()}`);
         }
+      } else if (hour >= BRIEF_CATCHUP_END_HOUR_ET) {
+        // Past the catch-up window. Mark today as "done from this process'
+        // perspective" so the 30s tick also bails — even if the DB row was
+        // deleted, we will not re-blast subscribers in the afternoon/evening.
+        lastBriefDate = dateKey;
+        console.log(`[daily-brief] Boot at ${hour}:xx ET — past catch-up window (${BRIEF_HOUR_ET}-${BRIEF_CATCHUP_END_HOUR_ET} ET); will NOT send today even if slot looks unclaimed — ${briefTag()}`);
       } else {
         console.log(`[daily-brief] It's ${hour}:xx ET — next brief at ${BRIEF_HOUR_ET}:00 ET — ${briefTag()}`);
       }
@@ -1448,7 +1471,11 @@ export function startDailyBriefScheduler() {
     if (dateKey === lastBriefDate) return;
 
     const inPrimaryWindow = hour === BRIEF_HOUR_ET && minute <= 1;
-    const inCatchUpWindow = hour > BRIEF_HOUR_ET; // 7 ET through 23 ET
+    // Self-healing window: 6:02 ET through 8:59 ET only. Previously this ran
+    // any time hour > 6 (so all the way to 11 PM ET), which combined with the
+    // recipient_count=0 deletion paths caused unintended sends every time the
+    // server restarted during the working day.
+    const inCatchUpWindow = hour >= BRIEF_HOUR_ET && hour < BRIEF_CATCHUP_END_HOUR_ET && !inPrimaryWindow;
 
     if (!inPrimaryWindow && !inCatchUpWindow) return;
 
