@@ -270,8 +270,9 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
     macroRiskFlag = `HIGH MACRO RISK EVENTS WITHIN 48H: ${macroRiskEvents.join("; ")}. → Reduce position sizing. Cap leverage at 2x. Risk label: 🔴`;
   }
 
-  // Session context
-  const etHour = parseInt(now.toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }));
+  // Session context — use hourCycle:'h23' so midnight is 0 (not 24).
+  const etHourRaw = parseInt(now.toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hourCycle: "h23" }));
+  const etHour = etHourRaw === 24 ? 0 : etHourRaw;
   const sessionCtx = etHour >= 8 && etHour < 16 ? "NY Session active — full liquidity" : etHour >= 0 && etHour < 8 ? "Asian session — note lower liquidity, tighter targets" : "Post-NY/Overnight";
 
   const pendingWarningBlock = pendingHighEvents.length > 0
@@ -1318,14 +1319,21 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
 
 function getETComponents(): { hour: number; minute: number; dateKey: string } {
   const now = new Date();
+  // CRITICAL: hour12:false alone returns "24" for midnight in Node/ICU.
+  // That is THE root cause of the "midnight brief" incident — at 00:xx ET
+  // the resolver sees hour=24, which satisfies hour>=BRIEF_HOUR_ET (6) and
+  // fires catch-up. Use hourCycle 'h23' so midnight is reported as 0.
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).formatToParts(now);
   const p = (type: string) => parts.find(p => p.type === type)?.value || "0";
+  // Defensive coercion in case any future runtime still emits "24".
+  const rawHour = parseInt(p("hour"));
+  const hour = rawHour === 24 ? 0 : rawHour;
   return {
-    hour: parseInt(p("hour")),
+    hour,
     minute: parseInt(p("minute")),
     dateKey: `${p("year")}-${p("month")}-${p("day")}`,
   };
