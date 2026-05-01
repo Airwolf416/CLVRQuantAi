@@ -5613,6 +5613,50 @@ Every level must be technically defensible. Return JSON only.`;
       parsed.conviction_tier   = bayesian.tier;
       parsed.patterns          = patternResult;
       parsed.fear_greed        = fng;
+
+      // ─── REGIME ALIGNMENT GATE ─────────────────────────────────────────────
+      // Final post-AI sanity check: does the deterministic regime actually
+      // support the direction Claude proposed? Six universal checks plus a
+      // 7th funding check on crypto perps. ALIGNED = publish, PARTIAL =
+      // halve leverage / cap conviction at C, MISALIGNED = force NEUTRAL.
+      const fundingForGate = cls === "crypto" ? (hlData[ticker]?.funding ?? null) : null;
+      const gate = computeRegimeGate(ind, confluence, bayesian, macroKillSwitch, parsed.signal, {
+        assetClass: cls,
+        funding: fundingForGate,
+      });
+      parsed.regime_gate = gate;
+
+      if (gate.action === "BLOCK") {
+        parsed.signal           = "NEUTRAL";
+        parsed.entry            = null;
+        parsed.tp1              = null;
+        parsed.tp2              = null;
+        parsed.tp3              = null;
+        parsed.stopLoss         = null;
+        parsed.leverage         = { recommended: 0, max: 0, rationale: "Trade blocked by regime gate." };
+        parsed.conviction_tier  = "D";
+        parsed.win_probability  = 0;
+        parsed.gate_status      = `🛑 BLOCKED — ${gate.verdict.toLowerCase()} (${gate.score}%)`;
+        const failing = gate.checks.filter((c: any) => !c.pass).map((c: any) => c.name).join(", ") || "macro window";
+        parsed.quant_rationale  =
+          `Trade blocked by regime gate. ${gate.reason}. ` +
+          `Failing checks: ${failing}. ` +
+          `The AI proposed ${gate.direction}, but the deterministic indicators do not support it. ` +
+          `Wait for alignment before re-evaluating — taking misaligned setups is the single biggest drag on win rate.`;
+      } else if (gate.action === "DOWNGRADE") {
+        if (parsed.leverage?.recommended) {
+          parsed.leverage.recommended = Math.max(1, Math.round(parsed.leverage.recommended * gate.adjustments.leverageMultiplier));
+        }
+        if (parsed.leverage?.max) {
+          parsed.leverage.max = Math.max(1, Math.round(parsed.leverage.max * gate.adjustments.leverageMultiplier));
+        }
+        parsed.conviction_tier = gate.adjustments.convictionCap;
+        parsed.gate_status     = `⚠️ PARTIAL ALIGNMENT (${gate.score}%) — leverage halved, conviction capped at ${gate.adjustments.convictionCap}`;
+        const failing = gate.checks.filter((c: any) => !c.pass).map((c: any) => c.name).join(", ");
+        parsed.quant_rationale = `[Regime gate ${gate.score}% — failing: ${failing}] ` + (parsed.quant_rationale || "");
+      } else {
+        parsed.gate_status = `✅ ALIGNED (${gate.score}%) — regime supports trade`;
+      }
       parsed.suppression       = {
         triggered: suppression.triggered,
         flags: suppression.flagsForAI,
