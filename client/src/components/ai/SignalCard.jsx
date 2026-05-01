@@ -165,6 +165,64 @@ export default function SignalCard({ ticker, result, rank, mode }) {
         </div>
       </div>
 
+      {result.regime_gate && Array.isArray(result.regime_gate.checks) && result.regime_gate.checks.length > 0 && (
+        <div
+          data-testid={`regime-gate-${ticker}`}
+          style={{
+            margin: "10px 12px 0",
+            padding: "10px 12px",
+            borderRadius: 6,
+            background:
+              result.regime_gate.action === "BLOCK"
+                ? "rgba(239,68,68,0.06)"
+                : result.regime_gate.action === "DOWNGRADE"
+                ? "rgba(245,158,11,0.06)"
+                : "rgba(34,197,94,0.05)",
+            border: `1px solid ${
+              result.regime_gate.action === "BLOCK"
+                ? "rgba(239,68,68,0.3)"
+                : result.regime_gate.action === "DOWNGRADE"
+                ? "rgba(245,158,11,0.3)"
+                : "rgba(34,197,94,0.25)"
+            }`,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 8,
+              letterSpacing: 1.5,
+              fontWeight: 700,
+              fontFamily: MONO,
+              marginBottom: 6,
+              color:
+                result.regime_gate.action === "BLOCK"
+                  ? "#ef4444"
+                  : result.regime_gate.action === "DOWNGRADE"
+                  ? "#f59e0b"
+                  : "#22c55e",
+            }}
+          >
+            ◆ REGIME GATE — {result.regime_gate.verdict} ({result.regime_gate.score}%)
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+            {result.regime_gate.checks.map((c, i) => (
+              <div key={i} style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", display: "flex", gap: 5, alignItems: "flex-start", fontFamily: MONO }}>
+                <span style={{ color: c.pass ? "#22c55e" : "#ef4444", flexShrink: 0, fontWeight: 700 }}>{c.pass ? "✓" : "✗"}</span>
+                <div>
+                  <div style={{ color: "rgba(255,255,255,0.85)", fontWeight: 600 }}>{c.name}</div>
+                  <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 8 }}>{c.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {result.gate_status && (
+            <div style={{ fontSize: 9, color: "rgba(255,255,255,0.6)", marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.05)", fontFamily: MONO }}>
+              {result.gate_status}
+            </div>
+          )}
+        </div>
+      )}
+
       {result.quant_rationale && (
         <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
           <div style={{ fontSize: 10, color: "#e0e0e0", fontFamily: SANS, fontStyle: "italic", lineHeight: 1.7 }}>{result.quant_rationale}</div>
