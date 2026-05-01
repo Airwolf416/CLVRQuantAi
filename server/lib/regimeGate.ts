@@ -81,64 +81,84 @@ export function computeRegimeGate(
 
   const checks: RegimeGateCheck[] = [];
 
+  // Each check is gated by data availability. Inputs that are entirely
+  // missing are SKIPPED (not added to checks[]) rather than failed — the
+  // upstream caller is the source of truth on whether that data exists,
+  // and forcing every endpoint to compute the full quant suite would
+  // either be impossible (vision endpoints) or wasteful. The score is
+  // computed against the checks that actually ran.
+
   // 1. Trend alignment (ind.trend must agree with AI direction)
-  const trend = ind?.trend || "";
-  const trendOk = isLong ? /UPTREND/i.test(trend) : /DOWNTREND/i.test(trend);
-  checks.push({
-    name: "Trend",
-    pass: trendOk,
-    detail: `${trend || "n/a"} ${trendOk ? "✓ aligns" : "✗ fights"} ${dir}`,
-  });
+  if (ind && typeof ind.trend === "string" && ind.trend.length > 0) {
+    const trend = ind.trend;
+    const trendOk = isLong ? /UPTREND/i.test(trend) : /DOWNTREND/i.test(trend);
+    checks.push({
+      name: "Trend",
+      pass: trendOk,
+      detail: `${trend} ${trendOk ? "✓ aligns" : "✗ fights"} ${dir}`,
+    });
+  }
 
   // 2. Multi-TF confluence (4h + 1d agreement)
-  const confDir = confluence?.direction || "MIXED";
-  const confOk = isLong
-    ? confDir === "BULLISH" || confDir === "LEANING_BULL"
-    : confDir === "BEARISH" || confDir === "LEANING_BEAR";
-  checks.push({
-    name: "Multi-TF confluence",
-    pass: confOk,
-    detail: `${confDir} (${confluence?.strength || "n/a"})`,
-  });
+  if (confluence && typeof confluence.direction === "string") {
+    const confDir = confluence.direction;
+    const confOk = isLong
+      ? confDir === "BULLISH" || confDir === "LEANING_BULL"
+      : confDir === "BEARISH" || confDir === "LEANING_BEAR";
+    checks.push({
+      name: "Multi-TF confluence",
+      pass: confOk,
+      detail: `${confDir} (${confluence.strength || "n/a"})`,
+    });
+  }
 
   // 3. EMA stack (price > EMA20 > EMA50 > EMA200, or inverse for shorts)
-  const stackOk = isLong
-    ? Number.isFinite(ind?.currentPrice) && Number.isFinite(ind?.ema20) && Number.isFinite(ind?.ema50) && Number.isFinite(ind?.ema200) &&
-      ind.currentPrice > ind.ema20 && ind.ema20 > ind.ema50 && ind.ema50 > ind.ema200
-    : Number.isFinite(ind?.currentPrice) && Number.isFinite(ind?.ema20) && Number.isFinite(ind?.ema50) && Number.isFinite(ind?.ema200) &&
-      ind.currentPrice < ind.ema20 && ind.ema20 < ind.ema50 && ind.ema50 < ind.ema200;
-  checks.push({
-    name: "EMA stack",
-    pass: stackOk,
-    detail: stackOk ? "Stack confirms direction" : "Stack broken or mixed",
-  });
+  const haveStack =
+    Number.isFinite(ind?.currentPrice) && Number.isFinite(ind?.ema20) &&
+    Number.isFinite(ind?.ema50)        && Number.isFinite(ind?.ema200);
+  if (haveStack) {
+    const stackOk = isLong
+      ? ind.currentPrice > ind.ema20 && ind.ema20 > ind.ema50 && ind.ema50 > ind.ema200
+      : ind.currentPrice < ind.ema20 && ind.ema20 < ind.ema50 && ind.ema50 < ind.ema200;
+    checks.push({
+      name: "EMA stack",
+      pass: stackOk,
+      detail: stackOk ? "Stack confirms direction" : "Stack broken or mixed",
+    });
+  }
 
   // 4. Momentum agreement
-  const mom = Number.isFinite(ind?.momentumScore) ? ind.momentumScore : 50;
-  const momOk = isLong ? mom >= 55 : mom <= 45;
-  checks.push({
-    name: "Momentum",
-    pass: momOk,
-    detail: `${mom}/100 ${momOk ? "✓" : "✗ neutral or opposing"}`,
-  });
+  if (Number.isFinite(ind?.momentumScore)) {
+    const mom = ind.momentumScore;
+    const momOk = isLong ? mom >= 55 : mom <= 45;
+    checks.push({
+      name: "Momentum",
+      pass: momOk,
+      detail: `${mom}/100 ${momOk ? "✓" : "✗ neutral or opposing"}`,
+    });
+  }
 
   // 5. RSI not exhausted against the direction
-  const rsi = Number.isFinite(ind?.rsi) ? ind.rsi : 50;
-  const rsiOk = isLong ? rsi < 75 : rsi > 25;
-  checks.push({
-    name: "RSI exhaustion",
-    pass: rsiOk,
-    detail: `RSI ${rsi} ${rsiOk ? "ok" : "exhausted — reversal risk"}`,
-  });
+  if (Number.isFinite(ind?.rsi)) {
+    const rsi = ind.rsi;
+    const rsiOk = isLong ? rsi < 75 : rsi > 25;
+    checks.push({
+      name: "RSI exhaustion",
+      pass: rsiOk,
+      detail: `RSI ${rsi} ${rsiOk ? "ok" : "exhausted — reversal risk"}`,
+    });
+  }
 
   // 6. Volatility regime sanity (ATR% in usable band)
-  const atrPct = parseFloat(ind?.atrPct) || 0;
-  const volOk = atrPct >= 0.3 && atrPct <= 12;
-  checks.push({
-    name: "Volatility regime",
-    pass: volOk,
-    detail: `ATR ${atrPct.toFixed(2)}% ${volOk ? "tradeable" : atrPct < 0.3 ? "too quiet — SL hits in noise" : "too wild — slippage risk"}`,
-  });
+  const atrPct = parseFloat(ind?.atrPct);
+  if (Number.isFinite(atrPct) && atrPct > 0) {
+    const volOk = atrPct >= 0.3 && atrPct <= 12;
+    checks.push({
+      name: "Volatility regime",
+      pass: volOk,
+      detail: `ATR ${atrPct.toFixed(2)}% ${volOk ? "tradeable" : atrPct < 0.3 ? "too quiet — SL hits in noise" : "too wild — slippage risk"}`,
+    });
+  }
 
   // 7. Funding rate (crypto perps only) — block if positioning is crowded
   // against the trade. Threshold: ±0.05% per 8h is the "extreme crowding"
@@ -161,7 +181,21 @@ export function computeRegimeGate(
 
   const passCount = checks.filter(c => c.pass).length;
   const total = checks.length;
-  const score = total > 0 ? Math.round((passCount / total) * 100) : 0;
+  // No checks ran (extreme degenerate case — e.g. caller passed only stub
+  // data and we're not even on crypto so the funding check was skipped).
+  // Pass through with a neutral score so we don't accidentally block.
+  if (total === 0) {
+    return {
+      verdict: "PASS_THROUGH",
+      action: "PUBLISH",
+      direction: dir,
+      score: 50,
+      reason: "No regime data available — gate cannot evaluate",
+      checks: [],
+      adjustments: { leverageMultiplier: 1, convictionCap: bayesian?.tier || "C" },
+    };
+  }
+  const score = Math.round((passCount / total) * 100);
 
   // Percentage-based thresholds so adding/removing checks does not break
   // the verdict logic (e.g. funding check is absent for non-crypto).
