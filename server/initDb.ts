@@ -342,19 +342,29 @@ export async function initializeDatabase(): Promise<void> {
     // SL/TP reflected across entry) is logged here and resolved against the
     // same live price feed. Used to measure what flipping the system would
     // actually have earned, without changing live behavior. Forward-only.
+    // Column names MUST match shared/schema.ts (Drizzle is the source of
+    // truth). Earlier revisions of this CREATE used tp1_price/tp2_price/
+    // tp3_price/stop_loss, which Drizzle now calls inverted_tp1/2/3 and
+    // inverted_sl — that drift broke production: every shadow-inversion
+    // INSERT and the outcome-resolver's SELECT both errored with
+    // `column "inverted_tp1" does not exist`. Fresh installs and any newly
+    // provisioned prod DB now get the correct columns. Existing databases
+    // that were created with the old names need a one-off rename migration
+    // (out of scope for this file, which uses CREATE TABLE IF NOT EXISTS).
     await client.query(`
       CREATE TABLE IF NOT EXISTS signal_shadow_inversions (
         id                  SERIAL PRIMARY KEY,
         source_signal_id    INTEGER NOT NULL REFERENCES ai_signal_log(id) ON DELETE CASCADE,
         token               VARCHAR(20) NOT NULL,
+        original_direction  VARCHAR(10) NOT NULL,
         inverted_direction  VARCHAR(10) NOT NULL,
         entry_price         DECIMAL(20,8) NOT NULL,
-        tp1_price           DECIMAL(20,8),
-        tp2_price           DECIMAL(20,8),
-        tp3_price           DECIMAL(20,8),
-        stop_loss           DECIMAL(20,8),
+        inverted_tp1        DECIMAL(20,8),
+        inverted_tp2        DECIMAL(20,8),
+        inverted_tp3        DECIMAL(20,8),
+        inverted_sl         DECIMAL(20,8),
         kill_clock_expires  TIMESTAMP,
-        outcome             VARCHAR(20) DEFAULT 'PENDING',
+        outcome             VARCHAR(20) NOT NULL DEFAULT 'PENDING',
         pnl_pct             DECIMAL(10,4),
         resolved_at         TIMESTAMP,
         created_at          TIMESTAMP DEFAULT NOW()
