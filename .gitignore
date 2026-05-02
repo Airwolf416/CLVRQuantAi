@@ -5,6 +5,9 @@ server/public
 vite.config.ts.*
 *.tar.gz
 
+# Local file-backed stores (admin candidate review log, etc.)
+data/
+
 # Database dump files — may contain hashed passwords, secrets, or PII
 *.sql
 *_dump.sql

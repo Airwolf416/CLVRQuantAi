@@ -1242,6 +1242,246 @@ function PerformanceHighlights(){
   );
 }
 
+// ── ADMIN: Signal Candidates queue (admin-only via /api/admin/candidates) ──
+// Pending signals from the quant engine sit here until I either Approve
+// (fires the existing /signals/:id/send-to-telegram pipeline → autoposter
+// webhook → Claude formats downstream → Telegram channel) or Reject (no
+// Claude, no post). Auto-refreshes every 30s. Counter at top.
+function AdminCandidatesTab(){
+  const{C}=useContext(ThemeCtx);
+  const[data,setData]=useState(null);
+  const[loading,setLoading]=useState(true);
+  const[err,setErr]=useState(null);
+  const[busyId,setBusyId]=useState(null);     // id currently being approved/rejected
+  const[toast,setLocalToast]=useState(null);  // {ok:bool, text:string}
+  const[rejectingId,setRejectingId]=useState(null);
+  const[rejectReason,setRejectReason]=useState("");
+
+  const fetchData=async()=>{
+    try{
+      const r=await fetch("/api/admin/candidates",{credentials:"include"});
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const j=await r.json();setData(j);setErr(null);
+    }catch(e){setErr(e.message||"Failed to load");}
+    finally{setLoading(false);}
+  };
+  useEffect(()=>{fetchData();const id=setInterval(fetchData,30000);return()=>clearInterval(id);},[]);
+
+  const showToast=(ok,text)=>{
+    setLocalToast({ok,text});
+    setTimeout(()=>setLocalToast(null),6000);
+  };
+
+  const approve=async(c)=>{
+    if(busyId)return;
+    if(!window.confirm(`Approve & send ${c.token} ${c.dir} to Telegram?\n\nEntry ${c.entry} · SL ${c.stopLoss} · TP1 ${c.tp1}${c.tp2?` · TP2 ${c.tp2}`:""}\n\nThis fires the autoposter webhook (→ Claude formats downstream → Telegram channel).`))return;
+    setBusyId(c.id);
+    try{
+      const r=await fetch(`/api/admin/candidates/${c.id}/approve`,{method:"POST",credentials:"include"});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok&&j.ok){
+        showToast(true,`Approved & sent: ${c.token} ${c.dir} (HTTP ${j.status||"?"}) ✓`);
+      }else if(r.status===429){
+        const sec=Math.ceil((j.cooldownRemainingMs||0)/1000);
+        showToast(false,`Cooldown active — wait ${sec}s before retry.`);
+      }else if(r.status===409){
+        showToast(false,`Already actioned (status: ${j.review?.status||"unknown"}).`);
+      }else{
+        const reason=j.reason||j.error||`HTTP ${r.status}`;
+        const detail=j.detail?` — ${String(j.detail).slice(0,140)}`:"";
+        showToast(false,`Approve failed: ${reason}${detail}`);
+      }
+      fetchData();
+    }catch(e){
+      showToast(false,`Network error: ${e?.message||"unknown"}`);
+    }finally{
+      setBusyId(null);
+    }
+  };
+
+  const openReject=(id)=>{
+    setRejectingId(id);
+    setRejectReason("");
+  };
+  const cancelReject=()=>{
+    setRejectingId(null);
+    setRejectReason("");
+  };
+  const submitReject=async()=>{
+    const id=rejectingId;
+    if(!id||busyId)return;
+    setBusyId(id);
+    try{
+      const r=await fetch(`/api/admin/candidates/${id}/reject`,{
+        method:"POST",
+        credentials:"include",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({reason:rejectReason.trim()||undefined}),
+      });
+      const j=await r.json().catch(()=>({}));
+      if(r.ok&&j.ok){
+        showToast(true,`Rejected · removed from queue ✓`);
+      }else if(r.status===409){
+        showToast(false,`Already actioned.`);
+      }else{
+        showToast(false,`Reject failed: ${j.error||`HTTP ${r.status}`}`);
+      }
+      cancelReject();
+      fetchData();
+    }catch(e){
+      showToast(false,`Network error: ${e?.message||"unknown"}`);
+    }finally{
+      setBusyId(null);
+    }
+  };
+
+  const fmtAge=(ms)=>{
+    if(ms<60000)return`${Math.floor(ms/1000)}s`;
+    if(ms<3600000)return`${Math.floor(ms/60000)}m`;
+    return`${Math.floor(ms/3600000)}h ${Math.floor((ms%3600000)/60000)}m`;
+  };
+  const fmtRemain=(expiresAt)=>{
+    const left=expiresAt-Date.now();
+    if(left<=0)return"expired";
+    const m=Math.floor(left/60000);
+    if(m<60)return`${m}m left`;
+    return`${Math.floor(m/60)}h ${m%60}m left`;
+  };
+  const dirColor=(d)=>d==="LONG"?"#22c55e":"#ef4444";
+  const confColor=(c)=>c>=80?"#22c55e":c>=70?"#86efac":c>=55?"#f59e0b":"#ef4444";
+  const gateColor=(action)=>action==="BLOCK"?"#ef4444":action==="DOWNGRADE"?"#f59e0b":"#22c55e";
+
+  const candidates=data?.candidates||[];
+  const counts=data?.history||{approved:0,rejected:0,expired:0};
+
+  return(<div data-testid="page-admin-candidates" style={{padding:"16px",color:C.text,maxWidth:1200,margin:"0 auto"}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:12}}>
+      <div>
+        <div style={{fontSize:18,fontWeight:800,letterSpacing:"0.04em"}}>SIGNAL CANDIDATES</div>
+        <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>
+          Pending quant signals — approve to fire Telegram, reject to discard · auto-refresh 30s · 2h TTL
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <div data-testid="stat-pending-count" style={{padding:"8px 14px",background:"rgba(201,168,76,0.08)",border:"1px solid rgba(201,168,76,0.4)",borderRadius:4,fontFamily:"monospace"}}>
+          <span style={{fontSize:22,fontWeight:800,color:"#c9a84c"}}>{candidates.length}</span>
+          <span style={{fontSize:10,color:C.textMuted,marginLeft:8,letterSpacing:"0.08em"}}>PENDING</span>
+        </div>
+        <button data-testid="button-refresh-candidates" onClick={()=>{setLoading(true);fetchData();}} disabled={loading} style={{padding:"6px 14px",fontSize:11,fontWeight:700,background:"transparent",color:C.text,border:`1px solid ${C.border}`,borderRadius:4,cursor:loading?"wait":"pointer",fontFamily:"monospace",letterSpacing:"0.04em"}}>{loading?"…":"REFRESH"}</button>
+      </div>
+    </div>
+
+    <div data-testid="row-history-counts" style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+      <div style={{padding:"6px 12px",background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.3)",borderRadius:3,fontFamily:"monospace",fontSize:10}}>
+        <span style={{color:"#22c55e",fontWeight:700}}>{counts.approved}</span>
+        <span style={{color:C.textMuted,marginLeft:6,letterSpacing:"0.08em"}}>APPROVED 48H</span>
+      </div>
+      <div style={{padding:"6px 12px",background:"rgba(239,68,68,0.06)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:3,fontFamily:"monospace",fontSize:10}}>
+        <span style={{color:"#ef4444",fontWeight:700}}>{counts.rejected}</span>
+        <span style={{color:C.textMuted,marginLeft:6,letterSpacing:"0.08em"}}>REJECTED 48H</span>
+      </div>
+      <div style={{padding:"6px 12px",background:"rgba(136,136,136,0.06)",border:"1px solid rgba(136,136,136,0.3)",borderRadius:3,fontFamily:"monospace",fontSize:10}}>
+        <span style={{color:"#888",fontWeight:700}}>{counts.expired}</span>
+        <span style={{color:C.textMuted,marginLeft:6,letterSpacing:"0.08em"}}>EXPIRED 48H</span>
+      </div>
+    </div>
+
+    {err&&<div data-testid="text-candidates-error" style={{padding:12,background:"rgba(239,68,68,0.1)",border:"1px solid #ef444455",borderRadius:4,color:"#ef4444",fontSize:12,marginBottom:12}}>Error: {err}</div>}
+
+    {toast&&<div data-testid="text-candidates-toast" style={{padding:"8px 12px",marginBottom:12,background:toast.ok?"rgba(34,197,94,0.1)":"rgba(239,68,68,0.1)",border:`1px solid ${toast.ok?"#22c55e55":"#ef444455"}`,borderRadius:4,fontSize:12,color:toast.ok?"#22c55e":"#ef4444",fontFamily:"monospace",fontWeight:600}}>
+      {toast.ok?"✓ ":"✗ "}{toast.text}
+    </div>}
+
+    {loading&&!data&&<div style={{padding:24,textAlign:"center",color:C.textMuted,fontSize:12}}>Loading candidates…</div>}
+
+    {data&&candidates.length===0&&<div data-testid="text-no-candidates" style={{padding:32,textAlign:"center",color:C.textMuted,fontSize:12,background:"rgba(255,255,255,0.02)",border:`1px dashed ${C.border}`,borderRadius:4}}>
+      <div style={{fontSize:24,marginBottom:8}}>📭</div>
+      <div>No pending signals. The quant engine will queue new candidates here as they fire.</div>
+      <div style={{fontSize:10,color:C.textMuted,marginTop:6}}>Auto-refreshing every 30s.</div>
+    </div>}
+
+    {candidates.map(c=>(
+      <div key={c.id} data-testid={`card-candidate-${c.id}`} style={{padding:14,marginBottom:10,background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:4}}>
+
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <span data-testid={`text-token-${c.id}`} style={{fontSize:16,fontWeight:800,fontFamily:"monospace"}}>{c.token}</span>
+            <span data-testid={`text-dir-${c.id}`} style={{padding:"2px 8px",fontSize:11,fontWeight:800,background:`${dirColor(c.dir)}22`,color:dirColor(c.dir),border:`1px solid ${dirColor(c.dir)}66`,borderRadius:3,fontFamily:"monospace",letterSpacing:"0.08em"}}>{c.dir}</span>
+            {c.leverage&&<span style={{padding:"2px 8px",fontSize:10,fontWeight:700,background:"rgba(201,168,76,0.1)",color:"#c9a84c",border:"1px solid rgba(201,168,76,0.4)",borderRadius:3,fontFamily:"monospace"}}>{c.leverage}</span>}
+            {c.isStrongSignal&&<span style={{padding:"2px 8px",fontSize:10,fontWeight:700,background:"rgba(34,197,94,0.1)",color:"#22c55e",border:"1px solid rgba(34,197,94,0.4)",borderRadius:3,fontFamily:"monospace",letterSpacing:"0.06em"}}>STRONG</span>}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",fontSize:10,fontFamily:"monospace"}}>
+            <span style={{color:C.textMuted}}>age <span style={{color:C.text,fontWeight:700}}>{fmtAge(c.ageMs)}</span></span>
+            <span style={{color:C.textMuted}}>·</span>
+            <span style={{color:C.textMuted}}><span data-testid={`text-expires-${c.id}`} style={{color:c.expiresAt-Date.now()<30*60*1000?"#f59e0b":C.text,fontWeight:600}}>{fmtRemain(c.expiresAt)}</span></span>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(110px, 1fr))",gap:8,marginBottom:10,fontFamily:"monospace",fontSize:11}}>
+          <div style={{padding:8,background:"rgba(255,255,255,0.02)",border:`1px solid ${C.border}`,borderRadius:3}}>
+            <div style={{fontSize:8,color:C.textMuted,letterSpacing:"0.08em",marginBottom:3}}>ENTRY</div>
+            <div data-testid={`text-entry-${c.id}`} style={{fontWeight:700}}>{c.entry}</div>
+          </div>
+          <div style={{padding:8,background:"rgba(239,68,68,0.04)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:3}}>
+            <div style={{fontSize:8,color:C.textMuted,letterSpacing:"0.08em",marginBottom:3}}>STOP {c.stopPct?`(${c.stopPct})`:""}</div>
+            <div data-testid={`text-stop-${c.id}`} style={{fontWeight:700,color:"#ef4444"}}>{c.stopLoss||"—"}</div>
+          </div>
+          <div style={{padding:8,background:"rgba(34,197,94,0.04)",border:"1px solid rgba(34,197,94,0.25)",borderRadius:3}}>
+            <div style={{fontSize:8,color:C.textMuted,letterSpacing:"0.08em",marginBottom:3}}>TP1 {c.tp1Pct?`(${c.tp1Pct})`:""}</div>
+            <div data-testid={`text-tp1-${c.id}`} style={{fontWeight:700,color:"#22c55e"}}>{c.tp1||"—"}</div>
+          </div>
+          {c.tp2&&<div style={{padding:8,background:"rgba(34,197,94,0.04)",border:"1px solid rgba(34,197,94,0.25)",borderRadius:3}}>
+            <div style={{fontSize:8,color:C.textMuted,letterSpacing:"0.08em",marginBottom:3}}>TP2 {c.tp2Pct?`(${c.tp2Pct})`:""}</div>
+            <div data-testid={`text-tp2-${c.id}`} style={{fontWeight:700,color:"#22c55e"}}>{c.tp2}</div>
+          </div>}
+          <div style={{padding:8,background:"rgba(255,255,255,0.02)",border:`1px solid ${C.border}`,borderRadius:3}}>
+            <div style={{fontSize:8,color:C.textMuted,letterSpacing:"0.08em",marginBottom:3}}>CONF</div>
+            <div data-testid={`text-conf-${c.id}`} style={{fontWeight:700,color:confColor(c.conf||0)}}>{c.conf||0}{c.advancedScore!=null?` / ${c.advancedScore}`:""}</div>
+          </div>
+          {c.rr1!=null&&<div style={{padding:8,background:"rgba(255,255,255,0.02)",border:`1px solid ${C.border}`,borderRadius:3}}>
+            <div style={{fontSize:8,color:C.textMuted,letterSpacing:"0.08em",marginBottom:3}}>R:R</div>
+            <div style={{fontWeight:700}}>{Number(c.rr1).toFixed(2)}{c.rr2?` / ${Number(c.rr2).toFixed(2)}`:""}</div>
+          </div>}
+          {c.checksTotalCount!=null&&<div style={{padding:8,background:"rgba(255,255,255,0.02)",border:`1px solid ${C.border}`,borderRadius:3}}>
+            <div style={{fontSize:8,color:C.textMuted,letterSpacing:"0.08em",marginBottom:3}}>CHECKS</div>
+            <div style={{fontWeight:700}}>{c.checksPassedCount}/{c.checksTotalCount}</div>
+          </div>}
+        </div>
+
+        {c.regimeGate&&<div data-testid={`row-gate-${c.id}`} style={{padding:"6px 10px",marginBottom:10,background:`${gateColor(c.regimeGate.action)}11`,border:`1px solid ${gateColor(c.regimeGate.action)}55`,borderLeft:`3px solid ${gateColor(c.regimeGate.action)}`,borderRadius:3,fontSize:10,fontFamily:"monospace"}}>
+          <span style={{color:gateColor(c.regimeGate.action),fontWeight:800}}>GATE · {c.regimeGate.verdict}</span>
+          <span style={{color:C.textMuted,margin:"0 6px"}}>·</span>
+          <span style={{color:C.text}}>{c.regimeGate.score}%</span>
+          {c.regimeGate.failingChecks?.length>0&&<>
+            <span style={{color:C.textMuted,margin:"0 6px"}}>·</span>
+            <span style={{color:"#f59e0b"}}>failing: {c.regimeGate.failingChecks.join(", ")}</span>
+          </>}
+        </div>}
+
+        {Array.isArray(c.reasoning)&&c.reasoning.length>0&&<div style={{marginBottom:10,padding:8,background:"rgba(0,0,0,0.2)",border:`1px solid ${C.border}`,borderRadius:3,fontFamily:"monospace",fontSize:10,lineHeight:1.6,color:C.textMuted}}>
+          {c.reasoning.map((line,i)=>(<div key={i}>{line}</div>))}
+        </div>}
+
+        {rejectingId===c.id?(
+          <div style={{padding:10,background:"rgba(239,68,68,0.05)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:3}}>
+            <div style={{fontSize:10,color:"#ef4444",fontWeight:700,letterSpacing:"0.08em",marginBottom:6,fontFamily:"monospace"}}>REJECT REASON (OPTIONAL)</div>
+            <input data-testid={`input-reject-reason-${c.id}`} value={rejectReason} onChange={e=>setRejectReason(e.target.value)} placeholder="e.g. macro overrides, low liquidity, already in similar position…" maxLength={280} style={{width:"100%",padding:"7px 10px",fontSize:12,background:"rgba(0,0,0,0.3)",border:`1px solid ${C.border}`,borderRadius:3,color:C.text,fontFamily:"monospace",marginBottom:8}}/>
+            <div style={{display:"flex",gap:6}}>
+              <button data-testid={`button-confirm-reject-${c.id}`} onClick={submitReject} disabled={busyId===c.id} style={{flex:1,padding:"7px 12px",fontSize:11,fontWeight:800,background:"#ef4444",color:"#fff",border:"none",borderRadius:3,cursor:busyId===c.id?"wait":"pointer",fontFamily:"monospace",letterSpacing:"0.06em"}}>{busyId===c.id?"REJECTING…":"CONFIRM REJECT"}</button>
+              <button data-testid={`button-cancel-reject-${c.id}`} onClick={cancelReject} disabled={busyId===c.id} style={{padding:"7px 12px",fontSize:11,fontWeight:700,background:"transparent",color:C.text,border:`1px solid ${C.border}`,borderRadius:3,cursor:"pointer",fontFamily:"monospace"}}>CANCEL</button>
+            </div>
+          </div>
+        ):(
+          <div style={{display:"flex",gap:8}}>
+            <button data-testid={`button-approve-${c.id}`} onClick={()=>approve(c)} disabled={busyId===c.id||!!busyId} style={{flex:2,padding:"10px 14px",fontSize:12,fontWeight:800,background:busyId===c.id?"transparent":"#22c55e",color:busyId===c.id?"#22c55e":"#000",border:"1px solid #22c55e",borderRadius:3,cursor:busyId?(busyId===c.id?"wait":"not-allowed"):"pointer",fontFamily:"monospace",letterSpacing:"0.08em",opacity:busyId&&busyId!==c.id?0.4:1}}>{busyId===c.id?"SENDING…":"✓ APPROVE & SEND TO TELEGRAM"}</button>
+            <button data-testid={`button-reject-${c.id}`} onClick={()=>openReject(c.id)} disabled={!!busyId} style={{flex:1,padding:"10px 14px",fontSize:12,fontWeight:800,background:"transparent",color:"#ef4444",border:"1px solid #ef4444",borderRadius:3,cursor:busyId?"not-allowed":"pointer",fontFamily:"monospace",letterSpacing:"0.08em",opacity:busyId?0.4:1}}>✗ REJECT</button>
+          </div>
+        )}
+      </div>
+    ))}
+  </div>);
+}
+
 // ── ADMIN: Rejection tuning dashboard (admin-only via /api/admin/rejections) ──
 // Surfaces why the auto-scanner is killing setups so we can tune thresholds
 // without flying blind. Backed by signal_rejections table (30d retention).
@@ -3894,6 +4134,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"signals",icon:"⚡",label:i18n.signals},
     ...(isAdmin?[{k:"track",icon:"📈",label:"RECORD"}]:[]),
     ...(isAdmin?[{k:"rejections",icon:"🚫",label:"REJECTS"}]:[]),
+    ...(isAdmin?[{k:"candidates",icon:"📋",label:"REVIEW"}]:[]),
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -5335,6 +5576,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 
         {tab==="rejections"&&isAdmin&&<AdminRejectionsTab/>}
+
+        {tab==="candidates"&&isAdmin&&<AdminCandidatesTab/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>
