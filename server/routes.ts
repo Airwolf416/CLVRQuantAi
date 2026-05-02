@@ -1225,7 +1225,14 @@ async function detectMoves() {
     }
 
     liveSignals.unshift(signal);
-    notifyAutoposter(signal).catch(() => {}); // fire and forget — never blocks signal flow
+    // ── AUTOPOSTER DISABLED ──────────────────────────────────────────────
+    // The live auto-scanner used to fire the Telegram autoposter on every
+    // new signal here. Disabled per owner request — replaced by the
+    // admin-triggered flow (/api/admin/signals/test-send-real). The signal
+    // is still saved to liveSignals + DB so the in-app dashboard, manual
+    // admin send, and outcome resolver continue to work normally.
+    // Do not re-enable without approval.
+    // notifyAutoposter(signal).catch(() => {}); // fire and forget — never blocks signal flow
     if (liveSignals.length > 50) liveSignals.length = 50;
     lastSignalTime[sym] = now;
     if (!perAssetSignalLog[sym]) perAssetSignalLog[sym] = [];
