@@ -2075,6 +2075,196 @@ export async function registerRoutes(
     }
   });
 
+  // ── /api/admin/candidates ────────────────────────────────────────────────
+  // Admin-only Signal Candidates queue. Returns every signal in the in-memory
+  // live buffer (server keeps the last 50) that is BOTH:
+  //   - aged < 2h (signals go stale fast — the spec set this TTL)
+  //   - not yet acted on (no review record AND not auto-expired)
+  // Decisions are tracked in data/candidate-reviews.json (file-backed, no DB
+  // schema changes). Counters in `history` reflect the last 48h of activity.
+  const CANDIDATE_TTL_MS = 2 * 60 * 60 * 1000;
+
+  app.get("/api/admin/candidates", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    const { getAllReviews, getReviewCounts } = await import("./lib/candidateReviews");
+    const reviews = getAllReviews();
+    const now = Date.now();
+    const pending = liveSignals
+      .filter((s: any) => {
+        if (!s?.id) return false;
+        const ageMs = now - (s.ts || 0);
+        if (ageMs > CANDIDATE_TTL_MS) return false;
+        return !reviews.has(String(s.id));
+      })
+      .map((s: any) => {
+        const ageMs = now - (s.ts || now);
+        const expiresAt = (s.ts || now) + CANDIDATE_TTL_MS;
+        const gate = s.regime_gate
+          ? {
+              verdict: s.regime_gate.verdict,
+              action:  s.regime_gate.action,
+              score:   s.regime_gate.score,
+              failingChecks: Array.isArray(s.regime_gate.checks)
+                ? s.regime_gate.checks.filter((c: any) => !c.pass).map((c: any) => c.name)
+                : [],
+            }
+          : null;
+        return {
+          id: s.id,
+          token: s.token,
+          dir: s.dir,
+          entry: s.entry,
+          stopLoss: s.stopLoss,
+          tp1: s.tp1,
+          tp2: s.tp2,
+          leverage: s.lev,
+          conf: s.conf,
+          advancedScore: s.advancedScore,
+          isStrongSignal: s.isStrongSignal,
+          pctMove: s.pctMove,
+          tp1Pct: s.tp1Pct,
+          tp2Pct: s.tp2Pct,
+          stopPct: s.stopPct,
+          rr1: s.rr1,
+          rr2: s.rr2,
+          atr: s.atr,
+          masterScore: s.masterScore,
+          riskLabel: s.riskLabel,
+          timeframe: s.timeframe,
+          session: s.session,
+          macroFlags: s.macroFlags,
+          whaleAligned: s.whaleAligned,
+          checksPassedCount: s.checksPassedCount,
+          checksTotalCount: s.checksTotalCount,
+          detectedPatterns: s.detectedPatterns,
+          regimeGate: gate,
+          reasoning: Array.isArray(s.reasoning) ? s.reasoning.slice(0, 8) : [],
+          ts: s.ts,
+          ageMs,
+          expiresAt,
+        };
+      });
+
+    res.json({
+      count: pending.length,
+      candidates: pending,
+      ttlMs: CANDIDATE_TTL_MS,
+      history: getReviewCounts(),
+    });
+  });
+
+  // ── /api/admin/candidates/:id/approve ────────────────────────────────────
+  // Same pipeline as /api/admin/signals/:id/send-to-telegram, but ALSO
+  // records an "approved" review record so the candidate disappears from
+  // the queue. Reuses the same 30s per-signal cooldown map.
+  app.post("/api/admin/candidates/:id/approve", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    const id = String(req.params.id || "");
+    if (!id) return res.status(400).json({ error: "Missing candidate id" });
+
+    const { getReview, setReview } = await import("./lib/candidateReviews");
+    const existing = getReview(id);
+    if (existing) {
+      return res.status(409).json({ error: "Already actioned", review: existing });
+    }
+
+    const sig = liveSignals.find((s: any) => String(s?.id) === id);
+    if (!sig) return res.status(404).json({ error: "Candidate not found in live buffer (rolled out)" });
+
+    const now = Date.now();
+    for (const k of Object.keys(lastManualSendBySignal)) {
+      if (now - lastManualSendBySignal[k] > MANUAL_SEND_COOLDOWN_MS) delete lastManualSendBySignal[k];
+    }
+    const last = lastManualSendBySignal[id] || 0;
+    const remaining = MANUAL_SEND_COOLDOWN_MS - (now - last);
+    if (remaining > 0) {
+      return res.status(429).json({ error: "Cooldown active", cooldownRemainingMs: remaining });
+    }
+    lastManualSendBySignal[id] = now;
+
+    try {
+      const result = await notifyAutoposter(sig);
+      if (result.ok) {
+        setReview(id, {
+          status: "approved",
+          at: Date.now(),
+          telegramOk: true,
+          telegramStatus: result.status,
+          signalToken: sig.token,
+          signalDir: sig.dir,
+        });
+        return res.json({ ok: true, status: result.status, signalId: id });
+      }
+      delete lastManualSendBySignal[id];
+      const httpStatus =
+        result.reason === "missing_env" ? 503 :
+        result.reason === "invalid_signal" ? 422 :
+        result.reason === "http_error" ? 502 :
+        502;
+      return res.status(httpStatus).json(result);
+    } catch (e: any) {
+      delete lastManualSendBySignal[id];
+      return res.status(500).json({ ok: false, reason: "internal_error", detail: e?.message || String(e) });
+    }
+  });
+
+  // ── /api/admin/candidates/:id/reject ─────────────────────────────────────
+  // Marks the candidate as rejected. No Claude call, no Telegram post.
+  // Optional { reason } in body (≤280 chars) for later review.
+  app.post("/api/admin/candidates/:id/reject", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    const id = String(req.params.id || "");
+    if (!id) return res.status(400).json({ error: "Missing candidate id" });
+
+    const { getReview, setReview } = await import("./lib/candidateReviews");
+    if (getReview(id)) return res.status(409).json({ error: "Already actioned" });
+
+    const sig = liveSignals.find((s: any) => String(s?.id) === id);
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 280) : undefined;
+    setReview(id, {
+      status: "rejected",
+      at: Date.now(),
+      reason: reason || undefined,
+      signalToken: sig?.token,
+      signalDir: sig?.dir,
+    });
+    res.json({ ok: true, signalId: id });
+  });
+
+  // Background expirer — every 5 min, walk the live buffer and stamp any
+  // signal older than 2h that has no review record as "expired". Keeps the
+  // history counters accurate without needing the admin to act on stale
+  // candidates that scrolled out of view.
+  setInterval(async () => {
+    try {
+      const { getAllReviews, setReview } = await import("./lib/candidateReviews");
+      const reviews = getAllReviews();
+      const now = Date.now();
+      let expired = 0;
+      for (const s of liveSignals) {
+        if (!s?.id) continue;
+        const id = String(s.id);
+        if (reviews.has(id)) continue;
+        const ageMs = now - (s.ts || 0);
+        if (ageMs > CANDIDATE_TTL_MS) {
+          setReview(id, {
+            status: "expired",
+            at: now,
+            signalToken: s.token,
+            signalDir: s.dir,
+          });
+          expired++;
+        }
+      }
+      if (expired > 0) console.log(`[candidate-reviews] expired ${expired} stale candidate(s)`);
+    } catch (e: any) {
+      console.warn(`[candidate-reviews] expirer error: ${e?.message || e}`);
+    }
+  }, 5 * 60 * 1000).unref?.();
+
   // ── /api/admin/autoposter/status ─────────────────────────────────────────
   // Admin-only self-serve diagnostic for the Telegram autoposter pipeline.
   // Returns whether env vars are set (without leaking values), the masked
