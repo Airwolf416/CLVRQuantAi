@@ -1,3 +1,19 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOPOSTER DISABLED — replaced by admin-triggered flow.
+// Do not re-enable without approval.
+//
+// notifyAutoposter() below is INTENTIONALLY left intact: the admin-triggered
+// endpoints /api/admin/signals/test-send (routes.ts ~2053) and
+// /api/admin/signals/test-send-real (routes.ts ~2282) still call it on
+// demand. What was disabled is the AUTOMATIC callers:
+//   • server/routes.ts ~1228 — live auto-scanner (every detected signal)
+//   • server/dailyBrief.ts ~942 — morning Telegram "morning idea"
+//   • server/index.ts ~731-732 — startDailyBriefScheduler /
+//                                startWeeklyUpdateScheduler kickoffs
+//
+// No code path now calls this function on a timer/cron/loop. Telegram posts
+// only happen when an admin clicks the manual send button in the dashboard.
+// ─────────────────────────────────────────────────────────────────────────────
 import { createHash } from "crypto";
 
 type AnySignal = Record<string, any>;

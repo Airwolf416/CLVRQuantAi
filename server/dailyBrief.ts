@@ -8,7 +8,11 @@ import { CLAUDE_MODEL } from "./config";
 import { selectDailyTrades, sliceForTier, hydrateCalibration, logTierDistribution, getTieredBriefMode, type CandidatePlan, type AssetClass } from "./lib/selectDailyTrades";
 import { runIntegrityCheck, filterDropList, type PriceRow } from "./lib/dataIntegrity";
 import { getBrainSummary } from "./lib/statisticalBrain";
+// AUTOPOSTER DISABLED — morning Telegram idea no longer fires (see ~942
+// below). notifyAutoposter import retained as a `void` reference so
+// re-enabling is one-line. Do not re-enable without approval.
 import { notifyAutoposter } from "./autoposterNotify";
+void notifyAutoposter;
 import { computeRegimeGate } from "./lib/regimeGate";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
 
@@ -935,46 +939,17 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       // even if a same-day email-pipeline retry reaches this code while the
       // first autoposter call is still in flight — the second attempt will
       // see the row and bail.
-      const claimed = await claimTelegramSlot(dateKey, pick.token, pick.dir, pick.source);
-      if (!claimed) {
-        console.log(`[daily-brief] Telegram morning idea SKIPPED — slot already claimed for ${dateKey} (retry-safe)`);
-      } else {
-        const signalPayload = {
-          token:          pick.token,
-          dir:            pick.dir,
-          entry:          pick.entry,
-          stopLoss:       pick.stop,
-          tp1:            pick.tp1,
-          tp2:            pick.tp2,
-          lev,
-          conf:           pick.conf,
-          advancedScore,
-          reasoning,
-          isStrongSignal: elitePick,
-          ts:             stableTs,
-        };
-
-        // Fire-and-forget: do NOT await. The autoposter call has its own
-        // 2× retry + 15s timeout, and we don't want a slow webhook to delay
-        // the email loop that immediately follows. On not-ok / throw we
-        // RELEASE the slot so a future retry (or the next day's) can attempt.
-        const pickSnapshot = pick; // narrow for the async closure
-        notifyAutoposter(signalPayload)
-          .then(async (res) => {
-            if (res.ok) {
-              console.log(`[daily-brief] Telegram morning idea sent — ${pickSnapshot.token} ${pickSnapshot.dir} (source=${pickSnapshot.source}, conf=${pickSnapshot.conf}%, advScore=${advancedScore})`);
-            } else {
-              const detail = "detail" in res ? ` detail=${res.detail}` : "";
-              const status = "status" in res ? ` status=${res.status}` : "";
-              console.warn(`[daily-brief] Telegram morning idea FAILED — reason=${res.reason}${status}${detail} — releasing slot`);
-              await releaseTelegramSlotOnFailure(dateKey);
-            }
-          })
-          .catch(async (e) => {
-            console.warn(`[daily-brief] Telegram morning idea threw (non-fatal): ${(e as Error)?.message || e} — releasing slot`);
-            await releaseTelegramSlotOnFailure(dateKey);
-          });
-      }
+      // ── AUTOPOSTER DISABLED ──────────────────────────────────────────
+      // The morning brief used to fire one Telegram "morning idea" via the
+      // autoposter alongside the email send. Disabled per owner request —
+      // replaced by the admin-triggered flow. We deliberately DO NOT call
+      // claimTelegramSlot() either, so the slot remains available if/when
+      // the flow is re-enabled. Email pipeline below is unaffected.
+      // Do not re-enable without approval.
+      void claimTelegramSlot; void releaseTelegramSlotOnFailure;
+      void pick; void lev; void advancedScore; void reasoning;
+      void elitePick; void stableTs;
+      console.log(`[daily-brief] Telegram morning idea SKIPPED — autoposter disabled (owner request)`);
     }
   } catch (e) {
     console.warn(`[daily-brief] Telegram morning idea pipeline threw (non-fatal): ${(e as Error)?.message || e}`);
