@@ -1,0 +1,41 @@
+Build an admin-only "Signal Candidates" queue inside CLVRQuantAI. The flow:
+
+1. The existing quant engine continues running on its schedule and computes signals across all 80+ instruments using pure math (momentum, OI, Fibonacci, Kelly, kill switches) — NO Claude calls at this stage.
+
+2. When a signal passes the quant engine's threshold, instead of posting to Telegram, write it to a new "signal_candidates" table/store with these fields:
+   - id (uuid)
+   - instrument
+   - direction (long/short)
+   - entry, stop_loss, take_profit_1, take_profit_2, take_profit_3
+   - kelly_size_pct
+   - confidence_score
+   - quant_metadata (JSON: momentum, OI, funding, Fib level, etc.)
+   - created_at
+   - status: "pending" | "approved" | "rejected" | "expired"
+   - expires_at (default: created_at + 2 hours, since signals go stale)
+
+3. Build a new admin route /admin/candidates (gated by an is_admin check on the logged-in user — only my account should pass). The page shows:
+   - All "pending" candidates, newest first
+   - Each candidate as a card with: instrument, direction, entry/SL/TP levels, confidence score, age, and the quant metadata
+   - Two buttons per candidate: "Approve & Send to Telegram" (green) and "Reject" (red)
+   - Auto-refresh every 30 seconds
+   - A counter at the top: "X pending candidates"
+
+4. When I click "Approve & Send to Telegram":
+   - Call Claude (Sonnet 4.6) ONCE to generate the formatted signal commentary/narrative for Telegram. Use prompt caching on the system prompt to keep cost down.
+   - Post the formatted message to the Telegram channel via the existing bot API integration
+   - Update the candidate status to "approved" and store the Claude-generated text and the Telegram message_id
+   - Also log the signal to the existing signal performance tracker so PnL can be tracked
+   - Show a success toast
+
+5. When I click "Reject":
+   - Update status to "rejected", no Claude call, no Telegram post
+   - Optional: small text field to log why (for later review)
+
+6. Add a background cleanup job that marks candidates as "expired" if they pass expires_at without being actioned.
+
+7. Admin gating: add a simple is_admin boolean on the user model (default false), set it to true only for my account. Protect the /admin/candidates route and the approve/reject endpoints with this check. Return 403 for anyone else.
+
+8. Keep the UI consistent with the existing CLVRQuantAI design (dark theme, same fonts and component style).
+
+Confirm in your response: (a) the file structure you created, (b) any DB migrations needed, (c) how to set my account as admin, and (d) confirmation that Claude is only called on approval click — never on schedule.
