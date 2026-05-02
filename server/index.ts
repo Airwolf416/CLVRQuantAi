@@ -728,19 +728,12 @@ function logDataSourceStatus() {
   await initStripe();
   await registerRoutes(httpServer, app);
   initSocketIO(httpServer);
-  // ── AUTOPOSTER DISABLED ─────────────────────────────────────────────────
-  // startDailyBriefScheduler() and startWeeklyUpdateScheduler() are the two
-  // background loops that auto-call Claude (to generate brief/weekly content)
-  // AND auto-trigger the Telegram autoposter. Both are disabled per owner
-  // request — replaced by admin-triggered flow. Side effect: the daily 6 AM
-  // ET email brief and the Saturday 10 AM ET weekly email update will NOT
-  // fire automatically until these are re-enabled. The signal-generation
-  // engine (HL/stock workers, detectMoves, outcome resolver, calibration,
-  // adaptive thresholds, circuit breaker) keeps running normally below.
-  // Do not re-enable without approval.
-  // startDailyBriefScheduler();
-  // startWeeklyUpdateScheduler();
-  void startDailyBriefScheduler; void startWeeklyUpdateScheduler;
+  // Daily 6 AM ET email brief + Saturday 10 AM ET weekly email update —
+  // these go to subscribers and must keep firing automatically. Their inner
+  // Telegram autoposter calls (dailyBrief.ts ~942) remain disabled per
+  // owner request; only the email side runs.
+  startDailyBriefScheduler();
+  startWeeklyUpdateScheduler();
   startOutcomeResolver();
   startChartAIResolver();
   startAdaptiveThresholds();
