@@ -1,0 +1,250 @@
+TASK: Add a 1-on-1 booking system to CLVRQuantAI for tier-based 30-min platform walkthroughs. Integrate with existing stack: Node.js/Express backend, React frontend, PostgreSQL (Railway), Stripe, Resend, and Google Calendar API for auto-creating Google Meet calls.
+
+═══════════════════════════════════════════════════
+1. DATABASE SCHEMA (PostgreSQL — add to existing DB)
+═══════════════════════════════════════════════════
+
+Create a new table `bookings`:
+- id (UUID, primary key)
+- user_id (FK to users table)
+- user_email (text)
+- user_name (text)
+- tier_at_booking (enum: 'free', 'pro', 'elite')
+- booking_date (date)
+- booking_time (time, stored as UTC)
+- timezone (text — user's local TZ at time of booking)
+- session_price_usd (numeric — 0 for Elite first-of-month, 99 for Pro, 149 for Free)
+- payment_status (enum: 'pending', 'paid', 'comped', 'refunded')
+- stripe_session_id (text, nullable)
+- stripe_payment_intent_id (text, nullable — needed for refunds)
+- google_event_id (text, nullable)
+- google_meet_link (text, nullable)
+- status (enum: 'confirmed', 'cancelled_by_user', 'cancelled_by_admin', 'completed', 'no_show')
+- cancellation_reason (text, nullable)
+- cancelled_at (timestamp, nullable)
+- refund_eligible (boolean — true if cancelled ≥24h before booking)
+- created_at, updated_at (timestamps)
+
+Add columns to `users` table:
+- elite_session_used_this_month (boolean, default false)
+- elite_session_reset_at (timestamp — first of next month)
+
+═══════════════════════════════════════════════════
+2. BACKEND ENDPOINTS (Express)
+═══════════════════════════════════════════════════
+
+Create new route file `routes/booking.js`:
+
+GET /api/booking/availability
+- Returns array of available 30-min slots for next 60 days
+- Rules:
+  • Must be ≥ 7 days from today (1 week advance booking minimum)
+  • Mon–Fri: 6:00pm–10:00pm America/Toronto (slots: 18:00, 18:30, 19:00, 19:30, 20:00, 20:30, 21:00, 21:30)
+  • Sat–Sun: 3:00pm–10:00pm America/Toronto (slots: 15:00, 15:30 ... 21:30)
+  • Exclude any date that has a confirmed booking (max 1 call/day)
+  • Exclude past slots
+- Return: [{ date: "2026-05-15", slots: ["18:00", "18:30", ...] }]
+
+POST /api/booking/create-checkout
+- Body: { user_id, slot_date, slot_time, timezone }
+- Logic:
+  1. Re-validate slot availability (DB lock to prevent race)
+  2. Look up user's current tier
+  3. Determine price:
+     - Elite + elite_session_used_this_month=false → $0
+     - Elite + already used → $49
+     - Pro → $99
+     - Free → $149
+  4. If $0: create booking with status=confirmed, payment_status=comped, mark elite_session_used_this_month=true, call createGoogleMeetEvent(), trigger all confirmation emails
+  5. If >$0: create Stripe Checkout Session with metadata { user_id, slot_date, slot_time, timezone }, return checkout URL
+
+POST /api/booking/stripe-webhook
+- Listen for `checkout.session.completed`
+- Pull metadata, store stripe_payment_intent_id, create booking row, call createGoogleMeetEvent(), send all confirmation emails
+
+GET /api/booking/my-bookings
+- Returns logged-in user's upcoming + past bookings
+
+POST /api/booking/cancel/:id
+- CANCELLATION POLICY LOGIC:
+  1. Get booking. Confirm it belongs to logged-in user. Confirm status='confirmed'.
+  2. Calculate hours_until_booking = (booking_datetime_utc - now_utc) / 3600
+  3. If hours_until_booking >= 24:
+     • Set refund_eligible = true
+     • If payment_status='paid': call Stripe refunds.create({ payment_intent: stripe_payment_intent_id })
+     • If payment_status='comped' (Elite free): restore elite_session_used_this_month=false
+     • Update status='cancelled_by_user', cancelled_at=now
+     • Cancel Google Calendar event (calendar.events.delete with sendUpdates='all')
+     • Send cancellation confirmation emails to user + support@clvrquantai.com (refund issued)
+     • Free up the date for re-booking
+  4. If hours_until_booking < 24:
+     • Set refund_eligible = false
+     • Do NOT issue refund
+     • Update status='cancelled_by_user', cancelled_at=now
+     • Cancel Google Calendar event
+     • Send cancellation confirmation emails to user + support@clvrquantai.com (NO refund — under 24h policy)
+     • Free up the date for re-booking
+  5. Return: { success: true, refunded: boolean, message: string }
+
+═══════════════════════════════════════════════════
+3. GOOGLE CALENDAR / MEET INTEGRATION
+═══════════════════════════════════════════════════
+
+Use `googleapis` npm package.
+
+Create `services/googleCalendar.js`:
+- One-time OAuth setup on Mike's Google account (refresh token in env)
+- Function: createGoogleMeetEvent({ summary, description, startISO, endISO, attendeeEmail, attendeeName })
+  • Creates event on Mike's primary calendar (mike@clvrquantai.com or whichever)
+  • conferenceData with createRequest auto-generates Meet link
+  • Adds attendees: [user, support@clvrquantai.com]
+  • sendUpdates='all' so Google sends its own native invite
+  • Returns { eventId, meetLink, htmlLink }
+
+- Function: cancelGoogleMeetEvent(eventId)
+  • calendar.events.delete with sendUpdates='all' to notify attendees
+
+ENV VARS:
+- GOOGLE_CLIENT_ID
+- GOOGLE_CLIENT_SECRET
+- GOOGLE_REFRESH_TOKEN
+- GOOGLE_CALENDAR_ID (default: "primary")
+- SUPPORT_EMAIL=support@clvrquantai.com
+
+Include /docs/GOOGLE_CALENDAR_SETUP.md with OAuth Playground steps.
+
+═══════════════════════════════════════════════════
+4. FRONTEND (React)
+═══════════════════════════════════════════════════
+
+Create new page `/book` (BookingPage.jsx):
+- Terminal aesthetic, gold accents
+- Headline: "Book Your 30-Min CLVRQuant AI Walkthrough"
+- Display user's tier + price
+- Show CANCELLATION POLICY prominently before checkout:
+  "Cancel 24+ hours before your session for a full refund. Cancellations within 24 hours are non-refundable."
+- Calendar (react-day-picker or similar — single file)
+  • Disable: dates <7 days out, dates with no slots, already-booked dates
+- Date click → show available slots
+- Slot click → confirm modal showing { date, time, price, cancellation policy }
+- "Confirm & Pay" → POST /api/booking/create-checkout
+  • $0: redirect /booking/confirmed
+  • >$0: redirect to Stripe URL
+
+Create `/booking/confirmed` page:
+- Show Meet link, calendar add button, "check your email"
+- Cancellation policy reminder
+- "Manage my bookings" link
+
+Create `/my-bookings` page:
+- List upcoming bookings
+- Each shows: date/time, Meet link, "Cancel" button
+- Cancel button:
+  • If ≥24h away: shows "Cancel & Refund" — green
+  • If <24h: shows "Cancel (No Refund)" — red, requires double confirmation
+- POST /api/booking/cancel/:id
+
+Add /book and /my-bookings to nav for logged-in users.
+
+═══════════════════════════════════════════════════
+5. EMAIL FLOWS (Resend)
+═══════════════════════════════════════════════════
+
+ALL booking-related emails CC support@clvrquantai.com.
+
+A) WELCOME EMAIL (on new signup, tier-based):
+
+— FREE —
+Subject: "Welcome to CLVRQuant AI — Your First Walkthrough"
+CTA: https://clvrquantai.com/book ($149 session)
+
+— PRO —
+Subject: "Welcome, Pro Trader — Book Your Discounted Walkthrough"
+CTA: https://clvrquantai.com/book ($99 session)
+
+— ELITE —
+Subject: "Welcome to Elite — Your Free Monthly Walkthrough Awaits"
+CTA: https://clvrquantai.com/book (1 free/month included)
+
+B) BOOKING CONFIRMATION (triggered immediately after booking succeeds):
+
+Send TWO emails simultaneously:
+
+→ TO USER (user_email):
+Subject: "Your CLVRQuant AI Walkthrough is Confirmed — [DATE] at [TIME]"
+Body:
+- Confirmation details (date, time, timezone)
+- Google Meet link
+- Add-to-calendar link
+- What to expect
+- CANCELLATION POLICY: "Cancel 24+ hours before for a full refund. Cancellations within 24 hours are non-refundable. Manage at clvrquantai.com/my-bookings"
+- Disclaimer footer
+
+→ TO SUPPORT (support@clvrquantai.com):
+Subject: "🔔 New Booking — [USER_NAME] — [DATE] at [TIME]"
+Body:
+- User name, email, tier
+- Booking date/time (in America/Toronto)
+- Price paid
+- Stripe session ID
+- Google Meet link
+- Google Calendar event link
+
+C) REMINDER EMAIL (24 hours before — Railway scheduled cron):
+Subject: "Reminder: Your CLVRQuant AI Walkthrough Tomorrow"
+TO user only. Quick reminder + Meet link + cancellation deadline note ("This is your final window to cancel with refund — cancel before [TIME] for full refund").
+
+D) CANCELLATION CONFIRMATION (on user cancel):
+
+→ TO USER:
+Subject (if refunded): "Booking Cancelled — Refund Processed"
+Subject (if no refund): "Booking Cancelled — No Refund (Under 24h)"
+Body: Confirms cancellation, refund status, invitation to rebook.
+
+→ TO SUPPORT:
+Subject: "❌ Booking Cancelled — [USER_NAME] — [DATE]"
+Body: User details, original booking details, hours_until_booking at cancel, refund status, Stripe refund ID if applicable.
+
+All emails: dark terminal aesthetic, gold accents, footer disclaimer "CLVRQuant AI is an information & education platform. Not a trading platform."
+
+═══════════════════════════════════════════════════
+6. EDGE CASES & RULES
+═══════════════════════════════════════════════════
+
+- Times stored UTC, displayed in user's TZ
+- "1 week advance" = 7×24h from now (use date-fns or moment-timezone)
+- Max 1 call/day: WHERE booking_date=X AND status='confirmed' — if count≥1, block date
+- Stripe abandonment: slot only reserved on webhook success (not on checkout creation)
+- Race condition: use SELECT...FOR UPDATE on booking creation
+- Refund window: calculated in UTC, rounded down (23h 59m = no refund)
+- If Elite user cancels free session ≥24h: restore their monthly free credit
+- Google Calendar event cancellation must use sendUpdates='all' so user gets native Google cancellation notice too
+
+═══════════════════════════════════════════════════
+7. FILES TO CREATE/MODIFY
+═══════════════════════════════════════════════════
+
+NEW:
+- routes/booking.js
+- services/googleCalendar.js
+- services/bookingEmails.js
+- services/stripeRefunds.js
+- migrations/add_bookings_table.sql
+- src/pages/BookingPage.jsx
+- src/pages/BookingConfirmed.jsx
+- src/pages/MyBookings.jsx
+- src/components/BookingCalendar.jsx
+- src/components/CancellationModal.jsx
+- docs/GOOGLE_CALENDAR_SETUP.md
+- jobs/sendReminderEmails.js (cron)
+
+MODIFY:
+- server.js / app.js — register routes, Stripe webhook
+- routes/auth.js — tier-based welcome email
+- src/App.jsx — add new routes
+
+═══════════════════════════════════════════════════
+8. DELIVERABLE FORMAT
+═══════════════════════════════════════════════════
+
+Generate each file as a complete, copy-paste-ready single block. No diff syntax. Mobile-friendly output. Start with SQL migration, then backend routes, services, React components, email templates. Confirm each file before next.
