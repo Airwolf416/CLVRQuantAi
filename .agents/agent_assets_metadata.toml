@@ -30,3 +30,21 @@ id = "o6Jarxp3329s_Myvn7S4u"
 uri = "file://exports/calibration_reliability_bins.csv"
 type = "table"
 title = "Reliability Bins — CSV"
+
+[[outputs]]
+id = "Woc01AZK2tMP4RGqavh5O"
+uri = "file://exports/calibration_result_v2.md"
+type = "text"
+title = "Calibration Result v2 — Summary"
+
+[[outputs]]
+id = "Bb3yfpX_xpEklTndf9ohz"
+uri = "file://exports/calibration_result_v2.json"
+type = "unspecified"
+title = "Calibration Result v2 — Full JSON"
+
+[[outputs]]
+id = "Hxk7JpXiQDo7eGy3D9l8j"
+uri = "file://exports/calibration_reliability_bins_v2.csv"
+type = "table"
+title = "Reliability Bins v2 — CSV (raw / platt / isotonic)"
