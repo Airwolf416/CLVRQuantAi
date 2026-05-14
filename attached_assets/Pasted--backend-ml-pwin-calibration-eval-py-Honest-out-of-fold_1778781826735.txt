@@ -1,0 +1,647 @@
+“””
+backend/ml/pwin/calibration_eval.py
+
+Honest, out-of-fold calibration evaluation for CLVRQuantAI.
+
+Improvements over the v1 in-sample evaluator:
+
+1. K-fold CV — Platt/isotonic are fit on training folds and scored
+   on held-out folds. No more in-sample optimism.
+1. ECE / MCE — scalar calibration metrics for dashboard tracking.
+1. Quantile bins — equal-count instead of equal-width; stable when
+   predictions cluster or N is small.
+1. Bootstrap CIs on Brier scores + a significance test that asks
+   “does the calibrator actually beat raw?” on resamples.
+1. Baseline-rate Brier — the trivial “always predict base rate”
+   benchmark. If your raw scorer can’t beat it, calibration won’t
+   save you.
+1. Persists final fitted calibrators (fit on ALL data) so live
+   inference has something to call.
+
+Usage:
+from backend.ml.pwin.calibration_eval import evaluate_and_persist
+
+```
+report = await evaluate_and_persist(
+    pool=pg_pool,
+    model_column="direction_probability",
+    instrument_class="crypto",
+    days=90,
+)
+print(json.dumps(report, indent=2))
+```
+
+Returns a dict matching the existing calibration_result.json shape
+plus the new fields (cv_*, ece, mce, bootstrap_*, baseline_brier).
+“””
+
+from **future** import annotations
+
+import json
+import math
+import pathlib
+import pickle
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Optional
+
+import numpy as np
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold
+
+# –––––––––––––––––––––––––––––––––––
+
+# Constants
+
+# –––––––––––––––––––––––––––––––––––
+
+CALIB_DIR = pathlib.Path(“quant/calibrators”)
+CALIB_DIR.mkdir(parents=True, exist_ok=True)
+
+EPS = 1e-6
+MIN_N_FOR_FIT = 100          # below this, refuse to fit (returns None)
+MIN_N_PER_BIN = 5            # bins with fewer samples are dropped
+DEFAULT_N_BINS = 10
+DEFAULT_N_FOLDS = 5
+DEFAULT_N_BOOT = 1000
+DEFAULT_CI = 0.90
+DEFAULT_SEED = 42
+
+# –––––––––––––––––––––––––––––––––––
+
+# Core metrics
+
+# –––––––––––––––––––––––––––––––––––
+
+def _clip(p: np.ndarray) -> np.ndarray:
+return np.clip(p, EPS, 1.0 - EPS)
+
+def brier(p: np.ndarray, y: np.ndarray) -> float:
+return float(np.mean((p - y) ** 2))
+
+def log_loss(p: np.ndarray, y: np.ndarray) -> float:
+p = _clip(p)
+return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
+
+def baseline_brier(y: np.ndarray) -> float:
+“”“Brier of the trivial ‘always predict base rate’ model.
+Equals p*(1-p) where p is the observed base rate.
+Your scorer must beat this to be worth keeping.”””
+p = float(y.mean())
+return p * (1.0 - p)
+
+def ece_mce(p: np.ndarray, y: np.ndarray, n_bins: int = DEFAULT_N_BINS) -> tuple[float, float]:
+“”“Expected and Maximum Calibration Error (equal-width bins).
+
+```
+ECE = sample-weighted mean of |predicted - observed| across bins.
+MCE = worst single bin's |predicted - observed|.
+
+Production targets: ECE < 0.05, MCE < 0.10.
+"""
+edges = np.linspace(0.0, 1.0, n_bins + 1)
+idx = np.clip(np.digitize(p, edges) - 1, 0, n_bins - 1)
+n = len(p)
+ece = 0.0
+mce = 0.0
+for b in range(n_bins):
+    mask = idx == b
+    k = int(mask.sum())
+    if k == 0:
+        continue
+    gap = abs(float(p[mask].mean()) - float(y[mask].mean()))
+    ece += (k / n) * gap
+    mce = max(mce, gap)
+return float(ece), float(mce)
+```
+
+# –––––––––––––––––––––––––––––––––––
+
+# Reliability bins (quantile-based)
+
+# –––––––––––––––––––––––––––––––––––
+
+def quantile_reliability_bins(
+p: np.ndarray,
+y: np.ndarray,
+n_bins: int = DEFAULT_N_BINS,
+min_n: int = MIN_N_PER_BIN,
+) -> list[dict]:
+“”“Equal-count bins, more stable than equal-width when predictions
+cluster or N is small. Drops bins with n < min_n.”””
+if len(p) == 0:
+return []
+edges = np.quantile(p, np.linspace(0.0, 1.0, n_bins + 1))
+edges[0], edges[-1] = 0.0, 1.0
+edges = np.unique(edges)
+idx = np.clip(np.digitize(p, edges) - 1, 0, len(edges) - 2)
+
+```
+out: list[dict] = []
+for b in range(len(edges) - 1):
+    mask = idx == b
+    k = int(mask.sum())
+    if k < min_n:
+        continue
+    p_avg = float(p[mask].mean())
+    y_avg = float(y[mask].mean())
+    out.append({
+        "bin_lo": float(edges[b]),
+        "bin_hi": float(edges[b + 1]),
+        "p_avg": p_avg,
+        "y_avg": y_avg,
+        "n": k,
+        "gap": y_avg - p_avg,                # negative = underconfident
+        "abs_gap": abs(y_avg - p_avg),
+    })
+return out
+```
+
+# –––––––––––––––––––––––––––––––––––
+
+# Bootstrap CIs
+
+# –––––––––––––––––––––––––––––––––––
+
+def bootstrap_brier_ci(
+p: np.ndarray,
+y: np.ndarray,
+n_boot: int = DEFAULT_N_BOOT,
+ci: float = DEFAULT_CI,
+seed: int = DEFAULT_SEED,
+) -> dict:
+rng = np.random.default_rng(seed)
+n = len(p)
+scores = np.empty(n_boot)
+for i in range(n_boot):
+idx = rng.integers(0, n, n)
+scores[i] = np.mean((p[idx] - y[idx]) ** 2)
+alpha = (1.0 - ci) / 2.0
+lo, hi = np.quantile(scores, [alpha, 1.0 - alpha])
+return {
+“mean”: float(scores.mean()),
+“ci_low”: float(lo),
+“ci_high”: float(hi),
+“ci_level”: ci,
+“n_boot”: n_boot,
+}
+
+def bootstrap_improvement_test(
+p_raw: np.ndarray,
+p_cal: np.ndarray,
+y: np.ndarray,
+n_boot: int = DEFAULT_N_BOOT,
+seed: int = DEFAULT_SEED,
+) -> dict:
+“”“Fraction of bootstrap resamples in which calibrator’s Brier
+beats raw’s Brier. Treat > 0.95 as ‘real improvement’, < 0.80 as
+‘not actually helping’.”””
+rng = np.random.default_rng(seed)
+n = len(y)
+wins = 0
+deltas = np.empty(n_boot)
+for i in range(n_boot):
+idx = rng.integers(0, n, n)
+b_raw = np.mean((p_raw[idx] - y[idx]) ** 2)
+b_cal = np.mean((p_cal[idx] - y[idx]) ** 2)
+deltas[i] = b_raw - b_cal               # positive = cal better
+if b_cal < b_raw:
+wins += 1
+return {
+“p_cal_beats_raw”: wins / n_boot,
+“delta_mean”: float(deltas.mean()),
+“delta_ci_low”: float(np.quantile(deltas, 0.05)),
+“delta_ci_high”: float(np.quantile(deltas, 0.95)),
+}
+
+# –––––––––––––––––––––––––––––––––––
+
+# K-fold CV evaluation
+
+# –––––––––––––––––––––––––––––––––––
+
+@dataclass
+class CalibratorOOF:
+name: str
+oof_predictions: np.ndarray
+brier_oof: float
+log_loss_oof: float
+ece_oof: float
+mce_oof: float
+
+def _fit_platt(p_train: np.ndarray, y_train: np.ndarray) -> LogisticRegression:
+return LogisticRegression(C=1e6, solver=“lbfgs”, max_iter=1000).fit(
+p_train.reshape(-1, 1), y_train
+)
+
+def _fit_isotonic(p_train: np.ndarray, y_train: np.ndarray) -> IsotonicRegression:
+return IsotonicRegression(out_of_bounds=“clip”, y_min=0.0, y_max=1.0).fit(
+p_train, y_train
+)
+
+def cv_evaluate(
+p_raw: np.ndarray,
+y: np.ndarray,
+n_splits: int = DEFAULT_N_FOLDS,
+seed: int = DEFAULT_SEED,
+) -> dict[str, CalibratorOOF]:
+“”“Out-of-fold predictions for raw / Platt / isotonic.
+Stratified by outcome so class balance is preserved per fold.”””
+skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+
+```
+oof_platt = np.zeros_like(p_raw, dtype=float)
+oof_iso = np.zeros_like(p_raw, dtype=float)
+
+for tr, te in skf.split(p_raw, y):
+    platt = _fit_platt(p_raw[tr], y[tr])
+    oof_platt[te] = platt.predict_proba(p_raw[te].reshape(-1, 1))[:, 1]
+
+    iso = _fit_isotonic(p_raw[tr], y[tr])
+    oof_iso[te] = iso.predict(p_raw[te])
+
+def _pack(name: str, preds: np.ndarray) -> CalibratorOOF:
+    e, m = ece_mce(preds, y)
+    return CalibratorOOF(
+        name=name,
+        oof_predictions=preds,
+        brier_oof=brier(preds, y),
+        log_loss_oof=log_loss(preds, y),
+        ece_oof=e,
+        mce_oof=m,
+    )
+
+return {
+    "raw": _pack("raw", p_raw),
+    "platt": _pack("platt", oof_platt),
+    "isotonic": _pack("isotonic", oof_iso),
+}
+```
+
+# –––––––––––––––––––––––––––––––––––
+
+# Selection + persistence of the FINAL calibrator (fit on all data)
+
+# –––––––––––––––––––––––––––––––––––
+
+def _persist_calibrator(model_name: str, instrument_class: str, kind: str, obj) -> str:
+“”“Persist with pickle. Filename encodes (model, class, kind).”””
+path = CALIB_DIR / f”{model_name}**{instrument_class}**{kind}.pkl”
+with open(path, “wb”) as f:
+pickle.dump(obj, f)
+return str(path)
+
+def select_and_fit_final(
+p_raw: np.ndarray,
+y: np.ndarray,
+cv: dict[str, CalibratorOOF],
+model_name: str,
+instrument_class: str,
+) -> dict:
+“”“Pick the better OOF Brier (Platt vs isotonic), but only if it
+actually beats raw on bootstrap test. Then refit on full dataset
+and persist.”””
+raw_brier = cv[“raw”].brier_oof
+platt_brier = cv[“platt”].brier_oof
+iso_brier = cv[“isotonic”].brier_oof
+
+```
+# Significance check against raw
+platt_sig = bootstrap_improvement_test(p_raw, cv["platt"].oof_predictions, y)
+iso_sig = bootstrap_improvement_test(p_raw, cv["isotonic"].oof_predictions, y)
+
+# Prefer Platt when results are close — fewer params, more robust
+# out-of-distribution. Only pick isotonic when its OOF Brier is
+# meaningfully better (>0.005) AND it passes the significance bar.
+PLATT_BIAS = 0.005
+
+chosen = None
+if platt_brier <= iso_brier + PLATT_BIAS and platt_sig["p_cal_beats_raw"] >= 0.80:
+    chosen = "platt"
+elif iso_sig["p_cal_beats_raw"] >= 0.80:
+    chosen = "isotonic"
+elif platt_sig["p_cal_beats_raw"] >= 0.80:
+    chosen = "platt"
+else:
+    chosen = None        # neither calibrator is helping
+
+fitted_path: Optional[str] = None
+final_params: dict = {}
+
+if chosen == "platt":
+    final = _fit_platt(p_raw, y)
+    fitted_path = _persist_calibrator(model_name, instrument_class, "platt", final)
+    # Extract scalar a, b for logging (sklearn parameterizes differently
+    # but on a 1D input we can recover them)
+    a = float(final.coef_[0, 0])
+    b = float(final.intercept_[0])
+    final_params = {"kind": "platt", "a": a, "b": b}
+elif chosen == "isotonic":
+    final = _fit_isotonic(p_raw, y)
+    fitted_path = _persist_calibrator(model_name, instrument_class, "isotonic", final)
+    final_params = {
+        "kind": "isotonic",
+        "n_breakpoints": int(len(final.X_thresholds_)),
+    }
+else:
+    final_params = {"kind": "none", "reason": "no calibrator beat raw at p>=0.80"}
+
+return {
+    "chosen": chosen,
+    "fitted_path": fitted_path,
+    "final_params": final_params,
+    "significance": {
+        "platt_vs_raw": platt_sig,
+        "isotonic_vs_raw": iso_sig,
+    },
+    "oof_brier": {
+        "raw": raw_brier,
+        "platt": platt_brier,
+        "isotonic": iso_brier,
+    },
+}
+```
+
+# –––––––––––––––––––––––––––––––––––
+
+# Top-level evaluator
+
+# –––––––––––––––––––––––––––––––––––
+
+def evaluate(
+p_raw: np.ndarray,
+y: np.ndarray,
+model_name: str,
+instrument_class: str,
+n_splits: int = DEFAULT_N_FOLDS,
+n_bins: int = DEFAULT_N_BINS,
+n_boot: int = DEFAULT_N_BOOT,
+seed: int = DEFAULT_SEED,
+persist: bool = True,
+) -> dict:
+“”“Build the full calibration report. All metrics OOF where possible.”””
+n = int(len(p_raw))
+if n < MIN_N_FOR_FIT:
+return {
+“status”: “insufficient_data”,
+“n_samples”: n,
+“min_required”: MIN_N_FOR_FIT,
+“model_name”: model_name,
+“instrument_class”: instrument_class,
+“generated_at_iso”: datetime.now(timezone.utc).isoformat(),
+}
+
+```
+# Make sure inputs are numpy + within (0,1)
+p_raw = _clip(np.asarray(p_raw, dtype=float))
+y = np.asarray(y, dtype=float)
+
+# Raw (in-sample, just for the report header)
+raw_brier_is = brier(p_raw, y)
+raw_ll_is = log_loss(p_raw, y)
+raw_ece, raw_mce = ece_mce(p_raw, y, n_bins=n_bins)
+base_rate = float(y.mean())
+base_brier = baseline_brier(y)
+
+# CV evaluation
+cv = cv_evaluate(p_raw, y, n_splits=n_splits, seed=seed)
+
+# Bootstrap CIs for raw and each calibrator (uses OOF preds for cals)
+boot = {
+    "raw":      bootstrap_brier_ci(p_raw,                              y, n_boot=n_boot, seed=seed),
+    "platt":    bootstrap_brier_ci(cv["platt"].oof_predictions,        y, n_boot=n_boot, seed=seed),
+    "isotonic": bootstrap_brier_ci(cv["isotonic"].oof_predictions,     y, n_boot=n_boot, seed=seed),
+}
+
+# Reliability bins (quantile) — show all three for the dashboard
+reliability = {
+    "raw":      quantile_reliability_bins(p_raw, y, n_bins=n_bins),
+    "platt":    quantile_reliability_bins(cv["platt"].oof_predictions, y, n_bins=n_bins),
+    "isotonic": quantile_reliability_bins(cv["isotonic"].oof_predictions, y, n_bins=n_bins),
+}
+
+# Choose + persist final calibrator
+selection = select_and_fit_final(p_raw, y, cv, model_name, instrument_class) if persist else {
+    "chosen": None, "fitted_path": None, "final_params": {},
+    "significance": {}, "oof_brier": {},
+}
+
+# Verdict — short human-readable summary
+verdict = _build_verdict(
+    n=n,
+    base_brier=base_brier,
+    raw_brier=raw_brier_is,
+    cv=cv,
+    selection=selection,
+)
+
+return {
+    "generated_at_iso": datetime.now(timezone.utc).isoformat(),
+    "model_name": model_name,
+    "instrument_class": instrument_class,
+    "n_samples": n,
+    "base_rate_observed": base_rate,
+    "baseline_brier": base_brier,
+    "raw_in_sample": {
+        "brier": raw_brier_is,
+        "log_loss": raw_ll_is,
+        "ece": raw_ece,
+        "mce": raw_mce,
+    },
+    "cv_metrics": {
+        name: {
+            "brier_oof":    c.brier_oof,
+            "log_loss_oof": c.log_loss_oof,
+            "ece_oof":      c.ece_oof,
+            "mce_oof":      c.mce_oof,
+        } for name, c in cv.items()
+    },
+    "bootstrap_brier_ci": boot,
+    "reliability_quantile_bins": reliability,
+    "calibrator_selection": {
+        "chosen": selection["chosen"],
+        "fitted_path": selection["fitted_path"],
+        "final_params": selection["final_params"],
+        "significance": selection.get("significance", {}),
+    },
+    "verdict": verdict,
+    "config": {
+        "n_splits": n_splits,
+        "n_bins": n_bins,
+        "n_boot": n_boot,
+        "seed": seed,
+        "min_n_per_bin": MIN_N_PER_BIN,
+    },
+}
+```
+
+def _build_verdict(
+n: int,
+base_brier: float,
+raw_brier: float,
+cv: dict[str, CalibratorOOF],
+selection: dict,
+) -> dict:
+“”“Short flags for the dashboard.”””
+notes = []
+if raw_brier >= base_brier:
+notes.append(
+f”Raw scorer Brier ({raw_brier:.4f}) does not beat the trivial “
+f”base-rate baseline ({base_brier:.4f}). Calibration helps but “
+f”underlying signal is weak.”
+)
+chosen = selection.get(“chosen”)
+if chosen is None:
+notes.append(
+“No calibrator beat raw at the 80% bootstrap threshold. “
+“Keep raw scores for now; recheck after more closed signals.”
+)
+else:
+cal_brier = cv[chosen].brier_oof
+notes.append(
+f”Selected calibrator: {chosen}. OOF Brier {cal_brier:.4f} vs “
+f”raw {cv[‘raw’].brier_oof:.4f}.”
+)
+
+```
+if cv["platt"].ece_oof > 0.05:
+    notes.append(f"Platt OOF ECE {cv['platt'].ece_oof:.3f} above 0.05 target.")
+if cv["isotonic"].ece_oof > 0.05:
+    notes.append(f"Isotonic OOF ECE {cv['isotonic'].ece_oof:.3f} above 0.05 target.")
+
+if n < 300:
+    notes.append(
+        f"N={n} is small. Treat selection as provisional; re-evaluate "
+        f"weekly until N >= 500."
+    )
+
+return {"notes": notes}
+```
+
+# –––––––––––––––––––––––––––––––––––
+
+# Async DB loader + persistence helper (asyncpg, matches quant/db.py)
+
+# –––––––––––––––––––––––––––––––––––
+
+async def fetch_predictions(
+pool,
+model_column: str,
+instrument_class: str,
+days: int = 90,
+) -> tuple[np.ndarray, np.ndarray]:
+“”“Pull closed signals for a (model_column, instrument_class) slice.
+model_column must be one of: direction_probability, p_loss_meta_proxy,
+direction_probability_calibrated, etc.”””
+# Whitelist to prevent SQL injection on column name
+allowed = {
+“direction_probability”,
+“direction_probability_calibrated”,
+“p_loss_meta_proxy”,
+“p_meta”, “p_kronos”, “p_llm”, “p_llm_raw”, “p_regime”, “p_fused”,
+}
+if model_column not in allowed:
+raise ValueError(f”model_column {model_column!r} not in whitelist”)
+
+```
+sql = f"""
+    SELECT {model_column} AS p, outcome
+    FROM prediction_log
+    WHERE outcome IN ('win', 'loss')
+      AND instrument_class = $1
+      AND closed_at >= NOW() - ($2 || ' days')::interval
+      AND {model_column} IS NOT NULL
+"""
+async with pool.acquire() as conn:
+    rows = await conn.fetch(sql, instrument_class, str(days))
+
+if not rows:
+    return np.array([]), np.array([])
+p = np.array([float(r["p"]) for r in rows])
+y = np.array([1.0 if r["outcome"] == "win" else 0.0 for r in rows])
+return p, y
+```
+
+async def persist_calibrator_state(
+pool,
+model_name: str,
+instrument_class: str,
+report: dict,
+) -> None:
+“”“Insert a row into calibrator_state summarising this run.”””
+sel = report.get(“calibrator_selection”) or {}
+chosen = sel.get(“chosen”)
+if chosen and chosen in report[“cv_metrics”]:
+cv_m = report[“cv_metrics”][chosen]
+else:
+cv_m = report[“cv_metrics”][“raw”]
+
+```
+sql = """
+    INSERT INTO calibrator_state (
+        model_name, instrument_class, method, n_samples,
+        brier, log_loss, ece, mce, fitted_path, params_json,
+        fitted_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+"""
+async with pool.acquire() as conn:
+    await conn.execute(
+        sql,
+        model_name,
+        instrument_class,
+        chosen or "none",
+        int(report["n_samples"]),
+        float(cv_m["brier_oof"]),
+        float(cv_m["log_loss_oof"]),
+        float(cv_m["ece_oof"]),
+        float(cv_m["mce_oof"]),
+        sel.get("fitted_path"),
+        json.dumps(sel.get("final_params", {})),
+    )
+```
+
+async def evaluate_and_persist(
+pool,
+model_column: str,
+instrument_class: str,
+days: int = 90,
+**kwargs,
+) -> dict:
+“”“End-to-end: load data, evaluate, persist calibrator, write state row.”””
+p, y = await fetch_predictions(pool, model_column, instrument_class, days=days)
+report = evaluate(
+p_raw=p, y=y,
+model_name=model_column,
+instrument_class=instrument_class,
+**kwargs,
+)
+if report.get(“status”) != “insufficient_data”:
+await persist_calibrator_state(pool, model_column, instrument_class, report)
+return report
+
+# –––––––––––––––––––––––––––––––––––
+
+# CLI smoke test against the synthetic generator from v1
+
+# –––––––––––––––––––––––––––––––––––
+
+def _synthetic_overconfident(n: int = 200, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
+“”“Replicates the v1 synthetic dataset:
+true_p = sigmoid(2 * p_raw - 1); outcome ~ Bernoulli(true_p).”””
+rng = np.random.default_rng(seed)
+p_raw = rng.beta(1.2, 1.4, size=n)
+true_p = 1.0 / (1.0 + np.exp(-(2.0 * p_raw - 1.0)))
+y = (rng.random(n) < true_p).astype(float)
+return p_raw, y
+
+if **name** == “**main**”:
+p_raw, y = _synthetic_overconfident(n=200, seed=42)
+report = evaluate(
+p_raw=p_raw,
+y=y,
+model_name=“direction_probability”,
+instrument_class=“crypto”,
+persist=False,
+)
+print(json.dumps(report, indent=2, default=str))
