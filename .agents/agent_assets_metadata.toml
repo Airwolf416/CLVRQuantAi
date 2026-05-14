@@ -12,3 +12,21 @@ id = "jwa6m07oCoK-2OK_Y2ChB"
 uri = "file://CLVRQuantAI_AI_Tab_Architecture.md"
 type = "text"
 title = "CLVRQuantAI AI Tab Architecture — Full Context Export"
+
+[[outputs]]
+id = "I8CM3bjpOfs1TA10Cu3kr"
+uri = "file://exports/calibration_result.md"
+type = "text"
+title = "Calibration Result — Summary"
+
+[[outputs]]
+id = "3ujpf0Sx3YrUF9wisVPRY"
+uri = "file://exports/calibration_result.json"
+type = "unspecified"
+title = "Calibration Result — Full JSON"
+
+[[outputs]]
+id = "o6Jarxp3329s_Myvn7S4u"
+uri = "file://exports/calibration_reliability_bins.csv"
+type = "table"
+title = "Reliability Bins — CSV"
