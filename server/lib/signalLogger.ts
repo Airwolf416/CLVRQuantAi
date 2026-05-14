@@ -1,5 +1,6 @@
 import { db } from "../db";
 import { aiSignalLog, signalShadowInversions, type InsertAiSignalLog } from "@shared/schema";
+import { logPrediction, type PwinSnapshot } from "./calibrationLog";
 
 export type SignalSource = "trade_ideas" | "quant_scanner" | "signals_tab" | "basket";
 
@@ -27,6 +28,13 @@ export interface LogSignalInput {
   targetUserId?: string | null;
   // ── News snapshot at signal time (for outcome ↔ news correlation) ──
   newsContext?: any;
+  // ── pwin Phase 1 — passive calibration tracker (optional) ──────────────
+  // When provided, fires a fire-and-forget POST to the quant service's
+  // /calibration/log endpoint after the aiSignalLog row is inserted, so we
+  // can compute Brier / log-loss / reliability for direction_probability
+  // and p_loss_meta_proxy. Failure NEVER affects signal publication.
+  // Callers that have a quant prepass result in scope should populate this.
+  pwin?: PwinSnapshot;
 }
 
 const toDec = (v: any): string | null => {
@@ -75,6 +83,23 @@ export async function logSignal(input: LogSignalInput): Promise<number | null> {
 
     const [inserted] = await db.insert(aiSignalLog).values(row).returning({ id: aiSignalLog.id });
     const insertedId = inserted?.id ?? null;
+
+    // ── pwin Phase 1: passive calibration log ──────────────────────────────
+    // Fire-and-forget. Only sent when the caller supplied a pwin snapshot
+    // (signals from code paths without quant prepass data simply don't log
+    // here, which is fine — they wouldn't contribute to model Brier anyway).
+    if (insertedId != null && input.pwin) {
+      try {
+        logPrediction({ predictionId: insertedId, ...input.pwin });
+      } catch (pwinErr) {
+        // logPrediction itself is fire-and-forget so this catch is purely
+        // defensive (e.g. payload serialization throws).
+        console.warn(
+          `[signalLogger] pwin log dispatch failed for signal ${insertedId} (non-fatal):`,
+          (pwinErr as Error)?.message ?? pwinErr
+        );
+      }
+    }
 
     // ── Shadow-inverted twin ("Reverse Costanza" backtest) ─────────────────
     // For every real signal, write a mirror with the opposite direction and

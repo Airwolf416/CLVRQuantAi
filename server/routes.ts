@@ -6208,6 +6208,51 @@ Every level must be technically defensible. Return JSON only.`;
       // ── Log to ai_signal_log (non-blocking) ──────────────────────────────
       if (parsed.signal && (parsed.signal.includes("LONG") || parsed.signal.includes("SHORT")) && parsed.entry?.price) {
         const killHours = tf.id === "scalp" ? 4 : tf.id === "day" ? 24 : tf.id === "swing" ? 72 : 168;
+        // ── pwin Phase 1 — passive calibration snapshot ───────────────────
+        // Build the snapshot from what's already in scope here (no new HTTP
+        // calls, fully passive). direction_probability + p_loss_meta_proxy
+        // are NULL on this code path because the V2 prepass pipeline isn't
+        // live in production yet — once it is, those columns light up
+        // automatically. Bayesian.probability is the closest existing proxy
+        // and is logged in features_snapshot for cross-checking.
+        const _dir = parsed.signal.includes("LONG") ? "long" : "short";
+        const _pwin = await (async (): Promise<import("./lib/calibrationLog").PwinSnapshot | undefined> => {
+          try {
+            // Dynamic imports match the existing pattern at L1137 / L5698 and
+            // hit Node's module cache after first call (negligible latency).
+            const { normalizeAssetClass } = await import("./quantClient");
+            const { instrumentClassFromScorer } = await import("./lib/calibrationLog");
+            const scorerCls = normalizeAssetClass(undefined, ticker);
+            return {
+              instrument: ticker,
+              instrumentClass: instrumentClassFromScorer(scorerCls),
+              side: _dir as "long" | "short",
+              entry: Number(parsed.entry.price),
+              asofTs: Date.now(),
+              tp: parsed.tp1?.price ?? null,
+              sl: parsed.stopLoss?.price ?? null,
+              holdWindowBars: killHours, // 1h-bar approximation; refine in Phase 2 with timeframe map
+              directionProbability: null,
+              directionProbabilityCalibrated: null,
+              pLossMetaProxy: null,
+              conviction: typeof parsed.conviction === "number" ? parsed.conviction : null,
+              regime: typeof (parsed as any).regime === "string" ? (parsed as any).regime : null,
+              timeframe: tf.id || null,
+              atrPct: null,
+              featuresSnapshot: {
+                bayesian_probability: bayesian?.probability ?? null,
+                advanced_score: adjScore ?? null,
+                confluence_direction: confluence?.direction ?? null,
+                edge: parsed.edge ?? null,
+                edge_source: parsed.edge_source ?? null,
+                kronos: !!parsed.kronos,
+                source: "quant_scanner",
+              },
+            };
+          } catch {
+            return undefined; // never block signal publication on snapshot build
+          }
+        })();
         logSignal({
           source: "quant_scanner",
           token: ticker,
@@ -6227,6 +6272,7 @@ Every level must be technically defensible. Return JSON only.`;
           thesis: parsed.thesis || null,
           invalidation: parsed.invalidation || null,
           scores: { bayesian: bayesian?.probability, advanced: adjScore, confluence: confluence?.direction },
+          pwin: _pwin,
           newsContext: (() => {
             const dir = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
             const ni = dir === "LONG" ? newsImpactLong : newsImpactShort;

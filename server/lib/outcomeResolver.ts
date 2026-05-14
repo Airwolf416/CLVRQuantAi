@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { aiSignalLog, signalShadowInversions } from "@shared/schema";
 import { livePrices, hlData } from "../state";
+import { resolvePrediction, mapOutcomeToWinLoss } from "./calibrationLog";
 
 const INTERVAL_MS = 60 * 1000;
 let started = false;
@@ -100,6 +101,16 @@ async function resolveOnce(): Promise<void> {
         await db.update(aiSignalLog)
           .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
           .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")));
+        // pwin Phase 1: fire-and-forget resolve to /calibration/resolve.
+        // Maps Node-side TP*_HIT/SL_HIT → simple win/loss; non-trade
+        // terminals (cancelled, never_filled etc.) → 'void' so they don't
+        // pollute Brier.
+        resolvePrediction({
+          predictionId: row.id,
+          outcome: mapOutcomeToWinLoss(outcome),
+          exitPrice,
+          pnlPct: pnl,
+        });
         resolvedCount++;
         continue;
       }
@@ -113,6 +124,12 @@ async function resolveOnce(): Promise<void> {
       await db.update(aiSignalLog)
         .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
         .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")));
+      resolvePrediction({
+        predictionId: row.id,
+        outcome: mapOutcomeToWinLoss(outcome),
+        exitPrice: cur,
+        pnlPct: pnl,
+      });
       resolvedCount++;
     }
   }

@@ -18,9 +18,14 @@ from .garch import sigma_daily_decimal
 from .sizing import vol_target_size
 from .costs import total_cost_bps, ev_pass
 from .sl_placement import build_sl_tp
-from .db import log_quant_score
+from .db import log_quant_score, bootstrap_pwin_tables
 from .external_bars import fetch_external_bars, provider_for, health_probe
 from .config import DEFAULT_COINS
+from .pwin import tracker as pwin_tracker
+from .pwin import calibration as pwin_calibration
+from .pwin.weekly_recalibration import run_weekly_recalibration
+from pydantic import BaseModel, Field
+from typing import Optional, Any, Dict, List
 
 log = logging.getLogger("quant")
 logging.basicConfig(level=logging.INFO)
@@ -126,6 +131,14 @@ async def lifespan(app: FastAPI):
     # service is already up and the backfill resolves in ~30s.
     backfill_task = asyncio.create_task(_run_backfill(), name="bar-backfill")
     app.state.backfill_task = backfill_task
+    # ── pwin Phase 1 — passive calibration tracker bootstrap ──────────────
+    # Idempotent CREATE TABLE IF NOT EXISTS for prediction_log + calibrator_state.
+    # Failure here is non-fatal: the quant service still scores; only the
+    # /calibration/* endpoints degrade.
+    try:
+        await bootstrap_pwin_tables()
+    except Exception as e:
+        log.warning("pwin bootstrap failed (calibration endpoints degraded): %s", e)
     log.info("quant service started")
     try:
         yield
@@ -395,3 +408,189 @@ async def cost(req: CostRequest):
     c = total_cost_bps(req.symbol, req.order_usd, req.adv_usd,
                        req.sigma_daily_dec, req.asset_class)
     return CostResponse(**c, ev_pass=ev_pass(req.expected_alpha_bps, c["total_bps"]))
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# pwin Phase 1 — calibration endpoints (passive tracker)
+# ────────────────────────────────────────────────────────────────────────────
+# These endpoints are PASSIVE: they observe and report. They never feed
+# back into scorer logic, Kelly sizing, or the LLM prompt during Phase 1.
+#
+#   POST /calibration/log        — Node fires after aiSignalLog INSERT
+#   POST /calibration/resolve    — Node fires when outcome flips PENDING → terminal
+#   GET  /calibration/dashboard  — admin reads metrics + reliability bins
+#   POST /calibration/recalibrate — manual Platt/isotonic refit (admin trigger)
+
+
+class CalibrationLogPayload(BaseModel):
+    prediction_id: str
+    instrument: str
+    instrument_class: str
+    side: str
+    regime: Optional[str] = None
+    timeframe: Optional[str] = None
+    entry: float
+    tp: Optional[float] = None
+    sl: Optional[float] = None
+    hold_window_bars: Optional[int] = None
+    atr_pct: Optional[float] = None
+    asof_ts: int
+    direction_probability: Optional[float] = None
+    direction_probability_calibrated: Optional[float] = None
+    p_loss_meta_proxy: Optional[float] = None
+    conviction: Optional[float] = None
+    features_snapshot: Optional[Dict[str, Any]] = None
+
+
+class CalibrationResolvePayload(BaseModel):
+    prediction_id: str
+    outcome: str = Field(..., pattern="^(win|loss|void)$")
+    exit_price: Optional[float] = None
+    pnl_pct: Optional[float] = None
+
+
+class CalibrationRecalibratePayload(BaseModel):
+    model_name: Optional[str] = None      # None = all known model_names
+    instrument_class: Optional[str] = None  # None = all four classes
+    method: str = Field(default="auto", pattern="^(auto|platt|isotonic)$")
+    window_days: Optional[int] = 90
+
+
+@app.post("/calibration/log")
+async def calibration_log(payload: CalibrationLogPayload):
+    ok = await pwin_tracker.log_prediction(
+        prediction_id=payload.prediction_id,
+        instrument=payload.instrument,
+        instrument_class=payload.instrument_class,
+        side=payload.side,
+        regime=payload.regime,
+        timeframe=payload.timeframe,
+        entry=payload.entry,
+        tp=payload.tp,
+        sl=payload.sl,
+        hold_window_bars=payload.hold_window_bars,
+        atr_pct=payload.atr_pct,
+        asof_ts=payload.asof_ts,
+        direction_probability=payload.direction_probability,
+        direction_probability_calibrated=payload.direction_probability_calibrated,
+        p_loss_meta_proxy=payload.p_loss_meta_proxy,
+        conviction=payload.conviction,
+        features_snapshot=payload.features_snapshot,
+    )
+    return {"ok": ok, "prediction_id": payload.prediction_id}
+
+
+@app.post("/calibration/resolve")
+async def calibration_resolve(payload: CalibrationResolvePayload):
+    updated = await pwin_tracker.resolve_prediction(
+        prediction_id=payload.prediction_id,
+        outcome=payload.outcome,
+        exit_price=payload.exit_price,
+        pnl_pct=payload.pnl_pct,
+    )
+    return {"ok": True, "updated": updated, "prediction_id": payload.prediction_id}
+
+
+@app.get("/calibration/dashboard")
+async def calibration_dashboard(
+    model_name: Optional[str] = None,
+    instrument_class: Optional[str] = None,
+    window_days: Optional[int] = None,
+    n_bins: int = 10,
+):
+    """Per (model_name × instrument_class) calibration metrics.
+
+    Query params:
+      model_name: filter to one model (else all in pwin_tracker.model_columns())
+      instrument_class: filter to one class (else: crypto / fx / commodity / equity)
+      window_days: only consider closed signals within this rolling window
+      n_bins: reliability-diagram bin count (default 10)
+
+    Always returns HTTP 200 with valid JSON (empty entries when no closed
+    signals exist for a bucket). Never raises on insufficient data.
+    """
+    models = [model_name] if model_name else pwin_tracker.model_columns()
+    classes = (
+        [instrument_class]
+        if instrument_class
+        else ["crypto", "fx", "commodity", "equity"]
+    )
+
+    out_models: List[Dict[str, Any]] = []
+    for m in models:
+        if m not in pwin_tracker.model_columns():
+            continue
+        per_class: List[Dict[str, Any]] = []
+        for icls in classes:
+            try:
+                p_arr, y_arr = await pwin_tracker.fetch_model_predictions(
+                    m, instrument_class=icls, window_days=window_days,
+                )
+            except Exception as e:
+                log.warning("dashboard fetch failed %s/%s: %s", m, icls, e)
+                p_arr, y_arr = ([], [])  # type: ignore
+            n = int(len(p_arr))
+            entry: Dict[str, Any] = {
+                "instrument_class": icls,
+                "n_samples": n,
+                "base_rate": float(sum(y_arr) / n) if n > 0 else None,
+                "brier": pwin_tracker.brier(p_arr, y_arr) if n > 0 else None,
+                "log_loss": pwin_tracker.log_loss(p_arr, y_arr) if n > 0 else None,
+                "reliability_bins": (
+                    pwin_tracker.reliability_bins(p_arr, y_arr, n_bins=n_bins)
+                    if n > 0 else []
+                ),
+                "calibrator": None,
+            }
+            try:
+                cal = await pwin_calibration.get_calibrator(m, icls)
+                entry["calibrator"] = {
+                    "method": getattr(cal, "method", "identity"),
+                    "params": cal.to_params() if hasattr(cal, "to_params") else {},
+                }
+            except Exception as e:
+                log.warning("dashboard get_calibrator failed %s/%s: %s", m, icls, e)
+            # NaN cleanup so the JSON encoder never trips.
+            for k in ("brier", "log_loss", "base_rate"):
+                v = entry.get(k)
+                if v is not None and not math.isfinite(float(v)):
+                    entry[k] = None
+            per_class.append(entry)
+        out_models.append({"model_name": m, "by_class": per_class})
+
+    return {
+        "ok": True,
+        "as_of_unix_ms": int(time.time() * 1000),
+        "window_days": window_days,
+        "n_bins": n_bins,
+        "models": out_models,
+        "graduation_criteria": {
+            "min_closed_signals_per_class": 100,
+            "min_observation_weeks": 2,
+            "monotonic_platt_required": True,
+        },
+    }
+
+
+@app.post("/calibration/recalibrate")
+async def calibration_recalibrate(payload: CalibrationRecalibratePayload):
+    """Manual Platt/isotonic refit. With both filters omitted, fits all
+    (model × class) pairs that have enough data and returns the per-pair
+    summary. Idempotent: latest fit overwrites the row in calibrator_state."""
+    if payload.model_name and payload.instrument_class:
+        res = await pwin_calibration.fit_calibrator(
+            payload.model_name, payload.instrument_class,
+            method=payload.method, window_days=payload.window_days,
+        )
+        return {"ok": True, "result": res}
+    # else: fan out across the requested subset (or everything)
+    classes = (
+        [payload.instrument_class]
+        if payload.instrument_class
+        else ["crypto", "fx", "commodity", "equity"]
+    )
+    return await run_weekly_recalibration(
+        instrument_classes=classes,
+        method=payload.method,
+        window_days=payload.window_days or 90,
+    )
