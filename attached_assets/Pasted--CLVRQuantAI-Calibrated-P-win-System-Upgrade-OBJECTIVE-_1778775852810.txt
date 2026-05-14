@@ -1,0 +1,788 @@
+# CLVRQuantAI — Calibrated P(win) System Upgrade
+
+## OBJECTIVE
+
+Upgrade every AI/ML component in the signal pipeline to output a **calibrated probability of win** — P(price hits TP before SL within hold window | features) — and fuse them into a single P(win) that drives Kelly sizing. Add a calibration feedback loop so each model’s reliability is measured, corrected (Platt scaling), and used to weight fusion.
+
+This replaces ad-hoc “conviction scores” with measurable forecasters. Without calibration, probabilities are just rebranded confidence.
+
+-----
+
+## ARCHITECTURE
+
+```
+                  ┌──────────────────────────────────────┐
+                  │   Signal Candidate (entry, TP, SL)   │
+                  └──────────────┬───────────────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+┌───────────────┐      ┌──────────────────┐      ┌────────────────┐
+│ Meta-label    │      │ Kronos forecast  │      │ Claude Sonnet  │
+│ classifier    │      │ transformer      │      │ 4.6 validator  │
+│ → p_meta      │      │ → p_kronos       │      │ → p_llm        │
+└───────┬───────┘      └────────┬─────────┘      └────────┬───────┘
+        │                       │                         │
+        │     ┌─────────────────┴────────────┐            │
+        │     ▼                              │            │
+        │  ┌─────────────────────┐           │            │
+        │  │ Regime prior        │           │            │
+        │  │ (rolling hit-rate   │           │            │
+        │  │  by regime × class) │           │            │
+        │  │ → p_regime          │           │            │
+        │  └──────────┬──────────┘           │            │
+        │             │                      │            │
+        └─────────────┴──────────┬───────────┴────────────┘
+                                 ▼
+                  ┌──────────────────────────────┐
+                  │  Fusion (weighted logit mean │
+                  │  → logistic stack at scale)  │
+                  │  → p_win_fused               │
+                  └──────────────┬───────────────┘
+                                 ▼
+                  ┌──────────────────────────────┐
+                  │  Platt scaling per model     │
+                  │  (recalibrated weekly)       │
+                  └──────────────┬───────────────┘
+                                 ▼
+                  ┌──────────────────────────────┐
+                  │  Fractional Kelly sizing     │
+                  │  f* = (p·b - q) / b          │
+                  └──────────────┬───────────────┘
+                                 ▼
+                  ┌──────────────────────────────┐
+                  │  Calibration tracker (log    │
+                  │  every prediction + outcome) │
+                  │  → Brier / LogLoss / Bins    │
+                  └──────────────────────────────┘
+```
+
+-----
+
+## FILES TO CREATE / MODIFY
+
+```
+backend/
+├── ml/
+│   ├── pwin/
+│   │   ├── __init__.py
+│   │   ├── definitions.py          # canonical P(win) definition + utils
+│   │   ├── kronos_pwin.py          # path-sampling → P(win)
+│   │   ├── meta_pwin.py            # meta-label classifier wrapper
+│   │   ├── llm_pwin.py             # Claude validator with calibrated prompt
+│   │   ├── regime_prior.py         # rolling base-rate by regime × class
+│   │   ├── fusion.py               # weighted logit mean + stack
+│   │   ├── calibration.py          # Platt scaling, isotonic fallback
+│   │   └── tracker.py              # prediction logging + Brier/reliability
+│   └── ...
+├── api/
+│   └── routes/
+│       └── calibration.py          # /calibration/dashboard endpoint
+├── models/
+│   └── calibration_models.py       # SQLAlchemy: PredictionLog, CalibratorState
+└── jobs/
+    └── weekly_recalibration.py     # cron: refit Platt scalers, update weights
+```
+
+-----
+
+## 1. CANONICAL P(WIN) DEFINITION
+
+**File: `backend/ml/pwin/definitions.py`**
+
+```python
+"""
+Canonical P(win) definition shared by every model.
+
+P(win) = P( price hits TP before SL within hold_window_bars
+            | features available at signal time )
+
+All models MUST output probability under this same definition so that
+fusion is well-formed.
+"""
+from dataclasses import dataclass
+from typing import Literal
+import numpy as np
+
+@dataclass
+class SignalContext:
+    instrument: str
+    side: Literal["long", "short"]
+    entry: float
+    tp: float
+    sl: float
+    hold_window_bars: int           # e.g. 96 for 4h chart × 24h
+    timeframe: str                  # "5m", "15m", "1h", "4h"
+    regime: str                     # from regime classifier
+    instrument_class: str           # "crypto", "fx", "commodity", "equity"
+    atr_pct: float                  # ATR as % of price (volatility regime)
+    asof_ts: int                    # unix ms, signal generation time
+
+def rr_ratio(ctx: SignalContext) -> float:
+    """Reward:risk based on entry/TP/SL geometry."""
+    if ctx.side == "long":
+        return (ctx.tp - ctx.entry) / (ctx.entry - ctx.sl)
+    return (ctx.entry - ctx.tp) / (ctx.sl - ctx.entry)
+
+def clip_p(p: float, eps: float = 1e-4) -> float:
+    return float(np.clip(p, eps, 1.0 - eps))
+```
+
+-----
+
+## 2. KRONOS → P(WIN) FROM SAMPLED PATHS
+
+**File: `backend/ml/pwin/kronos_pwin.py`**
+
+```python
+"""
+Convert Kronos forecast samples to P(win) by simulating TP/SL touch order.
+Kronos returns multiple price paths; P(win) = fraction of paths that hit
+TP before SL within hold_window.
+"""
+import numpy as np
+from .definitions import SignalContext, clip_p
+
+def kronos_p_win(
+    forecast_paths: np.ndarray,     # shape (n_samples, horizon_bars)
+    ctx: SignalContext,
+) -> float:
+    if forecast_paths.ndim != 2:
+        raise ValueError("forecast_paths must be 2D (samples, horizon)")
+
+    paths = forecast_paths[:, : ctx.hold_window_bars]
+
+    if ctx.side == "long":
+        tp_hit = paths >= ctx.tp
+        sl_hit = paths <= ctx.sl
+    else:
+        tp_hit = paths <= ctx.tp
+        sl_hit = paths >= ctx.sl
+
+    # First bar index where each touch occurs; inf if never
+    tp_idx = np.where(tp_hit.any(axis=1), tp_hit.argmax(axis=1), np.inf)
+    sl_idx = np.where(sl_hit.any(axis=1), sl_hit.argmax(axis=1), np.inf)
+
+    wins = (tp_idx < sl_idx).mean()
+    return clip_p(float(wins))
+```
+
+-----
+
+## 3. META-LABEL CLASSIFIER → P(WIN)
+
+**File: `backend/ml/pwin/meta_pwin.py`**
+
+```python
+"""
+Wrap the existing meta-label gradient-boosted classifier so it returns
+calibrated P(win). Uses predict_proba; never raw decision_function.
+"""
+import numpy as np
+from .definitions import SignalContext, clip_p
+from .calibration import get_calibrator
+
+def meta_p_win(model, feature_vector: np.ndarray, ctx: SignalContext) -> float:
+    raw = float(model.predict_proba(feature_vector.reshape(1, -1))[0, 1])
+    calibrator = get_calibrator("meta", ctx.instrument_class)
+    return clip_p(calibrator.transform(raw) if calibrator else raw)
+```
+
+-----
+
+## 4. CLAUDE SONNET 4.6 VALIDATOR — CALIBRATED PROMPT
+
+**File: `backend/ml/pwin/llm_pwin.py`**
+
+```python
+"""
+Claude Sonnet 4.6 validator with explicit calibrated probability output.
+The model's Brier score is tracked; overconfident outputs are penalized
+in fusion weighting and corrected via Platt scaling.
+"""
+import json
+import os
+from anthropic import Anthropic
+from .definitions import SignalContext, clip_p
+from .calibration import get_calibrator
+
+CLIENT = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+VALIDATOR_SYSTEM_PROMPT = """\
+You are a quantitative signal validator for the CLVRQuantAI platform.
+For every setup, output a CALIBRATED PROBABILITY ESTIMATE — not a
+recommendation, not a conviction score.
+
+Definition: p_win = P(price hits TP before SL within hold_window_bars
+                       given the features you are shown)
+
+Return JSON ONLY (no prose, no markdown fences):
+{
+  "p_win": <float 0-1>,
+  "p_win_low": <float, lower bound of 90% CI>,
+  "p_win_high": <float, upper bound of 90% CI>,
+  "reasoning": "<2-3 sentence factor breakdown>",
+  "dominant_risk": "<single biggest reason this fails>",
+  "edge_decay_min": <int, minutes this edge likely persists>
+}
+
+Calibration rules:
+- p_win > 0.65 only when 3+ INDEPENDENT features align
+  (e.g. regime + momentum + liquidity + microstructure)
+- p_win < 0.45 still passes through with reasoning — low-probability
+  setups train the meta-label correctly and must not be censored
+- Never output exactly 0.5; if uninformative, output 0.48 or 0.52
+  with explicit reasoning for the direction of weak lean
+- Penalize: late entry on extended move, low ATR percentile,
+  funding/OI crowding, proximity to high-impact macro event,
+  thin liquidity at SL level
+- Your historical Brier score is tracked across all calls.
+  Overconfident outputs are corrected via Platt scaling and
+  reduce your weight in the fusion layer. Honest uncertainty
+  is rewarded.
+"""
+
+def llm_p_win(ctx: SignalContext, feature_summary: dict) -> dict:
+    user_msg = json.dumps({
+        "signal_context": {
+            "instrument": ctx.instrument,
+            "side": ctx.side,
+            "entry": ctx.entry,
+            "tp": ctx.tp,
+            "sl": ctx.sl,
+            "hold_window_bars": ctx.hold_window_bars,
+            "timeframe": ctx.timeframe,
+            "regime": ctx.regime,
+            "atr_pct": ctx.atr_pct,
+        },
+        "features": feature_summary,
+    })
+
+    resp = CLIENT.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system=VALIDATOR_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    raw_text = resp.content[0].text.strip()
+    parsed = json.loads(raw_text)
+
+    calibrator = get_calibrator("llm", ctx.instrument_class)
+    p_raw = clip_p(float(parsed["p_win"]))
+    parsed["p_win_raw"] = p_raw
+    parsed["p_win"] = clip_p(calibrator.transform(p_raw) if calibrator else p_raw)
+    return parsed
+```
+
+-----
+
+## 5. REGIME PRIOR — ROLLING BASE RATE
+
+**File: `backend/ml/pwin/regime_prior.py`**
+
+```python
+"""
+Conditional base rate of TP-before-SL hits by (regime, instrument_class,
+side). Computed from the rolling 90-day window of closed signals.
+This is the empirical prior; the other models contribute information
+on top of it.
+"""
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from .definitions import SignalContext, clip_p
+
+def regime_p_win(db: Session, ctx: SignalContext, window_days: int = 90) -> float:
+    q = text("""
+        SELECT
+            AVG(CASE WHEN outcome = 'win' THEN 1.0 ELSE 0.0 END) AS hit_rate,
+            COUNT(*) AS n
+        FROM prediction_log
+        WHERE regime = :regime
+          AND instrument_class = :icls
+          AND side = :side
+          AND closed_at >= NOW() - (:wd || ' days')::interval
+          AND outcome IN ('win', 'loss')
+    """)
+    row = db.execute(q, {
+        "regime": ctx.regime,
+        "icls": ctx.instrument_class,
+        "side": ctx.side,
+        "wd": window_days,
+    }).first()
+
+    if not row or row.n is None or row.n < 30:
+        return 0.5                       # uninformative prior until N≥30
+    return clip_p(float(row.hit_rate))
+```
+
+-----
+
+## 6. FUSION — WEIGHTED LOGIT MEAN (UPGRADES TO STACK)
+
+**File: `backend/ml/pwin/fusion.py`**
+
+```python
+"""
+Fuse component P(win) estimates into a single calibrated value.
+
+Stage 1 (now): weighted logit mean. Robust with limited training data.
+Stage 2 (once N_closed >= 500): logistic stack with sklearn LogisticRegression
+on [p_meta, p_kronos, p_llm, p_regime] -> outcome.
+
+Weights are refit weekly based on inverse Brier score per component.
+"""
+import numpy as np
+from scipy.special import logit, expit as sigmoid
+from .definitions import clip_p
+
+DEFAULT_WEIGHTS = {
+    "meta":   0.35,
+    "kronos": 0.30,
+    "regime": 0.20,
+    "llm":    0.15,
+}
+
+def fuse_p_win(
+    p_meta: float,
+    p_kronos: float,
+    p_llm: float,
+    p_regime: float,
+    weights: dict | None = None,
+) -> float:
+    w = weights or DEFAULT_WEIGHTS
+    z = (
+        w["meta"]   * logit(clip_p(p_meta)) +
+        w["kronos"] * logit(clip_p(p_kronos)) +
+        w["llm"]    * logit(clip_p(p_llm)) +
+        w["regime"] * logit(clip_p(p_regime))
+    )
+    return clip_p(float(sigmoid(z)))
+
+
+# --- Stage 2 stack (activate when enough data) -------------------------
+from sklearn.linear_model import LogisticRegression
+import joblib, pathlib
+
+STACK_PATH = pathlib.Path("backend/ml/pwin/_stack_model.joblib")
+
+def train_stack(X: np.ndarray, y: np.ndarray) -> LogisticRegression:
+    """X columns: [p_meta, p_kronos, p_llm, p_regime] (in logit space)."""
+    X_logit = logit(np.clip(X, 1e-4, 1 - 1e-4))
+    model = LogisticRegression(C=1.0, max_iter=1000)
+    model.fit(X_logit, y)
+    joblib.dump(model, STACK_PATH)
+    return model
+
+def fuse_stack(p_meta, p_kronos, p_llm, p_regime) -> float:
+    if not STACK_PATH.exists():
+        return fuse_p_win(p_meta, p_kronos, p_llm, p_regime)
+    model = joblib.load(STACK_PATH)
+    X = logit(np.array([[clip_p(p_meta), clip_p(p_kronos),
+                          clip_p(p_llm), clip_p(p_regime)]]))
+    return clip_p(float(model.predict_proba(X)[0, 1]))
+```
+
+-----
+
+## 7. CALIBRATION — PLATT SCALING (ISOTONIC FALLBACK)
+
+**File: `backend/ml/pwin/calibration.py`**
+
+```python
+"""
+Per-model Platt scaling. Logistic-regress predicted_p -> outcome on a
+rolling window. If reliability is non-monotonic, fall back to isotonic.
+
+State is persisted per (model_name, instrument_class) tuple.
+"""
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.isotonic import IsotonicRegression
+from sqlalchemy.orm import Session
+import joblib, pathlib
+
+CALIB_DIR = pathlib.Path("backend/ml/pwin/_calibrators")
+CALIB_DIR.mkdir(parents=True, exist_ok=True)
+
+class PlattCalibrator:
+    def __init__(self, model: LogisticRegression):
+        self.model = model
+    def transform(self, p: float) -> float:
+        return float(self.model.predict_proba([[p]])[0, 1])
+
+class IsotonicCalibrator:
+    def __init__(self, model: IsotonicRegression):
+        self.model = model
+    def transform(self, p: float) -> float:
+        return float(self.model.predict([p])[0])
+
+def _path(model_name: str, icls: str) -> pathlib.Path:
+    return CALIB_DIR / f"{model_name}__{icls}.joblib"
+
+def get_calibrator(model_name: str, icls: str):
+    p = _path(model_name, icls)
+    return joblib.load(p) if p.exists() else None
+
+def fit_calibrator(
+    model_name: str,
+    icls: str,
+    predicted: np.ndarray,
+    outcomes: np.ndarray,
+    min_n: int = 100,
+):
+    if len(predicted) < min_n:
+        return None
+    # Try Platt first
+    lr = LogisticRegression().fit(predicted.reshape(-1, 1), outcomes)
+    platt = PlattCalibrator(lr)
+    # Sanity check monotonicity on a grid
+    grid = np.linspace(0.01, 0.99, 50)
+    transformed = np.array([platt.transform(p) for p in grid])
+    if np.all(np.diff(transformed) >= -1e-6):
+        joblib.dump(platt, _path(model_name, icls))
+        return platt
+    # Fall back to isotonic if Platt is non-monotonic
+    iso = IsotonicRegression(out_of_bounds="clip").fit(predicted, outcomes)
+    isocal = IsotonicCalibrator(iso)
+    joblib.dump(isocal, _path(model_name, icls))
+    return isocal
+```
+
+-----
+
+## 8. PREDICTION LOG + CALIBRATOR STATE — SQLALCHEMY
+
+**File: `backend/models/calibration_models.py`**
+
+```python
+from sqlalchemy import (Column, String, Float, Integer, BigInteger,
+                        DateTime, Index, JSON)
+from sqlalchemy.sql import func
+from .base import Base
+
+class PredictionLog(Base):
+    __tablename__ = "prediction_log"
+
+    id                 = Column(BigInteger, primary_key=True)
+    signal_id          = Column(String, index=True, nullable=False)
+    instrument         = Column(String, index=True, nullable=False)
+    instrument_class   = Column(String, index=True, nullable=False)
+    side               = Column(String, nullable=False)
+    regime             = Column(String, index=True)
+    timeframe          = Column(String)
+
+    p_meta             = Column(Float)
+    p_kronos           = Column(Float)
+    p_llm              = Column(Float)
+    p_llm_raw          = Column(Float)
+    p_regime           = Column(Float)
+    p_fused            = Column(Float, nullable=False)
+
+    rr                 = Column(Float)
+    kelly_fraction     = Column(Float)
+    size_multiplier    = Column(Float)
+
+    entry              = Column(Float)
+    tp                 = Column(Float)
+    sl                 = Column(Float)
+
+    outcome            = Column(String)            # 'win' | 'loss' | 'expired' | 'open'
+    realized_r         = Column(Float)             # actual R multiple
+    closed_at          = Column(DateTime(timezone=True))
+    created_at         = Column(DateTime(timezone=True), server_default=func.now())
+
+    features_snapshot  = Column(JSON)              # for forensics
+    llm_reasoning      = Column(String)
+
+    __table_args__ = (
+        Index("ix_predlog_closed_outcome", "closed_at", "outcome"),
+        Index("ix_predlog_regime_class_side", "regime", "instrument_class", "side"),
+    )
+
+class CalibratorState(Base):
+    __tablename__ = "calibrator_state"
+    id              = Column(Integer, primary_key=True)
+    model_name      = Column(String, nullable=False)   # 'meta'|'kronos'|'llm'|'fused'
+    instrument_class= Column(String, nullable=False)
+    method          = Column(String)                   # 'platt'|'isotonic'
+    n_samples       = Column(Integer)
+    brier           = Column(Float)
+    log_loss        = Column(Float)
+    fitted_at       = Column(DateTime(timezone=True), server_default=func.now())
+```
+
+-----
+
+## 9. TRACKER — BRIER, LOG LOSS, RELIABILITY BINS
+
+**File: `backend/ml/pwin/tracker.py`**
+
+```python
+import numpy as np
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
+def brier(p: np.ndarray, y: np.ndarray) -> float:
+    return float(np.mean((p - y) ** 2))
+
+def log_loss(p: np.ndarray, y: np.ndarray, eps: float = 1e-9) -> float:
+    p = np.clip(p, eps, 1 - eps)
+    return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
+
+def reliability_bins(p: np.ndarray, y: np.ndarray, n_bins: int = 10):
+    edges = np.linspace(0, 1, n_bins + 1)
+    idx = np.digitize(p, edges) - 1
+    idx = np.clip(idx, 0, n_bins - 1)
+    out = []
+    for b in range(n_bins):
+        mask = idx == b
+        if mask.sum() == 0:
+            out.append({"bin": b, "pred_mean": None, "obs_rate": None, "n": 0})
+            continue
+        out.append({
+            "bin": b,
+            "lo": float(edges[b]),
+            "hi": float(edges[b + 1]),
+            "pred_mean": float(p[mask].mean()),
+            "obs_rate":  float(y[mask].mean()),
+            "n": int(mask.sum()),
+        })
+    return out
+
+def fetch_model_predictions(db: Session, model_col: str, days: int = 90,
+                             icls: str | None = None):
+    where_icls = "AND instrument_class = :icls" if icls else ""
+    q = text(f"""
+        SELECT {model_col} AS p, outcome
+        FROM prediction_log
+        WHERE outcome IN ('win', 'loss')
+          AND closed_at >= NOW() - (:d || ' days')::interval
+          AND {model_col} IS NOT NULL
+          {where_icls}
+    """)
+    params = {"d": days}
+    if icls: params["icls"] = icls
+    rows = db.execute(q, params).fetchall()
+    if not rows: return np.array([]), np.array([])
+    p = np.array([r.p for r in rows])
+    y = np.array([1.0 if r.outcome == "win" else 0.0 for r in rows])
+    return p, y
+```
+
+-----
+
+## 10. WEEKLY RECALIBRATION JOB
+
+**File: `backend/jobs/weekly_recalibration.py`**
+
+```python
+"""
+Run weekly (Sunday 02:00 UTC). Refit Platt scalers and update fusion weights
+based on inverse Brier per component.
+"""
+import logging
+import numpy as np
+from sqlalchemy.orm import Session
+from backend.db import SessionLocal
+from backend.ml.pwin.tracker import (fetch_model_predictions, brier,
+                                      log_loss, reliability_bins)
+from backend.ml.pwin.calibration import fit_calibrator
+from backend.models.calibration_models import CalibratorState
+import json, pathlib
+
+log = logging.getLogger("recalib")
+FUSION_WEIGHTS_PATH = pathlib.Path("backend/ml/pwin/_fusion_weights.json")
+
+MODELS = ["p_meta", "p_kronos", "p_llm_raw", "p_fused"]
+NAME_MAP = {"p_meta": "meta", "p_kronos": "kronos",
+            "p_llm_raw": "llm", "p_fused": "fused"}
+ICLASSES = ["crypto", "fx", "commodity", "equity"]
+
+def run():
+    db: Session = SessionLocal()
+    try:
+        scores = {}
+        for col in MODELS:
+            for icls in ICLASSES:
+                p, y = fetch_model_predictions(db, col, days=90, icls=icls)
+                if len(p) < 50:
+                    continue
+                b = brier(p, y); ll = log_loss(p, y)
+                mname = NAME_MAP[col]
+                log.info(f"{mname}/{icls}  n={len(p)}  brier={b:.4f}  ll={ll:.4f}")
+                fit_calibrator(mname, icls, p, y, min_n=100)
+                db.add(CalibratorState(
+                    model_name=mname, instrument_class=icls,
+                    method="platt", n_samples=len(p),
+                    brier=b, log_loss=ll,
+                ))
+                scores.setdefault(mname, []).append(b)
+
+        # Update fusion weights: inverse Brier, normalised
+        agg = {m: float(np.mean(v)) for m, v in scores.items() if m != "fused"}
+        if {"meta", "kronos", "llm"}.issubset(agg):
+            inv = {m: 1.0 / max(agg[m], 1e-3) for m in ("meta", "kronos", "llm")}
+            inv["regime"] = 1.0 / 0.25            # fixed reference
+            total = sum(inv.values())
+            weights = {m: v / total for m, v in inv.items()}
+            FUSION_WEIGHTS_PATH.write_text(json.dumps(weights, indent=2))
+            log.info(f"Updated fusion weights: {weights}")
+        db.commit()
+    finally:
+        db.close()
+
+if __name__ == "__main__":
+    run()
+```
+
+-----
+
+## 11. KELLY SIZING — INTEGRATED WITH FUSED P(WIN)
+
+**File: `backend/ml/pwin/kelly.py`** (or extend existing sizing module)
+
+```python
+def kelly_fraction(p_win: float, rr: float,
+                   kelly_mult: float = 0.25, cap: float = 0.05) -> float:
+    """
+    Fractional Kelly with hard cap. Cap protects against residual
+    miscalibration; lift kelly_mult toward 0.5 once Brier < 0.18 sustained.
+    """
+    if p_win <= 0 or rr <= 0:
+        return 0.0
+    b = rr
+    f_star = (p_win * b - (1.0 - p_win)) / b
+    return max(0.0, min(f_star * kelly_mult, cap))
+```
+
+-----
+
+## 12. CALIBRATION DASHBOARD ENDPOINT
+
+**File: `backend/api/routes/calibration.py`**
+
+```python
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from backend.db import get_db
+from backend.ml.pwin.tracker import (fetch_model_predictions, brier,
+                                      log_loss, reliability_bins)
+
+router = APIRouter(prefix="/calibration", tags=["calibration"])
+
+MODELS = {
+    "meta":   "p_meta",
+    "kronos": "p_kronos",
+    "llm":    "p_llm",
+    "fused":  "p_fused",
+}
+
+@router.get("/dashboard")
+def dashboard(days: int = 30, db: Session = Depends(get_db)):
+    out = {}
+    for name, col in MODELS.items():
+        p, y = fetch_model_predictions(db, col, days=days)
+        if len(p) == 0:
+            out[name] = {"n": 0}
+            continue
+        out[name] = {
+            "n": int(len(p)),
+            "brier": brier(p, y),
+            "log_loss": log_loss(p, y),
+            "mean_pred": float(p.mean()),
+            "mean_obs": float(y.mean()),
+            "reliability": reliability_bins(p, y),
+        }
+    return out
+```
+
+Frontend: render a reliability diagram (predicted_p on X, observed_rate on Y, identity line = perfect calibration) + Brier/LogLoss time series per model. Use the existing dark terminal aesthetic — black/gold/green tokens, IBM Plex Mono.
+
+-----
+
+## 13. SIGNAL GENERATOR — WIRING IT TOGETHER
+
+In your signal pipeline, replace the conviction-scoring block with:
+
+```python
+from backend.ml.pwin.definitions import SignalContext, rr_ratio
+from backend.ml.pwin.meta_pwin import meta_p_win
+from backend.ml.pwin.kronos_pwin import kronos_p_win
+from backend.ml.pwin.llm_pwin import llm_p_win
+from backend.ml.pwin.regime_prior import regime_p_win
+from backend.ml.pwin.fusion import fuse_stack
+from backend.ml.pwin.kelly import kelly_fraction
+from backend.ml.pwin.calibration import get_calibrator
+import json, pathlib
+
+_FUSION_W_PATH = pathlib.Path("backend/ml/pwin/_fusion_weights.json")
+
+def _load_weights():
+    if _FUSION_W_PATH.exists():
+        return json.loads(_FUSION_W_PATH.read_text())
+    return None
+
+def evaluate_signal(ctx: SignalContext, features, kronos_paths, db) -> dict:
+    p_meta   = meta_p_win(META_MODEL, features.vector, ctx)
+    p_kronos = kronos_p_win(kronos_paths, ctx)
+    p_regime = regime_p_win(db, ctx)
+    llm_out  = llm_p_win(ctx, features.summary)
+    p_llm    = llm_out["p_win"]
+
+    p_fused = fuse_stack(p_meta, p_kronos, p_llm, p_regime)
+
+    # Optional: calibrate the fused output itself
+    fused_calib = get_calibrator("fused", ctx.instrument_class)
+    if fused_calib:
+        p_fused = fused_calib.transform(p_fused)
+
+    rr = rr_ratio(ctx)
+    f_kelly = kelly_fraction(p_fused, rr)
+
+    return {
+        "p_meta": p_meta, "p_kronos": p_kronos, "p_llm": p_llm,
+        "p_llm_raw": llm_out["p_win_raw"], "p_regime": p_regime,
+        "p_fused": p_fused, "rr": rr,
+        "kelly_fraction": f_kelly,
+        "size_multiplier": min(f_kelly / 0.01, 5.0),   # 1x at 1% Kelly, capped at 5x
+        "llm_reasoning": llm_out["reasoning"],
+        "dominant_risk": llm_out["dominant_risk"],
+    }
+```
+
+After the trade closes, update `prediction_log.outcome` and `realized_r`. The weekly job does the rest.
+
+-----
+
+## 14. ACCEPTANCE CRITERIA
+
+Implementation is complete when:
+
+1. Every published signal has `p_meta`, `p_kronos`, `p_llm`, `p_regime`, `p_fused` logged.
+1. `GET /calibration/dashboard?days=30` returns Brier, log-loss, and reliability bins for each component AND the fused output.
+1. Weekly job runs Sundays 02:00 UTC, refits Platt scalers, updates `_fusion_weights.json`.
+1. After 30 days, `p_fused` Brier ≤ best individual component Brier (fusion must add value).
+1. Reliability diagram for `p_fused` lies within ±0.05 of the identity line in the 0.4-0.7 predicted-probability band (where most signals live).
+1. Kelly fraction is computed from `p_fused`, capped at 5% notional per signal, with `kelly_mult = 0.25` until Brier < 0.18 sustained for 4 consecutive weeks.
+1. UI Elite tier surfaces `p_fused`, the reliability diagram, and per-model Brier scores.
+
+-----
+
+## 15. ROLLOUT ORDER
+
+1. Ship schema (`PredictionLog`, `CalibratorState`) + tracker — log everything before changing model behaviour.
+1. Wire Kronos + meta P(win) — these are deterministic and cheap to validate.
+1. Update LLM validator prompt + parse — measure Brier for 2 weeks before letting it influence Kelly.
+1. Add fusion with default weights — keep `kelly_mult` low (0.15) for the first 2 weeks.
+1. Turn on weekly recalibration job — only after ≥100 closed signals per instrument_class.
+1. Switch from weighted-logit-mean to logistic stack — only after ≥500 total closed signals.
+1. Expose calibration dashboard to Elite tier.
+
+-----
+
+## NOTES
+
+- Use Anthropic SDK model string `claude-sonnet-4-6` (consistent with current platform).
+- Do not let the LLM see prior model outputs — that creates anchoring and inflates apparent fusion lift. Each component must produce P(win) independently from raw features.
+- `regime_p_win` returning 0.5 when n < 30 is intentional — uninformative prior beats a noisy one.
+- If Platt scaling drifts hard (mean_pred vs mean_obs diverges by >0.10 on the dashboard), check for regime change before retraining; recalibrating on regime-shifted data bakes in the drift.
