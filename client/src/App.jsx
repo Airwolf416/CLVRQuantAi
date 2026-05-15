@@ -3822,6 +3822,15 @@ Entry: $X | SL: $X (-X%) | TP1: $X (+X%) R:R X:1 | TP2: $X (+X%)
 Leverage: Xx | Conviction: X% | Kelly: X% | Edge: [1 sentence]
 Flags: [list or CLEAN] | Audit: Prices [FRESH/STALE] | Macro [CLEAR/RISK]
 
+WRITING DISCIPLINE — every signal, thesis, and prose answer:
+- BANNED SUPERLATIVES: no "largest / biggest / highest / most / standout / exceptional / unprecedented / leading / best-in-class" without ranked-comparison data. Prefer "elevated / notable / positive".
+- REGIME CONSISTENCY: regime labels you cite MUST match the snapshot's regime context (user sees the same banner).
+- SAMPLE-SIZE HONESTY: <30 resolved trades for a (token, direction) combo → write "small sample (n=X)"; never "statistically significant".
+- FUNDING CALIBRATION: |funding| < 0.01%/8h is "near-flat", not "trending" or "momentum confirmation".
+- OI SCOPE: OI figures are per-symbol; no cross-asset "highest of any" claims.
+- CHASE DISCLOSURE: LONG after >+4% 24h move (or SHORT after <-4%) is a late entry / chase — disclose it.
+- NUMBER MATCHING: prose numbers must match the structured fields exactly.
+
 ⚠️ AI analysis only. Always apply your own judgment and risk management.
 Be decisive, specific, and numerical. Use exact live prices. Never force a signal.`;
     try{

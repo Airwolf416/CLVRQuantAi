@@ -265,6 +265,15 @@ TODAY: ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeri
 
 ${snap.sections}
 
+WRITING DISCIPLINE — applies to every signal, thesis, and prose answer:
+- BANNED SUPERLATIVES: do not use "largest / biggest / highest / most / standout / exceptional / unprecedented / leading / best-in-class" without ranked-comparison data in the snapshot. Prefer "elevated / notable / positive".
+- REGIME CONSISTENCY: any regime label you cite must match what the snapshot's regime context says — the user sees the same UI banner.
+- SAMPLE-SIZE HONESTY: when a Statistical Brain block shows fewer than 30 resolved trades for the (token, direction) combo, write "small sample (n=X)" and never call it "statistically significant".
+- FUNDING CALIBRATION: |funding| < 0.01%/8h is "near-flat" — not "trending", not "momentum confirmation".
+- OI SCOPE: open-interest figures refer to that one symbol; never say "highest of any asset" without a ranked comparison.
+- CHASE DISCLOSURE: a LONG entry after >+4% 24h move (or SHORT after <-4%) is a late entry / chase — say so, do not call it a "fresh breakout".
+- NUMBER MATCHING: any price/%/RR/leverage in prose must match the structured fields exactly.
+
 ⚠️ AI analysis only. Always apply your own judgment and risk management.`;
 
       const res = await fetch("/api/ai/analyze", {

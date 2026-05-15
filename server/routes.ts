@@ -3429,7 +3429,15 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   "invalidation": "what price action would void this setup",
   "news_context": "<=1 sentence summarizing relevant news found, or 'no material catalysts'",
   "warnings": ["low volume" | "news risk" | "choppy" | "overextended" | "event window" | etc.]
-}`;
+}
+
+═══ WRITING DISCIPLINE for the "reasoning" field ═══
+- BANNED SUPERLATIVES: do not use "largest / biggest / highest / most / standout / exceptional / unprecedented / leading / best-in-class" unless the chart visibly shows ranked context. Prefer "elevated / notable / positive".
+- SAMPLE-SIZE HONESTY: if you cite a backtest or pattern frequency, never call <30 occurrences "statistically significant".
+- NO FORCED CONFLUENCE: if structure + indicators + news do not actually agree, say so and lean toward "no_trade" rather than inventing alignment.
+- NUMBER MATCHING: any price/RR/% mentioned in "reasoning" must match the entry/stop_loss/take_profits values you returned above.
+- CHASE DISCLOSURE: a long entry near a recent fresh swing high after a big move is a chase — call it that, do not call it a "breakout" without explicit breakout structure.
+- FUNDING / OI mentions only when visible on the chart (rare).`;
 
           const messages = [{
             role: "user",
@@ -7720,6 +7728,93 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         kronosFlipCache.set(cacheKey, { ensemble_signal: newSignal, ensemble_confidence: newConf });
       } catch { /* non-fatal */ }
       // ─────────────────────────────────────────────────────────────────────────
+
+      // ── Kronos trade_plan hardener ────────────────────────────────────────
+      // Same gates as Trade Ideas: ATR-floored stop, chase/crowded flags, Wilson
+      // CI on backtest WR, regime leverage cap, conviction veto. Only runs when
+      // trade_plan.direction is LONG/SHORT (NO_TRADE passes through). Wrapped in
+      // try/catch — any hardener failure leaves trade_plan untouched.
+      try {
+        const tp = parsed.trade_plan;
+        if (tp && (tp.direction === "LONG" || tp.direction === "SHORT")) {
+          const e = parseFloat(tp.entry), sl = parseFloat(tp.sl);
+          const t1 = parseFloat(tp.tp1), t2 = parseFloat(tp.tp2);
+          if ([e, sl, t1].every(Number.isFinite)) {
+            const { hardenSignal, getOiChangePct } = await import("./lib/signalHardening");
+            const { getBrainFor } = await import("./lib/statisticalBrain");
+            const symbolK = String(parsed.asset || ticker).split("/")[0].toUpperCase();
+            const dirK: "LONG" | "SHORT" = tp.direction;
+            const bus = getDataBusStatus();
+            const busLabel = (bus?.regime?.label || "NEUTRAL").toUpperCase();
+            const regimeK: "MACRO_CLEAR" | "RISK_ON" | "RISK_OFF" | "MACRO_EVENT" =
+              busLabel === "RISK_ON" ? "RISK_ON" :
+              busLabel === "RISK_OFF" ? "RISK_OFF" :
+              "MACRO_CLEAR"; // NEUTRAL → MACRO_CLEAR (MACRO_EVENT not yet wired in dataBus — mirrors hardenTradeIdeas regime mapping)
+            const brainK = await getBrainFor(symbolK, dirK).catch(() => null as any);
+            const statK = brainK?.stat;
+            const targets = Number.isFinite(t2) ? [t1, t2] : [t1];
+            const ctxK = {
+              symbol: symbolK,
+              direction: dirK,
+              entry: e,
+              proposedStop: sl,
+              proposedTargets: targets,
+              rawConviction: Math.max(0, Math.min(1, (Number(parsed.ensemble_confidence) || 50) / 100)),
+              atr1h: Number(atr) || 0,  // already computed for kronos
+              pctChange24h: ((bus?.prices?.[symbolK]?.change24h ?? 0) / 100),
+              funding8h: bus?.funding?.[symbolK] ?? 0,
+              oiUsd: bus?.oi?.[symbolK] ?? 0,
+              oiChange24hPct: ((getOiChangePct(symbolK) ?? 0) / 100),
+              liquidationClusters: [],
+              backtestN: statK?.sampleSize ?? 0,
+              backtestWr: statK?.winRate ?? 0,
+              backtestAvgR: statK?.expectedR ?? 0,
+              regime: regimeK,
+              edgeSource: "estimated" as const,
+            };
+            const hK = hardenSignal(ctxK);
+            if (!hK.accept) {
+              parsed.trade_plan = {
+                ...tp,
+                direction: "NO_TRADE",
+                notes: `Kronos hardener veto: ${hK.reasonsRejected.join("; ")}. ${tp.notes || ""}`,
+              };
+              console.log(`[kronos hardener] ${symbolK} ${dirK} VETOED: ${hK.reasonsRejected.join("; ")}`);
+            } else {
+              const riskNew = Math.abs(e - hK.stop);
+              const rrK = (target: number) => riskNew > 0 ? `${(Math.abs(target - e) / riskNew).toFixed(1)}:1` : "—";
+              const slPct = ((Math.abs(e - hK.stop) / e) * 100);
+              const tp1Pct = ((Math.abs(hK.targets[0] - e) / e) * 100);
+              parsed.trade_plan = {
+                ...tp,
+                sl: parseFloat(hK.stop.toFixed(6)),
+                sl_pct: parseFloat(slPct.toFixed(2)),
+                tp1: parseFloat(hK.targets[0].toFixed(6)),
+                tp1_pct: parseFloat(tp1Pct.toFixed(2)),
+                tp2: Number.isFinite(hK.targets[1]) ? parseFloat(hK.targets[1].toFixed(6)) : tp.tp2,
+                rr_tp1: rrK(hK.targets[0]),
+                rr_tp2: Number.isFinite(hK.targets[1]) ? rrK(hK.targets[1]) : tp.rr_tp2,
+                leverage: `${Math.min(parseFloat(String(tp.leverage || "1").replace(/[^\d.]/g, "")) || 1, hK.leverageCap).toFixed(0)}x (capped by ${regimeK})`,
+                notes: hK.notes.length ? `${hK.notes.join("; ")}. ${tp.notes || ""}` : tp.notes,
+              };
+              parsed.ensemble_confidence = Math.round(hK.finalConviction * 100);
+              parsed.hardener = {
+                applied: true,
+                sizeMultiplier: parseFloat(hK.sizeMultiplier.toFixed(3)),
+                wrCi: [Math.round(hK.wrCiLow * 100), Math.round(hK.wrCiHigh * 100)],
+                flags: [
+                  ...(hK.chaseFlag ? ["chase"] : []),
+                  ...(hK.crowdingFlag ? ["crowded"] : []),
+                  ...(hK.lowSampleFlag ? ["low-sample"] : []),
+                ],
+                materiallyMutated: hK.materiallyMutated,
+              };
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn("[kronos hardener] skipped:", e?.message || e);
+      }
 
       res.json(parsed);
 
