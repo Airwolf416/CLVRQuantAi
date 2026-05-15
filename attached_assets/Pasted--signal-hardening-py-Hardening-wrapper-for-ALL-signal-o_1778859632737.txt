@@ -1,0 +1,282 @@
+## “””
+signal_hardening.py
+
+Hardening wrapper for ALL signal outputs (Kronos + quant scoring path).
+
+Enforces:
+
+- ATR-based stop floor (1.8x ATR minimum)
+- Liquidity-aware SL (uses Coinglass liquidation clusters when available)
+- Funding/OI crowding gate
+- Chase detection (entry vs 24h pct move)
+- Wilson-CI confidence haircut for small backtest samples
+- Regime-consistent leverage cap (sourced from the same classifier as the UI banner)
+- Quarter-Kelly size multiplier using CI LOWER bound (conservative)
+
+Wire this BEFORE the rationale generator and BEFORE returning to UI.
+“””
+from dataclasses import dataclass, field
+from typing import Literal, Optional
+import math
+
+Regime = Literal[“MACRO_CLEAR”, “RISK_ON”, “RISK_OFF”, “MACRO_EVENT”]
+Direction = Literal[“LONG”, “SHORT”]
+
+# –––––––––––––––––––––––––––––––––––––
+
+# Data contracts
+
+# –––––––––––––––––––––––––––––––––––––
+
+@dataclass
+class SignalContext:
+“”“Raw market context required to harden a signal. Populate from your
+centralized data bus — NEVER from per-tab fetches.”””
+symbol: str
+direction: Direction
+entry: float
+proposed_stop: float
+proposed_target: float
+raw_conviction: float            # 0-1 from Kronos / quant scorer
+atr_1h: float                    # ATR(14) on 1h candles
+last_close: float
+high_24h: float
+low_24h: float
+pct_change_24h: float            # +0.0548 == +5.48%
+funding_8h: float                # in percent units, e.g. +0.0013 == +0.0013%/8h
+oi_usd: float                    # current OI in USD (this symbol only)
+oi_change_24h_pct: float         # OI 24h delta, e.g. +0.12 == +12%
+liquidation_clusters: list[dict] = field(default_factory=list)
+# cluster shape: {“price”: float, “side”: “long”|“short”, “size_usd”: float}
+backtest_n: int = 0
+backtest_wr: float = 0.0         # 0-1
+backtest_avg_r: float = 0.0      # average R multiple per closed trade
+regime: Regime = “MACRO_CLEAR”   # MUST come from same source as UI banner
+
+@dataclass
+class HardenedSignal:
+accept: bool
+reasons_rejected: list[str]
+direction: Direction
+entry: float
+stop: float                      # post-hardening
+target: float                    # post-hardening
+rr: float
+leverage_cap: float
+final_conviction: float          # post-haircut, 0-1
+size_multiplier: float           # 0-1 quarter-Kelly fraction
+wr_ci_low: float
+wr_ci_high: float
+chase_flag: bool
+crowding_flag: bool
+low_sample_flag: bool
+regime_used: Regime
+notes: list[str]
+
+# –––––––––––––––––––––––––––––––––––––
+
+# Statistics helpers
+
+# –––––––––––––––––––––––––––––––––––––
+
+def wilson_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
+“”“95% Wilson score interval for binomial proportion. Robust at small n.”””
+if n == 0:
+return (0.0, 1.0)
+p = wins / n
+denom = 1 + z * z / n
+center = (p + z * z / (2 * n)) / denom
+margin = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n) / denom
+return (max(0.0, center - margin), min(1.0, center + margin))
+
+def kelly_size(ci_low_wr: float, avg_r: float, fraction: float = 0.25) -> float:
+“”“Quarter-Kelly using LOWER bound of WR CI. Returns 0-1.”””
+p = ci_low_wr
+b = max(0.1, avg_r)
+if p <= 0:
+return 0.0
+kelly = (p * (b + 1) - 1) / b
+return max(0.0, min(1.0, kelly * fraction))
+
+# –––––––––––––––––––––––––––––––––––––
+
+# Stop placement
+
+# –––––––––––––––––––––––––––––––––––––
+
+def atr_stop_floor(entry: float, atr_1h: float, direction: Direction, mult: float = 1.8) -> float:
+“”“Minimum stop distance = mult * ATR(1h).”””
+distance = atr_1h * mult
+return entry - distance if direction == “LONG” else entry + distance
+
+def liquidity_aware_stop(entry: float,
+direction: Direction,
+clusters: list[dict],
+atr_1h: float,
+max_atr_extension: float = 3.0) -> Optional[float]:
+“”“Snap stop to just beyond the largest opposing liquidation cluster
+within max_atr_extension ATRs of entry. Returns None if no good cluster.”””
+if not clusters or atr_1h <= 0:
+return None
+band = atr_1h * max_atr_extension
+candidates = []
+for c in clusters:
+price = c.get(“price”, 0.0)
+size = c.get(“size_usd”, 0.0)
+if direction == “LONG” and price < entry and (entry - price) <= band:
+candidates.append((size, price))
+elif direction == “SHORT” and price > entry and (price - entry) <= band:
+candidates.append((size, price))
+if not candidates:
+return None
+_, cluster_price = max(candidates, key=lambda x: x[0])
+buffer = atr_1h * 0.3
+return cluster_price - buffer if direction == “LONG” else cluster_price + buffer
+
+# –––––––––––––––––––––––––––––––––––––
+
+# Flag detectors
+
+# –––––––––––––––––––––––––––––––––––––
+
+def detect_chase(ctx: SignalContext, threshold_pct: float = 0.04) -> bool:
+“”“LONG after >+4% in 24h, or SHORT after >-4% in 24h = chase.”””
+if ctx.direction == “LONG” and ctx.pct_change_24h > threshold_pct:
+return True
+if ctx.direction == “SHORT” and ctx.pct_change_24h < -threshold_pct:
+return True
+return False
+
+def detect_crowding(ctx: SignalContext) -> tuple[bool, str]:
+“”“Directional funding + rising OI = crowded positioning.”””
+elevated_funding = (
+(ctx.direction == “LONG” and ctx.funding_8h > 0.01) or
+(ctx.direction == “SHORT” and ctx.funding_8h < -0.01)
+)
+rising_oi = ctx.oi_change_24h_pct > 0.10
+if elevated_funding and rising_oi:
+return True, (
+f”Crowded: funding {ctx.funding_8h:+.4f}%/8h with OI “
+f”{ctx.oi_change_24h_pct:+.1%}/24h”
+)
+return False, “”
+
+# –––––––––––––––––––––––––––––––––––––
+
+# Regime → leverage cap (single source of truth)
+
+# –––––––––––––––––––––––––––––––––––––
+
+REGIME_LEVERAGE_CAP: dict[Regime, float] = {
+“MACRO_CLEAR”: 5.0,
+“RISK_ON”:     5.0,
+“RISK_OFF”:    3.0,
+“MACRO_EVENT”: 2.0,
+}
+
+# –––––––––––––––––––––––––––––––––––––
+
+# Main hardening entrypoint
+
+# –––––––––––––––––––––––––––––––––––––
+
+def harden_signal(ctx: SignalContext,
+min_backtest_n: int = 30,
+min_rr: float = 1.8,
+min_post_haircut_conviction: float = 0.50,
+max_chase_pct: float = 0.04) -> HardenedSignal:
+notes: list[str] = []
+rejected: list[str] = []
+
+```
+# 1. Stop placement: pick the FURTHER of ATR floor vs liquidity-aware
+atr_floor = atr_stop_floor(ctx.entry, ctx.atr_1h, ctx.direction, mult=1.8)
+liq_stop = liquidity_aware_stop(ctx.entry, ctx.direction,
+                                 ctx.liquidation_clusters, ctx.atr_1h)
+
+if liq_stop is not None:
+    # For LONG, "further from entry" means smaller (lower) price
+    final_stop = min(liq_stop, atr_floor) if ctx.direction == "LONG" \
+                 else max(liq_stop, atr_floor)
+    notes.append("Stop placed beyond liquidation cluster (ATR-validated)")
+else:
+    final_stop = atr_floor
+    notes.append("Stop = entry ± 1.8x ATR(1h) (no liq cluster data)")
+
+# 2. Recompute target preserving original RR or min_rr, whichever larger
+risk = abs(ctx.entry - final_stop)
+orig_reward = abs(ctx.proposed_target - ctx.entry)
+orig_risk = abs(ctx.entry - ctx.proposed_stop)
+orig_rr = (orig_reward / orig_risk) if orig_risk > 0 else 0.0
+target_rr = max(orig_rr, min_rr)
+final_target = (ctx.entry + risk * target_rr) if ctx.direction == "LONG" \
+               else (ctx.entry - risk * target_rr)
+final_rr = target_rr
+
+# 3. Flag detection
+chase = detect_chase(ctx, max_chase_pct)
+if chase:
+    notes.append(f"CHASE: entering after {ctx.pct_change_24h:+.1%} 24h move")
+
+crowded, crowd_msg = detect_crowding(ctx)
+if crowded:
+    notes.append(crowd_msg)
+
+# 4. Backtest sample CI
+wins = round(ctx.backtest_wr * ctx.backtest_n)
+ci_low, ci_high = wilson_ci(wins, ctx.backtest_n)
+low_sample = ctx.backtest_n < min_backtest_n
+if low_sample:
+    notes.append(
+        f"Low sample: n={ctx.backtest_n} (<{min_backtest_n}); "
+        f"WR 95% CI [{ci_low:.0%}, {ci_high:.0%}]"
+    )
+
+# 5. Leverage cap from regime (single source of truth)
+lev_cap = REGIME_LEVERAGE_CAP.get(ctx.regime, 3.0)
+
+# 6. Conviction haircut (compounding)
+final_conv = ctx.raw_conviction
+if chase:
+    final_conv *= 0.70
+if crowded:
+    final_conv *= 0.75
+if low_sample:
+    final_conv *= 0.80
+
+# 7. Kelly sizing off CI LOWER bound
+size_mult = kelly_size(ci_low, ctx.backtest_avg_r)
+
+# 8. Veto checks
+if chase and crowded:
+    rejected.append("VETO: chase + crowded = late entry into already-positioned move")
+if final_conv < min_post_haircut_conviction:
+    rejected.append(
+        f"VETO: post-haircut conviction {final_conv:.0%} "
+        f"below {min_post_haircut_conviction:.0%}"
+    )
+if final_rr < min_rr:
+    rejected.append(f"VETO: R:R {final_rr:.2f} below min {min_rr}")
+if ctx.atr_1h <= 0:
+    rejected.append("VETO: missing ATR data — cannot validate stop placement")
+
+return HardenedSignal(
+    accept=(len(rejected) == 0),
+    reasons_rejected=rejected,
+    direction=ctx.direction,
+    entry=ctx.entry,
+    stop=final_stop,
+    target=final_target,
+    rr=final_rr,
+    leverage_cap=lev_cap,
+    final_conviction=final_conv,
+    size_multiplier=size_mult,
+    wr_ci_low=ci_low,
+    wr_ci_high=ci_high,
+    chase_flag=chase,
+    crowding_flag=crowded,
+    low_sample_flag=low_sample,
+    regime_used=ctx.regime,
+    notes=notes,
+)
+```
