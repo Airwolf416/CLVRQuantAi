@@ -340,3 +340,266 @@ export function getOiChangePct(token: string, windowMs = 6 * 60 * 60 * 1000, now
   if (baseline.oi <= 0) return undefined;
   return ((latest.oi - baseline.oi) / baseline.oi) * 100;
 }
+
+// ============================================================================
+// hardenSignal — post-LLM hardening for Trade Ideas cards (separate API from
+// the older applySignalHardening / quant-scanner gates above; intentionally
+// kept side-by-side, no shared types). Wired from /api/ai/analyze AFTER the
+// LLM JSON parses, BEFORE response cache + res.json.
+//
+// Companion: server/lib/rationalePrompt.ts (RATIONALE_REGEN_SYSTEM_PROMPT +
+// buildRationaleUserMsg) for the optional prose-regen call.
+// ============================================================================
+
+export type HSDirection = "LONG" | "SHORT";
+export type HSRegime = "MACRO_CLEAR" | "RISK_ON" | "RISK_OFF" | "MACRO_EVENT";
+
+export interface HSLiquidationCluster {
+  price: number;
+  side: "long" | "short";
+  size_usd: number;
+}
+
+export interface SignalContext {
+  symbol: string;
+  direction: HSDirection;
+  entry: number;
+  proposedStop: number;
+  proposedTargets: number[]; // TP1, TP2, TP3 prices from the LLM card
+  rawConviction: number;     // 0..1
+  atr1h: number;
+  pctChange24h: number;      // +0.0548 = +5.48%
+  funding8h: number;         // percent units, e.g. +0.0013 = +0.0013%/8h
+  oiUsd: number;
+  oiChange24hPct: number;    // 6h proxy from getOiChangePct() in production —
+                             // 24h feed not on databus; documented in caller.
+  liquidationClusters: HSLiquidationCluster[];
+  backtestN: number;
+  backtestWr: number;        // 0..1
+  backtestAvgR: number;
+  regime: HSRegime;          // MUST come from same source as UI banner
+  edgeSource?: "OI-verified" | "estimated" | "no OI";
+}
+
+export interface HardenedSignal {
+  accept: boolean;
+  reasonsRejected: string[];
+  direction: HSDirection;
+  entry: number;
+  stop: number;
+  targets: number[];         // recomputed; preserves LLM's R-multiples off the new stop
+  rrFirst: number;
+  leverageCap: number;
+  finalConviction: number;   // 0..1
+  sizeMultiplier: number;    // 0..1
+  wrCiLow: number;
+  wrCiHigh: number;
+  chaseFlag: boolean;
+  crowdingFlag: boolean;
+  lowSampleFlag: boolean;
+  regimeUsed: HSRegime;
+  notes: string[];
+  materiallyMutated: boolean;
+}
+
+export interface HardenConfig {
+  minBacktestN?: number;
+  minRr?: number;
+  minPostHaircutConviction?: number;
+  maxChasePct?: number;
+  materialStopMovePct?: number;
+  materialConvictionDelta?: number;
+  atrStopMult?: number;
+}
+
+function _wilsonCi(wins: number, n: number, z = 1.96): [number, number] {
+  if (n === 0) return [0, 1];
+  const p = wins / n;
+  const denom = 1 + (z * z) / n;
+  const center = (p + (z * z) / (2 * n)) / denom;
+  const margin =
+    (z * Math.sqrt((p * (1 - p) + (z * z) / (4 * n)) / n)) / denom;
+  return [Math.max(0, center - margin), Math.min(1, center + margin)];
+}
+
+function _kellySize(ciLow: number, avgR: number, fraction = 0.25): number {
+  const p = ciLow;
+  const b = Math.max(0.1, avgR);
+  if (p <= 0) return 0;
+  const kelly = (p * (b + 1) - 1) / b;
+  return Math.max(0, Math.min(1, kelly * fraction));
+}
+
+function _atrStopFloor(entry: number, atr1h: number, direction: HSDirection, mult: number): number {
+  const distance = atr1h * mult;
+  return direction === "LONG" ? entry - distance : entry + distance;
+}
+
+function _liquidityAwareStop(
+  entry: number,
+  direction: HSDirection,
+  clusters: HSLiquidationCluster[],
+  atr1h: number,
+  maxAtrExtension = 3.0,
+): number | null {
+  if (!clusters.length || atr1h <= 0) return null;
+  const band = atr1h * maxAtrExtension;
+  const candidates: Array<{ size: number; price: number }> = [];
+  for (const c of clusters) {
+    if (direction === "LONG" && c.price < entry && entry - c.price <= band) {
+      candidates.push({ size: c.size_usd, price: c.price });
+    } else if (direction === "SHORT" && c.price > entry && c.price - entry <= band) {
+      candidates.push({ size: c.size_usd, price: c.price });
+    }
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.size - a.size);
+  const clusterPrice = candidates[0].price;
+  const buffer = atr1h * 0.3;
+  return direction === "LONG" ? clusterPrice - buffer : clusterPrice + buffer;
+}
+
+function _detectChase(ctx: SignalContext, threshold: number): boolean {
+  if (ctx.direction === "LONG" && ctx.pctChange24h > threshold) return true;
+  if (ctx.direction === "SHORT" && ctx.pctChange24h < -threshold) return true;
+  return false;
+}
+
+function _detectCrowding(ctx: SignalContext): [boolean, string] {
+  if (ctx.edgeSource === "no OI") return [false, ""];
+  const elevatedFunding =
+    (ctx.direction === "LONG" && ctx.funding8h > 0.01) ||
+    (ctx.direction === "SHORT" && ctx.funding8h < -0.01);
+  const risingOi = ctx.oiChange24hPct > 0.10;
+  if (elevatedFunding && risingOi) {
+    return [
+      true,
+      `Crowded: funding ${ctx.funding8h.toFixed(4)}%/8h with OI ${(ctx.oiChange24hPct * 100).toFixed(1)}%`,
+    ];
+  }
+  return [false, ""];
+}
+
+const _REGIME_LEVERAGE_CAP: Record<HSRegime, number> = {
+  MACRO_CLEAR: 5.0,
+  RISK_ON:     5.0,
+  RISK_OFF:    3.0,
+  MACRO_EVENT: 2.0,
+};
+
+export function hardenSignal(ctx: SignalContext, config: HardenConfig = {}): HardenedSignal {
+  const {
+    minBacktestN = 30,
+    minRr = 1.8,
+    minPostHaircutConviction = 0.5,
+    maxChasePct = 0.04,
+    materialStopMovePct = 0.15,
+    materialConvictionDelta = 0.15,
+    atrStopMult = 1.8,
+  } = config;
+
+  const notes: string[] = [];
+  const rejected: string[] = [];
+
+  // 1. Stop: take the FURTHER of (ATR floor, liquidity-aware) from entry
+  const atrFloor = _atrStopFloor(ctx.entry, ctx.atr1h, ctx.direction, atrStopMult);
+  const liqStop = _liquidityAwareStop(
+    ctx.entry, ctx.direction, ctx.liquidationClusters, ctx.atr1h,
+  );
+  let finalStop: number;
+  if (liqStop !== null) {
+    finalStop = ctx.direction === "LONG"
+      ? Math.min(liqStop, atrFloor)
+      : Math.max(liqStop, atrFloor);
+    notes.push("Stop placed beyond liquidation cluster (ATR-validated)");
+  } else {
+    finalStop = atrFloor;
+    notes.push(`Stop = entry ± ${atrStopMult}x ATR(1h) (no liq cluster data)`);
+  }
+
+  // 2. TP ladder: preserve LLM's R-multiples off NEW stop; floor TP1 at minRr
+  const origRisk = Math.abs(ctx.entry - ctx.proposedStop);
+  const newRisk = Math.abs(ctx.entry - finalStop);
+  const rMultiples = ctx.proposedTargets.map((tp) =>
+    origRisk > 0 ? Math.abs(tp - ctx.entry) / origRisk : 0,
+  );
+  const adjustedR = rMultiples.map((r, i) => (i === 0 ? Math.max(r, minRr) : r));
+  const hardenedTargets = adjustedR.map((r) =>
+    ctx.direction === "LONG" ? ctx.entry + newRisk * r : ctx.entry - newRisk * r,
+  );
+  const rrFirst = adjustedR[0] ?? minRr;
+
+  // 3. Flags
+  const chase = _detectChase(ctx, maxChasePct);
+  if (chase) notes.push(`CHASE: entering after ${(ctx.pctChange24h * 100).toFixed(1)}% 24h move`);
+  const [crowded, crowdMsg] = _detectCrowding(ctx);
+  if (crowded) notes.push(crowdMsg);
+
+  // 4. Backtest CI
+  const wins = Math.round(ctx.backtestWr * ctx.backtestN);
+  const [ciLow, ciHigh] = _wilsonCi(wins, ctx.backtestN);
+  const lowSample = ctx.backtestN < minBacktestN;
+  if (lowSample) {
+    notes.push(
+      `Low sample: n=${ctx.backtestN} (<${minBacktestN}); WR 95% CI [${(ciLow * 100).toFixed(0)}%, ${(ciHigh * 100).toFixed(0)}%]`,
+    );
+  }
+
+  // 5. Leverage cap from regime
+  const leverageCap = _REGIME_LEVERAGE_CAP[ctx.regime] ?? 3.0;
+
+  // 6. Conviction haircuts (multiplicative)
+  let finalConv = ctx.rawConviction;
+  if (chase) finalConv *= 0.70;
+  if (crowded) finalConv *= 0.75;
+  if (lowSample) finalConv *= 0.80;
+
+  // 7. Quarter-Kelly off CI lower bound
+  const sizeMultiplier = _kellySize(ciLow, ctx.backtestAvgR);
+
+  // 8. Veto checks
+  if (chase && crowded) {
+    rejected.push("VETO: chase + crowded = late entry into already-positioned move");
+  }
+  if (finalConv < minPostHaircutConviction) {
+    rejected.push(
+      `VETO: post-haircut conviction ${(finalConv * 100).toFixed(0)}% below ${(minPostHaircutConviction * 100).toFixed(0)}%`,
+    );
+  }
+  if (rrFirst < minRr) {
+    rejected.push(`VETO: RR ${rrFirst.toFixed(2)} below min ${minRr}`);
+  }
+  if (ctx.atr1h <= 0) {
+    rejected.push("VETO: missing ATR data — cannot validate stop placement");
+  }
+
+  // 9. Material mutation → gates prose regen
+  const stopMovePctOfRisk = origRisk > 0 ? Math.abs(ctx.proposedStop - finalStop) / origRisk : 0;
+  const convictionDelta = ctx.rawConviction - finalConv;
+  const materiallyMutated =
+    stopMovePctOfRisk > materialStopMovePct ||
+    convictionDelta > materialConvictionDelta ||
+    chase ||
+    crowded;
+
+  return {
+    accept: rejected.length === 0,
+    reasonsRejected: rejected,
+    direction: ctx.direction,
+    entry: ctx.entry,
+    stop: finalStop,
+    targets: hardenedTargets,
+    rrFirst,
+    leverageCap,
+    finalConviction: finalConv,
+    sizeMultiplier,
+    wrCiLow: ciLow,
+    wrCiHigh: ciHigh,
+    chaseFlag: chase,
+    crowdingFlag: crowded,
+    lowSampleFlag: lowSample,
+    regimeUsed: ctx.regime,
+    notes,
+    materiallyMutated,
+  };
+}

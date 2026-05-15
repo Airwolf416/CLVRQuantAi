@@ -1,0 +1,164 @@
+# `server/routes.ts` patch — wire hardener into `/api/ai/analyze`
+
+## Imports (top of file, with other lib imports)
+
+```typescript
+import {
+  hardenSignal,
+  SignalContext,
+  HardenedSignal,
+} from "./lib/signalHardening";
+import {
+  RATIONALE_REGEN_SYSTEM_PROMPT,
+  buildRationaleUserMsg,
+} from "./lib/rationalePrompt";
+```
+
+## Helper (place near other helpers in routes.ts)
+
+Adjust the three `await` targets to match your actual import names — placeholders shown.
+
+```typescript
+async function assembleSignalContext(
+  card: TradeIdeaCard
+): Promise<SignalContext | null> {
+  // Pull from the SAME data bus the prompt builder used.
+  // Replace placeholders with the actual imports already in routes.ts.
+  const [hlMarket, brain, regime] = await Promise.all([
+    hyperliquidFeed.getMarketData(card.asset),    // TODO: confirm import
+    statisticalBrain.getBrainFor(card.asset, card.direction),
+    macroRegimeClassifier.currentRegime(),         // TODO: confirm import — MUST match the banner source
+  ]);
+
+  if (!hlMarket || !hlMarket.atr1h) return null; // can't harden blind
+
+  // Liquidation clusters — optional; tolerate Coinglass outage
+  let clusters: any[] = [];
+  try {
+    clusters = await coinglassClient.getLiquidationClusters(card.asset);
+  } catch (e) {
+    console.warn(`[hardener] no clusters for ${card.asset}:`, e);
+  }
+
+  return {
+    symbol: card.asset,
+    direction: card.direction,
+    entry: card.entry,
+    proposedStop: card.sl,
+    proposedTargets: [card.tp1.price, card.tp2.price, card.tp3.price],
+    rawConviction: card.conviction / 100, // GOTCHA: card is 0-100, ctx is 0-1
+    atr1h: hlMarket.atr1h,
+    pctChange24h: hlMarket.pctChange24h,
+    funding8h: hlMarket.funding8h,
+    oiUsd: hlMarket.oiUsd ?? 0,
+    oiChange24hPct: hlMarket.oiChange24hPct ?? 0,
+    liquidationClusters: clusters,
+    backtestN: brain?.nTrades ?? 0,
+    backtestWr: brain?.winRate ?? 0,
+    backtestAvgR: brain?.avgR ?? 0,
+    regime, // SAME source as UI banner — critical for consistency
+    edgeSource: card.edgeSource,
+  };
+}
+```
+
+## The wire-in — around line 7059, AFTER `callClaude` returns and the JSON is parsed
+
+Replace the current `res.json(parsed)` (or equivalent) with the block below.
+
+```typescript
+const llmCards: TradeIdeaCard[] = parsed.ideas; // adjust to actual shape
+const hardenedCards: TradeIdeaCard[] = [];
+const regenQueue: Array<{
+  idx: number;
+  ctx: SignalContext;
+  h: HardenedSignal;
+}> = [];
+
+for (let i = 0; i < llmCards.length; i++) {
+  const card = llmCards[i];
+  const ctx = await assembleSignalContext(card);
+  if (!ctx) {
+    console.log(`[hardener] DROP ${card.asset}: missing data bus inputs`);
+    continue;
+  }
+
+  const h = hardenSignal(ctx);
+
+  if (!h.accept) {
+    console.log(
+      `[hardener] VETO ${card.asset}: ${h.reasonsRejected.join("; ")}`
+    );
+    continue;
+  }
+
+  const newRisk = Math.abs(ctx.entry - h.stop);
+  const updatedCard: TradeIdeaCard = {
+    ...card,
+    sl: h.stop,
+    tp1: {
+      price: h.targets[0],
+      pct: ((h.targets[0] - ctx.entry) / ctx.entry) * 100,
+      rr: `${h.rrFirst.toFixed(1)}:1`,
+    },
+    tp2: {
+      price: h.targets[1],
+      pct: ((h.targets[1] - ctx.entry) / ctx.entry) * 100,
+      rr: `${(Math.abs(h.targets[1] - ctx.entry) / newRisk).toFixed(1)}:1`,
+    },
+    tp3: {
+      price: h.targets[2],
+      pct: ((h.targets[2] - ctx.entry) / ctx.entry) * 100,
+      trailing: card.tp3.trailing,
+    },
+    leverage: `${h.leverageCap}x MAX`,
+    conviction: Math.round(h.finalConviction * 100),
+    // honest edge display: CI range + sample size, not a point estimate
+    edge: `${(h.wrCiLow * 100).toFixed(0)}-${(h.wrCiHigh * 100).toFixed(0)}% (n=${ctx.backtestN})`,
+    flags: [
+      ...card.flags,
+      ...(h.chaseFlag ? ["CHASE"] : []),
+      ...(h.crowdingFlag ? ["CROWDED"] : []),
+      ...(h.lowSampleFlag ? [`LOW_N=${ctx.backtestN}`] : []),
+    ],
+    // optional: surface size multiplier on the card
+    sizeMultiplier: h.sizeMultiplier,
+  } as TradeIdeaCard;
+
+  hardenedCards.push(updatedCard);
+
+  if (h.materiallyMutated) {
+    regenQueue.push({ idx: hardenedCards.length - 1, ctx, h });
+  }
+}
+
+// Conditional prose regen — only when hardener mutated something material
+if (regenQueue.length > 0) {
+  console.log(`[hardener] regenerating prose for ${regenQueue.length} cards`);
+  const regens = await Promise.all(
+    regenQueue.map(({ ctx, h }) =>
+      callClaude({
+        system: RATIONALE_REGEN_SYSTEM_PROMPT,
+        messages: [
+          { role: "user", content: buildRationaleUserMsg(h, ctx) },
+        ],
+        max_tokens: 250,
+      })
+    )
+  );
+  for (let i = 0; i < regenQueue.length; i++) {
+    hardenedCards[regenQueue[i].idx].thesis = regens[i].text.trim();
+  }
+}
+
+res.json({ ideas: hardenedCards });
+```
+
+## Watch-outs
+
+1. **Conviction unit conversion** — card is `0–100`, `SignalContext.rawConviction` is `0–1`. The helper divides by 100 going in; the wire-in multiplies by 100 going out. Don’t lose this in copy-edit.
+1. **Regime single source** — `macroRegimeClassifier.currentRegime()` MUST be the same function/cache that feeds the UI’s “MACRO CLEAR” banner. If they read from different caches, the contradiction in the HYPE screenshot will recur. Confirm before shipping.
+1. **TP ladder preservation** — hardener floors TP1 R at 1.8, but TP2/TP3 R-multiples are preserved as-is from the LLM card. If the LLM had unrealistic TP3 (10R), it stays. Add a `maxRrCap` to `HardenConfig` if you want to clamp.
+1. **`callClaude` signature** — if your existing helper doesn’t accept `system` separately, adapt the regen call to whatever shape it does take. The 250-token cap is generous for 3-4 sentences.
+1. **Parallelism** — `Promise.all` on the regen queue means N parallel Sonnet calls if all 6 cards mutated materially. Watch rate limits; consider a small concurrency limiter if this becomes hot.
+1. **Edge string format change** — UI currently shows `edge: "72%"`. The hardened version is `"41-87% (n=18)"`. May need a width adjustment in `TopTradeIdeas.jsx`.

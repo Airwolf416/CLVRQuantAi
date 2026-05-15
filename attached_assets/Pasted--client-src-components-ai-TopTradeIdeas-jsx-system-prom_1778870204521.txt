@@ -1,0 +1,75 @@
+# `client/src/components/ai/TopTradeIdeas.jsx` — system prompt addendum
+
+The hardener cleans up the back end. But it can only catch and mutate; it can’t make the LLM smarter on the first pass. The cleanest gains come from tightening the system prompt that gets built at lines 156–180.
+
+## Add these rules to the existing system prompt string
+
+Inject this block into the prompt builder, ideally near the top of the “rules” section so the LLM sees it before reasoning:
+
+```text
+═══ ABSOLUTE RULES — violations cause card rejection ═══
+
+NO SUPERLATIVES without ranked-comparison data. The Market Snapshot does NOT
+contain cross-asset OI/volume rankings. Therefore the following are banned:
+"largest", "biggest", "highest", "most", "standout", "exceptional",
+"unprecedented", "leading". Use neutral language: "elevated", "notable",
+"positive", "significant relative to its own history".
+
+OI SCOPE. Any OI value you cite is for the SUBJECT symbol only. Do not
+compare it to other assets. ($1.02B is not "the largest in crypto" — BTC
+perp OI is ~$30-60B.)
+
+REGIME CONSISTENCY. The Market Snapshot contains the macro regime from the
+classifier. Your thesis MUST use that exact regime. Do not say "RISK-OFF"
+when the snapshot shows "MACRO_CLEAR". The user sees the regime banner.
+
+SAMPLE-SIZE HONESTY. If statisticalBrain n < 30, you MUST write the literal
+phrase "small sample (n=X)" in the thesis. Never call low-n results
+"statistically significant" or describe them as "a real edge".
+
+FUNDING CALIBRATION. Funding rates between -0.01% and +0.01% per 8h are
+NEAR-FLAT. Do not call this "trending", "momentum", "consistent with
+directional flow", or "institutional positioning". It means little.
+
+CHASE DISCLOSURE. If you are proposing LONG after a +4% or larger 24h move,
+or SHORT after a -4% or larger 24h move, you MUST write the phrase
+"this is a late entry chasing" in the thesis and downgrade conviction
+accordingly.
+
+NUMERIC CONSISTENCY.
+- Stop distance from entry MUST be at least 1.5x ATR(1h). The ATR is in
+  the Market Snapshot. If your proposed stop is tighter, widen it.
+- RR to TP1 MUST be at least 1.8:1. If you can't get that with a valid
+  stop, do not generate the card.
+- TP prices MUST be on the correct side of entry for the direction.
+```
+
+## Why this matters even with the hardener
+
+The hardener is the safety net, not the strategy. If the LLM’s first-pass output is closer to correct, three things improve:
+
+1. Fewer veto-drops → more cards survive to the UI
+1. Fewer material mutations → fewer prose-regen calls → lower latency + cost
+1. The displayed thesis matches the displayed numbers more often, even when the hardener didn’t trigger regen
+
+## What this does NOT fix
+
+The LLM still invents the numbers from scratch. A prompt cannot guarantee the LLM correctly computes 1.5x ATR or correctly checks RR — it’ll usually get close but sometimes drift. That’s why the hardener exists. But raising the floor is cheap.
+
+## Optional: also pass the hardener thresholds explicitly
+
+Consider injecting the actual numeric thresholds the hardener will apply:
+
+```text
+The post-generation hardener will REJECT cards meeting any of:
+- ATR-multiple stop < 1.8x (stop too tight)
+- RR to TP1 < 1.8:1
+- Post-haircut conviction < 50%
+- Chase + crowded simultaneously
+
+Cards that meet these floors but are mutated by the hardener (stop widened,
+conviction haircut) will have their thesis regenerated, costing latency.
+Generate cards that pass the hardener cleanly.
+```
+
+This turns the hardener into a known constraint surface the LLM optimizes against, rather than a black box that randomly nukes its work.
