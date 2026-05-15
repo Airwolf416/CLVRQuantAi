@@ -6824,6 +6824,183 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
+  // ── Trade Ideas hardener (post-LLM mechanical risk gates + optional prose
+  //    regen). Wired only when /api/ai/analyze response parses as
+  //    {trades:[...]}, so other callers (Morning Brief, ad-hoc) pass through
+  //    untouched. Lives inside registerRoutes so it can call fetchQuantCandles
+  //    (which is closure-scoped above this point).
+  // ─────────────────────────────────────────────────────────────────────────
+  type IdeaCard = any;
+  async function hardenTradeIdeas(
+    cards: IdeaCard[],
+    apiKey: string,
+  ): Promise<{ cards: IdeaCard[]; inCount: number; dropped: number; vetoed: number; regenerated: number }> {
+    const { hardenSignal } = await import("./lib/signalHardening");
+    const { getOiChangePct } = await import("./lib/signalHardening");
+    const { getBrainFor } = await import("./lib/statisticalBrain");
+    const { RATIONALE_REGEN_SYSTEM_PROMPT, buildRationaleUserMsg } = await import("./lib/rationalePrompt");
+
+    const bus = getDataBusStatus();
+    const busLabel = (bus?.regime?.label || "NEUTRAL").toUpperCase();
+    const regime: "MACRO_CLEAR" | "RISK_ON" | "RISK_OFF" | "MACRO_EVENT" =
+      busLabel === "RISK_ON" ? "RISK_ON" :
+      busLabel === "RISK_OFF" ? "RISK_OFF" :
+      "MACRO_CLEAR"; // NEUTRAL → MACRO_CLEAR (MACRO_EVENT not yet wired)
+
+    const detectClass = (sym: string): string => {
+      const s = sym.toUpperCase();
+      if (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(s)) return "equity";
+      if (["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(s)) return "commodity";
+      if (s.length === 6 && !s.includes("/")) return "fx";
+      return "crypto";
+    };
+
+    const computeAtr1h = async (ticker: string, cls: string): Promise<number> => {
+      try {
+        const candles = await fetchQuantCandles(ticker, cls, "1h", 48);
+        if (!Array.isArray(candles) || candles.length < 15) return 0;
+        const trs: number[] = [];
+        for (let i = 1; i < candles.length; i++) {
+          const h = candles[i].h ?? candles[i].high;
+          const l = candles[i].l ?? candles[i].low;
+          const pc = candles[i-1].c ?? candles[i-1].close;
+          trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+        }
+        return trs.slice(-14).reduce((a, b) => a + b, 0) / 14;
+      } catch { return 0; }
+    };
+
+    const inCount = cards.length;
+    let dropped = 0, vetoed = 0, regenerated = 0;
+
+    const out: IdeaCard[] = [];
+    await Promise.all(cards.map(async (card, idx) => {
+      try {
+        const symbol = String(card.asset || "").split("/")[0].toUpperCase();
+        const direction: "LONG" | "SHORT" = card.direction === "SHORT" ? "SHORT" : "LONG";
+        const entry = Number(card.entry);
+        const proposedStop = Number(card.sl);
+        const tp1 = Number(card.tp1?.price ?? card.tp1);
+        const tp2 = Number(card.tp2?.price ?? card.tp2);
+        const tp3 = Number(card.tp3?.price ?? card.tp3);
+        if (!symbol || !Number.isFinite(entry) || !Number.isFinite(proposedStop) || !Number.isFinite(tp1)) {
+          out[idx] = card; // missing required fields — skip hardening
+          return;
+        }
+
+        const cls = detectClass(symbol);
+        const [atr1h, brain] = await Promise.all([
+          computeAtr1h(symbol, cls),
+          getBrainFor(symbol, direction).catch(() => null as any),
+        ]);
+
+        const priceEntry = bus?.prices?.[symbol];
+        const pctChange24h = (priceEntry?.change24h ?? 0) / 100; // bus stores as percent units
+        const funding8h = bus?.funding?.[symbol] ?? 0;
+        const oiUsd = bus?.oi?.[symbol] ?? 0;
+        const oiChange6hPct = getOiChangePct(symbol);
+        const oiChange24hPct = (oiChange6hPct ?? 0) / 100; // 6h proxy until 24h feed lands
+
+        const stat = brain?.stat;
+        const ctx = {
+          symbol,
+          direction,
+          entry,
+          proposedStop,
+          proposedTargets: [tp1, tp2, tp3].filter(Number.isFinite) as number[],
+          rawConviction: Math.max(0, Math.min(1, Number(card.conviction ?? 50) / 100)),
+          atr1h,
+          pctChange24h,
+          funding8h,
+          oiUsd,
+          oiChange24hPct,
+          liquidationClusters: [], // coinglass clusters not wired yet
+          backtestN: stat?.sampleSize ?? 0,
+          backtestWr: stat?.winRate ?? 0,
+          backtestAvgR: stat?.expectedR ?? 0,
+          regime,
+          edgeSource: (card.edgeSource === "OI-verified" || card.edgeSource === "estimated" || card.edgeSource === "no OI")
+            ? card.edgeSource : "estimated" as const,
+        };
+
+        const h = hardenSignal(ctx);
+
+        if (!h.accept) {
+          vetoed++;
+          dropped++;
+          return; // drop card
+        }
+
+        // Optional prose regen if numbers/flags moved materially
+        let thesis: string = card.thesis || "";
+        if (h.materiallyMutated) {
+          try {
+            const r = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+                "x-api-key": apiKey,
+              },
+              body: JSON.stringify({
+                model: CLAUDE_MODEL,
+                max_tokens: 350,
+                system: RATIONALE_REGEN_SYSTEM_PROMPT,
+                messages: [{ role: "user", content: buildRationaleUserMsg(h, ctx) }],
+              }),
+            });
+            if (r.ok) {
+              const j: any = await r.json();
+              const newThesis = (j.content || []).map((b: any) => b.text || "").join("").trim();
+              if (newThesis) { thesis = newThesis; regenerated++; }
+            }
+          } catch { /* keep original thesis */ }
+        }
+
+        // Recompute RR strings against the hardened stop
+        const risk = Math.abs(entry - h.stop);
+        const rrStr = (target: number) => risk > 0 ? `${(Math.abs(target - entry) / risk).toFixed(1)}:1` : card.tp1?.rr || "";
+
+        out[idx] = {
+          ...card,
+          sl: Number(h.stop.toFixed(6)),
+          tp1: card.tp1 && typeof card.tp1 === "object"
+            ? { ...card.tp1, price: Number(h.targets[0]?.toFixed(6) ?? card.tp1.price), rr: rrStr(h.targets[0]) }
+            : Number(h.targets[0]?.toFixed(6) ?? tp1),
+          tp2: card.tp2 && typeof card.tp2 === "object" && Number.isFinite(h.targets[1])
+            ? { ...card.tp2, price: Number(h.targets[1].toFixed(6)), rr: rrStr(h.targets[1]) }
+            : (Number.isFinite(h.targets[1]) ? Number(h.targets[1].toFixed(6)) : card.tp2),
+          tp3: card.tp3 && typeof card.tp3 === "object" && Number.isFinite(h.targets[2])
+            ? { ...card.tp3, price: Number(h.targets[2].toFixed(6)) }
+            : (Number.isFinite(h.targets[2]) ? Number(h.targets[2].toFixed(6)) : card.tp3),
+          conviction: Math.round(h.finalConviction * 100),
+          edge: `${Math.round(h.finalConviction * 100)}%`,
+          leverage: `${Math.min(Number(String(card.leverage || "1x").replace(/[^\d.]/g, "")) || 1, h.leverageCap).toFixed(0)}x`,
+          thesis,
+          flags: Array.from(new Set([
+            ...((card.flags as string[]) || []),
+            ...(h.chaseFlag ? ["chase"] : []),
+            ...(h.crowdingFlag ? ["crowded"] : []),
+            ...(h.lowSampleFlag ? ["low-sample"] : []),
+          ])),
+          hardener: {
+            applied: true,
+            sizeMultiplier: Number(h.sizeMultiplier.toFixed(3)),
+            wrCi: [Number((h.wrCiLow * 100).toFixed(0)), Number((h.wrCiHigh * 100).toFixed(0))],
+            notes: h.notes,
+            materiallyMutated: h.materiallyMutated,
+          },
+        };
+      } catch (e: any) {
+        console.warn(`[hardenTradeIdeas] card ${idx} skipped:`, e?.message || e);
+        out[idx] = card; // keep original on per-card failure
+      }
+    }));
+
+    const finalCards = out.filter(Boolean);
+    return { cards: finalCards, inCount, dropped, vetoed, regenerated };
+  }
+
   app.post("/api/ai/analyze", aiIpLimiter, async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
@@ -7169,7 +7346,32 @@ Every level must be technically defensible. Return JSON only.`;
         return res.json({ text: errMsg, response: errMsg, cached: false, model });
       }
 
-      // Only cache valid non-empty responses
+      // ── Trade Ideas hardener ─────────────────────────────────────────────
+      // If the response parses as Trade Ideas JSON ({trades:[...]}), wrap each
+      // card with hardenSignal() before caching/returning. Pure pass-through
+      // for any other /api/ai/analyze caller (Morning Brief, ad-hoc analysis).
+      // Wrapped in try/catch — on any error the original `text` flows through
+      // unmodified so a hardener bug can't blank-out Trade Ideas in prod.
+      try {
+        const trimmed = text.trim();
+        const looksJson = trimmed.startsWith("{") && trimmed.includes('"trades"');
+        if (looksJson) {
+          const parsed: any = JSON.parse(trimmed);
+          if (parsed && Array.isArray(parsed.trades) && parsed.trades.length > 0) {
+            const hardened = await hardenTradeIdeas(parsed.trades, apiKey);
+            parsed.trades = hardened.cards;
+            text = JSON.stringify(parsed);
+            console.log(
+              `[ai/analyze] hardener: in=${hardened.inCount} out=${hardened.cards.length} ` +
+              `(dropped=${hardened.dropped} vetoed=${hardened.vetoed} regen=${hardened.regenerated})`,
+            );
+          }
+        }
+      } catch (e: any) {
+        console.warn("[ai/analyze] hardener skipped:", e?.message || e);
+      }
+
+      // Only cache valid non-empty responses (now post-hardening)
       aiCache.set(cacheKey, { text, ts: Date.now() });
 
       res.json({ text, response: text, cached: false, model });
