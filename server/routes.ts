@@ -6845,7 +6845,7 @@ Every level must be technically defensible. Return JSON only.`;
   ): Promise<{ cards: IdeaCard[]; inCount: number; dropped: number; vetoed: number; regenerated: number }> {
     const { hardenSignal } = await import("./lib/signalHardening");
     const { getOiChangePct } = await import("./lib/signalHardening");
-    const { getBrainFor } = await import("./lib/statisticalBrain");
+    const { getBrainFor, applyEdgePolicy, mirrorPrice } = await import("./lib/statisticalBrain");
     const { RATIONALE_REGEN_SYSTEM_PROMPT, buildRationaleUserMsg } = await import("./lib/rationalePrompt");
 
     const bus = getDataBusStatus();
@@ -6885,15 +6885,37 @@ Every level must be technically defensible. Return JSON only.`;
     await Promise.all(cards.map(async (card, idx) => {
       try {
         const symbol = String(card.asset || "").split("/")[0].toUpperCase();
-        const direction: "LONG" | "SHORT" = card.direction === "SHORT" ? "SHORT" : "LONG";
+        const llmDirection: "LONG" | "SHORT" = card.direction === "SHORT" ? "SHORT" : "LONG";
         const entry = Number(card.entry);
-        const proposedStop = Number(card.sl);
-        const tp1 = Number(card.tp1?.price ?? card.tp1);
-        const tp2 = Number(card.tp2?.price ?? card.tp2);
-        const tp3 = Number(card.tp3?.price ?? card.tp3);
+        let proposedStop = Number(card.sl);
+        let tp1 = Number(card.tp1?.price ?? card.tp1);
+        let tp2 = Number(card.tp2?.price ?? card.tp2);
+        let tp3 = Number(card.tp3?.price ?? card.tp3);
         if (!symbol || !Number.isFinite(entry) || !Number.isFinite(proposedStop) || !Number.isFinite(tp1)) {
           out[idx] = card; // missing required fields — skip hardening
           return;
+        }
+
+        // ── Edge policy (Phase 0): SUPPRESS the loser combos, INVERT the
+        //    perfect contra-indicators, recalibrate the inverted-conviction
+        //    tail. Runs BEFORE hardening so the hardener works off the final
+        //    direction + recalibrated conviction.
+        const rawConvPct = Number(card.conviction ?? 50);
+        const edge = await applyEdgePolicy(symbol, llmDirection, rawConvPct);
+        if (edge.action === "SUPPRESS") {
+          vetoed++; dropped++;
+          console.log(`[edge-policy] ${symbol} ${llmDirection} SUPPRESSED: ${edge.reason}`);
+          return;
+        }
+        let direction = edge.recommendedDirection;
+        if (edge.action === "INVERT") {
+          // Mirror SL + TPs around entry so a 2% SL_below becomes a 2% SL_above, etc.
+          // Same R-multiples preserved; the hardener still ATR-floors and re-grids TPs.
+          proposedStop = mirrorPrice(entry, proposedStop);
+          tp1 = mirrorPrice(entry, tp1);
+          if (Number.isFinite(tp2)) tp2 = mirrorPrice(entry, tp2);
+          if (Number.isFinite(tp3)) tp3 = mirrorPrice(entry, tp3);
+          console.log(`[edge-policy] ${symbol} ${llmDirection}→${direction} INVERTED: ${edge.reason}`);
         }
 
         const cls = detectClass(symbol);
@@ -6916,7 +6938,7 @@ Every level must be technically defensible. Return JSON only.`;
           entry,
           proposedStop,
           proposedTargets: [tp1, tp2, tp3].filter(Number.isFinite) as number[],
-          rawConviction: Math.max(0, Math.min(1, Number(card.conviction ?? 50) / 100)),
+          rawConviction: Math.max(0, Math.min(1, edge.recalibratedConvictionPct / 100)),
           atr1h,
           pctChange24h,
           funding8h,
@@ -6932,6 +6954,10 @@ Every level must be technically defensible. Return JSON only.`;
         };
 
         const h = hardenSignal(ctx);
+        // Edge inversion is itself a material mutation — force rationale regen
+        // even if hardener didn't otherwise mark it.
+        const inverted = edge.action === "INVERT";
+        if (inverted) (h as any).materiallyMutated = true;
 
         if (!h.accept) {
           vetoed++;
@@ -6971,6 +6997,7 @@ Every level must be technically defensible. Return JSON only.`;
 
         out[idx] = {
           ...card,
+          direction,                                    // <- reflects edge-policy flip when INVERT
           sl: Number(h.stop.toFixed(6)),
           tp1: card.tp1 && typeof card.tp1 === "object"
             ? { ...card.tp1, price: Number(h.targets[0]?.toFixed(6) ?? card.tp1.price), rr: rrStr(h.targets[0]) }
@@ -6990,6 +7017,7 @@ Every level must be technically defensible. Return JSON only.`;
             ...(h.chaseFlag ? ["chase"] : []),
             ...(h.crowdingFlag ? ["crowded"] : []),
             ...(h.lowSampleFlag ? ["low-sample"] : []),
+            ...(inverted ? ["edge-inverted"] : []),
           ])),
           hardener: {
             applied: true,
@@ -6997,6 +7025,15 @@ Every level must be technically defensible. Return JSON only.`;
             wrCi: [Number((h.wrCiLow * 100).toFixed(0)), Number((h.wrCiHigh * 100).toFixed(0))],
             notes: h.notes,
             materiallyMutated: h.materiallyMutated,
+          },
+          edgePolicy: {
+            action: edge.action,
+            originalDirection: edge.originalDirection,
+            recommendedDirection: edge.recommendedDirection,
+            brainVerdict: edge.brainVerdict,
+            rawConvictionPct: edge.rawConvictionPct,
+            recalibratedConvictionPct: edge.recalibratedConvictionPct,
+            reason: edge.reason,
           },
         };
       } catch (e: any) {
@@ -7741,62 +7778,96 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
           const t1 = parseFloat(tp.tp1), t2 = parseFloat(tp.tp2);
           if ([e, sl, t1].every(Number.isFinite)) {
             const { hardenSignal, getOiChangePct } = await import("./lib/signalHardening");
-            const { getBrainFor } = await import("./lib/statisticalBrain");
+            const { getBrainFor, applyEdgePolicy, mirrorPrice } = await import("./lib/statisticalBrain");
             const symbolK = String(parsed.asset || ticker).split("/")[0].toUpperCase();
-            const dirK: "LONG" | "SHORT" = tp.direction;
+            const llmDirK: "LONG" | "SHORT" = tp.direction;
             const bus = getDataBusStatus();
             const busLabel = (bus?.regime?.label || "NEUTRAL").toUpperCase();
             const regimeK: "MACRO_CLEAR" | "RISK_ON" | "RISK_OFF" | "MACRO_EVENT" =
               busLabel === "RISK_ON" ? "RISK_ON" :
               busLabel === "RISK_OFF" ? "RISK_OFF" :
               "MACRO_CLEAR"; // NEUTRAL → MACRO_CLEAR (MACRO_EVENT not yet wired in dataBus — mirrors hardenTradeIdeas regime mapping)
-            const brainK = await getBrainFor(symbolK, dirK).catch(() => null as any);
-            const statK = brainK?.stat;
-            const targets = Number.isFinite(t2) ? [t1, t2] : [t1];
-            const ctxK = {
-              symbol: symbolK,
-              direction: dirK,
-              entry: e,
-              proposedStop: sl,
-              proposedTargets: targets,
-              rawConviction: Math.max(0, Math.min(1, (Number(parsed.ensemble_confidence) || 50) / 100)),
-              atr1h: Number(atr) || 0,  // already computed for kronos
-              pctChange24h: ((bus?.prices?.[symbolK]?.change24h ?? 0) / 100),
-              funding8h: bus?.funding?.[symbolK] ?? 0,
-              oiUsd: bus?.oi?.[symbolK] ?? 0,
-              oiChange24hPct: ((getOiChangePct(symbolK) ?? 0) / 100),
-              liquidationClusters: [],
-              backtestN: statK?.sampleSize ?? 0,
-              backtestWr: statK?.winRate ?? 0,
-              backtestAvgR: statK?.expectedR ?? 0,
-              regime: regimeK,
-              edgeSource: "estimated" as const,
-            };
-            const hK = hardenSignal(ctxK);
-            if (!hK.accept) {
+
+            // Edge policy: SUPPRESS losers, INVERT contra-indicators, recalibrate conviction
+            const rawConfPct = Number(parsed.ensemble_confidence) || 50;
+            const edgeK = await applyEdgePolicy(symbolK, llmDirK, rawConfPct);
+            if (edgeK.action === "SUPPRESS") {
               parsed.trade_plan = {
                 ...tp,
                 direction: "NO_TRADE",
-                notes: `Kronos hardener veto: ${hK.reasonsRejected.join("; ")}. ${tp.notes || ""}`,
+                notes: `Edge-policy SUPPRESS: ${edgeK.reason}. ${tp.notes || ""}`,
               };
-              console.log(`[kronos hardener] ${symbolK} ${dirK} VETOED: ${hK.reasonsRejected.join("; ")}`);
+              parsed.edgePolicy = { action: "SUPPRESS", brainVerdict: edgeK.brainVerdict, reason: edgeK.reason };
+              console.log(`[kronos edge-policy] ${symbolK} ${llmDirK} SUPPRESSED: ${edgeK.reason}`);
             } else {
-              const riskNew = Math.abs(e - hK.stop);
-              const rrK = (target: number) => riskNew > 0 ? `${(Math.abs(target - e) / riskNew).toFixed(1)}:1` : "—";
-              const slPct = ((Math.abs(e - hK.stop) / e) * 100);
-              const tp1Pct = ((Math.abs(hK.targets[0] - e) / e) * 100);
-              parsed.trade_plan = {
-                ...tp,
-                sl: parseFloat(hK.stop.toFixed(6)),
-                sl_pct: parseFloat(slPct.toFixed(2)),
-                tp1: parseFloat(hK.targets[0].toFixed(6)),
-                tp1_pct: parseFloat(tp1Pct.toFixed(2)),
-                tp2: Number.isFinite(hK.targets[1]) ? parseFloat(hK.targets[1].toFixed(6)) : tp.tp2,
-                rr_tp1: rrK(hK.targets[0]),
-                rr_tp2: Number.isFinite(hK.targets[1]) ? rrK(hK.targets[1]) : tp.rr_tp2,
-                leverage: `${Math.min(parseFloat(String(tp.leverage || "1").replace(/[^\d.]/g, "")) || 1, hK.leverageCap).toFixed(0)}x (capped by ${regimeK})`,
-                notes: hK.notes.length ? `${hK.notes.join("; ")}. ${tp.notes || ""}` : tp.notes,
+              const dirK = edgeK.recommendedDirection;
+              let slK = sl, t1K = t1, t2K = t2;
+              if (edgeK.action === "INVERT") {
+                slK = mirrorPrice(e, sl);
+                t1K = mirrorPrice(e, t1);
+                if (Number.isFinite(t2)) t2K = mirrorPrice(e, t2);
+                console.log(`[kronos edge-policy] ${symbolK} ${llmDirK}→${dirK} INVERTED: ${edgeK.reason}`);
+              }
+              const brainK = await getBrainFor(symbolK, dirK).catch(() => null as any);
+              const statK = brainK?.stat;
+              const targets = Number.isFinite(t2K) ? [t1K, t2K] : [t1K];
+              const ctxK = {
+                symbol: symbolK,
+                direction: dirK,
+                entry: e,
+                proposedStop: slK,
+                proposedTargets: targets,
+                rawConviction: Math.max(0, Math.min(1, edgeK.recalibratedConvictionPct / 100)),
+                atr1h: Number(atr) || 0,  // already computed for kronos
+                pctChange24h: ((bus?.prices?.[symbolK]?.change24h ?? 0) / 100),
+                funding8h: bus?.funding?.[symbolK] ?? 0,
+                oiUsd: bus?.oi?.[symbolK] ?? 0,
+                oiChange24hPct: ((getOiChangePct(symbolK) ?? 0) / 100),
+                liquidationClusters: [],
+                backtestN: statK?.sampleSize ?? 0,
+                backtestWr: statK?.winRate ?? 0,
+                backtestAvgR: statK?.expectedR ?? 0,
+                regime: regimeK,
+                edgeSource: "estimated" as const,
               };
+              const hK = hardenSignal(ctxK);
+              if (!hK.accept) {
+                parsed.trade_plan = {
+                  ...tp,
+                  direction: "NO_TRADE",
+                  notes: `Kronos hardener veto: ${hK.reasonsRejected.join("; ")}. ${tp.notes || ""}`,
+                };
+                console.log(`[kronos hardener] ${symbolK} ${dirK} VETOED: ${hK.reasonsRejected.join("; ")}`);
+              } else {
+                const riskNew = Math.abs(e - hK.stop);
+                const rrK = (target: number) => riskNew > 0 ? `${(Math.abs(target - e) / riskNew).toFixed(1)}:1` : "—";
+                const slPct = ((Math.abs(e - hK.stop) / e) * 100);
+                const tp1Pct = ((Math.abs(hK.targets[0] - e) / e) * 100);
+                const invertedNote = edgeK.action === "INVERT"
+                  ? `EDGE-INVERTED ${llmDirK}→${dirK}: ${edgeK.reason}. `
+                  : "";
+                parsed.trade_plan = {
+                  ...tp,
+                  direction: dirK,                                  // <- reflects flip when INVERT
+                  sl: parseFloat(hK.stop.toFixed(6)),
+                  sl_pct: parseFloat(slPct.toFixed(2)),
+                  tp1: parseFloat(hK.targets[0].toFixed(6)),
+                  tp1_pct: parseFloat(tp1Pct.toFixed(2)),
+                  tp2: Number.isFinite(hK.targets[1]) ? parseFloat(hK.targets[1].toFixed(6)) : tp.tp2,
+                  rr_tp1: rrK(hK.targets[0]),
+                  rr_tp2: Number.isFinite(hK.targets[1]) ? rrK(hK.targets[1]) : tp.rr_tp2,
+                  leverage: `${Math.min(parseFloat(String(tp.leverage || "1").replace(/[^\d.]/g, "")) || 1, hK.leverageCap).toFixed(0)}x (capped by ${regimeK})`,
+                  notes: `${invertedNote}${hK.notes.length ? hK.notes.join("; ") + ". " : ""}${tp.notes || ""}`.trim(),
+                };
+                parsed.edgePolicy = {
+                  action: edgeK.action,
+                  originalDirection: edgeK.originalDirection,
+                  recommendedDirection: edgeK.recommendedDirection,
+                  brainVerdict: edgeK.brainVerdict,
+                  rawConvictionPct: edgeK.rawConvictionPct,
+                  recalibratedConvictionPct: edgeK.recalibratedConvictionPct,
+                  reason: edgeK.reason,
+                };
               parsed.ensemble_confidence = Math.round(hK.finalConviction * 100);
               parsed.hardener = {
                 applied: true,
@@ -7806,9 +7877,11 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   ...(hK.chaseFlag ? ["chase"] : []),
                   ...(hK.crowdingFlag ? ["crowded"] : []),
                   ...(hK.lowSampleFlag ? ["low-sample"] : []),
+                  ...(edgeK.action === "INVERT" ? ["edge-inverted"] : []),
                 ],
-                materiallyMutated: hK.materiallyMutated,
+                materiallyMutated: edgeK.action === "INVERT" ? true : hK.materiallyMutated,
               };
+              }
             }
           }
         }

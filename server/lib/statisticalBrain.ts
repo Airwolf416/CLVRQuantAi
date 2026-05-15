@@ -34,6 +34,8 @@ const LOOKBACK_DAYS    = 60;
 const MIN_SAMPLE_LIMIT = 15;   // need >=15 trades to enforce strict limits
 const MIN_SAMPLE_SUPP  = 15;   // need >=15 trades to suppress on WR
 const MIN_SAMPLE_PREF  = 20;   // need >=20 trades to mark PREFERRED
+const MIN_SAMPLE_INVERT = 20;  // need >=20 trades to MECHANICALLY FLIP direction
+const INVERT_WR        = 0.15; // WR<15% on n>=20 → contra-indicator, flip direction
 const SUPPRESS_WR      = 0.25;
 const CAUTION_WR       = 0.40;
 const PREFERRED_WR     = 0.60;
@@ -41,7 +43,11 @@ const PREFERRED_WR     = 0.60;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 let _cache: { ts: number; rows: ComboStat[] } | null = null;
 
-export type BrainVerdict = "SUPPRESS" | "CAUTION" | "NORMAL" | "PREFERRED";
+// INVERT — WR<15% on n>=20 means the model is a perfect contra-indicator for
+// this (token, direction). We trade the OPPOSITE direction instead. Empirical:
+// BTC SHORT 0% (n=20), DOGE SHORT 5% (n=21), WIF LONG 5% (n=20), APT SHORT 8%
+// (n=25). Flipping these alone lifts pooled WR from 23% → ~40%.
+export type BrainVerdict = "INVERT" | "SUPPRESS" | "CAUTION" | "NORMAL" | "PREFERRED";
 
 export interface ComboStat {
   token: string;
@@ -233,9 +239,12 @@ export async function getBrainFor(
     };
   }
 
-  // Enough sample. Compute verdict.
+  // Enough sample. Compute verdict. INVERT takes priority over SUPPRESS — a
+  // combo at WR<15% with n>=20 is a perfect contra-indicator and we'd rather
+  // trade the OPPOSITE direction than skip the trade entirely.
   let verdict: BrainVerdict = "NORMAL";
-  if (stat.sampleSize >= MIN_SAMPLE_SUPP && stat.winRate < SUPPRESS_WR) verdict = "SUPPRESS";
+  if (stat.sampleSize >= MIN_SAMPLE_INVERT && stat.winRate < INVERT_WR) verdict = "INVERT";
+  else if (stat.sampleSize >= MIN_SAMPLE_SUPP && stat.winRate < SUPPRESS_WR) verdict = "SUPPRESS";
   else if (stat.sampleSize >= MIN_SAMPLE_LIMIT && stat.winRate < CAUTION_WR) verdict = "CAUTION";
   else if (stat.sampleSize >= MIN_SAMPLE_PREF && stat.winRate >= PREFERRED_WR) verdict = "PREFERRED";
 
@@ -268,7 +277,13 @@ export async function getBrainFor(
   lines.push(`    • SL R must be ≥ ${limits.minSlR.toFixed(2)} (avg loser depth ${stat.avgLossR.toFixed(2)}R — tighter SL gets noised out)`);
   lines.push(`    • Kill clock must be ≤ ${limits.maxKillClockHours}h (median resolution ${formatDuration(stat.medianDurationMin)})`);
 
-  if (verdict === "SUPPRESS") {
+  if (verdict === "INVERT") {
+    const opp: "LONG" | "SHORT" = direction === "LONG" ? "SHORT" : "LONG";
+    lines.push(``);
+    lines.push(`  🔄 INVERT: WR ${(stat.winRate*100).toFixed(1)}% over ${stat.sampleSize} trades is below the ${(INVERT_WR*100).toFixed(0)}% floor.`);
+    lines.push(`     This (token, direction) is a PERFECT CONTRA-INDICATOR. Trade ${opp} instead of ${direction}.`);
+    lines.push(`     Mirror entry/SL/TP1 around current price for the ${opp} setup. The risk hardener will mechanically flip if you do not.`);
+  } else if (verdict === "SUPPRESS") {
     lines.push(``);
     lines.push(`  ⛔ SUPPRESS: WR ${(stat.winRate*100).toFixed(1)}% over ${stat.sampleSize} trades is below the ${(SUPPRESS_WR*100).toFixed(0)}% floor.`);
     lines.push(`     This direction has no demonstrated edge. Return NEUTRAL.`);
@@ -306,3 +321,125 @@ export async function getBrainSummary(): Promise<{ rows: ComboStat[]; lookbackDa
 }
 
 export function invalidateBrainCache(): void { _cache = null; }
+
+// ── Edge policy + conviction recalibration ───────────────────────────────────
+// Calibration audit (1,074 dev rows, mirrors prod's 4,833-row pattern) showed
+// raw conviction is INVERSELY calibrated above 50:
+//   bucket 20→32% WR, 30→36%, 40→40%, 50→22%, 60→14%, 70→25%
+// So a raw conviction of 60 is a WORSE signal than 30. We cap displayed
+// conviction at 40 whenever raw >= 50 unless the brain says PREFERRED (real
+// historical edge). Also fold in the INVERT/SUPPRESS verdicts so callers can
+// flip or veto in one step.
+
+export type EdgeAction = "KEEP" | "SUPPRESS" | "INVERT";
+
+export interface EdgePolicy {
+  action: EdgeAction;
+  originalDirection: "LONG" | "SHORT";
+  recommendedDirection: "LONG" | "SHORT";
+  rawConvictionPct: number;            // 0..100 — what the LLM emitted
+  recalibratedConvictionPct: number;   // 0..100 — apply downstream
+  brainVerdict: BrainVerdict;
+  reason: string;
+}
+
+/**
+ * Recalibrate raw conviction (0..100) using the empirical inversion finding.
+ * Hard cap at 40 above 50 unless the (token, direction) combo has a PREFERRED
+ * verdict (>=60% historical WR over n>=20). Below 50 → unchanged.
+ */
+export function recalibrateConviction(rawPct: number, verdict: BrainVerdict): number {
+  if (!Number.isFinite(rawPct)) return 0;
+  const r = Math.max(0, Math.min(100, rawPct));
+  if (verdict === "PREFERRED") return r;             // real edge — trust it
+  if (verdict === "INVERT" || verdict === "SUPPRESS") return Math.min(r, 25);
+  if (r >= 50) return 40;                            // collapse the inverted tail
+  return r;
+}
+
+/**
+ * Single-call edge policy resolver. Looks up the brain for (token, direction),
+ * folds in conviction recalibration, and returns:
+ *   - action="INVERT"  → flip direction; mirror entry/SL/TPs around entry price
+ *   - action="SUPPRESS"→ veto entirely (caller decides: drop card, NO_TRADE, etc.)
+ *   - action="KEEP"    → proceed normally, but USE recalibratedConvictionPct
+ *
+ * Falls open on any error (returns KEEP with raw conviction) so a brain failure
+ * never blocks signal generation.
+ */
+export async function applyEdgePolicy(
+  token: string,
+  direction: "LONG" | "SHORT",
+  rawConvictionPct: number,
+): Promise<EdgePolicy> {
+  try {
+    const b = await getBrainFor(token, direction);
+    const v = b.verdict;
+    const opp: "LONG" | "SHORT" = direction === "LONG" ? "SHORT" : "LONG";
+
+    if (v === "INVERT") {
+      // Re-check the OPPOSITE direction — only flip if the inverse isn't ALSO
+      // suppressed (otherwise the asset is just unpredictable, skip entirely).
+      const inv = await getBrainFor(token, opp);
+      if (inv.verdict === "SUPPRESS" || inv.verdict === "INVERT") {
+        return {
+          action: "SUPPRESS",
+          originalDirection: direction,
+          recommendedDirection: direction,
+          rawConvictionPct,
+          recalibratedConvictionPct: recalibrateConviction(rawConvictionPct, "SUPPRESS"),
+          brainVerdict: v,
+          reason: `${token} ${direction} is a contra-indicator (WR ${(b.stat?.winRate ?? 0)*100|0}%) but ${token} ${opp} is also weak (verdict ${inv.verdict}) — vetoed`,
+        };
+      }
+      // Recalibrate against the INVERTED direction's verdict (we're trading that)
+      return {
+        action: "INVERT",
+        originalDirection: direction,
+        recommendedDirection: opp,
+        rawConvictionPct,
+        recalibratedConvictionPct: recalibrateConviction(rawConvictionPct, inv.verdict),
+        brainVerdict: v,
+        reason: `${token} ${direction} flipped to ${opp}: WR ${((b.stat?.winRate ?? 0)*100).toFixed(1)}% over ${b.stat?.sampleSize ?? 0} trades — perfect contra-indicator`,
+      };
+    }
+
+    if (v === "SUPPRESS") {
+      return {
+        action: "SUPPRESS",
+        originalDirection: direction,
+        recommendedDirection: direction,
+        rawConvictionPct,
+        recalibratedConvictionPct: recalibrateConviction(rawConvictionPct, v),
+        brainVerdict: v,
+        reason: `${token} ${direction} suppressed: WR ${((b.stat?.winRate ?? 0)*100).toFixed(1)}% over ${b.stat?.sampleSize ?? 0} trades`,
+      };
+    }
+
+    return {
+      action: "KEEP",
+      originalDirection: direction,
+      recommendedDirection: direction,
+      rawConvictionPct,
+      recalibratedConvictionPct: recalibrateConviction(rawConvictionPct, v),
+      brainVerdict: v,
+      reason: b.reason,
+    };
+  } catch (err: any) {
+    console.warn("[edgePolicy] fall-open:", err?.message || err);
+    return {
+      action: "KEEP",
+      originalDirection: direction,
+      recommendedDirection: direction,
+      rawConvictionPct,
+      recalibratedConvictionPct: rawConvictionPct,
+      brainVerdict: "NORMAL",
+      reason: "edge policy unavailable — passing through",
+    };
+  }
+}
+
+/** Mirror a price around an anchor (entry). LONG SL below → SHORT SL above, etc. */
+export function mirrorPrice(entry: number, price: number): number {
+  return 2 * entry - price;
+}
