@@ -6097,13 +6097,28 @@ Every level must be technically defensible. Return JSON only.`;
           // Fully fail-open: any error leaves the original direction intact
           // and tags UNCLASSIFIED.
           try {
-            const { classifyArchetype, buildArchetypeContext, shouldFlipForMeanReversion } =
+            const { classifyArchetype, buildArchetypeContext, shouldFlipForMeanReversion, ARCHETYPE_LOOKBACK_1H } =
               await import("./lib/archetype");
+            // Module 2: fetch dedicated 336-bar 1h history (14 daily aggregated
+            // bars) so daily ATR(14) is mathematically meaningful. The
+            // surrounding TA pipeline keeps its 48-bar `candles1h` — only the
+            // archetype classifier upgrades. Fail-open to the smaller array
+            // if the wider fetch errors (classifier will degrade per its
+            // own lookback gate).
+            let archBars1h: any[] = candles1h as any[];
+            try {
+              const wide = await fetchQuantCandles(ticker, cls, "1h", ARCHETYPE_LOOKBACK_1H);
+              if (Array.isArray(wide) && wide.length > (candles1h as any[]).length) {
+                archBars1h = wide;
+              }
+            } catch (wideErr) {
+              // keep narrow fallback; classifier will gate atrDaily appropriately
+            }
             const archCtx = buildArchetypeContext({
               token: ticker,
               direction: hdDir,
               price: entryPx,
-              candles1h: (candles1h as any[]).map((c: any) => ({
+              candles1h: (archBars1h as any[]).map((c: any) => ({
                 open: Number(c.open ?? c.o), high: Number(c.high ?? c.h),
                 low: Number(c.low ?? c.l), close: Number(c.close ?? c.c),
                 volume: Number(c.volume ?? c.v ?? 0),
