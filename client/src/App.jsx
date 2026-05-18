@@ -1989,6 +1989,94 @@ function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
 }
 
 // ─── TRADE JOURNAL TAB (Elite) ─────────────────────────────
+// ─── Module 3 T05 — Signals Diagnosis Panel ─────────────────────────────────
+// Renders the per-signal post-trade diagnosis chip-table when
+// VITE_PTA_JOURNAL_DISPLAY_ENABLED is "1". Otherwise short-circuits to a
+// "coming soon" card so the nav entry never 404s while the tagger warms up.
+function SignalsDiagnosisPanel(){
+  const{C}=useContext(ThemeCtx);
+  const displayEnabled=String(import.meta.env.VITE_PTA_JOURNAL_DISPLAY_ENABLED||"").trim()==="1";
+  const[data,setData]=useState({trades:[],displayEnabled:false,loading:true,error:""});
+  useEffect(()=>{
+    let alive=true;
+    (async()=>{
+      try{
+        const r=await fetch("/api/journal",{credentials:"same-origin"});
+        if(!r.ok){if(alive)setData(d=>({...d,loading:false,error:`HTTP ${r.status}`}));return;}
+        const j=await r.json();
+        if(alive)setData({trades:Array.isArray(j?.trades)?j.trades:[],displayEnabled:!!j?.displayEnabled,loading:false,error:""});
+      }catch(e){if(alive)setData(d=>({...d,loading:false,error:e?.message||"fetch failed"}));}
+    })();
+    return()=>{alive=false;};
+  },[]);
+  // Local-only short-circuit while the flag is off; server still returns
+  // displayEnabled so the page can refresh once the operator flips it.
+  if(!displayEnabled&&!data.displayEnabled){
+    return(
+      <div data-testid="diagnosis-coming-soon" style={{margin:"12px 0 18px",padding:"14px 16px",border:`1px solid ${C.muted2}33`,borderRadius:10,background:`${C.muted2}10`}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:4}}>Signal Diagnoses — coming soon</div>
+        <div style={{fontSize:12,color:C.muted2,lineHeight:1.5}}>Every closed signal is being tagged in the background. Diagnoses will appear here once we've spot-checked the first batch for accuracy.</div>
+      </div>
+    );
+  }
+  if(data.loading)return<div style={{padding:"12px 0",color:C.muted2,fontSize:12}}>Loading diagnoses…</div>;
+  if(data.error)return<div style={{padding:"12px 0",color:C.red,fontSize:12}}>Could not load: {data.error}</div>;
+  const tagged=data.trades.filter(t=>t.diagnosis);
+  if(!tagged.length){
+    return(
+      <div data-testid="diagnosis-empty" style={{margin:"12px 0 18px",padding:"14px 16px",border:`1px solid ${C.muted2}33`,borderRadius:10,background:`${C.muted2}10`}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:4}}>No tagged signals yet</div>
+        <div style={{fontSize:12,color:C.muted2}}>Diagnoses appear ~35min after a signal resolves.</div>
+      </div>
+    );
+  }
+  // Chip color mapping per spec: green=clean win, yellow=neutral/meta,
+  // red=clean loss, grey=PENDING/UNCLASSIFIED.
+  const chipColor=(tag)=>{
+    const T=String(tag||"").toUpperCase();
+    if(["TP_HIT_AS_DESIGNED","CLEAN_WINNER","STRUCTURAL_WIN","TP_HIT_ON_TREND"].includes(T))return{bg:"#0e3b1f",fg:"#7eedb1",bd:"#1f8f4a"};
+    if(["STOP_TOO_TIGHT","CHASED_ENTRY","WRONG_DIRECTION","SL_HIT_IMMEDIATE","REGIME_MISMATCH"].includes(T))return{bg:"#3b0e14",fg:"#ff8b97",bd:"#a0303a"};
+    if(["LOW_SAMPLE_ARCHETYPE","COUNTER_TREND_WARNING_IGNORED","MACRO_EVENT_OVERLAP","STALE_FLAT_PREMATURE","THESIS_INVALIDATED","BREAKEVEN_DRIFT","PARTIAL_WIN_THEN_STALL"].includes(T))return{bg:"#3a2d0a",fg:"#f0c970",bd:"#9a7b22"};
+    return{bg:"#1c2231",fg:"#b0b8c8",bd:"#2c3548"};
+  };
+  return(
+    <div data-testid="diagnosis-panel" style={{margin:"12px 0 18px"}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:8}}>Signal Diagnoses (last 30d, {tagged.length} tagged)</div>
+      <div style={{border:`1px solid ${C.muted2}22`,borderRadius:10,overflow:"hidden"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr style={{background:`${C.muted2}10`,color:C.muted2,textAlign:"left"}}>
+            <th style={{padding:"8px 10px"}}>Token</th>
+            <th style={{padding:"8px 10px"}}>Dir</th>
+            <th style={{padding:"8px 10px"}}>Outcome</th>
+            <th style={{padding:"8px 10px",textAlign:"right"}}>PnL%</th>
+            <th style={{padding:"8px 10px"}}>Diagnosis</th>
+            <th style={{padding:"8px 10px"}}>Explanation</th>
+          </tr></thead>
+          <tbody>
+            {tagged.slice(0,100).map(t=>{
+              const c=chipColor(t.diagnosis.primaryTag);
+              const pnl=t.pnlPct!=null?`${t.pnlPct>=0?"+":""}${Number(t.pnlPct).toFixed(2)}%`:"—";
+              return(
+                <tr key={t.id} data-testid={`row-diag-${t.id}`} style={{borderTop:`1px solid ${C.muted2}10`}}>
+                  <td style={{padding:"8px 10px",fontWeight:600}}>{t.token}</td>
+                  <td style={{padding:"8px 10px",color:t.direction==="LONG"?"#7eedb1":"#ff8b97"}}>{t.direction}</td>
+                  <td style={{padding:"8px 10px",color:C.muted2}}>{t.outcome}</td>
+                  <td style={{padding:"8px 10px",textAlign:"right",color:t.pnlPct>=0?"#7eedb1":"#ff8b97"}}>{pnl}</td>
+                  <td style={{padding:"8px 10px"}}>
+                    <span data-testid={`chip-diag-${t.id}`} title={t.diagnosis.explanation||""} style={{display:"inline-block",padding:"3px 8px",borderRadius:999,fontSize:11,fontWeight:700,background:c.bg,color:c.fg,border:`1px solid ${c.bd}`}}>{t.diagnosis.primaryTag}</span>
+                    {(t.diagnosis.secondaryTags||[]).slice(0,2).map(s=>(<span key={s} style={{display:"inline-block",marginLeft:6,padding:"2px 6px",borderRadius:999,fontSize:10,color:C.muted2,border:`1px solid ${C.muted2}44`}}>{s}</span>))}
+                  </td>
+                  <td style={{padding:"8px 10px",color:C.muted2,maxWidth:360}}>{t.diagnosis.explanation||"—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function TradeJournalTab({isElite,onUpgrade}){
   const{C}=useContext(ThemeCtx);
   const[showForm,setShowForm]=useState(false);
@@ -5602,7 +5690,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </>}
 
         {/* ══ JOURNAL ══ */}
-        {tab==="journal"&&<TradeJournalTab isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {tab==="journal"&&<><SignalsDiagnosisPanel/><TradeJournalTab isElite={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/></>}
         {tab==="chartai"&&isElite&&<ChartAITab C={C} MONO={MONO} SERIF={SERIF} SANS={SANS} isMobile={isMobile}/>}
 
         {/* ══ ALERTS ══ */}

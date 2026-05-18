@@ -569,6 +569,132 @@ export async function initializeDatabase(): Promise<void> {
       console.warn("[initDb] archetype_stats initial refresh skipped:", e?.message);
     }
 
+    // ── Module 3 (PostTradeAnalyzer — Phase A) — additive tables + MV ─────────
+    // Same forbidden-file constraints as Modules 1/2 — shared/schema.ts is NOT
+    // touched. Phase A creates the storage but only `post_trade_analysis`
+    // receives writes; `model_adjustments` stays empty until Phase B wires
+    // the auto-adjust feedback loop. `archetype_scorecard` is a read-only MV
+    // refreshed by the existing M2 hourly cron (extended in M3 T04).
+    //
+    // We also extend `stats_refresh_log` with `mv_name` so the refresher can
+    // distinguish which MV each row refers to (archetype_stats vs
+    // archetype_scorecard). Pre-existing rows get NULL — interpreted as the
+    // original M2 MV (archetype_stats).
+    await client.query(`ALTER TABLE stats_refresh_log ADD COLUMN IF NOT EXISTS mv_name TEXT`).catch(() => {});
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS post_trade_analysis (
+        id                    SERIAL PRIMARY KEY,
+        signal_id             INTEGER NOT NULL REFERENCES ai_signal_log(id) ON DELETE CASCADE,
+        analyzed_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        primary_tag           TEXT NOT NULL DEFAULT 'PENDING_ANALYSIS',
+        secondary_tags        TEXT[] DEFAULT '{}',
+        assigned_archetype    TEXT,
+        actual_archetype      TEXT,
+        mfe_r                 DOUBLE PRECISION,
+        mae_r                 DOUBLE PRECISION,
+        diagnosis_confidence  DOUBLE PRECISION,
+        explanation_text      TEXT,
+        diagnostics           JSONB
+      )
+    `);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pta_signal_id ON post_trade_analysis (signal_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_pta_primary_tag ON post_trade_analysis (primary_tag)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_pta_analyzed_at ON post_trade_analysis (analyzed_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_pta_pending ON post_trade_analysis (primary_tag) WHERE primary_tag = 'PENDING_ANALYSIS'`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS model_adjustments (
+        id                    SERIAL PRIMARY KEY,
+        adjusted_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        archetype             TEXT NOT NULL,
+        parameter_name        TEXT NOT NULL,
+        old_value             DOUBLE PRECISION,
+        new_value             DOUBLE PRECISION,
+        trigger_reason        TEXT,
+        trigger_metric_value  DOUBLE PRECISION,
+        sample_size           INTEGER,
+        source                TEXT NOT NULL DEFAULT 'organic'
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_model_adj_archetype ON model_adjustments (archetype, adjusted_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_model_adj_source ON model_adjustments (source)`);
+
+    // archetype_scorecard — read-only MV. Trailing-50 window per archetype,
+    // effective WR = (clean_win + chop_win + runner_win +
+    // thesis_invalidated_correctly + stale_flat_correct) / total. The MV is
+    // grouped by archetype only (vol_regime not yet plumbed onto
+    // ai_signal_log; placeholder column is always NULL until that arrives —
+    // unique index includes it so the structure is future-proof).
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_matviews WHERE matviewname = 'archetype_scorecard'
+        ) THEN
+          CREATE MATERIALIZED VIEW archetype_scorecard AS
+          WITH recent AS (
+            SELECT
+              COALESCE(sl.archetype, 'UNCLASSIFIED') AS archetype,
+              NULL::TEXT                              AS vol_regime,
+              sl.outcome,
+              sl.pnl_pct,
+              pta.primary_tag,
+              pta.secondary_tags,
+              ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(sl.archetype, 'UNCLASSIFIED')
+                ORDER BY sl.resolved_at DESC NULLS LAST
+              ) AS rn
+            FROM ai_signal_log sl
+            LEFT JOIN post_trade_analysis pta ON pta.signal_id = sl.id
+            WHERE sl.outcome IS NOT NULL AND sl.outcome <> 'PENDING'
+              AND sl.resolved_at IS NOT NULL
+          ),
+          trailing AS (SELECT * FROM recent WHERE rn <= 50)
+          SELECT
+            archetype,
+            vol_regime,
+            COUNT(*)::INTEGER                                                     AS trailing_n,
+            CASE WHEN COUNT(*) > 0
+                 THEN SUM(CASE WHEN primary_tag IN (
+                                'clean_win','chop_win','runner_win',
+                                'thesis_invalidated_correctly','stale_flat_correct'
+                              ) THEN 1 ELSE 0 END)::FLOAT / COUNT(*)::FLOAT
+                 ELSE 0 END                                                       AS effective_win_rate,
+            AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct::FLOAT ELSE NULL END)  AS avg_realized_pnl_pct,
+            (
+              SELECT ARRAY_AGG(tag ORDER BY cnt DESC)
+              FROM (
+                SELECT primary_tag AS tag, COUNT(*) AS cnt
+                FROM trailing t2
+                WHERE t2.archetype = trailing.archetype
+                  AND COALESCE(t2.vol_regime, '') = COALESCE(trailing.vol_regime, '')
+                  AND primary_tag IS NOT NULL
+                GROUP BY 1
+                ORDER BY cnt DESC
+                LIMIT 3
+              ) sub
+            ) AS top_3_diagnosis_tags,
+            NOW() AS last_updated
+          FROM trailing
+          GROUP BY archetype, vol_regime;
+        END IF;
+      END$$;
+    `).catch((e: any) => console.warn("[initDb] archetype_scorecard MV create skipped:", e?.message));
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS archetype_scorecard_pk
+        ON archetype_scorecard (archetype, COALESCE(vol_regime, ''))
+    `).catch((e: any) => console.warn("[initDb] archetype_scorecard_pk skipped:", e?.message));
+    try {
+      const seedCheck: any = await client.query(`SELECT COUNT(*)::INTEGER AS n FROM archetype_scorecard`);
+      if (Number(seedCheck?.rows?.[0]?.n || 0) === 0) {
+        await client.query(`REFRESH MATERIALIZED VIEW archetype_scorecard`);
+        console.log("[initDb] archetype_scorecard MV seeded (initial refresh).");
+      }
+    } catch (e: any) {
+      console.warn("[initDb] archetype_scorecard initial refresh skipped:", e?.message);
+    }
+
     // ── signal_shadow_inversions (the "Reverse Costanza" backtest) ────────────
     // For every real signal we publish, a mirrored twin (opposite direction,
     // SL/TP reflected across entry) is logged here and resolved against the

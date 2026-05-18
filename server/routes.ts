@@ -10997,5 +10997,106 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     console.log("[alerts] Server-side alert checker started");
   }, 8000);
 
+  // ─── Module 3 — PostTradeAnalyzer endpoints (Phase A) ───────────────────────
+  // /api/journal           — user's resolved signals + diagnoses (last 30d)
+  // /api/reports/weekly-model — Elite: last generated weekly report JSON
+  // /api/admin/pta/*       — admin tools (one-shot worker + on-demand report)
+  // All endpoints fail-soft: if the PTA tables are missing or queries throw,
+  // we return an empty payload rather than 500 the page.
+  app.get("/api/journal", async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || null;
+      if (!userId) return res.status(401).json({ error: "auth_required" });
+      const { ptaJournalDisplayEnabled } = await import("./lib/featureFlags");
+      const flagOn = ptaJournalDisplayEnabled();
+      const sqlMod = await import("drizzle-orm");
+      const r: any = await db.execute(sqlMod.sql`
+        SELECT s.id, s.token, s.direction, s.entry_price, s.tp1_price,
+               s.tp2_price, s.tp3_price, s.stop_loss, s.outcome, s.pnl_pct,
+               s.resolved_at, s.created_at, s.archetype, s.conviction,
+               pta.primary_tag, pta.secondary_tags, pta.actual_archetype,
+               pta.mfe_r, pta.mae_r, pta.diagnosis_confidence,
+               pta.explanation_text, pta.analyzed_at
+        FROM ai_signal_log s
+        LEFT JOIN post_trade_analysis pta ON pta.signal_id = s.id
+        WHERE s.outcome IS NOT NULL
+          AND s.outcome <> 'PENDING'
+          AND s.resolved_at >= NOW() - INTERVAL '30 days'
+        ORDER BY s.resolved_at DESC
+        LIMIT 200
+      `);
+      const rows = (r?.rows || r || []) as any[];
+      return res.json({
+        displayEnabled: flagOn,
+        trades: rows.map((x) => ({
+          id: x.id,
+          token: x.token,
+          direction: x.direction,
+          entryPrice: x.entry_price,
+          tp1: x.tp1_price, tp2: x.tp2_price, tp3: x.tp3_price,
+          stopLoss: x.stop_loss,
+          outcome: x.outcome,
+          pnlPct: x.pnl_pct != null ? Number(x.pnl_pct) : null,
+          resolvedAt: x.resolved_at,
+          createdAt: x.created_at,
+          archetype: x.archetype || null,
+          conviction: x.conviction != null ? Number(x.conviction) : null,
+          diagnosis: flagOn && x.primary_tag && x.primary_tag !== "PENDING_ANALYSIS" ? {
+            primaryTag: x.primary_tag,
+            secondaryTags: x.secondary_tags || [],
+            actualArchetype: x.actual_archetype,
+            mfeR: x.mfe_r != null ? Number(x.mfe_r) : null,
+            maeR: x.mae_r != null ? Number(x.mae_r) : null,
+            confidence: x.diagnosis_confidence != null ? Number(x.diagnosis_confidence) : null,
+            explanation: x.explanation_text || null,
+            analyzedAt: x.analyzed_at,
+          } : null,
+        })),
+      });
+    } catch (err: any) {
+      console.warn("[/api/journal] failed:", err?.message);
+      return res.json({ displayEnabled: false, trades: [] });
+    }
+  });
+
+  app.get("/api/reports/weekly-model", async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || null;
+      if (!userId) return res.status(401).json({ error: "auth_required" });
+      const tier = await getUserTier(userId);
+      if (tier !== "elite") return res.status(403).json({ error: "elite_required" });
+      const { getLastReport } = await import("./lib/weeklyModelReport");
+      const report = getLastReport();
+      if (!report) return res.json({ report: null, hint: "No report generated yet." });
+      return res.json({ report });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "report_failed" });
+    }
+  });
+
+  app.post("/api/admin/pta/generate-report", async (req: any, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    try {
+      const { generateNow } = await import("./lib/weeklyModelReport");
+      const report = await generateNow();
+      return res.json({ ok: true, report });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "generate_failed" });
+    }
+  });
+
+  app.post("/api/admin/pta/run-worker-once", async (req: any, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    try {
+      const { runWorkerOnceForAdmin } = await import("./lib/postTradeAnalyzerWorker");
+      const result = await runWorkerOnceForAdmin();
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "worker_failed" });
+    }
+  });
+
   return httpServer;
 }

@@ -752,6 +752,25 @@ function logDataSourceStatus() {
     console.warn("[startup] statsMvRefresher init skipped:", err?.message);
   }
 
+  // Module 3 T03 — post-trade analyzer worker (60s tick, processes pending
+  // diagnoses where signal resolved_at > 35min ago). Gated by
+  // PTA_ANALYZER_ENABLED (default true). Fail-open.
+  try {
+    const { startPostTradeAnalyzerWorker } = await import("./lib/postTradeAnalyzerWorker");
+    startPostTradeAnalyzerWorker();
+  } catch (err: any) {
+    console.warn("[startup] postTradeAnalyzerWorker init skipped:", err?.message);
+  }
+
+  // Module 3 T06 — weekly model report scheduler (Sun 22:00 ET, gated by
+  // PTA_WEEKLY_REPORT_ENABLED, default false). Builds + (optionally) emails.
+  try {
+    const { startWeeklyModelReportScheduler } = await import("./lib/weeklyModelReport");
+    startWeeklyModelReportScheduler();
+  } catch (err: any) {
+    console.warn("[startup] weeklyModelReport init skipped:", err?.message);
+  }
+
   // Module 2 T10 — shadow-compare TS vs MV repos every 30min, write
   // divergences >1pp on the Wilson 80% LCB to stats_divergence_log. Always
   // on (cheap) regardless of STATS_SOURCE so we always know if the MV is
