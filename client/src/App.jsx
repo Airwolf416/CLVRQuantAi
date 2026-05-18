@@ -4231,10 +4231,6 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"signals",icon:"⚡",label:i18n.signals},
-    ...(isAdmin?[{k:"track",icon:"📈",label:"RECORD"}]:[]),
-    ...(isAdmin?[{k:"rejections",icon:"🚫",label:"REJECTS"}]:[]),
-    ...(isAdmin?[{k:"candidates",icon:"📋",label:"REVIEW"}]:[]),
-    ...(isAdmin?[{k:"archetypes",icon:"🧬",label:"ARCH"}]:[]),
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -4331,6 +4327,27 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             <span style={{flex:1}}>LANGUAGE · {lang}</span>
             <span style={{fontFamily:MONO,fontSize:9,color:C.gold,padding:"2px 8px",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,letterSpacing:"0.1em"}}>{lang==="EN"?"→ FR":"→ EN"}</span>
           </button>
+
+          {/* ── Owner-only admin tabs (RECORD / REJECTS / REVIEW / ARCH) ── */}
+          {isOwnerOnly&&<>
+            <div style={{height:1,background:C.border,margin:"8px 6px"}}/>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.gold2,letterSpacing:"0.18em",padding:"6px 14px 4px"}}>OWNER TOOLS</div>
+            {[
+              {k:"track",icon:"📈",label:"RECORD"},
+              {k:"rejections",icon:"🚫",label:"REJECTS"},
+              {k:"candidates",icon:"📋",label:"REVIEW"},
+              {k:"archetypes",icon:"🧬",label:"ARCH"},
+            ].map(item=>(
+              <button key={item.k} data-testid={`drawer-btn-${item.k}`}
+                onClick={()=>{setDrawerOpen(false);setTab(item.k);}}
+                style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:tab===item.k?"rgba(201,168,76,.08)":"none",border:"none",borderRadius:4,color:tab===item.k?C.gold:C.muted2,fontFamily:MONO,fontSize:11,cursor:"pointer",textAlign:"left",letterSpacing:"0.06em"}}
+                onMouseEnter={(e)=>e.currentTarget.style.background="rgba(255,255,255,.04)"}
+                onMouseLeave={(e)=>e.currentTarget.style.background=tab===item.k?"rgba(201,168,76,.08)":"none"}>
+                <span style={{fontSize:14,width:16,textAlign:"center"}}>{item.icon}</span>
+                <span style={{flex:1}}>{item.label}</span>
+              </button>
+            ))}
+          </>}
 
           <div style={{height:1,background:C.border,margin:"8px 6px"}}/>
 
@@ -5673,13 +5690,13 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </>}
 
 
-        {tab==="track"&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
+        {tab==="track"&&isOwnerOnly&&<TrackRecordTab isPro={isPro} onUpgrade={onUpgrade}/>}
 
-        {tab==="rejections"&&isAdmin&&<AdminRejectionsTab/>}
+        {tab==="rejections"&&isOwnerOnly&&<AdminRejectionsTab/>}
 
-        {tab==="candidates"&&isAdmin&&<AdminCandidatesTab/>}
+        {tab==="candidates"&&isOwnerOnly&&<AdminCandidatesTab/>}
 
-        {tab==="archetypes"&&isAdmin&&<ArchetypeAdminPanel/>}
+        {tab==="archetypes"&&isOwnerOnly&&<ArchetypeAdminPanel/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>
