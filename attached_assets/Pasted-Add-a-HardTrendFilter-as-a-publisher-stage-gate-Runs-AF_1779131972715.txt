@@ -1,0 +1,57 @@
+Add a HardTrendFilter as a publisher-stage gate. Runs AFTER archetype 
+classification but BEFORE EQS in the publish pipeline. Applies to all 
+three signal endpoints (scanner, /analyze, /kronos).
+
+LOGIC
+
+For each candidate signal, compute the trend state on the trade's 
+asset using two checks:
+
+1. Daily trend (primary):
+   - daily_ema20_slope = sign of (EMA20_today - EMA20_7d_ago) on 
+     1D candles
+   - If daily_ema20_slope > 0 and price > EMA20: trend = UP
+   - If daily_ema20_slope < 0 and price < EMA20: trend = DOWN
+   - Otherwise: trend = NEUTRAL
+
+2. Intraday trend (confirmation):
+   - hourly_ema20_slope = sign of (EMA20_now - EMA20_24h_ago) on 1H candles
+   - Must agree with daily for trend to be considered STRONG
+
+DECISION
+
+- Signal direction must agree with trend OR archetype must be 
+  MEAN_REVERSION_EXHAUSTION
+- LONG signal in DOWN trend: SUPPRESS unless archetype is 
+  MEAN_REVERSION_EXHAUSTION
+- SHORT signal in UP trend: SUPPRESS unless archetype is 
+  MEAN_REVERSION_EXHAUSTION
+- NEUTRAL trend: pass (no filter)
+
+This is the gate the dataset would have most benefited from. 
+Counter-trend signals on majors had 0% win rate; this rule kills them 
+before publish unless the model is explicitly fading.
+
+FEATURE FLAG
+
+HARD_TREND_FILTER_ENABLED (default: false on deploy, ship dark)
+
+Same shadow-mode pattern as Module 2: log what WOULD have been 
+suppressed during shadow period, validate the suppression rate isn't 
+killing too many good trades, then flip.
+
+LOG TO suppressed_signals
+- reason="counter_trend_no_mean_rev_archetype"
+- include trend state and direction in the log payload for later 
+  analysis
+
+EXPECTED IMPACT
+
+Based on the 32-day historical record:
+- Estimated suppression rate: 20-30% of signals
+- Expected win rate lift on remaining signals: +8 to +12 percentage 
+  points
+- Sample: counter-trend share was 40.8% on tokens with sufficient 
+  volume; not all those are pure counter-trend (some are short-term 
+  fades that work), so the filter is more conservative than killing 
+  all counter-trend

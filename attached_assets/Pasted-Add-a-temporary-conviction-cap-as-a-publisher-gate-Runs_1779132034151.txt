@@ -1,0 +1,57 @@
+Add a temporary conviction cap as a publisher gate. Runs as the 
+LAST step before publish, after all other gates.
+
+LOGIC
+
+If signal.conviction >= 50:
+  - Reduce signal.displayed_conviction to 49 on the user-facing card
+  - Set signal.high_conviction_review_flag = true in the signal payload
+  - Log to a new table: high_conviction_review with full signal 
+    snapshot, including all features that contributed to the >=50 score
+
+DISPLAY
+
+User card shows the capped conviction (49) until the inversion bug 
+is diagnosed. This prevents users from over-sizing into the worst 
+trades while we investigate.
+
+RATIONALE
+
+The 32-day historical record shows conviction scores >= 50 had:
+- 19.6% win rate (vs 37.6% for 30-49 bucket)
+- -178% cumulative PnL on 116 signals (10% of volume, 48% of loss 
+  magnitude)
+- Pearson correlation of conviction with outcome: -0.043
+
+The scoring model has learned to be MOST confident about the WORST 
+trades. Until we understand which features drive this inversion, 
+we cannot trust high-conviction labels.
+
+DIAGNOSTIC TASK (parallel)
+
+For each signal in the high_conviction_review table, extract:
+- All feature values at signal generation time
+- Final outcome
+- archetype (once Module 2 is live)
+- continuation_prob (once Module 3 is live)
+
+Then run a feature importance analysis (XGBoost or random forest) 
+on the resolved high-conviction signals to identify which features 
+INVERSELY predict outcome. Those are the features driving the bug.
+
+Most likely culprits based on archetype theory:
+- Day's % move (extreme moves probably score high but mark exhaustion)
+- Volume z-score (high volume often marks blow-off tops)
+- Momentum oscillators at extremes
+- OI z-score in trade direction (crowded positioning)
+
+Once identified, those features should be REVERSED in the conviction 
+score, or capped at saturation points.
+
+FEATURE FLAG
+
+CONVICTION_CAP_ENABLED (default: true on deploy — this is high-priority 
+risk reduction)
+
+NOT shipped behind a long shadow period. The historical evidence is 
+overwhelming. Flip on at deploy.
