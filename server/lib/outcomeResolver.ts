@@ -3,6 +3,7 @@ import { db } from "../db";
 import { aiSignalLog, signalShadowInversions } from "@shared/schema";
 import { livePrices, hlData } from "../state";
 import { resolvePrediction, mapOutcomeToWinLoss } from "./calibrationLog";
+import { enqueuePostTradeAnalysis } from "./postTradeAnalyzerWorker";
 
 const INTERVAL_MS = 60 * 1000;
 let started = false;
@@ -98,9 +99,12 @@ async function resolveOnce(): Promise<void> {
         const pnl = computePnlPct(entry, exitPrice, dir);
         // Compare-and-set on outcome='PENDING' so a slow tick that races the
         // next tick (or any future concurrent worker) can never double-resolve.
-        await db.update(aiSignalLog)
+        // .returning() confirms WE were the writer that flipped the row, so
+        // the PTA enqueue below is guaranteed single-fire per signal.
+        const updated = await db.update(aiSignalLog)
           .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
-          .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")));
+          .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")))
+          .returning({ id: aiSignalLog.id });
         // pwin Phase 1: fire-and-forget resolve to /calibration/resolve.
         // Maps Node-side TP*_HIT/SL_HIT → simple win/loss; non-trade
         // terminals (cancelled, never_filled etc.) → 'void' so they don't
@@ -111,6 +115,11 @@ async function resolveOnce(): Promise<void> {
           exitPrice,
           pnlPct: pnl,
         });
+        // Module 3 PTA: enqueue post-trade analysis only when we won the
+        // race. No-op when the analyzer flag is off.
+        if (updated && updated.length > 0) {
+          enqueuePostTradeAnalysis(row.id).catch(() => {});
+        }
         resolvedCount++;
         continue;
       }
@@ -121,15 +130,19 @@ async function resolveOnce(): Promise<void> {
       const cur = price != null && Number.isFinite(price) ? price : entry;
       const pnl = computePnlPct(entry, cur, row.direction);
       const outcome = pnl >= 0 ? "EXPIRED_WIN" : "EXPIRED_LOSS";
-      await db.update(aiSignalLog)
+      const updated = await db.update(aiSignalLog)
         .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
-        .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")));
+        .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")))
+        .returning({ id: aiSignalLog.id });
       resolvePrediction({
         predictionId: row.id,
         outcome: mapOutcomeToWinLoss(outcome),
         exitPrice: cur,
         pnlPct: pnl,
       });
+      if (updated && updated.length > 0) {
+        enqueuePostTradeAnalysis(row.id).catch(() => {});
+      }
       resolvedCount++;
     }
   }

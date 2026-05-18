@@ -58,3 +58,44 @@ export function statsSource(): "ts" | "mv" {
 export function useArchetypeDisplay(): boolean {
   return envBool("USE_ARCHETYPE_DISPLAY", false);
 }
+
+// ── Module 3 — PostTradeAnalyzer (Phase A: shadow-mode tagging) ─────────────
+// Phase A ships the tagger + journal UI + weekly report behind these four
+// flags. The auto-adjust feedback loop and 90d bootstrap (Parts 4 + 8 of the
+// spec) are Phase B and are intentionally NOT wired this session, so
+// `ptaModelAdjustmentsEnabled` is read but no code branches on it yet.
+
+/**
+ * Phase A — gate the post-trade analyzer worker entirely. Default true so the
+ * tagger starts collecting diagnoses immediately after deploy. Flipping off
+ * stops the 60s worker tick and disables enqueueing from outcomeResolver.
+ */
+export function ptaAnalyzerEnabled(): boolean {
+  return envBool("PTA_ANALYZER_ENABLED", true);
+}
+
+/**
+ * Phase A — gate the user-facing Journal chips. Default false: the Journal
+ * page renders a "coming soon" placeholder until we've spot-checked 30
+ * tagged signals manually for accuracy (per session-plan cadence).
+ */
+export function ptaJournalDisplayEnabled(): boolean {
+  return envBool("PTA_JOURNAL_DISPLAY_ENABLED", false);
+}
+
+/**
+ * Phase A — gate the Sunday 22:00 ET weekly report scheduler + email send.
+ * Default false: we want ≥2 weeks of analyzer output before the first
+ * report ships to admins / Elite users.
+ */
+export function ptaWeeklyReportEnabled(): boolean {
+  return envBool("PTA_WEEKLY_REPORT_ENABLED", false);
+}
+
+/**
+ * Phase B — auto-adjust feedback loop. STAYS at default false this session.
+ * Read here only so future Phase B wiring can grep one location.
+ */
+export function ptaModelAdjustmentsEnabled(): boolean {
+  return envBool("PTA_MODEL_ADJUSTMENTS_ENABLED", false);
+}

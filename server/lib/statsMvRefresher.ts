@@ -38,6 +38,7 @@ export interface RefreshSummary {
   success: boolean;
   errorMessage: string | null;
   concurrent: boolean;
+  mvName?: string;
 }
 
 /** Returns timing/counts of the most recent refresh attempt (for the admin panel). */
@@ -58,6 +59,60 @@ export function isRefreshInFlight(): boolean {
  *
  * Always writes a row to stats_refresh_log, including on failure.
  */
+async function refreshOneMV(
+  mvName: "archetype_stats" | "archetype_scorecard",
+  allowConcurrent: boolean,
+): Promise<RefreshSummary> {
+  const startedAt = new Date();
+  let concurrent = false;
+  let rowsRefreshed = 0;
+  let errorMessage: string | null = null;
+  let success = false;
+  try {
+    if (allowConcurrent) {
+      try {
+        await db.execute(sql.raw(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${mvName}`));
+        concurrent = true;
+      } catch (concErr: any) {
+        console.warn(`[mvRefresh:${mvName}] CONCURRENTLY failed, falling back:`, concErr?.message);
+        await db.execute(sql.raw(`REFRESH MATERIALIZED VIEW ${mvName}`));
+      }
+    } else {
+      await db.execute(sql.raw(`REFRESH MATERIALIZED VIEW ${mvName}`));
+    }
+    try {
+      const r: any = await db.execute(sql.raw(`SELECT COUNT(*)::INTEGER AS n FROM ${mvName}`));
+      rowsRefreshed = Number((r?.rows || r || [])[0]?.n || 0);
+    } catch { /* best-effort */ }
+    success = true;
+  } catch (err: any) {
+    errorMessage = String(err?.message || err);
+    console.error(`[mvRefresh:${mvName}] failed:`, errorMessage);
+  }
+  const finishedAt = new Date();
+  const durationMs = finishedAt.getTime() - startedAt.getTime();
+  if (success && durationMs > SLOW_REFRESH_THRESHOLD_MS) {
+    console.warn(`[mvRefresh:${mvName}] slow refresh: ${durationMs}ms`);
+  }
+  // Per-MV row in stats_refresh_log (Module 3 T04 — mv_name added).
+  try {
+    await db.execute(sql`
+      INSERT INTO stats_refresh_log
+        (started_at, duration_ms, rows_refreshed, success, error_message, mv_name)
+      VALUES
+        (${startedAt.toISOString()}, ${durationMs}, ${rowsRefreshed},
+         ${success}, ${errorMessage}, ${mvName})
+    `);
+  } catch (logErr: any) {
+    console.warn(`[mvRefresh:${mvName}] log write failed:`, logErr?.message);
+  }
+  return {
+    startedAt: startedAt.toISOString(),
+    finishedAt: finishedAt.toISOString(),
+    durationMs, rowsRefreshed, success, errorMessage, concurrent, mvName,
+  };
+}
+
 export async function refreshArchetypeStatsMV(opts?: { allowConcurrent?: boolean }): Promise<RefreshSummary> {
   if (_refreshInFlight) {
     // Caller should respect this; we still need to return a sentinel.
@@ -69,69 +124,29 @@ export async function refreshArchetypeStatsMV(opts?: { allowConcurrent?: boolean
     };
   }
   _refreshInFlight = true;
-  const startedAt = new Date();
   const allowConcurrent = opts?.allowConcurrent ?? true;
-  let concurrent = false;
-  let rowsRefreshed = 0;
-  let errorMessage: string | null = null;
-  let success = false;
+  let primary: RefreshSummary;
   try {
-    if (allowConcurrent) {
-      try {
-        await db.execute(sql`REFRESH MATERIALIZED VIEW CONCURRENTLY archetype_stats`);
-        concurrent = true;
-      } catch (concErr: any) {
-        // Common reason: no unique index, or first run from an empty MV that
-        // hasn't been populated non-concurrently yet. Retry the slow path.
-        console.warn("[mvRefresh] CONCURRENTLY failed, falling back:", concErr?.message);
-        await db.execute(sql`REFRESH MATERIALIZED VIEW archetype_stats`);
-      }
+    // Refresh both MVs back-to-back. Independent try/catch in refreshOneMV
+    // ensures a failure in one never aborts the other. Each gets its own
+    // stats_refresh_log row tagged with mv_name.
+    primary = await refreshOneMV("archetype_stats", allowConcurrent);
+    // Module 3 T04 — also refresh the per-archetype scorecard.
+    await refreshOneMV("archetype_scorecard", allowConcurrent);
+    if (primary.success) {
+      _consecutiveFailures = 0;
+      _lastRefreshAt = Date.now();
     } else {
-      await db.execute(sql`REFRESH MATERIALIZED VIEW archetype_stats`);
+      _consecutiveFailures++;
     }
-    try {
-      const r: any = await db.execute(sql`SELECT COUNT(*)::INTEGER AS n FROM archetype_stats`);
-      rowsRefreshed = Number((r?.rows || r || [])[0]?.n || 0);
-    } catch { /* row count is best-effort */ }
-    success = true;
-    _consecutiveFailures = 0;
-    _lastRefreshAt = Date.now();
-  } catch (err: any) {
-    errorMessage = String(err?.message || err);
-    _consecutiveFailures++;
-    console.error("[mvRefresh] failed:", errorMessage);
   } finally {
     _refreshInFlight = false;
-  }
-  const finishedAt = new Date();
-  const durationMs = finishedAt.getTime() - startedAt.getTime();
-  if (success && durationMs > SLOW_REFRESH_THRESHOLD_MS) {
-    console.warn(`[mvRefresh] slow refresh: ${durationMs}ms (threshold ${SLOW_REFRESH_THRESHOLD_MS}ms)`);
   }
   if (_consecutiveFailures >= FAILURE_WARN_THRESHOLD) {
     console.warn(`[mvRefresh] ${_consecutiveFailures} consecutive failures — admin attention recommended`);
   }
-
-  // Persist the attempt to stats_refresh_log. Drizzle-only. Best-effort.
-  try {
-    await db.execute(sql`
-      INSERT INTO stats_refresh_log
-        (started_at, duration_ms, rows_refreshed, success, error_message)
-      VALUES
-        (${startedAt.toISOString()}, ${durationMs}, ${rowsRefreshed},
-         ${success}, ${errorMessage})
-    `);
-  } catch (logErr: any) {
-    console.warn("[mvRefresh] log write failed:", logErr?.message);
-  }
-
-  const summary: RefreshSummary = {
-    startedAt: startedAt.toISOString(),
-    finishedAt: finishedAt.toISOString(),
-    durationMs, rowsRefreshed, success, errorMessage, concurrent,
-  };
-  _lastSummary = summary;
-  return summary;
+  _lastSummary = primary;
+  return primary;
 }
 
 /**
