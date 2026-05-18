@@ -429,6 +429,146 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_stats_refresh_started ON stats_refresh_log (started_at DESC)`);
 
+    // ── Module 2 T08 — wilson_lcb() plpgsql + archetype_stats MV ──────────────
+    // Database-side computation of the Wilson lower confidence bound so the
+    // materialized view can store stats ready-to-render without a round trip
+    // to Node for each card. IMMUTABLE — Postgres can cache results across
+    // calls inside the same query. Confidence values tested: 0.80 (z=0.8416)
+    // is the display default; 0.95 (z=1.6449) kept for the deprecation
+    // window where both bounds are surfaced side-by-side.
+    //
+    // The CREATE OR REPLACE is idempotent on body changes and safe to re-run.
+    await client.query(`
+      CREATE OR REPLACE FUNCTION wilson_lcb(wins INTEGER, total INTEGER, confidence FLOAT)
+      RETURNS FLOAT
+      LANGUAGE plpgsql
+      IMMUTABLE
+      AS $$
+      DECLARE
+        z      FLOAT;
+        p      FLOAT;
+        denom  FLOAT;
+        centre FLOAT;
+        margin FLOAT;
+      BEGIN
+        IF total IS NULL OR total <= 0 THEN
+          RETURN 0;
+        END IF;
+        z := CASE
+               WHEN confidence >= 0.99 THEN 2.5758
+               WHEN confidence >= 0.95 THEN 1.6449
+               WHEN confidence >= 0.90 THEN 1.2816
+               WHEN confidence >= 0.80 THEN 0.8416
+               ELSE 0.8416
+             END;
+        p      := wins::FLOAT / total::FLOAT;
+        denom  := 1 + (z*z)/total;
+        centre := p + (z*z)/(2*total);
+        margin := z * sqrt( (p*(1-p) + (z*z)/(4*total)) / total );
+        RETURN GREATEST(0, (centre - margin) / denom);
+      END;
+      $$;
+    `).catch((e: any) => console.warn("[initDb] wilson_lcb create skipped:", e?.message));
+
+    // Materialized view: ONE row per (archetype, classification_source) with
+    // pre-computed n/wins/wr_point/wr_lcb_80/wr_lcb_95/median_r/p75_hold/
+    // median_time_to_tp/sl. Both live ai_signal_log rows and joined backfill
+    // rows are included. classification_source distinguishes 'live' vs
+    // 'backfill' so the admin can A/B them in T12.
+    //
+    // CREATE MATERIALIZED VIEW does NOT support IF NOT EXISTS in older PG
+    // versions, so we DO block + IF NOT EXISTS guard.
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_matviews WHERE matviewname = 'archetype_stats'
+        ) THEN
+          CREATE MATERIALIZED VIEW archetype_stats AS
+          WITH all_rows AS (
+            SELECT
+              COALESCE(archetype, 'UNCLASSIFIED') AS archetype,
+              'live'::TEXT                         AS classification_source,
+              outcome,
+              pnl_pct,
+              EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60 AS duration_min
+            FROM ai_signal_log
+            WHERE outcome IS NOT NULL AND outcome <> 'PENDING'
+              AND resolved_at IS NOT NULL
+              AND (classification_source IS NULL OR classification_source = 'live')
+            UNION ALL
+            SELECT
+              bc.archetype                                              AS archetype,
+              'backfill'::TEXT                                          AS classification_source,
+              sl.outcome,
+              sl.pnl_pct,
+              EXTRACT(EPOCH FROM (sl.resolved_at - sl.created_at)) / 60 AS duration_min
+            FROM backfilled_classifications bc
+            JOIN ai_signal_log sl ON sl.id = bc.source_signal_id
+            WHERE sl.outcome IS NOT NULL AND sl.outcome <> 'PENDING'
+              AND sl.resolved_at IS NOT NULL
+              AND bc.archetype NOT IN (
+                'BACKFILL_UNRECOVERABLE',
+                'SKIPPED_ARCHETYPE_NOT_ALLOWED'
+              )
+          )
+          SELECT
+            archetype,
+            classification_source,
+            COUNT(*)::INTEGER                                                        AS n,
+            SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN')
+                     THEN 1 ELSE 0 END)::INTEGER                                     AS wins,
+            SUM(CASE WHEN outcome IN ('SL_HIT','EXPIRED_LOSS') THEN 1 ELSE 0 END)::INTEGER AS losses,
+            CASE WHEN COUNT(*) > 0
+                 THEN SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN')
+                               THEN 1 ELSE 0 END)::FLOAT / COUNT(*)::FLOAT
+                 ELSE 0 END                                                          AS wr_point,
+            wilson_lcb(
+              SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN')
+                       THEN 1 ELSE 0 END)::INTEGER,
+              COUNT(*)::INTEGER, 0.80)                                               AS wr_lcb_80,
+            wilson_lcb(
+              SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN')
+                       THEN 1 ELSE 0 END)::INTEGER,
+              COUNT(*)::INTEGER, 0.95)                                               AS wr_lcb_95,
+            COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY pnl_pct/10.0), 0)   AS median_r,
+            COALESCE(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY duration_min), 0)  AS p75_hold_minutes,
+            COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_min)
+                     FILTER (WHERE outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN')), 0)
+                                                                                     AS median_time_to_tp_min,
+            COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_min)
+                     FILTER (WHERE outcome IN ('SL_HIT','EXPIRED_LOSS')), 0)
+                                                                                     AS median_time_to_sl_min,
+            NOW()                                                                    AS refreshed_at
+          FROM all_rows
+          GROUP BY archetype, classification_source;
+        END IF;
+      END
+      $$;
+    `).catch((e: any) => console.warn("[initDb] archetype_stats MV create skipped:", e?.message));
+
+    // Unique index is REQUIRED for REFRESH MATERIALIZED VIEW CONCURRENTLY.
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS archetype_stats_pk
+        ON archetype_stats (archetype, classification_source)
+    `).catch((e: any) => console.warn("[initDb] archetype_stats_pk skipped:", e?.message));
+
+    // First-time population (non-concurrent; subsequent refreshes via T09
+    // hourly cron will be CONCURRENTLY). Guard against double-refresh on a
+    // fresh DB where the MV is empty by checking pg_stat_user_tables.
+    try {
+      const seedCheck: any = await client.query(`
+        SELECT COUNT(*)::INTEGER AS n FROM archetype_stats
+      `);
+      const seeded = Number(seedCheck?.rows?.[0]?.n || 0);
+      if (seeded === 0) {
+        await client.query(`REFRESH MATERIALIZED VIEW archetype_stats`);
+        console.log("[initDb] archetype_stats MV seeded (initial refresh).");
+      }
+    } catch (e: any) {
+      console.warn("[initDb] archetype_stats initial refresh skipped:", e?.message);
+    }
+
     // ── signal_shadow_inversions (the "Reverse Costanza" backtest) ────────────
     // For every real signal we publish, a mirrored twin (opposite direction,
     // SL/TP reflected across entry) is logged here and resolved against the

@@ -2277,6 +2277,253 @@ export async function registerRoutes(
     res.json(getAutoposterStatus());
   });
 
+  // ── /api/admin/archetype/backfill ─────────────────────────────────────────
+  // Module 2 T06 — admin-triggered 90d 1h-only archetype backfill. Idempotent
+  // by (source_signal_id, classifier_version). Heavy I/O; rate-limited to
+  // one concurrent run per process via the _backfillInFlight guard.
+  let _backfillInFlight = false;
+  let _lastBackfillRun: any = null;
+  app.post("/api/admin/archetype/backfill", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    if (_backfillInFlight) {
+      return res.status(429).json({ error: "backfill_in_flight", lastRun: _lastBackfillRun });
+    }
+    _backfillInFlight = true;
+    try {
+      const { runArchetypeBackfill } = await import("./scripts/backfillArchetypes");
+      const lookbackDays = Math.min(180, Math.max(7, Number(req.body?.lookbackDays) || 90));
+      const maxRows = Math.min(5000, Math.max(50, Number(req.body?.maxRows) || 2000));
+      const summary = await runArchetypeBackfill({ lookbackDays, maxRows });
+      _lastBackfillRun = summary;
+      res.json(summary);
+    } catch (err: any) {
+      console.error("[admin] backfill failed:", err);
+      res.status(500).json({ error: String(err?.message || err) });
+    } finally {
+      _backfillInFlight = false;
+    }
+  });
+
+  // ── /api/admin/archetype/backfill-report ──────────────────────────────────
+  // Side-by-side WR view: live ai_signal_log vs backfilled_classifications,
+  // plus UNRECOVERABLE count. Read-only — safe to call any time.
+  app.get("/api/admin/archetype/backfill-report", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    try {
+      const { getBackfillReport } = await import("./scripts/backfillArchetypes");
+      const report = await getBackfillReport();
+      res.json({ ...report, lastRun: _lastBackfillRun, inFlight: _backfillInFlight });
+    } catch (err: any) {
+      res.status(500).json({ error: String(err?.message || err) });
+    }
+  });
+
+  // ── /api/admin/archetype/refresh-stats ────────────────────────────────────
+  // Module 2 T09 — manual MV refresh button (rate-limited 1/5min across all
+  // admins to protect the DB). The hourly scheduler still runs independently;
+  // this endpoint is for "I just ran the backfill, show me numbers now".
+  let _lastManualRefreshAt = 0;
+  const MANUAL_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+  app.post("/api/admin/archetype/refresh-stats", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    const now = Date.now();
+    if (now - _lastManualRefreshAt < MANUAL_REFRESH_COOLDOWN_MS) {
+      const retryAfterMs = MANUAL_REFRESH_COOLDOWN_MS - (now - _lastManualRefreshAt);
+      return res.status(429).json({
+        error: "cooldown",
+        retry_after_ms: retryAfterMs,
+        message: `Manual refresh allowed once per 5 minutes. Try again in ${Math.ceil(retryAfterMs/1000)}s.`,
+      });
+    }
+    _lastManualRefreshAt = now;
+    try {
+      const { refreshArchetypeStatsMV, getLastRefreshSummary } =
+        await import("./lib/statsMvRefresher");
+      const summary = await refreshArchetypeStatsMV();
+      res.json({ ...summary, last: getLastRefreshSummary() });
+    } catch (err: any) {
+      res.status(500).json({ error: String(err?.message || err) });
+    }
+  });
+
+  // ── /api/admin/archetype/refresh-log ──────────────────────────────────────
+  // Last 24h of MV refresh attempts (success/failure/duration). Powers the
+  // T12 admin panel "Recent refresh log" widget. Read-only.
+  app.get("/api/admin/archetype/refresh-log", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    try {
+      const { sql: dsql } = await import("drizzle-orm");
+      const { db: ddb } = await import("./db");
+      const result: any = await ddb.execute(dsql`
+        SELECT id, started_at, duration_ms, rows_refreshed, success, error_message
+        FROM stats_refresh_log
+        WHERE started_at >= NOW() - INTERVAL '24 hours'
+        ORDER BY started_at DESC
+        LIMIT 100
+      `);
+      const { getLastRefreshSummary, isRefreshInFlight } =
+        await import("./lib/statsMvRefresher");
+      res.json({
+        rows: result?.rows || result || [],
+        last: getLastRefreshSummary(),
+        inFlight: isRefreshInFlight(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: String(err?.message || err) });
+    }
+  });
+
+  // ── /api/admin/archetype/summary ──────────────────────────────────────────
+  // Module 2 T12 — single aggregation endpoint that powers the four admin
+  // sub-panels (coverage, per-endpoint distribution, WR per archetype with
+  // divergence-from-global flag, top UNCLASSIFIED near-miss reasons).
+  // Pure read-only; pulls from ai_signal_log + suppressed_signals +
+  // backfilled_classifications + stats_divergence_log + stats_refresh_log.
+  app.get("/api/admin/archetype/summary", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    try {
+      const { sql: dsql } = await import("drizzle-orm");
+      const { db: ddb } = await import("./db");
+      const lookbackDays = Math.min(180, Math.max(1, Number(req.query?.lookbackDays) || 30));
+
+      // 1) Coverage by asset class (% classified vs UNCLASSIFIED).
+      const coverageQ: any = await ddb.execute(dsql`
+        SELECT
+          COALESCE(NULLIF(market_type,''),'unknown')        AS asset_class,
+          SUM(CASE WHEN archetype IS NOT NULL AND archetype <> 'UNCLASSIFIED' THEN 1 ELSE 0 END) AS classified,
+          SUM(CASE WHEN archetype IS NULL OR archetype = 'UNCLASSIFIED' THEN 1 ELSE 0 END)      AS unclassified,
+          COUNT(*) AS total
+        FROM ai_signal_log
+        WHERE created_at >= NOW() - (${lookbackDays} || ' days')::interval
+        GROUP BY 1
+        ORDER BY total DESC
+      `);
+
+      // 2) Per-endpoint distribution from classification_diagnostics.source_endpoint.
+      // Fail-open: if the column was added but no rows populated it yet, returns [].
+      const endpointQ: any = await ddb.execute(dsql`
+        SELECT
+          COALESCE(classification_diagnostics->>'source_endpoint','unknown') AS endpoint,
+          COALESCE(archetype,'UNCLASSIFIED') AS archetype,
+          COUNT(*) AS n
+        FROM ai_signal_log
+        WHERE created_at >= NOW() - (${lookbackDays} || ' days')::interval
+        GROUP BY 1, 2
+        ORDER BY 1, 3 DESC
+      `);
+
+      // 3) WR per archetype: live | backfill | combined, plus global WR for
+      // divergence flagging. Wins == any TP hit or EXPIRED_WIN.
+      const wrQ: any = await ddb.execute(dsql`
+        WITH live AS (
+          SELECT COALESCE(archetype,'UNCLASSIFIED') AS archetype,
+                 COUNT(*) FILTER (WHERE outcome IS NOT NULL AND outcome <> 'PENDING') AS n,
+                 SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) AS wins
+          FROM ai_signal_log
+          WHERE created_at >= NOW() - (${lookbackDays} || ' days')::interval
+          GROUP BY 1
+        ),
+        backfill AS (
+          SELECT bc.archetype AS archetype,
+                 COUNT(*) FILTER (WHERE asl.outcome IS NOT NULL AND asl.outcome <> 'PENDING') AS n,
+                 SUM(CASE WHEN asl.outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) AS wins
+          FROM backfilled_classifications bc
+          JOIN ai_signal_log asl ON asl.id = bc.source_signal_id
+          WHERE asl.created_at >= NOW() - (${lookbackDays} || ' days')::interval
+            -- Strip sentinel rows so they can't dilute combined WR / divergence.
+            AND bc.archetype NOT IN ('BACKFILL_UNRECOVERABLE','SKIPPED_ARCHETYPE_NOT_ALLOWED')
+          GROUP BY 1
+        )
+        SELECT
+          COALESCE(live.archetype, backfill.archetype) AS archetype,
+          COALESCE(live.n, 0)        AS live_n,
+          COALESCE(live.wins, 0)     AS live_wins,
+          COALESCE(backfill.n, 0)    AS bf_n,
+          COALESCE(backfill.wins, 0) AS bf_wins
+        FROM live
+        FULL OUTER JOIN backfill USING (archetype)
+        ORDER BY (COALESCE(live.n,0) + COALESCE(backfill.n,0)) DESC
+      `);
+
+      // 4) Top near-miss reasons for UNCLASSIFIED, mined from
+      // classification_diagnostics.clauses_fired (empty array == nothing fired).
+      const nearMissQ: any = await ddb.execute(dsql`
+        SELECT
+          COALESCE(classification_diagnostics->>'near_miss_reason','no_reason_recorded') AS reason,
+          COUNT(*) AS n
+        FROM ai_signal_log
+        WHERE created_at >= NOW() - (${lookbackDays} || ' days')::interval
+          AND (archetype IS NULL OR archetype = 'UNCLASSIFIED')
+          AND classification_diagnostics IS NOT NULL
+        GROUP BY 1
+        ORDER BY n DESC
+        LIMIT 5
+      `);
+
+      // 5) Recent stats_divergence_log (last 7d, >1pp on LCB).
+      const divergenceQ: any = await ddb.execute(dsql`
+        SELECT id, ts, archetype, ts_n, mv_n, ts_wr_lcb, mv_wr_lcb, divergence_abs
+        FROM stats_divergence_log
+        WHERE ts >= NOW() - INTERVAL '7 days'
+        ORDER BY divergence_abs DESC
+        LIMIT 20
+      `);
+
+      const rows = (q: any): any[] => q?.rows || q || [];
+
+      // Compute global WR for divergence flagging in WR panel.
+      const wrRows = rows(wrQ).map((r: any) => {
+        const liveN = Number(r.live_n) || 0;
+        const liveW = Number(r.live_wins) || 0;
+        const bfN   = Number(r.bf_n)   || 0;
+        const bfW   = Number(r.bf_wins) || 0;
+        return {
+          archetype: r.archetype,
+          live: { n: liveN, wins: liveW, wr: liveN > 0 ? liveW / liveN : null },
+          backfill: { n: bfN, wins: bfW, wr: bfN > 0 ? bfW / bfN : null },
+          combined: {
+            n: liveN + bfN,
+            wins: liveW + bfW,
+            wr: (liveN + bfN) > 0 ? (liveW + bfW) / (liveN + bfN) : null,
+          },
+        };
+      });
+      const totalN = wrRows.reduce((s, r) => s + r.combined.n, 0);
+      const totalW = wrRows.reduce((s, r) => s + r.combined.wins, 0);
+      const globalWr = totalN > 0 ? totalW / totalN : null;
+      for (const r of wrRows) {
+        (r as any).divergent_15pp = globalWr != null && r.combined.wr != null
+          && Math.abs(r.combined.wr - globalWr) >= 0.15;
+      }
+
+      // Pull last refresh metadata.
+      let lastRefresh: any = null;
+      try {
+        const { getLastRefreshSummary } = await import("./lib/statsMvRefresher");
+        lastRefresh = getLastRefreshSummary();
+      } catch { /* fall-open */ }
+
+      res.json({
+        lookback_days: lookbackDays,
+        coverage_by_asset_class: rows(coverageQ),
+        endpoint_distribution: rows(endpointQ),
+        wr_per_archetype: wrRows,
+        global_wr: globalWr,
+        top_unclassified_reasons: rows(nearMissQ),
+        recent_divergences: rows(divergenceQ),
+        last_refresh: lastRefresh,
+      });
+    } catch (err: any) {
+      console.error("[admin] archetype summary failed:", err);
+      res.status(500).json({ error: String(err?.message || err) });
+    }
+  });
+
   // ── /api/admin/autoposter/test-send ──────────────────────────────────────
   // Admin-only: fire a single TEST trade idea to the autoposter webhook so
   // the owner can verify the Telegram pipeline end-to-end (caption, hashtags,
@@ -6114,6 +6361,14 @@ Every level must be technically defensible. Return JSON only.`;
             } catch (wideErr) {
               // keep narrow fallback; classifier will gate atrDaily appropriately
             }
+            // Module 2: pull funding/OI through the shared snapshot helper so
+            // diagnostics distinguish "ok" / "unavailable" / "no_concept"
+            // identically across /api/quant, /api/ai/analyze, /api/kronos.
+            // /api/quant is crypto-only today (HL universe) but the helper
+            // accepts the asset class so future equity wiring is consistent.
+            const { getMicrostructureSnapshot, buildClassificationDiagnostics } =
+              await import("./lib/microstructureSnapshot");
+            const microQ = getMicrostructureSnapshot(ticker, "crypto");
             const archCtx = buildArchetypeContext({
               token: ticker,
               direction: hdDir,
@@ -6124,7 +6379,7 @@ Every level must be technically defensible. Return JSON only.`;
                 volume: Number(c.volume ?? c.v ?? 0),
                 timestamp: Number(c.timestamp ?? c.t ?? c.time ?? 0),
               })),
-              fundingRate: hlCtx?.funding != null ? Number(hlCtx.funding) : undefined,
+              fundingRate: microQ.fundingStatus === "ok" ? (microQ.funding ?? undefined) : undefined,
               oiChange6hPct: getOiChangePct(ticker),
               newsContext: (parsed as any).newsContext || (typeof newsImpactLong !== "undefined" ? newsImpactLong : undefined),
             });
@@ -6132,7 +6387,44 @@ Every level must be technically defensible. Return JSON only.`;
             (parsed as any).archetype = archResult.archetype;
             (parsed as any).archetype_confidence = +archResult.confidence.toFixed(2);
             (parsed as any).archetype_reason = archResult.reason;
+            (parsed as any).archetype_diagnostics = buildClassificationDiagnostics({
+              ctx: archCtx as unknown as Record<string, unknown>,
+              micro: microQ,
+              clausesFired: archResult.archetype !== "UNCLASSIFIED" ? [archResult.archetype.toLowerCase()] : [],
+              sourceEndpoint: "quant",
+            });
             console.log(`[ARCHETYPE] ${ticker} ${hdDir} → ${archResult.archetype} (conf=${archResult.confidence.toFixed(2)}): ${archResult.reason}`);
+
+            // ── Module 2 T05 — UNCLASSIFIED shadow/hot suppression. In shadow
+            // mode (default) we still publish but write a row so admin can
+            // measure footprint. In hot mode we early-return with a SUPPRESSED
+            // payload AND write the row. Fail-open per-row.
+            if (archResult.archetype === "UNCLASSIFIED") {
+              try {
+                const { archetypeSuppressionEnabled } = await import("./lib/featureFlags");
+                const { logSuppressedSignal } = await import("./lib/suppressedSignalsLog");
+                const hot = archetypeSuppressionEnabled();
+                logSuppressedSignal({
+                  ticker, intendedDirection: hdDir, assetClass: cls,
+                  sourceEndpoint: "quant",
+                  reason: hot ? "suppressed_no_archetype" : "would_suppress_no_archetype",
+                  rawSignalPayload: {
+                    signal: parsed.signal, entry: parsed.entry?.price,
+                    sl: parsed.stopLoss?.price, tp1: parsed.tp1?.price,
+                    conviction: parsed.conviction,
+                  },
+                  classificationDiagnostics: (parsed as any).archetype_diagnostics ?? null,
+                }).catch(() => {});
+                if (hot) {
+                  parsed.signal = "SUPPRESSED";
+                  parsed.suppressed = true;
+                  parsed.suppression_message = "No matching setup archetype detected — signal withheld.";
+                  parsed.suppression_rules = ["no_archetype"];
+                  return res.json(parsed);
+                }
+              } catch { /* shadow log is best-effort */ }
+            }
+
             const flipTo = shouldFlipForMeanReversion(archResult.archetype, archCtx.dayOpen, archCtx.price);
             if (flipTo && flipTo !== hdDir) {
               // FLIP: mean-reversion exhaustion fade. Edge policy / brain check
@@ -6176,6 +6468,7 @@ Every level must be technically defensible. Return JSON only.`;
                   losses: stats.losses,
                   wr_point: +stats.wrPointEst.toFixed(4),
                   wr_wilson_lb: +stats.wrWilsonLB.toFixed(4),
+                  wr_wilson_lb_80: +stats.wrWilsonLB80.toFixed(4),
                   median_r: +stats.medianR.toFixed(2),
                   p75_hold_min: Math.round(stats.p75HoldMinutes),
                   median_time_to_tp_min: Math.round(stats.medianTimeToTpMin),
@@ -6380,6 +6673,8 @@ Every level must be technically defensible. Return JSON only.`;
           scores: { bayesian: bayesian?.probability, advanced: adjScore, confluence: confluence?.direction },
           pwin: _pwin,
           archetype: (parsed as any).archetype || undefined,
+          classificationSource: "live",
+          classificationDiagnostics: (parsed as any).archetype_diagnostics || undefined,
           newsContext: (() => {
             const dir = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
             const ni = dir === "LONG" ? newsImpactLong : newsImpactShort;
@@ -7064,6 +7359,103 @@ Every level must be technically defensible. Return JSON only.`;
           return; // drop card
         }
 
+        // ── Module 2 (Setup Taxonomy) — classify AFTER edge policy + hardener
+        // so the archetype reflects the FINAL direction the user sees on the
+        // card. /api/ai/analyze does NOT auto-flip on MEAN_REVERSION_EXHAUSTION
+        // (that's a /api/quant scanner concern); instead we expose a
+        // `recommendedFlip` boolean so the UI can warn. Fail-open: any error
+        // leaves archetype undefined and the card publishes normally.
+        let cardArchetype: string | undefined;
+        let cardArchetypeStats: any = undefined;
+        let cardArchetypeDiagnostics: any = undefined;
+        let cardArchetypeConfidence: number | undefined;
+        let cardArchetypeReason: string | undefined;
+        let cardRecommendedFlip: boolean = false;
+        try {
+          const { classifyArchetype, buildArchetypeContext, shouldFlipForMeanReversion, ARCHETYPE_LOOKBACK_1H } =
+            await import("./lib/archetype");
+          const { getMicrostructureSnapshot, buildClassificationDiagnostics } =
+            await import("./lib/microstructureSnapshot");
+          const microClass: "crypto" | "equity" | "commodity" | "fx" =
+            cls === "crypto" ? "crypto" :
+            cls === "equity" ? "equity" :
+            cls === "commodity" ? "commodity" : "fx";
+          // 336-bar fetch (same as /api/quant), fail-open to whatever we get.
+          let archBars: any[] = [];
+          try {
+            archBars = await fetchQuantCandles(symbol, cls, "1h", ARCHETYPE_LOOKBACK_1H);
+          } catch { archBars = []; }
+          if (Array.isArray(archBars) && archBars.length >= 24) {
+            const micro = getMicrostructureSnapshot(symbol, microClass);
+            const archCtx = buildArchetypeContext({
+              token: symbol,
+              direction,
+              price: entry,
+              candles1h: archBars.map((c: any) => ({
+                open: Number(c.open ?? c.o), high: Number(c.high ?? c.h),
+                low: Number(c.low ?? c.l), close: Number(c.close ?? c.c),
+                volume: Number(c.volume ?? c.v ?? 0),
+                timestamp: Number(c.timestamp ?? c.t ?? c.time ?? 0),
+              })),
+              fundingRate: micro.fundingStatus === "ok" ? (micro.funding ?? undefined) : undefined,
+              oiChange6hPct: getOiChangePct(symbol),
+            });
+            const archResult = classifyArchetype(archCtx);
+            cardArchetype = archResult.archetype;
+            cardArchetypeConfidence = +archResult.confidence.toFixed(2);
+            cardArchetypeReason = archResult.reason;
+            cardArchetypeDiagnostics = buildClassificationDiagnostics({
+              ctx: archCtx as unknown as Record<string, unknown>,
+              micro,
+              clausesFired: archResult.archetype !== "UNCLASSIFIED" ? [archResult.archetype.toLowerCase()] : [],
+              sourceEndpoint: "analyze",
+            });
+            // recommendedFlip: hint only — /analyze does NOT auto-flip
+            const flipTo = shouldFlipForMeanReversion(archResult.archetype, archCtx.dayOpen, archCtx.price);
+            cardRecommendedFlip = !!(flipTo && flipTo !== direction);
+            // ── Module 2 T05 — UNCLASSIFIED shadow logging per card. In hot
+            // mode the entire card is dropped (return without writing to out[]).
+            if (cardArchetype === "UNCLASSIFIED") {
+              try {
+                const { archetypeSuppressionEnabled } = await import("./lib/featureFlags");
+                const { logSuppressedSignal } = await import("./lib/suppressedSignalsLog");
+                const hot = archetypeSuppressionEnabled();
+                logSuppressedSignal({
+                  ticker: symbol, intendedDirection: direction, assetClass: cls,
+                  sourceEndpoint: "analyze",
+                  reason: hot ? "suppressed_no_archetype" : "would_suppress_no_archetype",
+                  rawSignalPayload: {
+                    entry, sl: card.stopLoss, tp1: card.tp1, conviction: card.conviction,
+                  },
+                  classificationDiagnostics: cardArchetypeDiagnostics ?? null,
+                }).catch(() => {});
+                if (hot) { vetoed++; dropped++; return; }
+              } catch { /* shadow log is best-effort */ }
+            }
+            if (cardArchetype && cardArchetype !== "UNCLASSIFIED") {
+              try {
+                const { getArchetypeStats } = await import("./lib/statisticalBrain");
+                const s = await getArchetypeStats(symbol, direction, cardArchetype as any);
+                if (s && s.n > 0) {
+                  cardArchetypeStats = {
+                    n: s.n, wins: s.wins, losses: s.losses,
+                    wr_point: +s.wrPointEst.toFixed(4),
+                    wr_wilson_lb: +s.wrWilsonLB.toFixed(4),
+                    wr_wilson_lb_80: +s.wrWilsonLB80.toFixed(4),
+                    median_r: +s.medianR.toFixed(2),
+                    p75_hold_min: Math.round(s.p75HoldMinutes),
+                    median_time_to_tp_min: Math.round(s.medianTimeToTpMin),
+                    median_time_to_sl_min: Math.round(s.medianTimeToSlMin),
+                    low_sample: s.lowSample,
+                  };
+                }
+              } catch { /* fail-open */ }
+            }
+          }
+        } catch (archErr: any) {
+          console.warn(`[analyze ARCHETYPE] ${symbol} fail-open:`, archErr?.message || archErr);
+        }
+
         // Optional prose regen if numbers/flags moved materially
         let thesis: string = card.thesis || "";
         if (h.materiallyMutated) {
@@ -7134,6 +7526,12 @@ Every level must be technically defensible. Return JSON only.`;
             recalibratedConvictionPct: edge.recalibratedConvictionPct,
             reason: edge.reason,
           },
+          archetype: cardArchetype,
+          archetype_confidence: cardArchetypeConfidence,
+          archetype_reason: cardArchetypeReason,
+          archetype_stats: cardArchetypeStats,
+          archetype_diagnostics: cardArchetypeDiagnostics,
+          recommendedFlip: cardRecommendedFlip,
         };
       } catch (e: any) {
         console.warn(`[hardenTradeIdeas] card ${idx} skipped:`, e?.message || e);
@@ -7968,6 +8366,90 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   reason: edgeK.reason,
                 };
               parsed.ensemble_confidence = Math.round(hK.finalConviction * 100);
+              // ── Module 2 (Setup Taxonomy) — classify the FINAL (post-edge,
+              // post-hardener) Kronos plan. Like /api/ai/analyze, /api/kronos
+              // does NOT auto-flip; it surfaces `recommendedFlip` for the UI.
+              // Crypto-only today (Kronos universe is HL perps + select majors);
+              // helper handles class-awareness if equities are added later.
+              try {
+                const { classifyArchetype, buildArchetypeContext, shouldFlipForMeanReversion, ARCHETYPE_LOOKBACK_1H } =
+                  await import("./lib/archetype");
+                const { getMicrostructureSnapshot, buildClassificationDiagnostics } =
+                  await import("./lib/microstructureSnapshot");
+                let archBarsK: any[] = [];
+                try {
+                  archBarsK = await fetchQuantCandles(symbolK, "crypto", "1h", ARCHETYPE_LOOKBACK_1H);
+                } catch { archBarsK = []; }
+                if (Array.isArray(archBarsK) && archBarsK.length >= 24) {
+                  const microK = getMicrostructureSnapshot(symbolK, "crypto");
+                  const archCtxK = buildArchetypeContext({
+                    token: symbolK,
+                    direction: dirK,
+                    price: e,
+                    candles1h: archBarsK.map((c: any) => ({
+                      open: Number(c.open ?? c.o), high: Number(c.high ?? c.h),
+                      low: Number(c.low ?? c.l), close: Number(c.close ?? c.c),
+                      volume: Number(c.volume ?? c.v ?? 0),
+                      timestamp: Number(c.timestamp ?? c.t ?? c.time ?? 0),
+                    })),
+                    fundingRate: microK.fundingStatus === "ok" ? (microK.funding ?? undefined) : undefined,
+                    oiChange6hPct: getOiChangePct(symbolK),
+                  });
+                  const archResK = classifyArchetype(archCtxK);
+                  (parsed as any).archetype = archResK.archetype;
+                  (parsed as any).archetype_confidence = +archResK.confidence.toFixed(2);
+                  (parsed as any).archetype_reason = archResK.reason;
+                  (parsed as any).archetype_diagnostics = buildClassificationDiagnostics({
+                    ctx: archCtxK as unknown as Record<string, unknown>,
+                    micro: microK,
+                    clausesFired: archResK.archetype !== "UNCLASSIFIED" ? [archResK.archetype.toLowerCase()] : [],
+                    sourceEndpoint: "kronos",
+                  });
+                  const flipToK = shouldFlipForMeanReversion(archResK.archetype, archCtxK.dayOpen, archCtxK.price);
+                  (parsed as any).recommendedFlip = !!(flipToK && flipToK !== dirK);
+                  // Module 2 T05 — UNCLASSIFIED shadow log. Hot mode marks the
+                  // Kronos response as suppressed (UI will hide the trade plan).
+                  if (archResK.archetype === "UNCLASSIFIED") {
+                    try {
+                      const { archetypeSuppressionEnabled } = await import("./lib/featureFlags");
+                      const { logSuppressedSignal } = await import("./lib/suppressedSignalsLog");
+                      const hot = archetypeSuppressionEnabled();
+                      logSuppressedSignal({
+                        ticker: symbolK, intendedDirection: dirK, assetClass: "crypto",
+                        sourceEndpoint: "kronos",
+                        reason: hot ? "suppressed_no_archetype" : "would_suppress_no_archetype",
+                        rawSignalPayload: { entry: e, conviction: hK.finalConviction },
+                        classificationDiagnostics: (parsed as any).archetype_diagnostics ?? null,
+                      }).catch(() => {});
+                      if (hot) {
+                        (parsed as any).suppressed = true;
+                        (parsed as any).suppression_message = "No matching setup archetype detected — Kronos plan withheld.";
+                      }
+                    } catch { /* shadow log is best-effort */ }
+                  }
+                  if (archResK.archetype && archResK.archetype !== "UNCLASSIFIED") {
+                    try {
+                      const { getArchetypeStats } = await import("./lib/statisticalBrain");
+                      const sK = await getArchetypeStats(symbolK, dirK, archResK.archetype as any);
+                      if (sK && sK.n > 0) {
+                        (parsed as any).archetype_stats = {
+                          n: sK.n, wins: sK.wins, losses: sK.losses,
+                          wr_point: +sK.wrPointEst.toFixed(4),
+                          wr_wilson_lb: +sK.wrWilsonLB.toFixed(4),
+                          wr_wilson_lb_80: +sK.wrWilsonLB80.toFixed(4),
+                          median_r: +sK.medianR.toFixed(2),
+                          p75_hold_min: Math.round(sK.p75HoldMinutes),
+                          median_time_to_tp_min: Math.round(sK.medianTimeToTpMin),
+                          median_time_to_sl_min: Math.round(sK.medianTimeToSlMin),
+                          low_sample: sK.lowSample,
+                        };
+                      }
+                    } catch { /* fail-open */ }
+                  }
+                }
+              } catch (archErrK: any) {
+                console.warn(`[kronos ARCHETYPE] ${symbolK} fail-open:`, archErrK?.message || archErrK);
+              }
               parsed.hardener = {
                 applied: true,
                 sizeMultiplier: parseFloat(hK.sizeMultiplier.toFixed(3)),

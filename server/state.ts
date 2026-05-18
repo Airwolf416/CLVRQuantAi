@@ -7,12 +7,17 @@
 import type { Response } from "express";
 
 // ── Hyperliquid perp market data ──────────────────────────────────────────────
+// `ts` is the wall-clock ms when this entry was last refreshed by the HL worker.
+// Module 2 microstructure snapshot uses it for per-asset staleness checks (funding
+// >30min stale → "unavailable", OI >5min stale → "unavailable"). Field is optional
+// for backward compatibility — readers that don't care can ignore it.
 export const hlData: Record<string, {
   funding: number;
   oi: number;
   perpPrice: number;
   volume: number;
   dayChg: number;
+  ts?: number;
 }> = {};
 
 // ── Rolling 15-min price history (all symbols) ────────────────────────────────

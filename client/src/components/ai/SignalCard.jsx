@@ -76,18 +76,29 @@ export default function SignalCard({ ticker, result, rank, mode }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 900, color: "#e0e0e0", fontFamily: MONO }}>#{rank + 1}</span>
             <span style={{ fontSize: 14, fontWeight: 900, color: "#e0e0e0", fontFamily: SERIF }}>{ticker}/USDT</span>
-            {result.archetype && result.archetype !== "UNCLASSIFIED" && (() => {
+            {result.archetype && (() => {
+              // Module 2 T11 — abbreviated badges per spec. Full archetype
+              // name + reason still surface in the tooltip so the
+              // information density of Module 1 is preserved.
               const palette = {
-                NEWS_MOMO:                 { fg: "#f87171", bg: "rgba(248,113,113,0.12)", bd: "#f8717155", label: "NEWS MOMO" },
-                MEAN_REVERSION_EXHAUSTION: { fg: "#a78bfa", bg: "rgba(167,139,250,0.12)", bd: "#a78bfa55", label: "MEAN REV" },
-                BREAKOUT_RETEST:           { fg: "#22d3ee", bg: "rgba(34,211,238,0.12)",  bd: "#22d3ee55", label: "BREAKOUT" },
-                VWAP_RECLAIM:              { fg: "#34d399", bg: "rgba(52,211,153,0.12)",  bd: "#34d39955", label: "VWAP RECLAIM" },
-                TREND_PULLBACK:            { fg: "#fbbf24", bg: "rgba(251,191,36,0.12)",  bd: "#fbbf2455", label: "TREND PULLBACK" },
-                RANGE_FADE:                { fg: "#94a3b8", bg: "rgba(148,163,184,0.12)", bd: "#94a3b855", label: "RANGE FADE" },
+                NEWS_MOMO:                 { fg: "#f87171", bg: "rgba(248,113,113,0.12)", bd: "#f8717155", label: "NEWS" },
+                MEAN_REVERSION_EXHAUSTION: { fg: "#a78bfa", bg: "rgba(167,139,250,0.12)", bd: "#a78bfa55", label: "MEAN-REV" },
+                BREAKOUT_RETEST:           { fg: "#22d3ee", bg: "rgba(34,211,238,0.12)",  bd: "#22d3ee55", label: "BREAKOUT-RT" },
+                VWAP_RECLAIM:              { fg: "#34d399", bg: "rgba(52,211,153,0.12)",  bd: "#34d39955", label: "VWAP-RCLM" },
+                TREND_PULLBACK:            { fg: "#fbbf24", bg: "rgba(251,191,36,0.12)",  bd: "#fbbf2455", label: "PULLBACK" },
+                RANGE_FADE:                { fg: "#94a3b8", bg: "rgba(148,163,184,0.12)", bd: "#94a3b855", label: "RANGE" },
+                UNCLASSIFIED:              { fg: "#6b7280", bg: "rgba(107,114,128,0.10)", bd: "#6b728044", label: "UNCLASSIFIED — exp" },
               }[result.archetype] || { fg: "#94a3b8", bg: "rgba(148,163,184,0.10)", bd: "#94a3b833", label: result.archetype };
+              // Hide the UNCLASSIFIED experimental badge unless the display
+              // flag is on — keeps the default UI clean during the shadow
+              // rollout while admin still gets full visibility via diagnostics.
+              const useArchDisplay = String(import.meta.env.VITE_USE_ARCHETYPE_DISPLAY || "").toLowerCase() === "true";
+              if (result.archetype === "UNCLASSIFIED" && !useArchDisplay) return null;
               const tip = result.archetype_reason
                 ? `${result.archetype} · ${result.archetype_reason}${result.archetype_flipped_from ? ` · direction flipped from ${result.archetype_flipped_from} (fade)` : ""}`
-                : result.archetype;
+                : result.archetype === "UNCLASSIFIED"
+                  ? "No matching setup archetype — published in shadow mode for measurement"
+                  : result.archetype;
               return (
                 <span
                   data-testid={`badge-archetype-${ticker}`}
@@ -195,10 +206,16 @@ export default function SignalCard({ ticker, result, rank, mode }) {
 
       {result.archetype_stats && result.archetype_stats.n > 0 && (() => {
         const s = result.archetype_stats;
-        const wrPct = (s.wr_point * 100).toFixed(0);
-        const wlbPct = (s.wr_wilson_lb * 100).toFixed(0);
+        // Module 2 T04: Wilson 80% LCB is the primary display number. Fall back
+        // to 95% LB if the server hasn't been updated yet (one-release transition).
+        const lcb80 = (typeof s.wr_wilson_lb_80 === "number" ? s.wr_wilson_lb_80 : s.wr_wilson_lb) ?? 0;
+        const rawPct = (s.wr_point * 100).toFixed(0);
+        const lcb80Pct = (lcb80 * 100).toFixed(0);
+        const wlb95Pct = (s.wr_wilson_lb * 100).toFixed(0);
         const holdHrs = s.p75_hold_min > 60 ? `${(s.p75_hold_min / 60).toFixed(1)}h` : `${s.p75_hold_min}m`;
         const archLabel = (result.archetype || "").replace(/_/g, " ");
+        // Color thresholds tuned for 80% LCB (gentler than 95% LB cutoffs)
+        const wrColor = lcb80 >= 0.55 ? "#22c55e" : lcb80 >= 0.40 ? "#f59e0b" : "#ef4444";
         return (
           <div
             data-testid={`archetype-stats-${ticker}`}
@@ -209,7 +226,7 @@ export default function SignalCard({ ticker, result, rank, mode }) {
             }}
           >
             {s.low_sample && (
-              <span title={`Only ${s.n} resolved trades for this combo — Wilson 95% LB used for honest sizing`} style={{
+              <span title={`Only ${s.n} resolved trades for this combo — Wilson 80% lower bound shown to be honest about uncertainty`} style={{
                 fontSize: 8, fontWeight: 800, color: "#f59e0b",
                 background: "rgba(245,158,11,0.10)", border: "1px solid #f59e0b55",
                 borderRadius: 4, padding: "2px 6px", fontFamily: MONO, letterSpacing: "0.04em",
@@ -218,8 +235,17 @@ export default function SignalCard({ ticker, result, rank, mode }) {
             <span style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", fontFamily: MONO, letterSpacing: "0.04em" }}>
               {archLabel} WR:
             </span>
-            <span title={`Point estimate ${wrPct}% · Wilson 95% lower bound ${wlbPct}%`} style={{ fontSize: 11, fontWeight: 800, color: s.wr_wilson_lb >= 0.5 ? "#22c55e" : s.wr_wilson_lb >= 0.35 ? "#f59e0b" : "#ef4444", fontFamily: MONO }}>
-              {wrPct}% <span style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.45)" }}>(LB {wlbPct}%, n={s.n})</span>
+            <span
+              title={`Wilson 80% lower bound (display default). Point estimate ${rawPct}% · Wilson 95% LB ${wlb95Pct}%`}
+              style={{ fontSize: 11, fontWeight: 800, color: wrColor, fontFamily: MONO }}
+              data-testid={`text-archetype-wr-${ticker}`}
+            >
+              {lcb80Pct}%
+              {s.low_sample ? (
+                <span style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.45)" }}> (n={s.n}, raw {rawPct}%)</span>
+              ) : (
+                <span style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.45)" }}> (n={s.n})</span>
+              )}
             </span>
             <span style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", fontFamily: MONO }}>·</span>
             <span title="Median realized R-multiple on resolved trades for this archetype" style={{ fontSize: 10, fontWeight: 700, color: "#e0e0e0", fontFamily: MONO }}>
