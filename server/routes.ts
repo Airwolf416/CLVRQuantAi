@@ -2394,7 +2394,7 @@ export async function registerRoutes(
       // 1) Coverage by asset class (% classified vs UNCLASSIFIED).
       const coverageQ: any = await ddb.execute(dsql`
         SELECT
-          COALESCE(NULLIF(market_type,''),'unknown')        AS asset_class,
+          COALESCE(NULLIF(trade_type,''),'unknown')         AS asset_class,
           SUM(CASE WHEN archetype IS NOT NULL AND archetype <> 'UNCLASSIFIED' THEN 1 ELSE 0 END) AS classified,
           SUM(CASE WHEN archetype IS NULL OR archetype = 'UNCLASSIFIED' THEN 1 ELSE 0 END)      AS unclassified,
           COUNT(*) AS total
