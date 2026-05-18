@@ -650,7 +650,7 @@ export async function initializeDatabase(): Promise<void> {
             WHERE sl.outcome IS NOT NULL AND sl.outcome <> 'PENDING'
               AND sl.resolved_at IS NOT NULL
           ),
-          trailing AS (SELECT * FROM recent WHERE rn <= 50)
+          trailing50 AS (SELECT * FROM recent WHERE rn <= 50)
           SELECT
             archetype,
             vol_regime,
@@ -666,9 +666,9 @@ export async function initializeDatabase(): Promise<void> {
               SELECT ARRAY_AGG(tag ORDER BY cnt DESC)
               FROM (
                 SELECT primary_tag AS tag, COUNT(*) AS cnt
-                FROM trailing t2
-                WHERE t2.archetype = trailing.archetype
-                  AND COALESCE(t2.vol_regime, '') = COALESCE(trailing.vol_regime, '')
+                FROM trailing50 t2
+                WHERE t2.archetype = trailing50.archetype
+                  AND COALESCE(t2.vol_regime, '') = COALESCE(trailing50.vol_regime, '')
                   AND primary_tag IS NOT NULL
                 GROUP BY 1
                 ORDER BY cnt DESC
@@ -676,7 +676,7 @@ export async function initializeDatabase(): Promise<void> {
               ) sub
             ) AS top_3_diagnosis_tags,
             NOW() AS last_updated
-          FROM trailing
+          FROM trailing50
           GROUP BY archetype, vol_regime;
         END IF;
       END$$;

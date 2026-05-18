@@ -2001,7 +2001,7 @@ function SignalsDiagnosisPanel(){
     let alive=true;
     (async()=>{
       try{
-        const r=await fetch("/api/journal",{credentials:"same-origin"});
+        const r=await fetch("/api/journal/diagnoses",{credentials:"same-origin"});
         if(!r.ok){if(alive)setData(d=>({...d,loading:false,error:`HTTP ${r.status}`}));return;}
         const j=await r.json();
         if(alive)setData({trades:Array.isArray(j?.trades)?j.trades:[],displayEnabled:!!j?.displayEnabled,loading:false,error:""});
@@ -2030,13 +2030,14 @@ function SignalsDiagnosisPanel(){
       </div>
     );
   }
-  // Chip color mapping per spec: green=clean win, yellow=neutral/meta,
-  // red=clean loss, grey=PENDING/UNCLASSIFIED.
+  // Chip color mapping aligned with PrimaryTag taxonomy in
+  // server/lib/postTradeAnalyzer.ts (chipColor()) — green=clean win,
+  // amber=neutral/meta, red=clean loss, grey=PENDING/fallback.
   const chipColor=(tag)=>{
-    const T=String(tag||"").toUpperCase();
-    if(["TP_HIT_AS_DESIGNED","CLEAN_WINNER","STRUCTURAL_WIN","TP_HIT_ON_TREND"].includes(T))return{bg:"#0e3b1f",fg:"#7eedb1",bd:"#1f8f4a"};
-    if(["STOP_TOO_TIGHT","CHASED_ENTRY","WRONG_DIRECTION","SL_HIT_IMMEDIATE","REGIME_MISMATCH"].includes(T))return{bg:"#3b0e14",fg:"#ff8b97",bd:"#a0303a"};
-    if(["LOW_SAMPLE_ARCHETYPE","COUNTER_TREND_WARNING_IGNORED","MACRO_EVENT_OVERLAP","STALE_FLAT_PREMATURE","THESIS_INVALIDATED","BREAKEVEN_DRIFT","PARTIAL_WIN_THEN_STALL"].includes(T))return{bg:"#3a2d0a",fg:"#f0c970",bd:"#9a7b22"};
+    const T=String(tag||"").toLowerCase();
+    if(["clean_win","runner_win","thesis_invalidated_correctly","stale_flat_correct"].includes(T))return{bg:"#0e3b1f",fg:"#7eedb1",bd:"#1f8f4a"};
+    if(["chop_win","stop_too_tight","early_exit_left_money","right_idea_wrong_timing"].includes(T))return{bg:"#3a2d0a",fg:"#f0c970",bd:"#9a7b22"};
+    if(["regime_misclassified","archetype_mismatch","chased_entry","stop_too_wide","stale_flat_premature"].includes(T))return{bg:"#3b0e14",fg:"#ff8b97",bd:"#a0303a"};
     return{bg:"#1c2231",fg:"#b0b8c8",bd:"#2c3548"};
   };
   return(

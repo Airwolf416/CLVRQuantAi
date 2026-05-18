@@ -11003,7 +11003,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
   // /api/admin/pta/*       — admin tools (one-shot worker + on-demand report)
   // All endpoints fail-soft: if the PTA tables are missing or queries throw,
   // we return an empty payload rather than 500 the page.
-  app.get("/api/journal", async (req: any, res) => {
+  app.get("/api/journal/diagnoses", async (req: any, res) => {
     try {
       const userId = req.session?.userId || null;
       if (!userId) return res.status(401).json({ error: "auth_required" });
