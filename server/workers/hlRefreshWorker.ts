@@ -48,6 +48,7 @@ export async function runHlTick(onPricesUpdated: () => void): Promise<void> {
       perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) * scale : 0,
       volume:    parseFloat(ctxs[i]?.dayNtlVlm     || 0),
       dayChg,
+      ts:        Date.now(), // Module 2: per-asset freshness for microstructure staleness
     };
     if (markPx > 0) recordPrice(appName, markPx);
   });

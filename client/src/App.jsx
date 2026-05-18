@@ -23,6 +23,7 @@ import InsiderTab from "./tabs/InsiderTab";
 import KronosPanel from "./components/KronosPanel";
 import AIQuantTab from "./tabs/AITab";
 import PricingModal from "./components/PricingModal.jsx";
+import ArchetypeAdminPanel from "./components/admin/ArchetypeAdminPanel.jsx";
 import MyBasket from "./components/MyBasket.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
@@ -4144,6 +4145,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     ...(isAdmin?[{k:"track",icon:"📈",label:"RECORD"}]:[]),
     ...(isAdmin?[{k:"rejections",icon:"🚫",label:"REJECTS"}]:[]),
     ...(isAdmin?[{k:"candidates",icon:"📋",label:"REVIEW"}]:[]),
+    ...(isAdmin?[{k:"archetypes",icon:"🧬",label:"ARCH"}]:[]),
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -5587,6 +5589,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {tab==="rejections"&&isAdmin&&<AdminRejectionsTab/>}
 
         {tab==="candidates"&&isAdmin&&<AdminCandidatesTab/>}
+
+        {tab==="archetypes"&&isAdmin&&<ArchetypeAdminPanel/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>

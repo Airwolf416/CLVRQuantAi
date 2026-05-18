@@ -464,7 +464,9 @@ export interface ArchetypeStats {
   wins: number;
   losses: number;
   wrPointEst: number;          // 0..1
+  /** @deprecated kept for one release; use wrWilsonLB80 for display. */
   wrWilsonLB: number;          // 0..1, 95% lower bound (z = 1.96)
+  wrWilsonLB80: number;        // 0..1, 80% lower bound (z = 0.8416) — display default per Module 2 T04
   medianR: number;             // realized R-multiple across all resolved
   p75HoldMinutes: number;      // 75th percentile of resolution time
   medianTimeToTpMin: number;   // median over winners only
@@ -472,7 +474,12 @@ export interface ArchetypeStats {
   lowSample: boolean;          // n <= 20
 }
 
-/** Wilson 95% LB. Mirrors the formula in signalHardening.ts wilsonLB(). */
+/**
+ * Wilson lower bound. Default z=1.96 (95%) preserved for back-compat; pass
+ * z=0.8416 for the 80% LCB that Module 2 surfaces on cards. The 80% bound is
+ * the "lukewarm-but-honest" floor — tight enough to penalise tiny samples
+ * but not so harsh it hides marginal edges with n=15-30.
+ */
 function wilsonLowerBound(wins: number, n: number, z = 1.96): number {
   if (!n || n <= 0) return 0;
   const p = wins / n;
@@ -485,40 +492,109 @@ function wilsonLowerBound(wins: number, n: number, z = 1.96): number {
 const _archCache = new Map<string, { ts: number; stats: ArchetypeStats }>();
 const ARCH_TTL_MS = 5 * 60 * 1000;
 
-export async function getArchetypeStats(
+/**
+ * Module 2 T10 (cycle-safe fix): raw TS query path that NEVER consults
+ * STATS_SOURCE. This is what the MV repo's catch block + the shadow-compare
+ * scheduler's "TS side" call into, so a misbehaving MV (or a flipped flag)
+ * can't trigger recursion or invalidate shadow comparisons. All callers
+ * outside the repository abstraction should keep using `getArchetypeStats`
+ * (which honors STATS_SOURCE); this export is intentionally low-level.
+ */
+export async function getArchetypeStatsTsOnly(
   token: string,
   direction: "LONG" | "SHORT",
   archetype: string,
 ): Promise<ArchetypeStats> {
-  const key = `${token}|${direction}|${archetype}`;
+  return _getArchetypeStatsTsRaw(token, direction, archetype);
+}
+
+async function _getArchetypeStatsTsRaw(
+  token: string,
+  direction: "LONG" | "SHORT",
+  archetype: string,
+): Promise<ArchetypeStats> {
+  const key = `${token}|${direction}|${archetype}|ts`;
   const cached = _archCache.get(key);
   const now = Date.now();
   if (cached && now - cached.ts < ARCH_TTL_MS) return cached.stats;
-
   const empty: ArchetypeStats = {
     token, direction, archetype,
     n: 0, wins: 0, losses: 0,
-    wrPointEst: 0, wrWilsonLB: 0, medianR: 0,
+    wrPointEst: 0, wrWilsonLB: 0, wrWilsonLB80: 0, medianR: 0,
     p75HoldMinutes: 0, medianTimeToTpMin: 0, medianTimeToSlMin: 0,
     lowSample: true,
   };
-
   try {
-    const result: any = await db.execute(sql`
-      SELECT
-        outcome,
-        pnl_pct,
-        ABS((stop_loss - entry_price) / NULLIF(entry_price, 0)) * 100 AS sl_pct,
-        EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60                AS duration_min
-      FROM ai_signal_log
-      WHERE token = ${token}
-        AND direction = ${direction}
-        AND archetype = ${archetype}
-        AND outcome IS NOT NULL
-        AND outcome <> 'PENDING'
-        AND resolved_at IS NOT NULL
-        AND created_at >= NOW() - (${LOOKBACK_DAYS} || ' days')::interval
-    `);
+    // Module 2 T05: treat UNCLASSIFIED as a 7th archetype that ALSO pools
+    // rows where the column is NULL (historical signals predating Module 1
+    // had no archetype written at all). Classified archetypes use strict
+    // equality so they aren't polluted by NULLs.
+    const isUnclassified = archetype === "UNCLASSIFIED";
+    // Module 2 T07: when USE_BACKFILLED_STATS is on, UNION the live
+    // ai_signal_log rows with the same outcomes joined through
+    // backfilled_classifications. Backfill rows are tagged via their own
+    // archetype column (computed by the 1h-only backfill script), so live's
+    // NULL/UNCLASSIFIED bucket and backfill's UNCLASSIFIED bucket combine
+    // naturally. SKIPPED_* / BACKFILL_UNRECOVERABLE sentinel rows in the
+    // backfill table are filtered out so they don't dilute classified stats.
+    let useBackfill = false;
+    try {
+      const { useBackfilledStats } = await import("./featureFlags");
+      useBackfill = useBackfilledStats();
+    } catch { /* fail-closed to live-only */ }
+
+    const liveArchClause = isUnclassified
+      ? sql`(archetype IS NULL OR archetype = 'UNCLASSIFIED')`
+      : sql`archetype = ${archetype}`;
+
+    const result: any = useBackfill
+      ? await db.execute(sql`
+          SELECT
+            outcome,
+            pnl_pct,
+            ABS((stop_loss - entry_price) / NULLIF(entry_price, 0)) * 100 AS sl_pct,
+            EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60            AS duration_min
+          FROM ai_signal_log
+          WHERE token = ${token}
+            AND direction = ${direction}
+            AND ${liveArchClause}
+            AND outcome IS NOT NULL
+            AND outcome <> 'PENDING'
+            AND resolved_at IS NOT NULL
+            AND created_at >= NOW() - (${LOOKBACK_DAYS} || ' days')::interval
+            AND (classification_source IS NULL OR classification_source = 'live')
+          UNION ALL
+          SELECT
+            sl.outcome,
+            sl.pnl_pct,
+            ABS((sl.stop_loss - sl.entry_price) / NULLIF(sl.entry_price, 0)) * 100 AS sl_pct,
+            EXTRACT(EPOCH FROM (sl.resolved_at - sl.created_at)) / 60       AS duration_min
+          FROM backfilled_classifications bc
+          JOIN ai_signal_log sl ON sl.id = bc.source_signal_id
+          WHERE sl.token = ${token}
+            AND sl.direction = ${direction}
+            AND bc.archetype = ${archetype}
+            AND sl.outcome IS NOT NULL
+            AND sl.outcome <> 'PENDING'
+            AND sl.resolved_at IS NOT NULL
+            AND sl.created_at >= NOW() - (${LOOKBACK_DAYS} || ' days')::interval
+            AND (sl.classification_source IS NULL OR sl.classification_source = 'live')
+        `)
+      : await db.execute(sql`
+          SELECT
+            outcome,
+            pnl_pct,
+            ABS((stop_loss - entry_price) / NULLIF(entry_price, 0)) * 100 AS sl_pct,
+            EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60            AS duration_min
+          FROM ai_signal_log
+          WHERE token = ${token}
+            AND direction = ${direction}
+            AND ${liveArchClause}
+            AND outcome IS NOT NULL
+            AND outcome <> 'PENDING'
+            AND resolved_at IS NOT NULL
+            AND created_at >= NOW() - (${LOOKBACK_DAYS} || ' days')::interval
+        `);
     const rows: any[] = result?.rows || result || [];
     if (!rows.length) {
       _archCache.set(key, { ts: now, stats: empty });
@@ -554,6 +630,7 @@ export async function getArchetypeStats(
       n, wins, losses,
       wrPointEst: wrPt,
       wrWilsonLB: wilsonLowerBound(wins, n),
+      wrWilsonLB80: wilsonLowerBound(wins, n, 0.8416),
       medianR: percentile(allR, 0.5),
       p75HoldMinutes: percentile(allDur, 0.75),
       medianTimeToTpMin: percentile(winDur, 0.5),
@@ -568,12 +645,46 @@ export async function getArchetypeStats(
   }
 }
 
+/**
+ * Public stats accessor honored by every signal-path caller. Routes through
+ * STATS_SOURCE; falls open to the cycle-safe `_getArchetypeStatsTsRaw` on
+ * any MV failure or when MV returns an empty bucket.
+ */
+export async function getArchetypeStats(
+  token: string,
+  direction: "LONG" | "SHORT",
+  archetype: string,
+): Promise<ArchetypeStats> {
+  const key = `${token}|${direction}|${archetype}`;
+  const cached = _archCache.get(key);
+  const now = Date.now();
+  if (cached && now - cached.ts < ARCH_TTL_MS) return cached.stats;
+  try {
+    const { statsSource } = await import("./featureFlags");
+    if (statsSource() === "mv") {
+      const { MaterializedViewStatsRepository } = await import("./statsRepository");
+      const mv = new MaterializedViewStatsRepository();
+      const out = await mv.getArchetypeStats(token, direction, archetype);
+      if (out && out.n > 0) {
+        _archCache.set(key, { ts: now, stats: out });
+        return out;
+      }
+      // fall through to TS query if MV returned empty (e.g. arch not in MV yet)
+    }
+  } catch { /* fall through to TS raw */ }
+  const stats = await _getArchetypeStatsTsRaw(token, direction, archetype);
+  _archCache.set(key, { ts: now, stats });
+  return stats;
+}
+
 export interface ArchetypeSummaryRow {
   archetype: string;
   n: number;
   wins: number;
   wrPointEst: number;
+  /** @deprecated kept for one release; use wrWilsonLB80 for display. */
   wrWilsonLB: number;
+  wrWilsonLB80: number;
   medianR: number;
 }
 
@@ -608,6 +719,7 @@ export async function getArchetypeSummary(): Promise<{
         wins,
         wrPointEst: n > 0 ? wins / n : 0,
         wrWilsonLB: wilsonLowerBound(wins, n),
+        wrWilsonLB80: wilsonLowerBound(wins, n, 0.8416),
         medianR: Number(r.avg_r) || 0,
       };
     });

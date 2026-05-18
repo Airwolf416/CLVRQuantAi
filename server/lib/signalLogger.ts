@@ -3,6 +3,7 @@ import { db } from "../db";
 import { aiSignalLog, signalShadowInversions, type InsertAiSignalLog } from "@shared/schema";
 import { logPrediction, type PwinSnapshot } from "./calibrationLog";
 import type { ArchetypeName } from "./archetype";
+import type { ClassificationDiagnostics } from "./microstructureSnapshot";
 
 export type SignalSource = "trade_ideas" | "quant_scanner" | "signals_tab" | "basket";
 
@@ -42,6 +43,14 @@ export interface LogSignalInput {
   // added additively in server/initDb.ts. Failure is non-fatal: the signal
   // still publishes, just without an archetype tag.
   archetype?: ArchetypeName;
+  // ── Module 2 (Setup Taxonomy) — optional. Persisted via post-insert UPDATE
+  // to the additive columns `ai_signal_log.classification_source` and
+  // `ai_signal_log.classification_diagnostics` (added in server/initDb.ts).
+  // `classificationSource` is one of "live" | "backfill" | "backfill_unrecoverable".
+  // For all live publish paths (/api/quant, /api/ai/analyze, /api/kronos) it is
+  // "live". The 90d backfill script writes the other two values.
+  classificationSource?: "live" | "backfill" | "backfill_unrecoverable";
+  classificationDiagnostics?: ClassificationDiagnostics;
 }
 
 const toDec = (v: any): string | null => {
@@ -105,6 +114,31 @@ export async function logSignal(input: LogSignalInput): Promise<number | null> {
         console.warn(
           `[signalLogger] archetype tag failed for signal ${insertedId} (non-fatal):`,
           (archetypeErr as Error)?.message ?? archetypeErr,
+        );
+      }
+    }
+
+    // ── Module 2 (Setup Taxonomy) — persist classification_source +
+    // classification_diagnostics. Single UPDATE round-trips both columns;
+    // skipped silently when neither is provided. Failure is non-fatal — the
+    // signal is already published, the diagnostic trail is just lost for this
+    // row. Drizzle-only; no raw pg.
+    if (insertedId != null && (input.classificationSource || input.classificationDiagnostics)) {
+      try {
+        const src = input.classificationSource ?? "live";
+        const diagJson = input.classificationDiagnostics
+          ? JSON.stringify(input.classificationDiagnostics)
+          : null;
+        await db.execute(sql`
+          UPDATE ai_signal_log
+             SET classification_source = ${src},
+                 classification_diagnostics = ${diagJson}::jsonb
+           WHERE id = ${insertedId}
+        `);
+      } catch (diagErr) {
+        console.warn(
+          `[signalLogger] classification diagnostics write failed for signal ${insertedId} (non-fatal):`,
+          (diagErr as Error)?.message ?? diagErr,
         );
       }
     }

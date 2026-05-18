@@ -741,6 +741,27 @@ function logDataSourceStatus() {
   startCircuitBreaker();
   const { startNewsCleanupScheduler } = await import("./lib/newsPersist");
   startNewsCleanupScheduler();
+
+  // Module 2 T09 — archetype_stats MV refresher (5-min heartbeat, refreshes
+  // at :05 past every hour + :35 during US cash hours, debounced to 15min
+  // floor). Logs every attempt to stats_refresh_log. Fail-open.
+  try {
+    const { startStatsMvRefreshScheduler } = await import("./lib/statsMvRefresher");
+    startStatsMvRefreshScheduler();
+  } catch (err: any) {
+    console.warn("[startup] statsMvRefresher init skipped:", err?.message);
+  }
+
+  // Module 2 T10 — shadow-compare TS vs MV repos every 30min, write
+  // divergences >1pp on the Wilson 80% LCB to stats_divergence_log. Always
+  // on (cheap) regardless of STATS_SOURCE so we always know if the MV is
+  // drifting. Fail-open.
+  try {
+    const { startShadowCompareScheduler } = await import("./lib/statsRepository");
+    startShadowCompareScheduler();
+  } catch (err: any) {
+    console.warn("[startup] statsRepository shadow compare init skipped:", err?.message);
+  }
   // Catch up the system to historical reality on every startup (idempotent).
   // Suppresses any token+direction with <30% WR over 10+ resolved signals.
   suppressHistoricalBleeders().catch(e => console.error("[startup] suppressHistoricalBleeders failed:", e));
