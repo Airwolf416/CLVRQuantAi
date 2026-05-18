@@ -48,3 +48,15 @@ id = "Hxk7JpXiQDo7eGy3D9l8j"
 uri = "file://exports/calibration_reliability_bins_v2.csv"
 type = "table"
 title = "Reliability Bins v2 — CSV (raw / platt / isotonic)"
+
+[[outputs]]
+id = "9-yk8uLfi0umbf3dlyIX_"
+uri = "file://exports/signal_track_record_2026-05-18.csv"
+type = "table"
+title = "Signal Track Record (CSV — 1,107 signals)"
+
+[[outputs]]
+id = "S9dNyOnxjIQICEmiwgfJS"
+uri = "file://exports/signal_track_record_2026-05-18.json"
+type = "unspecified"
+title = "Signal Track Record (JSON — full data + aggregate summary)"
