@@ -347,6 +347,88 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS archetype TEXT`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_archetype ON ai_signal_log (token, direction, archetype, created_at DESC) WHERE archetype IS NOT NULL AND outcome IS NOT NULL AND outcome <> 'PENDING'`).catch(() => {});
 
+    // ── Module 2 (Setup Taxonomy + Per-Setup Stats): additive columns +
+    // tables. Same forbidden-file constraints as Module 1 — shared/schema.ts
+    // intentionally NOT touched; raw SQL CREATE/ALTER IF NOT EXISTS is the
+    // documented additive pattern. Columns/tables added here:
+    //
+    //   ai_signal_log.classification_source       — 'live' | 'backfill' | NULL
+    //   ai_signal_log.classification_diagnostics  — JSONB audit trail of
+    //     which classifier inputs were populated, NULL'd, treated as
+    //     no-concept (asset class has no funding/OI), and which MEAN_REV
+    //     clauses fired. Powers admin near-miss reports.
+    //   suppressed_signals — shadow log of UNCLASSIFIED signals that WOULD
+    //     be dropped under ARCHETYPE_SUPPRESSION_ENABLED=true. Always
+    //     written (shadow mode default) so we can audit suppression impact
+    //     before flipping the flag.
+    //   backfilled_classifications — 1h-only 90d backfill rows for
+    //     TREND_PULLBACK / RANGE_FADE / MEAN_REVERSION_EXHAUSTION. Joined
+    //     to ai_signal_log via source_signal_id for outcome resolution.
+    //   stats_divergence_log — T10 shadow-compare: TS-computed stats vs
+    //     materialized-view stats divergence >1pp.
+    //   stats_refresh_log — T09 MV refresh history for monitoring.
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS classification_source TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS classification_diagnostics JSONB`).catch(() => {});
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS suppressed_signals (
+        id                          SERIAL PRIMARY KEY,
+        ts                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ticker                      VARCHAR(20) NOT NULL,
+        intended_direction          VARCHAR(10) NOT NULL,
+        asset_class                 VARCHAR(20),
+        source_endpoint             VARCHAR(30),
+        suppression_reason          TEXT NOT NULL,
+        raw_signal_payload          JSONB,
+        classification_diagnostics  JSONB
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_suppressed_signals_ts     ON suppressed_signals (ts DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_suppressed_signals_token  ON suppressed_signals (ticker, intended_direction)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_suppressed_signals_reason ON suppressed_signals (suppression_reason)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS backfilled_classifications (
+        id                  SERIAL PRIMARY KEY,
+        source_signal_id    INTEGER NOT NULL REFERENCES ai_signal_log(id) ON DELETE CASCADE,
+        archetype           TEXT NOT NULL,
+        classified_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        classifier_version  TEXT NOT NULL,
+        diagnostics         JSONB
+      )
+    `);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_backfill_unique     ON backfilled_classifications (source_signal_id, classifier_version)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_backfill_arch              ON backfilled_classifications (archetype)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_backfill_classified_at     ON backfilled_classifications (classified_at DESC)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stats_divergence_log (
+        id              SERIAL PRIMARY KEY,
+        ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        archetype       TEXT NOT NULL,
+        token           TEXT,
+        direction       TEXT,
+        ts_n            INTEGER,
+        mv_n            INTEGER,
+        ts_wr_lcb       DOUBLE PRECISION,
+        mv_wr_lcb       DOUBLE PRECISION,
+        divergence_abs  DOUBLE PRECISION
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_stats_divergence_ts ON stats_divergence_log (ts DESC)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stats_refresh_log (
+        id             SERIAL PRIMARY KEY,
+        started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        duration_ms    INTEGER,
+        rows_refreshed INTEGER,
+        success        BOOLEAN,
+        error_message  TEXT
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_stats_refresh_started ON stats_refresh_log (started_at DESC)`);
+
     // ── signal_shadow_inversions (the "Reverse Costanza" backtest) ────────────
     // For every real signal we publish, a mirrored twin (opposite direction,
     // SL/TP reflected across entry) is logged here and resolved against the

@@ -91,7 +91,19 @@ function chronological(candles: OHLCV[]): OHLCV[] {
     : candles.slice().reverse();
 }
 
-/** Average True Range over the last `period` bars (price units). */
+/**
+ * Required minimum 1h bars to compute ATR(14) on a daily timeframe via
+ * 24-bar aggregation. 14 daily bars × 24h/day = 336 bars.
+ *
+ * Do not reduce below 336: with fewer bars, daily-ATR aggregation collapses
+ * to ATR(1) (i.e., yesterday's TR), which makes the MEAN_REVERSION_EXHAUSTION
+ * gate ("|day move| > 2.5 × ATR_daily") compare against an unsmoothed value
+ * and over-trigger. This constant centralizes the lookback the classifier
+ * requires across /api/quant, /api/ai/analyze, and /api/kronos.
+ */
+export const ARCHETYPE_LOOKBACK_1H = 336;
+
+/** Average True Range over the last `period` bars (price units, simple mean). */
 function atr(bars: OHLCV[], period = 14): number | null {
   if (!bars || bars.length < period + 1) return null;
   const trs: number[] = [];
@@ -107,6 +119,32 @@ function atr(bars: OHLCV[], period = 14): number | null {
     trs.push(tr);
   }
   return trs.reduce((a, b) => a + b, 0) / trs.length;
+}
+
+/**
+ * Wilder-smoothed ATR. Industry-standard ATR that TradingView, brokerage
+ * platforms, and every retail trader expects. Uses simple-mean seed over
+ * first `period` TRs, then recursive smoothing:
+ *   ATR_t = (ATR_{t-1} * (period-1) + TR_t) / period
+ * Requires bars.length >= period + 1.
+ */
+function wilderATR(bars: OHLCV[], period = 14): number | null {
+  if (!bars || bars.length < period + 1) return null;
+  const trs: number[] = [];
+  for (let i = 1; i < bars.length; i++) {
+    const tr = Math.max(
+      bars[i].high - bars[i].low,
+      Math.abs(bars[i].high - bars[i - 1].close),
+      Math.abs(bars[i].low - bars[i - 1].close),
+    );
+    trs.push(tr);
+  }
+  if (trs.length < period) return null;
+  let atrVal = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atrVal = (atrVal * (period - 1) + trs[i]) / period;
+  }
+  return atrVal;
 }
 
 /** EMA over the last `period` bars on closes. Returns null if insufficient data. */
@@ -350,11 +388,20 @@ export function buildArchetypeContext(input: ArchetypeContextBuilderInput): Arch
   const dayOpen = last24[0]?.open;
   const dayHigh = last24.length ? Math.max(...last24.map(b => b.high)) : undefined;
   const dayLow = last24.length ? Math.min(...last24.map(b => b.low)) : undefined;
-  // True daily ATR proxy: aggregate 1h bars into ~24h daily candles (chunk by
-  // index since intraday ts may be irregular), then ATR over up to 14 daily
-  // bars. Falls back to undefined when fewer than 2 full days available.
+  // True daily ATR(14) via 24h aggregation. Requires ARCHETYPE_LOOKBACK_1H
+  // (336) 1h bars = 14 full daily bars + 1 prior-close for true-range seeding.
+  // Uses Wilder smoothing (industry standard, matches TradingView and every
+  // retail charting platform) once 15+ daily bars are available; falls back
+  // to simple-mean ATR for shorter histories.
+  //
+  // Module 2 fix: previously this gated on c1h.length >= 48 (= 2 daily bars),
+  // which silently collapsed ATR(14) to ATR(1) and over-triggered the
+  // MEAN_REVERSION_EXHAUSTION gate. Gating on ARCHETYPE_LOOKBACK_1H ensures
+  // ATR-dependent archetypes (MEAN_REV, BREAKOUT_RETEST) only evaluate
+  // when daily ATR is mathematically meaningful; non-ATR archetypes
+  // (NEWS_MOMO, VWAP_RECLAIM) remain reachable with shorter histories.
   let atrDaily: number | undefined;
-  if (c1h.length >= 48) {
+  if (c1h.length >= ARCHETYPE_LOOKBACK_1H) {
     const daily: OHLCV[] = [];
     for (let i = 0; i + 24 <= c1h.length; i += 24) {
       const chunk = c1h.slice(i, i + 24);
@@ -367,7 +414,11 @@ export function buildArchetypeContext(input: ArchetypeContextBuilderInput): Arch
         timestamp: chunk[chunk.length - 1].timestamp,
       });
     }
-    if (daily.length >= 2) {
+    if (daily.length >= 15) {
+      // Wilder ATR(14) — needs 14 TRs (= 15 bars).
+      atrDaily = wilderATR(daily, 14) || undefined;
+    } else if (daily.length >= 2) {
+      // Degraded path: simple-mean ATR over what we have, capped at 14.
       const period = Math.min(14, daily.length - 1);
       atrDaily = atr(daily, period) || undefined;
     }
