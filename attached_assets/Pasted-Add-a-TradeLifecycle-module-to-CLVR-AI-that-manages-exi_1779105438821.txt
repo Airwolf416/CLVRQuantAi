@@ -1,0 +1,126 @@
+Add a TradeLifecycle module to CLVR AI that manages exit logic for 
+every published signal. This replaces the current static "30 min hold 
++ fixed SL/TP" pattern with archetype-aware, data-driven exit rules.
+
+=== PART 1: Dynamic hold time from historical distribution ===
+
+For each (archetype, vol_regime) pair, query the backtest harness for 
+the time-to-outcome distribution of closed signals:
+- t_tp_median: median minutes from entry to hitting TP1
+- t_tp_p75: 75th percentile (used as "max patience" before reassess)
+- t_sl_median: median minutes to SL hit
+- t_flat_threshold: at what time-since-entry does the signal historically 
+  fail to move ±0.3 ATR_5m (default 0.6 * t_tp_median if unknown)
+
+Publish on each signal card:
+- "Expected hold: {t_tp_median} min"
+- "Reassess by: {t_tp_p75} min"
+- "Exit if no movement: {t_flat_threshold} min"
+
+If sample size for (archetype, vol_regime) < 15, fall back to 
+archetype-only stats. If still < 15, use these defaults:
+- BREAKOUT_RETEST: 45 / 90 / 25 min
+- TREND_PULLBACK: 60 / 120 / 35 min
+- RANGE_FADE: 30 / 75 / 20 min
+- MEAN_REVERSION_EXHAUSTION: 25 / 60 / 15 min
+- NEWS_MOMO: 15 / 45 / 10 min
+- VWAP_RECLAIM: 35 / 80 / 20 min
+
+=== PART 2: Trailing stop activation ===
+
+Once unrealized PnL >= +0.5R, switch from static SL to trailing SL.
+
+Trailing distance by vol_regime:
+- LOW: 0.8 * ATR_5m
+- NEUTRAL: 1.2 * ATR_5m
+- HIGH: 1.6 * ATR_5m
+
+Trailing logic:
+- For LONG: new_sl = max(current_sl, last_close - trail_distance)
+- For SHORT: new_sl = min(current_sl, last_close + trail_distance)
+- SL only moves in the favorable direction, never adverse
+
+When PnL >= +1.0R, automatically move SL to entry (breakeven lock).
+When PnL >= +1.5R AND TP1 not yet hit, scale out 50% at market, 
+move remaining SL to +0.5R (runner mode).
+
+Display in signal card a live "SL state": STATIC / TRAILING / 
+BREAKEVEN / RUNNER.
+
+=== PART 3: Thesis invalidation events ===
+
+Beyond the price SL, define per-archetype invalidation triggers. 
+If any fire, flatten at market regardless of price.
+
+BREAKOUT_RETEST:
+- 5m close back below breakout level (LONG) / above (SHORT)
+- Volume on retest > volume on initial breakout (failed retest)
+
+TREND_PULLBACK:
+- HTF trend flip: 1H EMA20 slope reverses sign
+- 3 consecutive 5m closes against trade direction
+
+RANGE_FADE:
+- 5m close beyond range boundary by > 0.3 ATR_5m
+- Volume spike > 2x 20-bar average against position
+
+MEAN_REVERSION_EXHAUSTION:
+- New extreme print beyond signal-generation extreme
+- Funding flips strongly in direction of original move (squeeze risk)
+
+NEWS_MOMO:
+- 5 minutes elapsed with no follow-through (price within ±0.2 ATR of entry)
+- Counter-headline detected via macro feed
+
+VWAP_RECLAIM:
+- Price re-crosses VWAP against trade direction
+- Volume on re-cross > volume on original reclaim
+
+Implement as a per-tick check (or per-5m-close where applicable) 
+in the position monitor loop.
+
+=== PART 4: Macro event exit gate ===
+
+Read from the existing Macro Clear feed. For each open position:
+- If a HIGH-impact event (CPI, FOMC, NFP, central bank decision) is 
+  within 15 minutes AND current PnL > 0: flatten and take the gain
+- If HIGH-impact event within 5 minutes regardless of PnL: flatten
+- If MEDIUM-impact event within 5 minutes AND archetype is 
+  NEWS_MOMO or BREAKOUT_RETEST: flatten
+
+Add a "macro_exit_pending" flag to the signal that shows on the card 
+as "⚠ Exit before {event_name} at {time_et}".
+
+=== PART 5: Stale signal timeout ===
+
+At t = t_flat_threshold minutes since entry:
+- If |unrealized PnL| < 0.3R: emit "STALE" alert, flatten at market
+- Log to outcomes table as outcome="stale_flat" for backtest stats
+
+At t = t_tp_p75 minutes since entry:
+- If TP1 not hit and SL not hit: emit "MAX HOLD REACHED — REASSESS" 
+  alert, do NOT auto-flatten (user decision)
+- After this point, tighten trailing stop to 0.6x its current distance
+
+=== PART 6: Schema and UI changes ===
+
+Add to signals table:
+- expected_hold_min, reassess_by_min, flat_threshold_min (integers)
+- sl_state (enum: STATIC, TRAILING, BREAKEVEN, RUNNER)
+- macro_exit_pending (boolean), macro_exit_event (text), macro_exit_time (timestamp)
+
+Add to outcomes table:
+- exit_reason (enum: tp1_hit, tp2_hit, sl_hit, trailing_sl, breakeven_sl, 
+  thesis_invalidated, macro_exit, stale_flat, manual)
+- minutes_to_exit (integer)
+- max_favorable_excursion_R, max_adverse_excursion_R (floats)
+
+On the signal card, render a live "Lifecycle" strip showing:
+[Entry: T+0] → [SL State: TRAILING] → [Time elapsed: 18m / 45m exp]
+With color coding: green if MFE > 0.5R, yellow if drifting, red if 
+near invalidation.
+
+Run a backtest pass over the last 90 days of historical signals with 
+these new exit rules to populate the t_tp / t_flat distributions and 
+to compare new-rules win rate vs old-rules win rate. Surface the 
+delta in the admin dashboard.
