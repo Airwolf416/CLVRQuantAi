@@ -73,9 +73,37 @@ export default function SignalCard({ ticker, result, rank, mode }) {
 
       <div style={{ padding: "14px 14px 10px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 900, color: "#e0e0e0", fontFamily: MONO }}>#{rank + 1}</span>
             <span style={{ fontSize: 14, fontWeight: 900, color: "#e0e0e0", fontFamily: SERIF }}>{ticker}/USDT</span>
+            {result.archetype && result.archetype !== "UNCLASSIFIED" && (() => {
+              const palette = {
+                NEWS_MOMO:                 { fg: "#f87171", bg: "rgba(248,113,113,0.12)", bd: "#f8717155", label: "NEWS MOMO" },
+                MEAN_REVERSION_EXHAUSTION: { fg: "#a78bfa", bg: "rgba(167,139,250,0.12)", bd: "#a78bfa55", label: "MEAN REV" },
+                BREAKOUT_RETEST:           { fg: "#22d3ee", bg: "rgba(34,211,238,0.12)",  bd: "#22d3ee55", label: "BREAKOUT" },
+                VWAP_RECLAIM:              { fg: "#34d399", bg: "rgba(52,211,153,0.12)",  bd: "#34d39955", label: "VWAP RECLAIM" },
+                TREND_PULLBACK:            { fg: "#fbbf24", bg: "rgba(251,191,36,0.12)",  bd: "#fbbf2455", label: "TREND PULLBACK" },
+                RANGE_FADE:                { fg: "#94a3b8", bg: "rgba(148,163,184,0.12)", bd: "#94a3b855", label: "RANGE FADE" },
+              }[result.archetype] || { fg: "#94a3b8", bg: "rgba(148,163,184,0.10)", bd: "#94a3b833", label: result.archetype };
+              const tip = result.archetype_reason
+                ? `${result.archetype} · ${result.archetype_reason}${result.archetype_flipped_from ? ` · direction flipped from ${result.archetype_flipped_from} (fade)` : ""}`
+                : result.archetype;
+              return (
+                <span
+                  data-testid={`badge-archetype-${ticker}`}
+                  title={tip}
+                  style={{
+                    fontSize: 8, fontWeight: 800, color: palette.fg,
+                    background: palette.bg, border: `1px solid ${palette.bd}`,
+                    borderRadius: 4, padding: "2px 6px",
+                    fontFamily: MONO, letterSpacing: "0.06em",
+                  }}
+                >
+                  {palette.label}
+                  {result.archetype_flipped_from && <span style={{ marginLeft: 4 }}>↺</span>}
+                </span>
+              );
+            })()}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{
@@ -164,6 +192,46 @@ export default function SignalCard({ ticker, result, rank, mode }) {
           <div style={{ fontSize: 10, fontWeight: 700, color: "#00d4ff", fontFamily: MONO }}>{duration}</div>
         </div>
       </div>
+
+      {result.archetype_stats && result.archetype_stats.n > 0 && (() => {
+        const s = result.archetype_stats;
+        const wrPct = (s.wr_point * 100).toFixed(0);
+        const wlbPct = (s.wr_wilson_lb * 100).toFixed(0);
+        const holdHrs = s.p75_hold_min > 60 ? `${(s.p75_hold_min / 60).toFixed(1)}h` : `${s.p75_hold_min}m`;
+        const archLabel = (result.archetype || "").replace(/_/g, " ");
+        return (
+          <div
+            data-testid={`archetype-stats-${ticker}`}
+            style={{
+              padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.04)",
+              display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10,
+              background: s.low_sample ? "rgba(245,158,11,0.04)" : "transparent",
+            }}
+          >
+            {s.low_sample && (
+              <span title={`Only ${s.n} resolved trades for this combo — Wilson 95% LB used for honest sizing`} style={{
+                fontSize: 8, fontWeight: 800, color: "#f59e0b",
+                background: "rgba(245,158,11,0.10)", border: "1px solid #f59e0b55",
+                borderRadius: 4, padding: "2px 6px", fontFamily: MONO, letterSpacing: "0.04em",
+              }}>LOW SAMPLE — use caution</span>
+            )}
+            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", fontFamily: MONO, letterSpacing: "0.04em" }}>
+              {archLabel} WR:
+            </span>
+            <span title={`Point estimate ${wrPct}% · Wilson 95% lower bound ${wlbPct}%`} style={{ fontSize: 11, fontWeight: 800, color: s.wr_wilson_lb >= 0.5 ? "#22c55e" : s.wr_wilson_lb >= 0.35 ? "#f59e0b" : "#ef4444", fontFamily: MONO }}>
+              {wrPct}% <span style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.45)" }}>(LB {wlbPct}%, n={s.n})</span>
+            </span>
+            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", fontFamily: MONO }}>·</span>
+            <span title="Median realized R-multiple on resolved trades for this archetype" style={{ fontSize: 10, fontWeight: 700, color: "#e0e0e0", fontFamily: MONO }}>
+              Med R: {s.median_r.toFixed(2)}
+            </span>
+            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.55)", fontFamily: MONO }}>·</span>
+            <span title={`75th-percentile resolution time · median win ${s.median_time_to_tp_min}m · median loss ${s.median_time_to_sl_min}m`} style={{ fontSize: 10, fontWeight: 700, color: "#e0e0e0", fontFamily: MONO }}>
+              p75 hold: {holdHrs}
+            </span>
+          </div>
+        );
+      })()}
 
       {result.regime_gate && Array.isArray(result.regime_gate.checks) && result.regime_gate.checks.length > 0 && (
         <div

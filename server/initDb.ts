@@ -337,6 +337,16 @@ export async function initializeDatabase(): Promise<void> {
     // Performance context aggregation index — covers the hot per-(token,direction,resolved-window) query
     await client.query(`CREATE INDEX IF NOT EXISTS idx_perf_combo ON ai_signal_log (token, direction, created_at DESC) WHERE outcome IS NOT NULL AND outcome <> 'PENDING'`);
 
+    // ── Module 1 (Setup Archetypes): additive column + index for per-archetype
+    // stats. shared/schema.ts intentionally NOT touched per project preferences
+    // — Drizzle stays the source of truth for typed columns, but additive raw
+    // SQL CREATE/ALTER IF NOT EXISTS is the documented pattern (see access-code
+    // redemption work). Archetype text is one of:
+    //   BREAKOUT_RETEST | TREND_PULLBACK | RANGE_FADE |
+    //   MEAN_REVERSION_EXHAUSTION | NEWS_MOMO | VWAP_RECLAIM | UNCLASSIFIED
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS archetype TEXT`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_archetype ON ai_signal_log (token, direction, archetype, created_at DESC) WHERE archetype IS NOT NULL AND outcome IS NOT NULL AND outcome <> 'PENDING'`).catch(() => {});
+
     // ── signal_shadow_inversions (the "Reverse Costanza" backtest) ────────────
     // For every real signal we publish, a mirrored twin (opposite direction,
     // SL/TP reflected across entry) is logged here and resolved against the

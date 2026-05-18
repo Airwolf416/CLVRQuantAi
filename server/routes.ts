@@ -6081,7 +6081,7 @@ Every level must be technically defensible. Return JSON only.`;
       if (parsed.signal && (parsed.signal.includes("LONG") || parsed.signal.includes("SHORT"))
           && parsed.entry?.price && parsed.stopLoss?.price && parsed.tp1?.price
           && Array.isArray(candles1h) && candles1h.length > 0) {
-        const hdDir: "LONG" | "SHORT" = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
+        let hdDir: "LONG" | "SHORT" = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
         const hdStart = Date.now();
         try {
           const { applySignalHardening, applyBrainLimits, recordOiSample, getOiChangePct } = await import("./lib/signalHardening");
@@ -6090,6 +6090,89 @@ Every level must be technically defensible. Return JSON only.`;
           const hlCtx: any = (typeof hlData !== "undefined" ? (hlData as any)[ticker] : undefined);
           if (hlCtx?.oi) recordOiSample(ticker, hlCtx.oi);
           const entryPx = Number(parsed.entry.price);
+
+          // ── Module 1 (Setup Archetypes) — classify BEFORE brain check so
+          // MEAN_REVERSION_EXHAUSTION can flip the direction and the brain
+          // still has final say on the flipped (token, direction) combo.
+          // Fully fail-open: any error leaves the original direction intact
+          // and tags UNCLASSIFIED.
+          try {
+            const { classifyArchetype, buildArchetypeContext, shouldFlipForMeanReversion } =
+              await import("./lib/archetype");
+            const archCtx = buildArchetypeContext({
+              token: ticker,
+              direction: hdDir,
+              price: entryPx,
+              candles1h: (candles1h as any[]).map((c: any) => ({
+                open: Number(c.open ?? c.o), high: Number(c.high ?? c.h),
+                low: Number(c.low ?? c.l), close: Number(c.close ?? c.c),
+                volume: Number(c.volume ?? c.v ?? 0),
+                timestamp: Number(c.timestamp ?? c.t ?? c.time ?? 0),
+              })),
+              fundingRate: hlCtx?.funding != null ? Number(hlCtx.funding) : undefined,
+              oiChange6hPct: getOiChangePct(ticker),
+              newsContext: (parsed as any).newsContext || (typeof newsImpactLong !== "undefined" ? newsImpactLong : undefined),
+            });
+            const archResult = classifyArchetype(archCtx);
+            (parsed as any).archetype = archResult.archetype;
+            (parsed as any).archetype_confidence = +archResult.confidence.toFixed(2);
+            (parsed as any).archetype_reason = archResult.reason;
+            console.log(`[ARCHETYPE] ${ticker} ${hdDir} → ${archResult.archetype} (conf=${archResult.confidence.toFixed(2)}): ${archResult.reason}`);
+            const flipTo = shouldFlipForMeanReversion(archResult.archetype, archCtx.dayOpen, archCtx.price);
+            if (flipTo && flipTo !== hdDir) {
+              // FLIP: mean-reversion exhaustion fade. Edge policy / brain check
+              // below still has final say — if the flipped (token, direction)
+              // combo is historically weak, brain will SUPPRESS it.
+              console.log(`[ARCHETYPE] ${ticker} MEAN_REVERSION_EXHAUSTION flip ${hdDir} → ${flipTo} (subject to brain veto)`);
+              (parsed as any).archetype_flipped_from = hdDir;
+              // Preserve any STRONG_ prefix etc. by swapping the LONG/SHORT token
+              parsed.signal = parsed.signal.replace(/LONG/g, "__TMP__").replace(/SHORT/g, "LONG").replace(/__TMP__/g, "SHORT");
+              // Sanity: if replacement somehow didn't yield the expected direction, fall back to plain replace
+              if (!parsed.signal.includes(flipTo)) parsed.signal = flipTo;
+              hdDir = flipTo;
+              // Mirror SL/TP around entry so the flipped setup has symmetric levels.
+              const ep = entryPx;
+              const mirror = (lvl: any) => {
+                const n = Number(lvl);
+                if (!Number.isFinite(n) || n <= 0) return lvl;
+                const m = 2 * ep - n;
+                return m > 0 ? m : lvl;
+              };
+              if (parsed.stopLoss?.price != null) parsed.stopLoss.price = mirror(parsed.stopLoss.price);
+              if (parsed.tp1?.price != null) parsed.tp1.price = mirror(parsed.tp1.price);
+              if (parsed.tp2?.price != null) parsed.tp2.price = mirror(parsed.tp2.price);
+              if (parsed.tp3?.price != null) parsed.tp3.price = mirror(parsed.tp3.price);
+            }
+          } catch (archErr: any) {
+            console.warn(`[ARCHETYPE] ${ticker} classifier error (fail-open):`, archErr?.message || archErr);
+            (parsed as any).archetype = "UNCLASSIFIED";
+          }
+
+          // ── Per-archetype Wilson-LB win rate for the card UI. Cheap cached
+          // query; fail-open returns n=0 which the UI hides.
+          if ((parsed as any).archetype && (parsed as any).archetype !== "UNCLASSIFIED") {
+            try {
+              const { getArchetypeStats } = await import("./lib/statisticalBrain");
+              const stats = await getArchetypeStats(ticker, hdDir, (parsed as any).archetype);
+              if (stats && stats.n > 0) {
+                (parsed as any).archetype_stats = {
+                  n: stats.n,
+                  wins: stats.wins,
+                  losses: stats.losses,
+                  wr_point: +stats.wrPointEst.toFixed(4),
+                  wr_wilson_lb: +stats.wrWilsonLB.toFixed(4),
+                  median_r: +stats.medianR.toFixed(2),
+                  p75_hold_min: Math.round(stats.p75HoldMinutes),
+                  median_time_to_tp_min: Math.round(stats.medianTimeToTpMin),
+                  median_time_to_sl_min: Math.round(stats.medianTimeToSlMin),
+                  low_sample: stats.lowSample,
+                };
+              }
+            } catch (statsErr: any) {
+              console.warn(`[ARCHETYPE STATS] ${ticker} fall-open:`, statsErr?.message || statsErr);
+            }
+          }
+
           const dayVolUsd = Number(hlCtx?.volume) || 0;
           const clusters = await getLiquidityClusters(ticker, entryPx, dayVolUsd);
           const hdHorizon: "scalp" | "swing" = tf.id === "scalp" ? "scalp" : "swing";
@@ -6281,6 +6364,7 @@ Every level must be technically defensible. Return JSON only.`;
           invalidation: parsed.invalidation || null,
           scores: { bayesian: bayesian?.probability, advanced: adjScore, confluence: confluence?.direction },
           pwin: _pwin,
+          archetype: (parsed as any).archetype || undefined,
           newsContext: (() => {
             const dir = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
             const ni = dir === "LONG" ? newsImpactLong : newsImpactShort;
