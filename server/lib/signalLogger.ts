@@ -1,6 +1,8 @@
+import { sql } from "drizzle-orm";
 import { db } from "../db";
 import { aiSignalLog, signalShadowInversions, type InsertAiSignalLog } from "@shared/schema";
 import { logPrediction, type PwinSnapshot } from "./calibrationLog";
+import type { ArchetypeName } from "./archetype";
 
 export type SignalSource = "trade_ideas" | "quant_scanner" | "signals_tab" | "basket";
 
@@ -35,6 +37,11 @@ export interface LogSignalInput {
   // and p_loss_meta_proxy. Failure NEVER affects signal publication.
   // Callers that have a quant prepass result in scope should populate this.
   pwin?: PwinSnapshot;
+  // ── Module 1 (Setup Archetypes) — optional, persisted via post-insert
+  // UPDATE because shared/schema.ts is intentionally NOT touched. Column
+  // added additively in server/initDb.ts. Failure is non-fatal: the signal
+  // still publishes, just without an archetype tag.
+  archetype?: ArchetypeName;
 }
 
 const toDec = (v: any): string | null => {
@@ -83,6 +90,24 @@ export async function logSignal(input: LogSignalInput): Promise<number | null> {
 
     const [inserted] = await db.insert(aiSignalLog).values(row).returning({ id: aiSignalLog.id });
     const insertedId = inserted?.id ?? null;
+
+    // ── Module 1 (Setup Archetypes) — persist via post-insert UPDATE because
+    // shared/schema.ts intentionally has no archetype column (additive raw
+    // SQL CREATE pattern in server/initDb.ts). Drizzle-only, no raw pg.
+    // Failure is non-fatal: signal is already published, the tag is lost
+    // but per-archetype stats will simply skip this row.
+    if (insertedId != null && input.archetype) {
+      try {
+        await db.execute(
+          sql`UPDATE ai_signal_log SET archetype = ${input.archetype} WHERE id = ${insertedId}`,
+        );
+      } catch (archetypeErr) {
+        console.warn(
+          `[signalLogger] archetype tag failed for signal ${insertedId} (non-fatal):`,
+          (archetypeErr as Error)?.message ?? archetypeErr,
+        );
+      }
+    }
 
     // ── pwin Phase 1: passive calibration log ──────────────────────────────
     // Fire-and-forget. Only sent when the caller supplied a pwin snapshot

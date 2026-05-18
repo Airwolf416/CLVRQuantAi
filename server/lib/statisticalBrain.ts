@@ -443,3 +443,179 @@ export async function applyEdgePolicy(
 export function mirrorPrice(entry: number, price: number): number {
   return 2 * entry - price;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 1 (Setup Archetypes) — per-(token, direction, archetype) stats
+//
+// Queries the `archetype` column added additively in server/initDb.ts. Returns
+// Wilson 95% lower bound win rate (so small samples don't masquerade as edge),
+// median R, p75 hold time, and median time-to-TP / time-to-SL. `lowSample` flag
+// fires when n <= 20 so the UI can prefix "LOW SAMPLE — use caution".
+//
+// Fully cached for 5 minutes per (token, direction, archetype) combo. Falls
+// open on DB error — caller treats `n=0, lowSample=true` as "no data, hide".
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ArchetypeStats {
+  token: string;
+  direction: "LONG" | "SHORT";
+  archetype: string;
+  n: number;
+  wins: number;
+  losses: number;
+  wrPointEst: number;          // 0..1
+  wrWilsonLB: number;          // 0..1, 95% lower bound (z = 1.96)
+  medianR: number;             // realized R-multiple across all resolved
+  p75HoldMinutes: number;      // 75th percentile of resolution time
+  medianTimeToTpMin: number;   // median over winners only
+  medianTimeToSlMin: number;   // median over losers only
+  lowSample: boolean;          // n <= 20
+}
+
+/** Wilson 95% LB. Mirrors the formula in signalHardening.ts wilsonLB(). */
+function wilsonLowerBound(wins: number, n: number, z = 1.96): number {
+  if (!n || n <= 0) return 0;
+  const p = wins / n;
+  const denom = 1 + (z * z) / n;
+  const centre = p + (z * z) / (2 * n);
+  const margin = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * n)) / n);
+  return Math.max(0, Math.min(1, (centre - margin) / denom));
+}
+
+const _archCache = new Map<string, { ts: number; stats: ArchetypeStats }>();
+const ARCH_TTL_MS = 5 * 60 * 1000;
+
+export async function getArchetypeStats(
+  token: string,
+  direction: "LONG" | "SHORT",
+  archetype: string,
+): Promise<ArchetypeStats> {
+  const key = `${token}|${direction}|${archetype}`;
+  const cached = _archCache.get(key);
+  const now = Date.now();
+  if (cached && now - cached.ts < ARCH_TTL_MS) return cached.stats;
+
+  const empty: ArchetypeStats = {
+    token, direction, archetype,
+    n: 0, wins: 0, losses: 0,
+    wrPointEst: 0, wrWilsonLB: 0, medianR: 0,
+    p75HoldMinutes: 0, medianTimeToTpMin: 0, medianTimeToSlMin: 0,
+    lowSample: true,
+  };
+
+  try {
+    const result: any = await db.execute(sql`
+      SELECT
+        outcome,
+        pnl_pct,
+        ABS((stop_loss - entry_price) / NULLIF(entry_price, 0)) * 100 AS sl_pct,
+        EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60                AS duration_min
+      FROM ai_signal_log
+      WHERE token = ${token}
+        AND direction = ${direction}
+        AND archetype = ${archetype}
+        AND outcome IS NOT NULL
+        AND outcome <> 'PENDING'
+        AND resolved_at IS NOT NULL
+        AND created_at >= NOW() - (${LOOKBACK_DAYS} || ' days')::interval
+    `);
+    const rows: any[] = result?.rows || result || [];
+    if (!rows.length) {
+      _archCache.set(key, { ts: now, stats: empty });
+      return empty;
+    }
+    let wins = 0, losses = 0;
+    const allR: number[] = [];
+    const allDur: number[] = [];
+    const winDur: number[] = [];
+    const lossDur: number[] = [];
+    for (const r of rows) {
+      const outcome = String(r.outcome || "");
+      const pnlPct = Number(r.pnl_pct);
+      const slPct = Number(r.sl_pct);
+      const durMin = Number(r.duration_min);
+      const isWin = WIN_OUTCOMES.has(outcome);
+      const isLoss = LOSS_OUTCOMES.has(outcome);
+      if (isWin) wins++;
+      if (isLoss) losses++;
+      if (Number.isFinite(pnlPct) && Number.isFinite(slPct) && slPct > 0) {
+        allR.push(pnlPct / slPct);
+      }
+      if (Number.isFinite(durMin) && durMin > 0) {
+        allDur.push(durMin);
+        if (isWin) winDur.push(durMin);
+        if (isLoss) lossDur.push(durMin);
+      }
+    }
+    const n = wins + losses;
+    const wrPt = n > 0 ? wins / n : 0;
+    const stats: ArchetypeStats = {
+      token, direction, archetype,
+      n, wins, losses,
+      wrPointEst: wrPt,
+      wrWilsonLB: wilsonLowerBound(wins, n),
+      medianR: percentile(allR, 0.5),
+      p75HoldMinutes: percentile(allDur, 0.75),
+      medianTimeToTpMin: percentile(winDur, 0.5),
+      medianTimeToSlMin: percentile(lossDur, 0.5),
+      lowSample: n <= 20,
+    };
+    _archCache.set(key, { ts: now, stats });
+    return stats;
+  } catch (err: any) {
+    console.warn(`[archetypeStats] fall-open ${key}:`, err?.message || err);
+    return empty;
+  }
+}
+
+export interface ArchetypeSummaryRow {
+  archetype: string;
+  n: number;
+  wins: number;
+  wrPointEst: number;
+  wrWilsonLB: number;
+  medianR: number;
+}
+
+/** Cross-token archetype summary for the admin dashboard. */
+export async function getArchetypeSummary(): Promise<{
+  rows: ArchetypeSummaryRow[];
+  lookbackDays: number;
+}> {
+  try {
+    const result: any = await db.execute(sql`
+      SELECT
+        COALESCE(archetype, 'UNCLASSIFIED') AS archetype,
+        COUNT(*)                            AS n,
+        SUM(CASE WHEN outcome IN ('TP1_HIT','TP2_HIT','TP3_HIT','EXPIRED_WIN') THEN 1 ELSE 0 END) AS wins,
+        AVG(CASE WHEN ABS((stop_loss - entry_price) / NULLIF(entry_price,0)) > 0
+                 THEN pnl_pct / (ABS((stop_loss - entry_price) / NULLIF(entry_price,0)) * 100)
+                 ELSE NULL END)             AS avg_r
+      FROM ai_signal_log
+      WHERE outcome IS NOT NULL
+        AND outcome <> 'PENDING'
+        AND created_at >= NOW() - (${LOOKBACK_DAYS} || ' days')::interval
+      GROUP BY 1
+      ORDER BY n DESC
+    `);
+    const raw: any[] = result?.rows || result || [];
+    const rows: ArchetypeSummaryRow[] = raw.map(r => {
+      const n = Number(r.n) || 0;
+      const wins = Number(r.wins) || 0;
+      return {
+        archetype: String(r.archetype || "UNCLASSIFIED"),
+        n,
+        wins,
+        wrPointEst: n > 0 ? wins / n : 0,
+        wrWilsonLB: wilsonLowerBound(wins, n),
+        medianR: Number(r.avg_r) || 0,
+      };
+    });
+    return { rows, lookbackDays: LOOKBACK_DAYS };
+  } catch (err: any) {
+    console.warn("[archetypeSummary] fall-open:", err?.message || err);
+    return { rows: [], lookbackDays: LOOKBACK_DAYS };
+  }
+}
+
+export function invalidateArchetypeCache(): void { _archCache.clear(); }
