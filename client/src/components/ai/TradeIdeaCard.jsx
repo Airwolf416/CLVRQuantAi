@@ -28,7 +28,14 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
   const tp1Pct = entry && tp1 ? (((tp1 - entry) / entry) * 100).toFixed(1) : null;
   const slPct = entry && sl ? (((sl - entry) / entry) * 100).toFixed(1) : null;
   const rr = trade.tp1?.rr || (entry && tp1 && sl ? `${(Math.abs(tp1 - entry) / Math.abs(entry - sl)).toFixed(1)}:1` : "—");
-  const conviction = trade.conviction || 0;
+  const rawConviction = trade.conviction || 0;
+  // ConvictionCap (May 2026): if the server capped the displayed value,
+  // show that — never the raw ≥50 number — and surface a REVIEW chip so
+  // users know the historical record above this threshold is unreliable.
+  const hasCap = typeof trade.displayedConviction === "number"
+    && trade.displayedConviction < rawConviction;
+  const conviction = hasCap ? trade.displayedConviction : rawConviction;
+  const reviewFlag = !!trade.highConvictionReview;
   const cColor = convictionColor(conviction);
 
   const fmtP = (p) => {
@@ -258,8 +265,23 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
               borderRadius: 3, transition: "width 1.2s ease",
             }} />
           </div>
-          <span style={{ fontSize: 10, fontWeight: 700, color: cColor, fontFamily: MONO, minWidth: 32, textAlign: "right" }}>{conviction}%</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: cColor, fontFamily: MONO, minWidth: 32, textAlign: "right" }} data-testid={`text-conviction-${trade.asset || "card"}`}>{conviction}%</span>
         </div>
+        {reviewFlag && (
+          <div
+            title="Raw model conviction was ≥50, where historical win-rate falls to ~20%. Displayed value capped at 49 until the conviction model is recalibrated."
+            data-testid={`chip-review-${trade.asset || "card"}`}
+            style={{
+              marginTop: 6, display: "inline-block",
+              fontSize: 9, fontWeight: 700, letterSpacing: 0.6, fontFamily: MONO,
+              color: "#f59e0b", background: "rgba(245,158,11,0.10)",
+              border: "1px solid #f59e0b55", borderRadius: 3,
+              padding: "2px 6px",
+            }}
+          >
+            REVIEW
+          </div>
+        )}
 
         {mode === "pro" && (
           <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
