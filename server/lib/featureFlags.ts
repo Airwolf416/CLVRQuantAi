@@ -74,6 +74,34 @@ export function ptaAnalyzerEnabled(): boolean {
   return envBool("PTA_ANALYZER_ENABLED", true);
 }
 
+// ── Win-rate hardening gates (May 2026) ─────────────────────────────────────
+// Two publisher-stage gates added in response to the 32-day track record
+// analysis showing (a) counter-trend signals on majors with ~0% WR and
+// (b) inverted conviction-vs-outcome correlation above 50.
+
+/**
+ * HardTrendFilter — suppress LONG signals in DOWN trends and SHORT signals in
+ * UP trends UNLESS archetype = MEAN_REVERSION_EXHAUSTION. Default OFF so the
+ * filter ships in shadow mode: candidates that WOULD be suppressed are logged
+ * to suppressed_signals with reason="counter_trend_no_mean_rev_archetype"
+ * while still publishing, giving the owner data to validate the
+ * suppression rate before flipping it on.
+ */
+export function hardTrendFilterEnabled(): boolean {
+  return envBool("HARD_TREND_FILTER_ENABLED", false);
+}
+
+/**
+ * ConvictionCap — caps the user-facing displayed conviction at 49 when the
+ * raw engine conviction is ≥50, and records a snapshot to
+ * high_conviction_review for later feature-importance analysis. Defaults ON
+ * because the historical evidence (WR 19.6% vs 37.6%, Pearson r=−0.043) is
+ * overwhelming and this is high-priority risk reduction.
+ */
+export function convictionCapEnabled(): boolean {
+  return envBool("CONVICTION_CAP_ENABLED", true);
+}
+
 /**
  * Phase A — gate the user-facing Journal chips. Default false: the Journal
  * page renders a "coming soon" placeholder until we've spot-checked 30

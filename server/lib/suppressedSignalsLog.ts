@@ -21,7 +21,10 @@ export type SuppressionReason =
   | "would_suppress_no_archetype"   // shadow mode: flag off, signal still published
   | "suppressed_no_archetype"       // hot mode: flag on, signal dropped
   | "would_suppress_low_wr"         // reserved for future per-archetype WR-based gates
-  | "suppressed_low_wr";
+  | "suppressed_low_wr"
+  // HardTrendFilter (May 2026) — counter-trend signal without MEAN_REV archetype
+  | "would_suppress_counter_trend_no_mean_rev_archetype"   // shadow mode
+  | "suppressed_counter_trend_no_mean_rev_archetype";      // hot mode
 
 export interface LogSuppressedSignalInput {
   ticker: string;

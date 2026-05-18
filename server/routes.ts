@@ -1224,6 +1224,103 @@ async function detectMoves() {
       console.warn(`[HARDENING] ${sym} ${dir} gate error, fail-open:`, (e as Error).message);
     }
 
+    // ── HardTrendFilter + ConvictionCap (May 2026) — scanner publish ──────────
+    // Scanner is crypto-only and has no archetype context, so the trend filter
+    // here can only PASS or SUPPRESS based on EMA20 daily/hourly. Both gates
+    // are wrapped in try/catch with the signal published on any error.
+    let _scannerTrendFilter: any = undefined;
+    let _scannerSuppressed = false;
+    try {
+      const { evaluateHardTrendFilter, fetchBinanceTrendCandles } = await import("./lib/hardTrendFilter");
+      const { hardTrendFilterEnabled } = await import("./lib/featureFlags");
+      const { dailyCandles, hourlyCandles } = await fetchBinanceTrendCandles(sym);
+      const direction: "LONG" | "SHORT" =
+        signal.dir === "LONG" || signal.dir === "SHORT"
+          ? signal.dir
+          : (String(signal.dir || "").includes("LONG") ? "LONG" : "SHORT");
+      const tf = evaluateHardTrendFilter({
+        direction,
+        archetype: null, // scanner has no archetype context today
+        currentPrice: Number(signal.entry) || 0,
+        dailyCandles,
+        hourlyCandles,
+      });
+      _scannerTrendFilter = {
+        decision: tf.decision, reason: tf.reason, trend: tf.trend,
+        intradayTrend: tf.intradayTrend, strong: tf.strong, enforced: false,
+      };
+      if (tf.decision === "SUPPRESS") {
+        const hot = hardTrendFilterEnabled();
+        try {
+          const { logSuppressedSignal } = await import("./lib/suppressedSignalsLog");
+          logSuppressedSignal({
+            ticker: sym, intendedDirection: direction, assetClass: "crypto",
+            sourceEndpoint: "auto_scanner",
+            reason: hot
+              ? "suppressed_counter_trend_no_mean_rev_archetype"
+              : "would_suppress_counter_trend_no_mean_rev_archetype",
+            rawSignalPayload: {
+              entry: signal.entry, sl: signal.stopLoss, tp1: signal.tp1,
+              conviction: signal.conf, archetype: null,
+            },
+            classificationDiagnostics: tf.diagnostics as any,
+          }).catch(() => {});
+        } catch { /* best-effort */ }
+        if (hot) {
+          _scannerTrendFilter.enforced = true;
+          _scannerSuppressed = true;
+          console.log(`[SCANNER HARD-TREND] ${sym} ${direction} VETOED — counter-trend (${tf.trend})`);
+        }
+      }
+      (signal as any).trend_filter = _scannerTrendFilter;
+    } catch (tfErr: any) {
+      console.warn(`[SCANNER HARD-TREND] ${sym} fail-open:`, tfErr?.message || tfErr);
+    }
+
+    if (_scannerSuppressed) {
+      continue; // hot mode — drop the signal entirely
+    }
+
+    try {
+      const { convictionCapEnabled } = await import("./lib/featureFlags");
+      if (convictionCapEnabled()) {
+        const { applyConvictionCap, recordHighConvictionReview } = await import("./lib/convictionCap");
+        const rawPct = Number(signal.conf) || Number(signal.advancedScore) || 0;
+        const capResult = applyConvictionCap(rawPct);
+        if (capResult.capped) {
+          (signal as any).displayedConviction = capResult.displayedConviction;
+          (signal as any).highConvictionReview = true;
+          recordHighConvictionReview({
+            rawConviction: capResult.rawConviction,
+            sourceEndpoint: "auto_scanner",
+            token: sym,
+            direction: signal.dir,
+            archetype: null,
+            signalId: signal.id ?? null,
+            aiSignalLogId: null,
+            featureSnapshot: {
+              advancedScore: signal.advancedScore ?? null,
+              isStrongSignal: !!signal.isStrongSignal,
+              pctMove: signal.pctMove ?? null,
+              stopPct: signal.stopPct ?? null,
+              tp1Pct: signal.tp1Pct ?? null,
+              rr1: signal.rr1 ?? null,
+              rr2: signal.rr2 ?? null,
+              rrAfterFriction: (signal as any).rrAfterFriction ?? null,
+              leverage: signal.lev ?? null,
+              trend_filter: _scannerTrendFilter ?? null,
+              fundingRate: hl?.funding ?? null,
+              oiChange6hPct: getOiChangePct(sym) ?? null,
+              scoreBreakdown: signal.scoreBreakdown ?? null,
+              hardening_applied: !!(signal as any).hardening,
+            },
+          }, capResult).catch(() => {});
+        }
+      }
+    } catch (capErr: any) {
+      console.warn(`[SCANNER CONV-CAP] ${sym} fail-open:`, capErr?.message || capErr);
+    }
+
     liveSignals.unshift(signal);
     // ── AUTOPOSTER DISABLED ──────────────────────────────────────────────
     // The live auto-scanner used to fire the Telegram autoposter on every
@@ -2373,6 +2470,175 @@ export async function registerRoutes(
         inFlight: isRefreshInFlight(),
       });
     } catch (err: any) {
+      res.status(500).json({ error: String(err?.message || err) });
+    }
+  });
+
+  // ── /api/admin/high-conviction-analysis ─────────────────────────────────
+  // ConvictionCap diagnostic (May 2026). Joins the high_conviction_review
+  // snapshots to ai_signal_log outcomes and returns:
+  //   - sample size + the cap's effective win rate vs the global baseline
+  //   - Pearson correlation r between every numeric snapshot feature and
+  //     the binary outcome (1 = win, 0 = loss). Skips features with < 5
+  //     resolved samples or zero variance to avoid spurious near-1 r.
+  // No XGBoost — plain JS. Pure read-only; per-token breakdown optional.
+  app.get("/api/admin/high-conviction-analysis", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    try {
+      const { sql: dsql } = await import("drizzle-orm");
+      const { db: ddb } = await import("./db");
+      const lookbackDays = Math.min(365, Math.max(1, Number(req.query?.lookbackDays) || 90));
+      // Pull every capped snapshot in the window plus its outcome (joined by
+      // token + direction + best-match time). Most rows won't have a signal_id
+      // yet (auto_scanner is the only path that supplies one today), so the
+      // outcome join falls back to the nearest matching ai_signal_log row
+      // within ±5 min of the snapshot timestamp.
+      const rowsQ: any = await ddb.execute(dsql`
+        WITH hc AS (
+          SELECT
+            r.id, r.ts, r.token, r.direction, r.raw_conviction,
+            r.displayed_conviction, r.archetype, r.source_endpoint,
+            r.feature_snapshot, r.signal_id, r.ai_signal_log_id,
+            r.outcome, r.pnl_pct, r.resolved_at
+          FROM high_conviction_review r
+          WHERE r.ts > NOW() - (${lookbackDays}::int || ' days')::interval
+        ),
+        outcomes AS (
+          SELECT
+            hc.id AS review_id,
+            CASE
+              WHEN hc.outcome IS NOT NULL THEN hc.outcome
+              WHEN sl.status IN ('tp1_hit','tp2_hit','tp3_hit') THEN 'WIN'
+              WHEN sl.status IN ('sl_hit','time_stop','expired','hard_exit') THEN 'LOSS'
+              ELSE NULL
+            END AS outcome_label,
+            COALESCE(hc.pnl_pct,
+              CASE WHEN sl.realized_r IS NOT NULL THEN sl.realized_r ELSE NULL END
+            ) AS realized_r
+          FROM hc
+          LEFT JOIN LATERAL (
+            SELECT s.status, s.realized_r
+              FROM ai_signal_log s
+             WHERE s.token = hc.token
+               AND s.direction = hc.direction
+               AND s.created_at BETWEEN hc.ts - interval '15 min' AND hc.ts + interval '15 min'
+             ORDER BY ABS(EXTRACT(EPOCH FROM (s.created_at - hc.ts))) ASC
+             LIMIT 1
+          ) sl ON true
+        )
+        SELECT hc.*, o.outcome_label, o.realized_r
+          FROM hc
+          LEFT JOIN outcomes o ON o.review_id = hc.id
+          ORDER BY hc.ts DESC
+      `);
+      const rows: any[] = (rowsQ.rows || rowsQ) as any[];
+
+      const resolved = rows.filter(r => r.outcome_label === "WIN" || r.outcome_label === "LOSS");
+      const wins = resolved.filter(r => r.outcome_label === "WIN").length;
+      const losses = resolved.length - wins;
+      const cappedWr = resolved.length > 0 ? wins / resolved.length : null;
+
+      // Global baseline WR over the same window (all resolved scanner signals)
+      const baselineQ: any = await ddb.execute(dsql`
+        SELECT
+          COUNT(*) FILTER (WHERE status IN ('tp1_hit','tp2_hit','tp3_hit')) AS wins,
+          COUNT(*) FILTER (WHERE status IN ('tp1_hit','tp2_hit','tp3_hit','sl_hit','time_stop','expired','hard_exit')) AS resolved
+          FROM ai_signal_log
+         WHERE created_at > NOW() - (${lookbackDays}::int || ' days')::interval
+      `);
+      const baseRow = (baselineQ.rows || baselineQ)[0] || {};
+      const baselineWr = Number(baseRow.resolved) > 0
+        ? Number(baseRow.wins) / Number(baseRow.resolved) : null;
+
+      // Pearson r per numeric feature across resolved capped snapshots.
+      // Flatten one level: top-level numeric keys + nested numeric keys
+      // (e.g. `trend_filter.strong` cast as 0/1).
+      function flattenNumeric(obj: any, prefix = ""): Record<string, number> {
+        const out: Record<string, number> = {};
+        if (!obj || typeof obj !== "object") return out;
+        for (const [k, v] of Object.entries(obj)) {
+          const key = prefix ? `${prefix}.${k}` : k;
+          if (typeof v === "number" && Number.isFinite(v)) out[key] = v;
+          else if (typeof v === "boolean") out[key] = v ? 1 : 0;
+          else if (v && typeof v === "object" && !Array.isArray(v)) {
+            Object.assign(out, flattenNumeric(v, key));
+          }
+        }
+        return out;
+      }
+      function pearson(xs: number[], ys: number[]): number | null {
+        const n = xs.length;
+        if (n < 5) return null;
+        const mx = xs.reduce((a, b) => a + b, 0) / n;
+        const my = ys.reduce((a, b) => a + b, 0) / n;
+        let num = 0, dx = 0, dy = 0;
+        for (let i = 0; i < n; i++) {
+          const ax = xs[i] - mx, ay = ys[i] - my;
+          num += ax * ay; dx += ax * ax; dy += ay * ay;
+        }
+        if (dx === 0 || dy === 0) return null;
+        return num / Math.sqrt(dx * dy);
+      }
+
+      const buckets: Record<string, { xs: number[]; ys: number[] }> = {};
+      for (const r of resolved) {
+        const flat = flattenNumeric(r.feature_snapshot ?? {});
+        const y = r.outcome_label === "WIN" ? 1 : 0;
+        for (const [k, v] of Object.entries(flat)) {
+          if (!buckets[k]) buckets[k] = { xs: [], ys: [] };
+          buckets[k].xs.push(v); buckets[k].ys.push(y);
+        }
+      }
+      const correlations = Object.entries(buckets)
+        .map(([feature, { xs, ys }]) => ({
+          feature,
+          n: xs.length,
+          mean: xs.length > 0 ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(4) : null,
+          r: pearson(xs, ys),
+        }))
+        .filter(c => c.r !== null)
+        .map(c => ({ ...c, r: +c.r!.toFixed(4) }))
+        .sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+
+      // Per-endpoint breakdown so we can see whether the bug is scanner-
+      // specific or shared across /analyze + /kronos.
+      const byEndpoint: Record<string, { n: number; resolved: number; wins: number }> = {};
+      for (const r of rows) {
+        const ep = String(r.source_endpoint || "unknown");
+        if (!byEndpoint[ep]) byEndpoint[ep] = { n: 0, resolved: 0, wins: 0 };
+        byEndpoint[ep].n += 1;
+        if (r.outcome_label === "WIN" || r.outcome_label === "LOSS") {
+          byEndpoint[ep].resolved += 1;
+          if (r.outcome_label === "WIN") byEndpoint[ep].wins += 1;
+        }
+      }
+
+      res.json({
+        lookbackDays,
+        totals: {
+          capped_snapshots: rows.length,
+          resolved: resolved.length,
+          wins, losses,
+          cappedWinRate: cappedWr,
+          baselineWinRate: baselineWr,
+          delta: (cappedWr != null && baselineWr != null) ? +(cappedWr - baselineWr).toFixed(4) : null,
+        },
+        byEndpoint: Object.entries(byEndpoint).map(([endpoint, v]) => ({
+          endpoint,
+          captured: v.n,
+          resolved: v.resolved,
+          wins: v.wins,
+          winRate: v.resolved > 0 ? +(v.wins / v.resolved).toFixed(4) : null,
+        })),
+        // Top features by absolute correlation with outcome — negative r means
+        // the feature is INVERSELY correlated with winning (the bug).
+        featureCorrelations: correlations,
+        note: "Pearson r over capped snapshots (raw_conviction ≥ 50) only. " +
+              "Features with <5 resolved samples or zero variance are excluded.",
+      });
+    } catch (err: any) {
+      console.error("[high-conv-analysis]", err);
       res.status(500).json({ error: String(err?.message || err) });
     }
   });
@@ -7456,6 +7722,105 @@ Every level must be technically defensible. Return JSON only.`;
           console.warn(`[analyze ARCHETYPE] ${symbol} fail-open:`, archErr?.message || archErr);
         }
 
+        // ── HardTrendFilter (May 2026, shadow by default) ─────────────────────
+        // Suppress counter-trend signals UNLESS archetype = MEAN_REVERSION_EXHAUSTION.
+        // Crypto-only (uses Binance klines); non-crypto skips entirely.
+        // Fail-open on any error.
+        let cardTrendFilter: any = undefined;
+        try {
+          if (cls === "crypto") {
+            const { evaluateHardTrendFilter, fetchBinanceTrendCandles } = await import("./lib/hardTrendFilter");
+            const { hardTrendFilterEnabled } = await import("./lib/featureFlags");
+            const { dailyCandles, hourlyCandles } = await fetchBinanceTrendCandles(symbol);
+            const tf = evaluateHardTrendFilter({
+              direction,
+              archetype: cardArchetype ?? null,
+              currentPrice: entry,
+              dailyCandles,
+              hourlyCandles,
+            });
+            cardTrendFilter = {
+              decision: tf.decision,
+              reason: tf.reason,
+              trend: tf.trend,
+              intradayTrend: tf.intradayTrend,
+              strong: tf.strong,
+              enforced: false, // updated below if hot mode drops the card
+            };
+            if (tf.decision === "SUPPRESS") {
+              const hot = hardTrendFilterEnabled();
+              try {
+                const { logSuppressedSignal } = await import("./lib/suppressedSignalsLog");
+                logSuppressedSignal({
+                  ticker: symbol, intendedDirection: direction, assetClass: cls,
+                  sourceEndpoint: "analyze",
+                  reason: hot
+                    ? "suppressed_counter_trend_no_mean_rev_archetype"
+                    : "would_suppress_counter_trend_no_mean_rev_archetype",
+                  rawSignalPayload: {
+                    entry, sl: card.stopLoss, tp1: card.tp1,
+                    conviction: card.conviction, archetype: cardArchetype ?? null,
+                  },
+                  classificationDiagnostics: tf.diagnostics as any,
+                }).catch(() => {});
+              } catch { /* best-effort */ }
+              if (hot) {
+                cardTrendFilter.enforced = true;
+                vetoed++; dropped++; return;
+              }
+            }
+          }
+        } catch (tfErr: any) {
+          console.warn(`[analyze HARD-TREND] ${symbol} fail-open:`, tfErr?.message || tfErr);
+        }
+
+        // ── ConvictionCap (May 2026, default ON) ──────────────────────────────
+        // Caps user-facing conviction at 49 when raw ≥ 50 and records a feature
+        // snapshot for later correlation analysis (the inverted-confidence bug).
+        let cardDisplayedConviction: number | undefined;
+        let cardConvictionReview: boolean = false;
+        try {
+          const { convictionCapEnabled } = await import("./lib/featureFlags");
+          if (convictionCapEnabled()) {
+            const { applyConvictionCap, recordHighConvictionReview } = await import("./lib/convictionCap");
+            const rawPct = Math.round(h.finalConviction * 100);
+            const capResult = applyConvictionCap(rawPct);
+            if (capResult.capped) {
+              cardDisplayedConviction = capResult.displayedConviction;
+              cardConvictionReview = true;
+              recordHighConvictionReview({
+                rawConviction: capResult.rawConviction,
+                sourceEndpoint: "analyze",
+                token: symbol,
+                direction,
+                archetype: cardArchetype ?? null,
+                signalId: null,
+                aiSignalLogId: null,
+                featureSnapshot: {
+                  archetype: cardArchetype ?? null,
+                  archetype_confidence: cardArchetypeConfidence ?? null,
+                  trend_filter: cardTrendFilter ?? null,
+                  atr1h, pctChange24h, funding8h, oiUsd, oiChange24hPct,
+                  regime,
+                  backtestN: ctx.backtestN, backtestWr: ctx.backtestWr, backtestAvgR: ctx.backtestAvgR,
+                  edge_action: edge.action,
+                  edge_recalibrated_pct: edge.recalibratedConvictionPct,
+                  hardener_size_multiplier: h.sizeMultiplier,
+                  hardener_wr_ci: [h.wrCiLow, h.wrCiHigh],
+                  chase_flag: !!h.chaseFlag, crowding_flag: !!h.crowdingFlag,
+                  low_sample_flag: !!h.lowSampleFlag,
+                  archetype_wr_lb_80: cardArchetypeStats?.wr_wilson_lb_80 ?? null,
+                  archetype_median_r: cardArchetypeStats?.median_r ?? null,
+                  archetype_n: cardArchetypeStats?.n ?? null,
+                  recommendedFlip: cardRecommendedFlip,
+                },
+              }, capResult).catch(() => {});
+            }
+          }
+        } catch (capErr: any) {
+          console.warn(`[analyze CONV-CAP] ${symbol} fail-open:`, capErr?.message || capErr);
+        }
+
         // Optional prose regen if numbers/flags moved materially
         let thesis: string = card.thesis || "";
         if (h.materiallyMutated) {
@@ -7503,13 +7868,6 @@ Every level must be technically defensible. Return JSON only.`;
           edge: `${Math.round(h.finalConviction * 100)}%`,
           leverage: `${Math.min(Number(String(card.leverage || "1x").replace(/[^\d.]/g, "")) || 1, h.leverageCap).toFixed(0)}x`,
           thesis,
-          flags: Array.from(new Set([
-            ...((card.flags as string[]) || []),
-            ...(h.chaseFlag ? ["chase"] : []),
-            ...(h.crowdingFlag ? ["crowded"] : []),
-            ...(h.lowSampleFlag ? ["low-sample"] : []),
-            ...(inverted ? ["edge-inverted"] : []),
-          ])),
           hardener: {
             applied: true,
             sizeMultiplier: Number(h.sizeMultiplier.toFixed(3)),
@@ -7532,6 +7890,19 @@ Every level must be technically defensible. Return JSON only.`;
           archetype_stats: cardArchetypeStats,
           archetype_diagnostics: cardArchetypeDiagnostics,
           recommendedFlip: cardRecommendedFlip,
+          // ── HardTrendFilter + ConvictionCap surface ─────────────────────────
+          trend_filter: cardTrendFilter,
+          displayedConviction: cardDisplayedConviction,
+          highConvictionReview: cardConvictionReview,
+          flags: Array.from(new Set([
+            ...((card.flags as string[]) || []),
+            ...(h.chaseFlag ? ["chase"] : []),
+            ...(h.crowdingFlag ? ["crowded"] : []),
+            ...(h.lowSampleFlag ? ["low-sample"] : []),
+            ...(inverted ? ["edge-inverted"] : []),
+            ...(cardTrendFilter?.decision === "SUPPRESS" && !cardTrendFilter?.enforced ? ["shadow-counter-trend"] : []),
+            ...(cardConvictionReview ? ["review"] : []),
+          ])),
         };
       } catch (e: any) {
         console.warn(`[hardenTradeIdeas] card ${idx} skipped:`, e?.message || e);
@@ -8450,6 +8821,104 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
               } catch (archErrK: any) {
                 console.warn(`[kronos ARCHETYPE] ${symbolK} fail-open:`, archErrK?.message || archErrK);
               }
+
+              // ── HardTrendFilter (May 2026, shadow by default) — Kronos ──────
+              let kronosTrendFilter: any = undefined;
+              try {
+                const { evaluateHardTrendFilter, fetchBinanceTrendCandles } = await import("./lib/hardTrendFilter");
+                const { hardTrendFilterEnabled } = await import("./lib/featureFlags");
+                const { dailyCandles, hourlyCandles } = await fetchBinanceTrendCandles(symbolK);
+                const archetypeK = (parsed as any).archetype ?? null;
+                const tf = evaluateHardTrendFilter({
+                  direction: dirK,
+                  archetype: archetypeK,
+                  currentPrice: e,
+                  dailyCandles,
+                  hourlyCandles,
+                });
+                kronosTrendFilter = {
+                  decision: tf.decision, reason: tf.reason, trend: tf.trend,
+                  intradayTrend: tf.intradayTrend, strong: tf.strong, enforced: false,
+                };
+                if (tf.decision === "SUPPRESS") {
+                  const hot = hardTrendFilterEnabled();
+                  try {
+                    const { logSuppressedSignal } = await import("./lib/suppressedSignalsLog");
+                    logSuppressedSignal({
+                      ticker: symbolK, intendedDirection: dirK, assetClass: "crypto",
+                      sourceEndpoint: "kronos",
+                      reason: hot
+                        ? "suppressed_counter_trend_no_mean_rev_archetype"
+                        : "would_suppress_counter_trend_no_mean_rev_archetype",
+                      rawSignalPayload: { entry: e, conviction: hK.finalConviction, archetype: archetypeK },
+                      classificationDiagnostics: tf.diagnostics as any,
+                    }).catch(() => {});
+                  } catch { /* best-effort */ }
+                  if (hot) {
+                    kronosTrendFilter.enforced = true;
+                    (parsed as any).suppressed = true;
+                    (parsed as any).suppression_message = "Counter-trend signal without mean-reversion archetype — Kronos plan withheld.";
+                    parsed.trade_plan = {
+                      ...parsed.trade_plan,
+                      direction: "NO_TRADE",
+                      notes: `HardTrendFilter veto: counter-trend (${tf.trend}) without MEAN_REVERSION_EXHAUSTION. ${parsed.trade_plan?.notes || ""}`,
+                    };
+                  }
+                }
+                (parsed as any).trend_filter = kronosTrendFilter;
+              } catch (tfErrK: any) {
+                console.warn(`[kronos HARD-TREND] ${symbolK} fail-open:`, tfErrK?.message || tfErrK);
+              }
+
+              // ── ConvictionCap (May 2026, default ON) — Kronos ───────────────
+              try {
+                const { convictionCapEnabled } = await import("./lib/featureFlags");
+                if (convictionCapEnabled() && !(parsed as any).suppressed) {
+                  const { applyConvictionCap, recordHighConvictionReview } = await import("./lib/convictionCap");
+                  const rawPct = Number(parsed.ensemble_confidence) || Math.round(hK.finalConviction * 100);
+                  const capResult = applyConvictionCap(rawPct);
+                  if (capResult.capped) {
+                    (parsed as any).displayedConviction = capResult.displayedConviction;
+                    (parsed as any).highConvictionReview = true;
+                    recordHighConvictionReview({
+                      rawConviction: capResult.rawConviction,
+                      sourceEndpoint: "kronos",
+                      token: symbolK,
+                      direction: dirK,
+                      archetype: (parsed as any).archetype ?? null,
+                      signalId: null,
+                      aiSignalLogId: null,
+                      featureSnapshot: {
+                        archetype: (parsed as any).archetype ?? null,
+                        archetype_confidence: (parsed as any).archetype_confidence ?? null,
+                        trend_filter: kronosTrendFilter ?? null,
+                        atr1h: Number(atr) || 0,
+                        pctChange24h: ((bus?.prices?.[symbolK]?.change24h ?? 0) / 100),
+                        funding8h: bus?.funding?.[symbolK] ?? 0,
+                        oiUsd: bus?.oi?.[symbolK] ?? 0,
+                        oiChange24hPct: ((getOiChangePct(symbolK) ?? 0) / 100),
+                        regime: regimeK,
+                        backtestN: statK?.sampleSize ?? 0,
+                        backtestWr: statK?.winRate ?? 0,
+                        backtestAvgR: statK?.expectedR ?? 0,
+                        edge_action: edgeK.action,
+                        edge_recalibrated_pct: edgeK.recalibratedConvictionPct,
+                        hardener_size_multiplier: hK.sizeMultiplier,
+                        hardener_wr_ci: [hK.wrCiLow, hK.wrCiHigh],
+                        chase_flag: !!hK.chaseFlag, crowding_flag: !!hK.crowdingFlag,
+                        low_sample_flag: !!hK.lowSampleFlag,
+                        archetype_wr_lb_80: (parsed as any).archetype_stats?.wr_wilson_lb_80 ?? null,
+                        archetype_median_r: (parsed as any).archetype_stats?.median_r ?? null,
+                        archetype_n: (parsed as any).archetype_stats?.n ?? null,
+                        recommendedFlip: !!(parsed as any).recommendedFlip,
+                      },
+                    }, capResult).catch(() => {});
+                  }
+                }
+              } catch (capErrK: any) {
+                console.warn(`[kronos CONV-CAP] ${symbolK} fail-open:`, capErrK?.message || capErrK);
+              }
+
               parsed.hardener = {
                 applied: true,
                 sizeMultiplier: parseFloat(hK.sizeMultiplier.toFixed(3)),

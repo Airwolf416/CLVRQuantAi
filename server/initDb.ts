@@ -1008,6 +1008,34 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS signal_rejections_reason_idx ON signal_rejections (reason)`);
     await client.query(`CREATE INDEX IF NOT EXISTS signal_rejections_token_idx  ON signal_rejections (token)`);
 
+    // ── high_conviction_review (May 2026 — ConvictionCap diagnostic) ─────────
+    // Captures a full feature snapshot every time a candidate is published
+    // with raw conviction ≥ 50. Used by /api/admin/high-conviction-analysis
+    // to compute Pearson correlation between each numeric feature and the
+    // eventual outcome, so the inverted-confidence bug can be diagnosed.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS high_conviction_review (
+        id                    SERIAL PRIMARY KEY,
+        ts                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        source_endpoint       TEXT NOT NULL,
+        token                 TEXT NOT NULL,
+        direction             TEXT NOT NULL,
+        raw_conviction        DOUBLE PRECISION NOT NULL,
+        displayed_conviction  DOUBLE PRECISION NOT NULL,
+        archetype             TEXT,
+        signal_id             TEXT,
+        ai_signal_log_id      INTEGER,
+        feature_snapshot      JSONB,
+        outcome               TEXT,
+        pnl_pct               DOUBLE PRECISION,
+        resolved_at           TIMESTAMPTZ
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS high_conv_review_ts_idx        ON high_conviction_review (ts)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS high_conv_review_token_idx     ON high_conviction_review (token)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS high_conv_review_signal_id_idx ON high_conviction_review (signal_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS high_conv_review_outcome_idx   ON high_conviction_review (outcome)`);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
 
