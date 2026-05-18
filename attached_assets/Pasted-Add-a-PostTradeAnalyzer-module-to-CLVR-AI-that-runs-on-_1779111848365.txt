@@ -1,0 +1,211 @@
+Add a PostTradeAnalyzer module to CLVR AI that runs on every closed 
+signal and produces a structured failure/success diagnosis. The output 
+feeds back into the archetype classifier and direction model so the 
+system learns from its own track record rather than repeating misclassifications.
+
+=== PART 1: Trigger and inputs ===
+
+Run PostTradeAnalyzer whenever a signal transitions to closed state 
+(any exit_reason from prompt 4). Pull the following data for the 
+analysis window [signal_generation_time - 60min, exit_time + 30min]:
+
+- Full price series at 1m resolution
+- Volume series at 1m
+- OI series (5m resolution acceptable)
+- Funding rate snapshots at signal time, midpoint, exit
+- VWAP, EMA20 (5m and 1H), ATR_5m, ATR_daily at signal time and exit
+- HTF trend state (1H EMA20 slope sign) at signal time and exit
+- Any macro events that fired during the window
+- Original signal payload: archetype, direction, entry, SL, TP1, TP2, 
+  continuation_prob, EQS, vol_regime
+- Actual outcome: exit_reason, minutes_to_exit, MFE_R, MAE_R, realized_R
+
+=== PART 2: Diagnostic tag taxonomy ===
+
+Every closed signal gets tagged with exactly one PRIMARY diagnosis 
+and 0-3 SECONDARY tags from this taxonomy:
+
+WIN TAGS (only assigned if realized_R > 0):
+- clean_win: TP1 hit within expected_hold, MFE/MAE ratio > 2
+- chop_win: TP1 hit but MAE_R > 0.5 (got lucky, took heat)
+- runner_win: TP2 hit or runner mode captured > 1.5R
+- early_exit_left_money: closed manually or via trail, but price 
+  continued > 0.5R further in trade direction post-exit
+
+LOSS TAGS (assigned if realized_R <= 0):
+- clean_stop: SL hit, thesis was reasonable, no obvious misread
+- thesis_invalidated_correctly: invalidation trigger fired before SL, 
+  saving capital — this is a SUCCESS even though realized_R < 0
+- regime_misclassified: continuation_prob said continue but price 
+  mean-reverted (or vice versa) — direction model failure
+- archetype_mismatch: was tagged X but price action behaved like Y 
+  (e.g., tagged BREAKOUT_RETEST but acted like MEAN_REVERSION_EXHAUSTION)
+- chased_entry: EQS was published >= 65 but post-hoc analysis shows 
+  price was > 1.5 ATR extended at entry (EQS module miscalibrated)
+- stop_too_tight: SL hit then price recovered to TP within 
+  expected_hold window (would have been a winner with wider stop)
+- stop_too_wide: realized loss > 1R when 0.5R stop would have 
+  preserved capital and same setup re-triggered cleanly later
+- macro_blindside: high-impact event during hold window that wasn't 
+  flagged by Macro Clear at signal time
+- liquidity_event: abnormal volume spike (>3x 20-bar avg) drove the 
+  loss, often a liquidation cascade or news flow
+- right_idea_wrong_timing: trade direction matched the eventual move 
+  by end of session but signal was too early or too late
+- stale_flat_correct: flat-exited at flat_threshold, price went 
+  nowhere — correct kill, log as efficiency win
+- stale_flat_premature: flat-exited but price moved > 0.5R in trade 
+  direction within 15 min after exit
+
+NEUTRAL/META TAGS:
+- low_sample_archetype: archetype had < 20 historical samples at 
+  signal time, outcome carries low information weight
+- counter_trend_warning_ignored: HTF trend was opposite, signal fired 
+  anyway, outcome aligned with HTF (not LTF setup)
+- macro_event_overlap: event fired within hold window even if 
+  pre-flagged
+
+=== PART 3: Diagnostic logic ===
+
+Primary diagnosis is assigned by a rules engine in priority order. 
+First match wins:
+
+1. If exit_reason == "thesis_invalidated" AND realized_R > -0.6:
+   PRIMARY = thesis_invalidated_correctly
+
+2. If exit_reason == "sl_hit" AND within 30 min post-exit price 
+   reaches original_TP1: PRIMARY = stop_too_tight
+
+3. If realized_R < 0 AND continuation_prob > 0.65 AND day's move 
+   reversed > 1 ATR_daily against trade direction: 
+   PRIMARY = regime_misclassified
+
+4. If realized_R < 0 AND post-hoc archetype reclassification (run 
+   the archetype classifier on the full price action window) 
+   differs from assigned archetype: PRIMARY = archetype_mismatch
+   (store both: assigned_archetype, actual_archetype)
+
+5. If realized_R < 0 AND at signal time price was > 1.5 ATR_daily 
+   extended from session open in trade direction:
+   PRIMARY = chased_entry
+
+6. If exit_reason == "stale_flat" AND |price_at_exit+15min - 
+   exit_price| / atr_5m > 0.5 in trade direction:
+   PRIMARY = stale_flat_premature
+
+7. If exit_reason == "stale_flat" AND no significant movement 
+   within 30 min post-exit: PRIMARY = stale_flat_correct
+
+8. If macro event with impact >= MEDIUM fired during hold window 
+   AND was NOT in Macro Clear feed at signal generation:
+   PRIMARY = macro_blindside
+
+9. Volume spike > 3x 20-bar average within 3 bars of adverse move:
+   PRIMARY = liquidity_event
+
+10. realized_R >= 1.0 AND MFE/MAE >= 2: PRIMARY = clean_win
+
+11. realized_R > 0 AND MAE_R > 0.5: PRIMARY = chop_win
+
+12. realized_R >= 1.5: PRIMARY = runner_win
+
+13. Default fallback if realized_R <= 0: PRIMARY = clean_stop
+
+Secondary tags are non-exclusive and run as independent checks.
+
+=== PART 4: Feedback into upstream models ===
+
+The tags don't just sit in a journal — they update model weights.
+
+Maintain a rolling per-archetype scorecard over trailing 50 closed 
+signals per archetype:
+- diagnosis_distribution: % of each PRIMARY tag
+- effective_win_rate: (clean_win + chop_win + runner_win + 
+  thesis_invalidated_correctly + stale_flat_correct) / total
+- avg_realized_R, avg_MFE_R, avg_MAE_R
+
+If for any archetype the rate of:
+
+- archetype_mismatch > 25% over trailing 30 signals: trigger 
+  ArchetypeClassifierReview — pause publishing that archetype, 
+  log an admin alert, require manual review before re-enabling.
+
+- regime_misclassified > 20% over trailing 30 signals: increase 
+  the direction model's mean-reversion weight by 10% (specifically, 
+  the day_move_atr_multiple penalty in RegimeDirection prompt 3 
+  gets multiplied by 1.10). Capped at 2.0x baseline.
+
+- chased_entry > 15% over trailing 30 signals: tighten EQS 
+  threshold from 65 to 70 for that archetype.
+
+- stop_too_tight > 25%: widen default SL distance for that 
+  archetype by 0.2 * ATR_5m. Capped at 2.5 * ATR_5m.
+
+- stop_too_wide > 25%: tighten default SL distance by 0.15 * 
+  ATR_5m. Floor at 0.8 * ATR_5m.
+
+- stale_flat_premature > 30%: extend flat_threshold_min for that 
+  archetype by 20%. Capped at 0.85 * t_tp_p75.
+
+All weight adjustments are LOGGED to a model_adjustments table with 
+timestamp, archetype, parameter, old_value, new_value, trigger_reason. 
+Never adjust silently. Display a "Model Calibration" page in the 
+admin dashboard showing all live adjustments and when they were applied.
+
+=== PART 5: User-facing journal ===
+
+For Elite users, expose a Journal tab showing their copied trades 
+with the auto-generated diagnosis tag rendered as a colored chip:
+
+- Green chips: clean_win, runner_win, thesis_invalidated_correctly, 
+  stale_flat_correct
+- Yellow chips: chop_win, stop_too_tight, early_exit_left_money, 
+  right_idea_wrong_timing
+- Red chips: regime_misclassified, archetype_mismatch, chased_entry, 
+  stop_too_wide, stale_flat_premature
+- Grey chips: clean_stop, macro_blindside, liquidity_event 
+  (acknowledged failures, not model errors)
+
+Include a one-sentence plain-English explanation per tag, generated 
+from a template. Example:
+"regime_misclassified — The model expected continuation but price 
+mean-reverted after a 2.8 ATR extension. Direction model has been 
+adjusted (mean-rev weight +10%)."
+
+This makes it transparent to users that the system is actually 
+learning, not just throwing signals at the wall.
+
+=== PART 6: Weekly model report ===
+
+Every Sunday 22:00 ET, generate a model performance report:
+- Per-archetype win rate, effective win rate, avg R
+- Diagnosis distribution
+- All model adjustments applied in the past 7 days, with rationale
+- Net change in effective win rate vs prior week
+- Any archetypes currently paused for review
+
+Email to admin and post to a /reports endpoint visible to Elite users.
+
+=== PART 7: Schema additions ===
+
+post_trade_analysis table:
+- signal_id (FK), analyzed_at, primary_tag, secondary_tags (array), 
+  assigned_archetype, actual_archetype, MFE_R, MAE_R, 
+  diagnosis_confidence (0-1), explanation_text
+
+model_adjustments table:
+- adjusted_at, archetype, parameter_name, old_value, new_value, 
+  trigger_reason, trigger_metric_value, sample_size
+
+archetype_scorecard table (materialized view, refreshed hourly):
+- archetype, vol_regime, trailing_n, effective_win_rate, 
+  avg_realized_R, top_3_diagnosis_tags, last_updated
+
+=== PART 8: Bootstrap ===
+
+On first deployment, run PostTradeAnalyzer over the entire historical 
+signal database (90+ days). Populate post_trade_analysis. Compute 
+initial archetype scorecards. Apply the first round of model 
+adjustments based on historical patterns BEFORE going live with the 
+feedback loop. Log all bootstrap adjustments separately so they're 
+distinguishable from organic learning adjustments.
