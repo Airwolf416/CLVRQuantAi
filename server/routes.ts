@@ -4728,6 +4728,44 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     if (MACRO_ORANGE_KW.some(kw => t.includes(kw))) return "orange";
     return "yellow";
   }
+  // ── EARNINGS (FMP) ─────────────────────────────────────────────────────────
+  // Public, cached. Calendar: from/to optional (default = today → +7d).
+  // History: required symbol. Both fail-soft to [] when FMP_API_KEY absent.
+  app.get("/api/earnings/calendar", async (req, res) => {
+    try {
+      const { getEarningsCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
+      if (!isFmpEarningsConfigured()) return res.json({ rows: [], configured: false });
+      const today = new Date();
+      const fmt = (d: Date) => d.toISOString().slice(0, 10);
+      const defaultFrom = fmt(today);
+      const defaultTo = fmt(new Date(today.getTime() + 7 * 86400000));
+      const from = String(req.query?.from || defaultFrom).slice(0, 10);
+      const to = String(req.query?.to || defaultTo).slice(0, 10);
+      const rows = await getEarningsCalendar(from, to);
+      const symFilter = String(req.query?.symbols || "").trim();
+      const filtered = symFilter
+        ? rows.filter(r => symFilter.toUpperCase().split(",").map(s => s.trim()).includes(r.symbol))
+        : rows;
+      res.json({ rows: filtered, configured: true, from, to });
+    } catch (e: any) {
+      res.status(500).json({ rows: [], error: e?.message || "earnings calendar failed" });
+    }
+  });
+
+  app.get("/api/earnings/history", async (req, res) => {
+    try {
+      const { getEarningsHistory, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
+      if (!isFmpEarningsConfigured()) return res.json({ rows: [], configured: false });
+      const symbol = String(req.query?.symbol || "").trim().toUpperCase();
+      if (!symbol) return res.status(400).json({ rows: [], error: "symbol required" });
+      const limit = Math.min(20, Math.max(1, Number(req.query?.limit) || 8));
+      const rows = await getEarningsHistory(symbol, limit);
+      res.json({ rows, configured: true, symbol });
+    } catch (e: any) {
+      res.status(500).json({ rows: [], error: e?.message || "earnings history failed" });
+    }
+  });
+
   app.get("/api/macro-intel", async (_req, res) => {
     if (MACRO_INTEL_CACHE.ts && Date.now() - MACRO_INTEL_CACHE.ts < 60000) {
       return res.json({ items: MACRO_INTEL_CACHE.data });
