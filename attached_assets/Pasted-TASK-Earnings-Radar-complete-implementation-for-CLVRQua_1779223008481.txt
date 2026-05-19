@@ -1,0 +1,1079 @@
+TASK: Earnings Radar — complete implementation for CLVRQuantAI
+Stack: Replit → GitHub → Railway. Postgres + Redis already provisioned.
+AI: Claude Sonnet 4.6 (claude-sonnet-4-6). Tier-gated to Pro + Elite.
+
+═══════════════════════════════════════════════════════════════
+FILE 1: migrations/007_earnings_cache.sql
+═══════════════════════════════════════════════════════════════
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS earnings_cache (
+  symbol            VARCHAR(10)  NOT NULL,
+  report_date       DATE         NOT NULL,
+  report_time       VARCHAR(10)  NOT NULL DEFAULT 'BMO',
+  company_name      TEXT,
+  market_cap        BIGINT,
+  eps_estimate      NUMERIC(12,4),
+  revenue_estimate  BIGINT,
+  features          JSONB        NOT NULL DEFAULT '{}'::jsonb,
+  ai_analysis       JSONB        NOT NULL DEFAULT '{}'::jsonb,
+  computed_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (symbol, report_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_earnings_report_date ON earnings_cache(report_date);
+CREATE INDEX IF NOT EXISTS idx_earnings_verdict ON earnings_cache((ai_analysis->>'verdict'));
+CREATE INDEX IF NOT EXISTS idx_earnings_pending ON earnings_cache(report_date)
+  WHERE (ai_analysis->>'actual_posted') IS DISTINCT FROM 'true';
+CREATE INDEX IF NOT EXISTS idx_earnings_market_cap ON earnings_cache(market_cap DESC);
+
+COMMIT;
+
+═══════════════════════════════════════════════════════════════
+FILE 2: migrations/run.js  (skip if you have a runner)
+═══════════════════════════════════════════════════════════════
+const fs = require('fs');
+const path = require('path');
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+async function run() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    const files = fs.readdirSync(__dirname).filter(f => f.endsWith('.sql')).sort();
+    for (const f of files) {
+      const { rows } = await client.query(
+        'SELECT 1 FROM schema_migrations WHERE filename=$1', [f]);
+      if (rows.length) { console.log(`✓ ${f} (already applied)`); continue; }
+      const sql = fs.readFileSync(path.join(__dirname, f), 'utf8');
+      console.log(`→ applying ${f}...`);
+      await client.query(sql);
+      await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [f]);
+      console.log(`✓ ${f} applied`);
+    }
+    console.log('All migrations applied.');
+  } catch (e) { console.error('Migration failed:', e); process.exit(1); }
+  finally { client.release(); await pool.end(); }
+}
+run();
+
+Add to package.json scripts:  "migrate": "node migrations/run.js"
+
+═══════════════════════════════════════════════════════════════
+FILE 3: backend/python/earnings_analyzer.py
+═══════════════════════════════════════════════════════════════
+"""CLVRQuantAI — Pre-earnings AI signal generator. Cron: 06:15 ET daily."""
+import os, json, asyncio, logging
+from datetime import datetime, timedelta
+from typing import Optional
+import asyncpg, httpx
+from anthropic import AsyncAnthropic
+
+log = logging.getLogger("earnings_analyzer")
+FMP_KEY = os.environ["FMP_API_KEY"]
+DB_URL = os.environ["DATABASE_URL"]
+anthropic = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+MODEL = "claude-sonnet-4-6"
+MIN_MARKET_CAP = 2_000_000_000
+LOOKAHEAD_DAYS = 5
+
+
+async def fetch_earnings_calendar() -> list[dict]:
+    start = datetime.utcnow().date()
+    end = start + timedelta(days=LOOKAHEAD_DAYS)
+    url = (f"https://financialmodelingprep.com/api/v3/earning_calendar"
+           f"?from={start}&to={end}&apikey={FMP_KEY}")
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.get(url); r.raise_for_status()
+        return r.json()
+
+
+async def compute_features(symbol: str, client: httpx.AsyncClient) -> Optional[dict]:
+    try:
+        surprises = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/earnings-surprises/"
+            f"{symbol}?apikey={FMP_KEY}")).json()[:8]
+        prices = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/historical-price-full/"
+            f"{symbol}?serietype=line&apikey={FMP_KEY}")).json().get("historical", [])
+        if not surprises or len(prices) < 30: return None
+
+        moves, beats, drift_beat, drift_miss = [], 0, [], []
+        for s in surprises:
+            edate = s["date"]
+            actual = s.get("actualEarningResult"); est = s.get("estimatedEarning")
+            if actual is None or est is None: continue
+            idx = next((i for i,p in enumerate(prices) if p["date"] <= edate), None)
+            if idx is None or idx + 5 >= len(prices): continue
+            p_t = prices[idx]["close"]
+            p_t1 = prices[max(idx-1,0)]["close"]
+            p_t5 = prices[max(idx-5,0)]["close"]
+            moves.append(abs(p_t1/p_t - 1) * 100)
+            if actual > est:
+                beats += 1; drift_beat.append((p_t5/p_t - 1) * 100)
+            else:
+                drift_miss.append((p_t5/p_t - 1) * 100)
+
+        hist_avg_move = sum(moves)/len(moves) if moves else 0
+        beat_rate = beats/len(surprises) * 100 if surprises else 0
+
+        implied_move = await _implied_move(symbol, client)
+
+        rev = (await client.get(
+            f"https://financialmodelingprep.com/api/v4/upgrades-downgrades-rss-feed"
+            f"?symbol={symbol}&apikey={FMP_KEY}")).json()
+        revisions = sum(1 if r.get("newGrade","").lower() in ("buy","outperform") else -1
+                        for r in rev[:20])
+
+        profile = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/profile/"
+            f"{symbol}?apikey={FMP_KEY}")).json()
+        sector_etf = _sector_to_etf(profile[0].get("sector") if profile else "")
+        sector_rs = await _relative_strength(symbol, sector_etf, client)
+
+        return {
+            "hist_avg_move_1d": round(hist_avg_move, 2),
+            "beat_rate_8q": round(beat_rate, 1),
+            "drift_beat_5d": round(sum(drift_beat)/len(drift_beat), 2) if drift_beat else 0,
+            "drift_miss_5d": round(sum(drift_miss)/len(drift_miss), 2) if drift_miss else 0,
+            "implied_move_pct": implied_move,
+            "revisions_90d": revisions,
+            "sector_rs_30d": sector_rs,
+            "macro_overlay": await _macro_events_this_week(client),
+            "liquidity_score": _liquidity(prices, profile),
+        }
+    except Exception as e:
+        log.exception(f"feature compute failed {symbol}: {e}")
+        return None
+
+
+async def _implied_move(symbol, client):
+    try:
+        opts = (await client.get(
+            f"https://financialmodelingprep.com/api/v4/options/"
+            f"{symbol}?apikey={FMP_KEY}")).json()
+        if not opts: return 0
+        atm = min(opts, key=lambda o: abs(o.get("strike",0) - o.get("underlying",0)))
+        straddle = atm.get("call_price",0) + atm.get("put_price",0)
+        spot = atm.get("underlying", 1) or 1
+        return round(straddle / spot * 100, 2)
+    except Exception: return 0
+
+
+def _sector_to_etf(sector: str) -> str:
+    return {
+        "Technology":"XLK","Financial Services":"XLF","Healthcare":"XLV",
+        "Consumer Cyclical":"XLY","Consumer Defensive":"XLP","Energy":"XLE",
+        "Industrials":"XLI","Communication Services":"XLC","Utilities":"XLU",
+        "Real Estate":"XLRE","Basic Materials":"XLB",
+    }.get(sector, "SPY")
+
+
+async def _relative_strength(symbol, etf, client):
+    async def ret30(s):
+        p = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/historical-price-full/"
+            f"{s}?serietype=line&apikey={FMP_KEY}")).json().get("historical", [])
+        if len(p) < 30: return 0
+        return (p[0]["close"] / p[29]["close"] - 1) * 100
+    a, b = await asyncio.gather(ret30(symbol), ret30(etf))
+    return round(a - b, 2)
+
+
+async def _macro_events_this_week(client):
+    today = datetime.utcnow().date(); end = today + timedelta(days=7)
+    try:
+        evs = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/economic_calendar"
+            f"?from={today}&to={end}&apikey={FMP_KEY}")).json()
+        return [e["event"] for e in evs
+                if e.get("country")=="US" and e.get("impact")=="High"][:5]
+    except Exception: return []
+
+
+def _liquidity(prices, profile):
+    if not prices or not profile: return 0
+    avg_vol = sum(p.get("volume",0) for p in prices[:20]) / min(20, len(prices))
+    avg_px  = sum(p["close"] for p in prices[:20]) / min(20, len(prices))
+    mcap = profile[0].get("mktCap", 1) or 1
+    return round((avg_vol * avg_px) / mcap, 4)
+
+
+async def get_claude_analysis(symbol, meta, feats):
+    prompt = f"""SYMBOL: {symbol} ({meta.get('company_name','')})
+REPORT: {meta['report_date']} {meta['report_time']}
+MARKET CAP: ${meta['market_cap']:,}
+CONSENSUS EPS: {meta.get('eps_estimate')}
+CONSENSUS REVENUE: ${meta.get('revenue_estimate') or 0:,}
+
+QUANT FEATURES
+- Avg 1d post-earnings move (8Q): {feats['hist_avg_move_1d']}%
+- Beat rate (8Q): {feats['beat_rate_8q']}%
+- 5d drift after beat vs miss: +{feats['drift_beat_5d']}% / {feats['drift_miss_5d']}%
+- Options implied move (front week): {feats['implied_move_pct']}%
+- Analyst revisions (90d net): {feats['revisions_90d']}
+- Sector RS (30d): {feats['sector_rs_30d']}%
+- Macro events this week: {feats['macro_overlay']}
+- Liquidity score: {feats['liquidity_score']}
+
+EDGE LOGIC
+- implied > 1.5x hist_avg → favor selling premium
+- implied < 0.7x hist_avg → favor long vol (straddle/strangle)
+- revisions positive + sector_rs positive → bias LONG
+- miss-prone history + elevated implied → bias SHORT / put spread
+- macro same day → prefer post_earnings_drift entry
+- liquidity < 0.02 → outright only
+
+Return STRICT JSON. confidence < 60 → verdict=AVOID, trade_structure=skip.
+{{
+  "verdict":"BULLISH|BEARISH|AVOID","confidence":0-100,
+  "expected_move_pct":float,"directional_bias":"LONG|SHORT|NEUTRAL",
+  "trade_structure":"outright_long|outright_short|long_call|long_put|call_spread|put_spread|long_straddle|short_strangle|iron_condor|skip",
+  "entry_strategy":"pre_earnings|post_earnings_drift|fade_reaction|skip",
+  "entry_level":float,"stop_loss":float,"target":float,"kelly_size_pct":float,
+  "thesis":"2 sentences max","key_risks":["risk1","risk2"]
+}}"""
+    msg = await anthropic.messages.create(
+        model=MODEL, max_tokens=1000,
+        system="You are an institutional equity derivatives strategist. Output strict JSON only, no prose.",
+        messages=[{"role":"user","content":prompt}])
+    txt = msg.content[0].text.strip().replace("```json","").replace("```","")
+    try: return json.loads(txt)
+    except json.JSONDecodeError:
+        log.warning(f"bad JSON {symbol}, marking AVOID")
+        return {"verdict":"AVOID","confidence":0,"trade_structure":"skip",
+                "thesis":"AI output parse failed","key_risks":[]}
+
+
+async def get_post_earnings_analysis(symbol, pre, actual):
+    prompt = f"""POST-EARNINGS REVIEW for {symbol}
+
+PRE-EARNINGS CALL:
+- Verdict: {pre.get('verdict')}  Confidence: {pre.get('confidence')}
+- Expected move: {pre.get('expected_move_pct')}%
+- Thesis: {pre.get('thesis')}
+
+ACTUAL RESULTS:
+- EPS actual: {actual.get('actual_eps')} vs est: {actual.get('eps_estimate')}
+- Revenue actual: ${actual.get('actual_revenue',0):,} vs est: ${actual.get('revenue_estimate',0):,}
+- EPS surprise: {actual.get('eps_surprise_pct')}%
+- Initial price reaction: {actual.get('price_reaction_pct')}%
+- Implied vs realized: implied {pre.get('expected_move_pct')}% vs realized {abs(actual.get('price_reaction_pct',0))}%
+
+Return STRICT JSON:
+{{
+  "call_outcome":"CORRECT|WRONG|MIXED","next_session_bias":"LONG|SHORT|NEUTRAL",
+  "drift_play":"fade|follow|skip","entry_level":float,"stop_loss":float,
+  "target":float,"kelly_size_pct":float,
+  "thesis":"1-2 sentences on what to do next 1-5 sessions","lessons":"1 sentence"
+}}"""
+    msg = await anthropic.messages.create(
+        model=MODEL, max_tokens=600,
+        system="Post-earnings drift strategist. JSON only.",
+        messages=[{"role":"user","content":prompt}])
+    txt = msg.content[0].text.strip().replace("```json","").replace("```","")
+    try: return json.loads(txt)
+    except: return {"drift_play":"skip","thesis":"parse failed"}
+
+
+async def analyze_and_cache():
+    pool = await asyncpg.create_pool(DB_URL)
+    calendar = await fetch_earnings_calendar()
+    async with httpx.AsyncClient(timeout=30) as client:
+        for entry in calendar:
+            symbol = entry["symbol"]
+            try:
+                prof = (await client.get(
+                    f"https://financialmodelingprep.com/api/v3/profile/"
+                    f"{symbol}?apikey={FMP_KEY}")).json()
+                if not prof or (prof[0].get("mktCap") or 0) < MIN_MARKET_CAP: continue
+                mcap = prof[0]["mktCap"]; company = prof[0].get("companyName", symbol)
+            except Exception: continue
+
+            meta = {"company_name":company,"market_cap":mcap,
+                    "report_date":entry["date"],"report_time":entry.get("time","BMO"),
+                    "eps_estimate":entry.get("epsEstimated"),
+                    "revenue_estimate":entry.get("revenueEstimated")}
+
+            feats = await compute_features(symbol, client)
+            if not feats: continue
+            ai = await get_claude_analysis(symbol, meta, feats)
+
+            await pool.execute("""
+                INSERT INTO earnings_cache
+                (symbol, report_date, report_time, company_name, market_cap,
+                 eps_estimate, revenue_estimate, features, ai_analysis, computed_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+                ON CONFLICT (symbol, report_date) DO UPDATE SET
+                  features=$8, ai_analysis=$9, computed_at=NOW()
+            """, symbol, datetime.fromisoformat(entry["date"]).date(),
+                meta["report_time"], company, mcap,
+                meta["eps_estimate"], meta["revenue_estimate"],
+                json.dumps(feats), json.dumps(ai))
+            log.info(f"cached {symbol} verdict={ai.get('verdict')}")
+            await asyncio.sleep(0.5)
+    await pool.close()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(analyze_and_cache())
+
+═══════════════════════════════════════════════════════════════
+FILE 4: backend/python/earnings_results_poller.py
+═══════════════════════════════════════════════════════════════
+"""Polls FMP for actual results during reporting windows.
+Publishes to Redis: earnings:results, squawk:alerts, push:earnings."""
+import os, json, asyncio, logging
+from datetime import datetime, timezone, timedelta
+import asyncpg, httpx
+import redis.asyncio as redis
+from earnings_analyzer import get_post_earnings_analysis
+
+log = logging.getLogger("earnings_poller")
+FMP_KEY = os.environ["FMP_API_KEY"]
+DB_URL = os.environ["DATABASE_URL"]
+REDIS_URL = os.environ["REDIS_URL"]
+
+POLL_INTERVAL_S = 30
+
+
+def in_reporting_window():
+    now = datetime.now(timezone(timedelta(hours=-5)))  # ET (adjust DST as needed)
+    cur = now.hour * 60 + now.minute
+    return (6*60 <= cur <= 9*60+30) or (16*60 <= cur <= 20*60)
+
+
+async def get_pending_symbols(pool):
+    today = datetime.utcnow().date()
+    rows = await pool.fetch("""
+        SELECT symbol, report_time, eps_estimate, revenue_estimate,
+               ai_analysis, company_name
+        FROM earnings_cache
+        WHERE report_date = $1
+          AND (ai_analysis->>'actual_posted')::boolean IS NOT TRUE
+    """, today)
+    return [dict(r) for r in rows]
+
+
+async def fetch_actual(symbol, client):
+    try:
+        r = await client.get(
+            f"https://financialmodelingprep.com/api/v3/earnings-surprises/"
+            f"{symbol}?apikey={FMP_KEY}", timeout=10)
+        data = r.json()
+        if not data: return None
+        latest = data[0]
+        rep_date = datetime.fromisoformat(latest["date"]).date()
+        if rep_date != datetime.utcnow().date(): return None
+        if latest.get("actualEarningResult") is None: return None
+        return {"actual_eps":latest["actualEarningResult"],
+                "eps_estimate":latest.get("estimatedEarning"),
+                "report_date":latest["date"]}
+    except Exception as e:
+        log.warning(f"fetch_actual {symbol}: {e}"); return None
+
+
+async def fetch_revenue_and_price(symbol, client):
+    out = {"actual_revenue":None,"price_reaction_pct":0}
+    try:
+        inc = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/income-statement/"
+            f"{symbol}?period=quarter&limit=1&apikey={FMP_KEY}")).json()
+        if inc: out["actual_revenue"] = inc[0].get("revenue")
+        q = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/quote/"
+            f"{symbol}?apikey={FMP_KEY}")).json()
+        if q: out["price_reaction_pct"] = round(q[0].get("changesPercentage",0), 2)
+    except Exception: pass
+    return out
+
+
+async def process_result(symbol, meta, actual, pool, rds, client):
+    extra = await fetch_revenue_and_price(symbol, client)
+    eps_surprise = 0
+    if meta.get("eps_estimate") and actual["actual_eps"]:
+        est = float(meta["eps_estimate"])
+        if est != 0:
+            eps_surprise = round((actual["actual_eps"] - est) / abs(est) * 100, 2)
+
+    payload = {**actual, **extra,
+               "eps_surprise_pct":eps_surprise,
+               "revenue_estimate":meta.get("revenue_estimate"),
+               "released_at":datetime.utcnow().isoformat()}
+
+    pre_ai = meta["ai_analysis"] if isinstance(meta["ai_analysis"], dict) \
+             else json.loads(meta["ai_analysis"])
+    post_ai = await get_post_earnings_analysis(symbol, pre_ai, payload)
+
+    merged = {**pre_ai, "actual_posted":True,
+              "actual":payload, "post_earnings":post_ai}
+    await pool.execute("""
+        UPDATE earnings_cache SET ai_analysis=$1, computed_at=NOW()
+        WHERE symbol=$2 AND report_date=$3
+    """, json.dumps(merged), symbol, datetime.utcnow().date())
+
+    event = {"type":"earnings_result","symbol":symbol,
+             "company_name":meta["company_name"],
+             "eps_surprise_pct":eps_surprise,
+             "price_reaction_pct":extra["price_reaction_pct"],
+             "pre_verdict":pre_ai.get("verdict"),
+             "call_outcome":post_ai.get("call_outcome"),
+             "next_bias":post_ai.get("next_session_bias"),
+             "thesis":post_ai.get("thesis"),
+             "timestamp":payload["released_at"]}
+    await rds.publish("earnings:results", json.dumps(event))
+
+    if abs(eps_surprise) >= 5:
+        await rds.publish("squawk:alerts", json.dumps({
+            "priority":"high",
+            "text":f"{symbol} {'beat' if eps_surprise>0 else 'missed'} by "
+                   f"{abs(eps_surprise):.1f} percent. Stock {extra['price_reaction_pct']:+.1f}%. "
+                   f"Our pre-earnings call was {pre_ai.get('verdict')}."}))
+
+    await rds.publish("push:earnings", json.dumps({
+        "title":f"{symbol} earnings {'BEAT' if eps_surprise>0 else 'MISS'}",
+        "body":f"EPS surprise {eps_surprise:+.1f}% • {post_ai.get('thesis','')[:80]}",
+        "deep_link":f"/earnings?symbol={symbol}"}))
+
+    log.info(f"processed {symbol} surprise={eps_surprise}% outcome={post_ai.get('call_outcome')}")
+
+
+async def poll_loop():
+    pool = await asyncpg.create_pool(DB_URL)
+    rds = redis.from_url(REDIS_URL)
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                if not in_reporting_window():
+                    await asyncio.sleep(60); continue
+                pending = await get_pending_symbols(pool)
+                for meta in pending:
+                    actual = await fetch_actual(meta["symbol"], client)
+                    if actual:
+                        await process_result(meta["symbol"], meta, actual,
+                                             pool, rds, client)
+                await asyncio.sleep(POLL_INTERVAL_S)
+            except Exception as e:
+                log.exception(f"poll loop error: {e}")
+                await asyncio.sleep(POLL_INTERVAL_S)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(poll_loop())
+
+═══════════════════════════════════════════════════════════════
+FILE 5: backend/routes/earnings.js
+═══════════════════════════════════════════════════════════════
+const express = require('express');
+const router = express.Router();
+const { Pool } = require('pg');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+const requireProOrElite = (req, res, next) => {
+  if (!['pro','elite'].includes(req.user?.tier)) {
+    return res.status(403).json({ error:'PRO_REQUIRED', feature:'earnings' });
+  }
+  next();
+};
+
+router.get('/today', requireProOrElite, async (req, res) => {
+  const today = new Date().toISOString().slice(0,10);
+  const { rows } = await pool.query(`
+    SELECT symbol, company_name, market_cap, report_time,
+           eps_estimate, revenue_estimate, features, ai_analysis, computed_at
+    FROM earnings_cache WHERE report_date = $1
+    ORDER BY market_cap DESC`, [today]);
+  res.json({ date: today, earnings: rows });
+});
+
+router.get('/week', requireProOrElite, async (req, res) => {
+  const start = new Date().toISOString().slice(0,10);
+  const end = new Date(Date.now() + 5*86400000).toISOString().slice(0,10);
+  const { rows } = await pool.query(`
+    SELECT report_date, symbol, company_name, market_cap, report_time,
+           eps_estimate, ai_analysis
+    FROM earnings_cache WHERE report_date BETWEEN $1 AND $2
+    ORDER BY report_date, market_cap DESC`, [start, end]);
+  const grouped = rows.reduce((acc, r) => {
+    const d = r.report_date.toISOString().slice(0,10);
+    (acc[d] = acc[d] || []).push(r); return acc;
+  }, {});
+  res.json({ grouped });
+});
+
+router.get('/analysis/:symbol', requireProOrElite, async (req, res) => {
+  const today = new Date().toISOString().slice(0,10);
+  const { rows } = await pool.query(`
+    SELECT * FROM earnings_cache
+    WHERE symbol = $1 AND report_date >= $2
+    ORDER BY report_date ASC LIMIT 1`,
+    [req.params.symbol.toUpperCase(), today]);
+  if (!rows.length) return res.status(404).json({ error:'not_found' });
+  res.json(rows[0]);
+});
+
+router.get('/teaser', async (req, res) => {
+  const today = new Date().toISOString().slice(0,10);
+  const { rows } = await pool.query(`
+    SELECT COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE ai_analysis->>'verdict' != 'AVOID')::int AS actionable
+    FROM earnings_cache WHERE report_date = $1`, [today]);
+  res.json(rows[0]);
+});
+
+module.exports = router;
+
+In app.js / server.js mount it:
+  app.use('/api/earnings', require('./routes/earnings'));
+
+═══════════════════════════════════════════════════════════════
+FILE 6: backend/ws/bridge.js
+═══════════════════════════════════════════════════════════════
+const WebSocket = require('ws');
+const Redis = require('ioredis');
+
+const CHANNELS = ['earnings:results', 'signals:new', 'squawk:alerts'];
+
+function attachWS(server) {
+  const wss = new WebSocket.Server({ server, path:'/ws' });
+  const sub = new Redis(process.env.REDIS_URL);
+
+  wss.on('connection', (ws) => {
+    ws.channels = new Set();
+    ws.on('message', (raw) => {
+      let msg; try { msg = JSON.parse(raw); } catch { return; }
+      if (msg.type === 'subscribe') ws.channels.add(msg.channel);
+      if (msg.type === 'unsubscribe') ws.channels.delete(msg.channel);
+      if (msg.type === 'ping') ws.send(JSON.stringify({ channel:'pong' }));
+    });
+    ws.on('close', () => ws.channels.clear());
+  });
+
+  sub.subscribe(...CHANNELS, (err) => {
+    if (err) console.error('Redis subscribe failed:', err);
+    else console.log(`WS bridge subscribed: ${CHANNELS.join(', ')}`);
+  });
+
+  sub.on('message', (channel, payload) => {
+    let data; try { data = JSON.parse(payload); } catch { data = payload; }
+    const frame = JSON.stringify({ channel, data });
+    wss.clients.forEach((c) => {
+      if (c.readyState === WebSocket.OPEN && c.channels.has(channel)) c.send(frame);
+    });
+  });
+  return wss;
+}
+module.exports = { attachWS };
+
+In server.js (only if no existing WS bridge):
+  const http = require('http');
+  const app = require('./app');
+  const { attachWS } = require('./ws/bridge');
+  const server = http.createServer(app);
+  attachWS(server);
+  server.listen(process.env.PORT || 3000);
+
+If you already have a WS bridge, just ADD 'earnings:results' to its
+channel subscription list.
+
+═══════════════════════════════════════════════════════════════
+FILE 7: backend/jobs/scheduler.js  (append to existing)
+═══════════════════════════════════════════════════════════════
+const cron = require('node-cron');
+const { spawn } = require('child_process');
+
+cron.schedule('15 11 * * 1-5', () => {           // 06:15 ET = 11:15 UTC
+  spawn('python', ['python/earnings_analyzer.py'], { stdio:'inherit' });
+}, { timezone:'America/New_York' });
+
+cron.schedule('30 16 * * 1-5', () => {           // 16:30 ET
+  spawn('python', ['python/earnings_analyzer.py'], {
+    stdio:'inherit', env:{ ...process.env, REFRESH_TOMORROW_ONLY:'1' } });
+}, { timezone:'America/New_York' });
+
+═══════════════════════════════════════════════════════════════
+FILE 8: frontend/src/hooks/useWebSocket.ts
+═══════════════════════════════════════════════════════════════
+import { useEffect, useRef } from 'react';
+
+type Message = { channel: string; data: any };
+type Handler = (data: any) => void;
+
+class WSBus {
+  private ws: WebSocket | null = null;
+  private url: string;
+  private handlers = new Map<string, Set<Handler>>();
+  private reconnectAttempts = 0;
+  private reconnectTimer: any = null;
+  private heartbeatTimer: any = null;
+  private connected = false;
+
+  constructor(url: string) { this.url = url; this.connect(); }
+
+  private connect() {
+    try { this.ws = new WebSocket(this.url); }
+    catch { this.scheduleReconnect(); return; }
+
+    this.ws.onopen = () => {
+      this.connected = true; this.reconnectAttempts = 0;
+      for (const channel of this.handlers.keys())
+        this.send({ type:'subscribe', channel });
+      this.heartbeatTimer = setInterval(() => {
+        if (this.ws?.readyState === WebSocket.OPEN) this.send({ type:'ping' });
+      }, 25000);
+    };
+    this.ws.onmessage = (evt) => {
+      let msg: Message; try { msg = JSON.parse(evt.data); } catch { return; }
+      if (msg.channel === 'pong') return;
+      const set = this.handlers.get(msg.channel);
+      if (set) set.forEach(h => { try { h(msg.data); } catch (e) { console.error(e); } });
+    };
+    this.ws.onclose = () => {
+      this.connected = false; clearInterval(this.heartbeatTimer);
+      this.scheduleReconnect();
+    };
+    this.ws.onerror = () => { this.ws?.close(); };
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer) return;
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 30000);
+    this.reconnectAttempts++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null; this.connect();
+    }, delay);
+  }
+
+  private send(obj: any) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+  }
+
+  subscribe(channel: string, handler: Handler) {
+    if (!this.handlers.has(channel)) {
+      this.handlers.set(channel, new Set());
+      if (this.connected) this.send({ type:'subscribe', channel });
+    }
+    this.handlers.get(channel)!.add(handler);
+    return () => {
+      const set = this.handlers.get(channel); if (!set) return;
+      set.delete(handler);
+      if (set.size === 0) {
+        this.handlers.delete(channel);
+        if (this.connected) this.send({ type:'unsubscribe', channel });
+      }
+    };
+  }
+}
+
+let bus: WSBus | null = null;
+function getBus(): WSBus {
+  if (!bus) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = import.meta.env.VITE_WS_URL || `${proto}//${window.location.host}/ws`;
+    bus = new WSBus(url);
+  }
+  return bus;
+}
+
+export function useWebSocket(channel: string, handler: Handler) {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
+  useEffect(() => {
+    const stable = (data: any) => handlerRef.current(data);
+    return getBus().subscribe(channel, stable);
+  }, [channel]);
+}
+
+NOTE: if you already have a WS hook, skip this file and just make sure
+your existing hook can subscribe to channel 'earnings:results'.
+
+═══════════════════════════════════════════════════════════════
+FILE 9: frontend/src/pages/Earnings.tsx
+═══════════════════════════════════════════════════════════════
+import { useEffect, useState, useMemo } from 'react';
+import { useWebSocket } from '@/hooks/useWebSocket';
+import { useUser } from '@/hooks/useUser';
+import { TrendingUp, TrendingDown, MinusCircle, Zap, AlertCircle } from 'lucide-react';
+
+type Earning = {
+  symbol: string; company_name: string; market_cap: number;
+  report_time: 'BMO' | 'AMC';
+  eps_estimate: number | null; revenue_estimate: number | null;
+  features: any; ai_analysis: any;
+};
+
+const verdictStyle: Record<string,string> = {
+  BULLISH:'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  BEARISH:'bg-rose-500/15 text-rose-400 border-rose-500/30',
+  AVOID:  'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+};
+
+const fmtCap = (n:number) =>
+  n>=1e12?`$${(n/1e12).toFixed(1)}T`:n>=1e9?`$${(n/1e9).toFixed(1)}B`:`$${(n/1e6).toFixed(0)}M`;
+
+export default function EarningsPage() {
+  const { user } = useUser();
+  const isPro = ['pro','elite'].includes(user?.tier);
+  const [tab, setTab] = useState<'today'|'week'>('today');
+  const [today, setToday] = useState<Earning[]>([]);
+  const [week, setWeek] = useState<Record<string, Earning[]>>({});
+  const [filter, setFilter] = useState<'all'|'high'|'mega'>('all');
+  const [expanded, setExpanded] = useState<string|null>(null);
+  const [flashSymbol, setFlashSymbol] = useState<string|null>(null);
+
+  useWebSocket('earnings:results', (evt:any) => {
+    setFlashSymbol(evt.symbol);
+    setTimeout(() => setFlashSymbol(null), 4000);
+    setToday(prev => prev.map(e =>
+      e.symbol === evt.symbol
+        ? { ...e, ai_analysis:{ ...e.ai_analysis, actual_posted:true,
+            actual: evt, post_earnings:{
+              call_outcome: evt.call_outcome,
+              next_session_bias: evt.next_bias,
+              thesis: evt.thesis }}}
+        : e
+    ));
+  });
+
+  useEffect(() => {
+    if (!isPro) return;
+    fetch('/api/earnings/today').then(r=>r.json()).then(d=>setToday(d.earnings||[]));
+    fetch('/api/earnings/week').then(r=>r.json()).then(d=>setWeek(d.grouped||{}));
+  }, [isPro]);
+
+  const filtered = useMemo(() => today.filter(e => {
+    const a = e.ai_analysis || {};
+    if (filter==='high') return (a.confidence||0) >= 75 && a.verdict !== 'AVOID';
+    if (filter==='mega') return e.market_cap >= 2e11;
+    return true;
+  }), [today, filter]);
+
+  if (!isPro) return <PaywallTeaser />;
+
+  const bmo = filtered.filter(e => e.report_time === 'BMO');
+  const amc = filtered.filter(e => e.report_time === 'AMC');
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Zap className="w-6 h-6 text-yellow-400"/> Earnings Radar
+          </h1>
+          <p className="text-sm text-zinc-400">AI-powered pre & post-earnings signals</p>
+        </div>
+        <div className="flex gap-2">
+          {(['today','week'] as const).map(t => (
+            <button key={t} onClick={()=>setTab(t)}
+              className={`px-4 py-1.5 rounded-lg text-sm ${
+                tab===t ? 'bg-yellow-400 text-black' : 'bg-zinc-800 text-zinc-300'}`}>
+              {t === 'today' ? 'Today' : 'This Week'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex gap-2 mb-4">
+        {([['all','All'],['high','High Conviction'],['mega','Mega Cap']] as const).map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)}
+            className={`px-3 py-1 text-xs rounded-full border ${
+              filter===k ? 'bg-zinc-700 border-zinc-500' : 'border-zinc-700 text-zinc-400'}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'today' ? (
+        <>
+          <Section title="Before Open" icon="🌅" items={bmo}
+            expanded={expanded} setExpanded={setExpanded} flashSymbol={flashSymbol}/>
+          <Section title="After Close" icon="🌙" items={amc}
+            expanded={expanded} setExpanded={setExpanded} flashSymbol={flashSymbol}/>
+        </>
+      ) : (
+        Object.entries(week).map(([date, items]) => (
+          <div key={date} className="mb-6">
+            <h2 className="text-sm font-semibold text-zinc-400 mb-2">{date}</h2>
+            {items.map(e => <Row key={e.symbol} e={e}
+              expanded={expanded} setExpanded={setExpanded} flashSymbol={flashSymbol}/>)}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function Section({ title, icon, items, expanded, setExpanded, flashSymbol }: any) {
+  if (!items.length) return null;
+  return (
+    <div className="mb-6">
+      <h2 className="text-sm font-semibold text-zinc-400 mb-2">{icon} {title}</h2>
+      {items.map((e:Earning) => (
+        <Row key={e.symbol} e={e} expanded={expanded} setExpanded={setExpanded}
+             flashSymbol={flashSymbol}/>
+      ))}
+    </div>
+  );
+}
+
+function Row({ e, expanded, setExpanded, flashSymbol }: any) {
+  const a = e.ai_analysis || {};
+  const isOpen = expanded === e.symbol;
+  const flashed = flashSymbol === e.symbol;
+  const actual = a.actual; const post = a.post_earnings;
+
+  return (
+    <div className={`border border-zinc-800 rounded-xl mb-2 transition-all
+        ${flashed ? 'ring-2 ring-yellow-400 animate-pulse' : ''}
+        ${isOpen ? 'bg-zinc-900' : 'bg-zinc-950 hover:bg-zinc-900/60'}`}>
+      <button onClick={()=>setExpanded(isOpen ? null : e.symbol)}
+        className="w-full p-4 text-left flex items-center gap-4">
+        <div className="w-20">
+          <div className="font-bold text-lg">{e.symbol}</div>
+          <div className="text-xs text-zinc-500 truncate">{e.company_name}</div>
+        </div>
+        <div className="flex-1 grid grid-cols-3 gap-3 text-xs">
+          <div><span className="text-zinc-500">Mkt Cap</span><div>{fmtCap(e.market_cap)}</div></div>
+          <div><span className="text-zinc-500">Est EPS</span><div>${e.eps_estimate ?? '—'}</div></div>
+          <div><span className="text-zinc-500">Implied</span><div>±{e.features?.implied_move_pct ?? '—'}%</div></div>
+        </div>
+        {actual ? (
+          <div className="text-right">
+            <div className={`text-xs font-semibold ${actual.eps_surprise_pct>0?'text-emerald-400':'text-rose-400'}`}>
+              EPS {actual.eps_surprise_pct>0?'+':''}{actual.eps_surprise_pct}%
+            </div>
+            <div className="text-xs text-zinc-400">
+              Stock {actual.price_reaction_pct>0?'+':''}{actual.price_reaction_pct}%
+            </div>
+          </div>
+        ) : (
+          <div className={`px-3 py-1.5 rounded-md border text-xs font-semibold ${
+            verdictStyle[a.verdict] || verdictStyle.AVOID}`}>
+            {a.verdict === 'BULLISH' && <TrendingUp className="w-3 h-3 inline mr-1"/>}
+            {a.verdict === 'BEARISH' && <TrendingDown className="w-3 h-3 inline mr-1"/>}
+            {a.verdict === 'AVOID'   && <MinusCircle className="w-3 h-3 inline mr-1"/>}
+            {a.verdict} · {a.confidence}
+          </div>
+        )}
+      </button>
+
+      {isOpen && (
+        <div className="px-4 pb-4 space-y-3 text-sm border-t border-zinc-800 pt-3">
+          {actual && post && (
+            <div className="bg-zinc-800/50 p-3 rounded-lg border border-yellow-500/30">
+              <div className="text-xs font-semibold text-yellow-400 mb-1 flex items-center gap-1">
+                <Zap className="w-3 h-3"/> POST-EARNINGS UPDATE
+              </div>
+              <div className="text-xs text-zinc-400">
+                Call outcome: <span className="text-white">{post.call_outcome}</span> ·
+                Next bias: <span className="text-white">{post.next_session_bias}</span>
+              </div>
+              <p className="text-sm mt-1">{post.thesis}</p>
+            </div>
+          )}
+          <p className="text-zinc-300">{a.thesis}</p>
+          <div className="grid grid-cols-4 gap-3 text-xs">
+            <Stat label="Structure" v={a.trade_structure}/>
+            <Stat label="Entry" v={`$${a.entry_level ?? '—'}`}/>
+            <Stat label="Stop" v={`$${a.stop_loss ?? '—'}`}/>
+            <Stat label="Target" v={`$${a.target ?? '—'}`}/>
+            <Stat label="Kelly Size" v={`${a.kelly_size_pct ?? 0}%`}/>
+            <Stat label="Beat Rate 8Q" v={`${e.features?.beat_rate_8q ?? '—'}%`}/>
+            <Stat label="Hist Move" v={`±${e.features?.hist_avg_move_1d ?? '—'}%`}/>
+            <Stat label="Sector RS" v={`${e.features?.sector_rs_30d ?? '—'}%`}/>
+          </div>
+          {a.key_risks?.length > 0 && (
+            <div className="text-xs text-zinc-400">
+              <span className="text-rose-400 font-semibold flex items-center gap-1">
+                <AlertCircle className="w-3 h-3"/> Risks:
+              </span>
+              <ul className="list-disc list-inside mt-1 space-y-0.5">
+                {a.key_risks.map((r:string,i:number)=><li key={i}>{r}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, v }:{label:string;v:any}) {
+  return (
+    <div className="bg-zinc-800/40 px-2 py-1.5 rounded">
+      <div className="text-zinc-500 text-[10px]">{label}</div>
+      <div className="font-mono">{v}</div>
+    </div>
+  );
+}
+
+function PaywallTeaser() {
+  const [teaser, setTeaser] = useState({ total:0, actionable:0 });
+  useEffect(() => {
+    fetch('/api/earnings/teaser').then(r=>r.json()).then(setTeaser);
+  }, []);
+  return (
+    <div className="p-8 max-w-2xl mx-auto text-center">
+      <Zap className="w-12 h-12 mx-auto text-yellow-400 mb-4"/>
+      <h1 className="text-2xl font-bold mb-2">Earnings Radar</h1>
+      <p className="text-zinc-400 mb-2">
+        {teaser.total} earnings today, <span className="text-yellow-400 font-bold">
+        {teaser.actionable} high-conviction</span> AI plays.
+      </p>
+      <p className="text-zinc-500 text-sm mb-6">
+        Pre-earnings AI signals · Real-time post-release updates · Squawk Box voice alerts
+      </p>
+      <button className="px-6 py-3 bg-yellow-400 text-black font-bold rounded-lg">
+        Upgrade to Pro
+      </button>
+    </div>
+  );
+}
+
+Add route in your router (App.tsx or wherever):
+  import EarningsPage from './pages/Earnings';
+  <Route path="/earnings" element={<EarningsPage/>} />
+
+═══════════════════════════════════════════════════════════════
+FILE 10: backend/templates/morning.html  (append section)
+═══════════════════════════════════════════════════════════════
+{{#if earnings_section}}
+<tr><td style="padding:24px 0 8px;">
+  <h2 style="font-size:18px;margin:0;">📊 Today's Earnings Radar</h2>
+  <p style="font-size:12px;color:#888;margin:4px 0 12px;">
+    {{earnings_total}} reporting · {{earnings_actionable}} high-conviction plays
+  </p>
+  {{#each earnings_picks}}
+  <table width="100%" style="border:1px solid #222;border-radius:8px;padding:12px;margin-bottom:8px;">
+    <tr><td>
+      <strong style="font-size:14px;">{{symbol}}</strong>
+      <span style="color:#888;font-size:11px;">· {{report_time}}</span>
+      <span style="background:{{verdict_color}};color:#000;padding:2px 8px;
+            border-radius:4px;font-size:10px;margin-left:8px;">
+        {{verdict}} · {{confidence}}
+      </span>
+      <div style="font-size:12px;color:#ccc;margin-top:4px;">{{thesis}}</div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">
+        Implied ±{{implied_move}}% · {{trade_structure}} · Size {{kelly_size}}%
+      </div>
+    </td></tr>
+  </table>
+  {{/each}}
+  <a href="https://clvrquantai.com/earnings" style="color:#facc15;font-size:12px;">
+    View full calendar →
+  </a>
+</td></tr>
+{{/if}}
+
+{{#if free_tier_teaser}}
+<tr><td style="padding:24px 0;text-align:center;background:#111;border-radius:8px;">
+  <strong>📊 {{earnings_total}} earnings today, {{earnings_actionable}} actionable</strong>
+  <p style="font-size:12px;color:#888;">Upgrade to Pro to see AI plays</p>
+</td></tr>
+{{/if}}
+
+═══════════════════════════════════════════════════════════════
+FILE 11: backend/jobs/morningEmail.js  (add function + merge)
+═══════════════════════════════════════════════════════════════
+async function buildEarningsSection(user) {
+  const today = new Date().toISOString().slice(0,10);
+  const { rows } = await pool.query(`
+    SELECT symbol, report_time, features, ai_analysis
+    FROM earnings_cache
+    WHERE report_date = $1
+      AND ai_analysis->>'verdict' != 'AVOID'
+      AND (ai_analysis->>'confidence')::int >= 70
+    ORDER BY (ai_analysis->>'confidence')::int DESC LIMIT 6`, [today]);
+
+  const totals = await pool.query(`
+    SELECT COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE ai_analysis->>'verdict' != 'AVOID')::int AS actionable
+    FROM earnings_cache WHERE report_date = $1`, [today]);
+
+  const isPro = ['pro','elite'].includes(user.tier);
+  return {
+    earnings_section: isPro && rows.length > 0,
+    free_tier_teaser: !isPro && totals.rows[0].total > 0,
+    earnings_total: totals.rows[0].total,
+    earnings_actionable: totals.rows[0].actionable,
+    earnings_picks: rows.map(r => ({
+      symbol: r.symbol, report_time: r.report_time,
+      verdict: r.ai_analysis.verdict,
+      verdict_color: r.ai_analysis.verdict === 'BULLISH' ? '#10b981' : '#f43f5e',
+      confidence: r.ai_analysis.confidence,
+      thesis: r.ai_analysis.thesis,
+      implied_move: r.features.implied_move_pct,
+      trade_structure: r.ai_analysis.trade_structure,
+      kelly_size: r.ai_analysis.kelly_size_pct,
+    })),
+  };
+}
+module.exports.buildEarningsSection = buildEarningsSection;
+
+// In your existing send loop:
+//   const earnings = await buildEarningsSection(user);
+//   const html = template({ ...existingData, ...earnings });
+
+═══════════════════════════════════════════════════════════════
+FILE 12: Procfile  (Railway processes)
+═══════════════════════════════════════════════════════════════
+web: npm run migrate && node server.js
+poller: python backend/python/earnings_results_poller.py
+
+═══════════════════════════════════════════════════════════════
+FILE 13: requirements.txt  (Python deps — append if missing)
+═══════════════════════════════════════════════════════════════
+anthropic>=0.40.0
+asyncpg>=0.29.0
+httpx>=0.27.0
+redis>=5.0.0
+
+═══════════════════════════════════════════════════════════════
+FILE 14: package.json  (npm deps — append if missing)
+═══════════════════════════════════════════════════════════════
+"dependencies": {
+  "ws": "^8.18.0",
+  "ioredis": "^5.4.0",
+  "node-cron": "^3.0.3",
+  "pg": "^8.12.0",
+  "express": "^4.19.0"
+}
+
+═══════════════════════════════════════════════════════════════
+ENV VARS (Railway → Variables tab)
+═══════════════════════════════════════════════════════════════
+DATABASE_URL       (already set)
+REDIS_URL          (already set)
+ANTHROPIC_API_KEY  (already set)
+FMP_API_KEY        (already set)
+VITE_WS_URL        (frontend, optional — defaults to same host)
+
+═══════════════════════════════════════════════════════════════
+SHIP CHECKLIST
+═══════════════════════════════════════════════════════════════
+□ Drop all 14 files into Replit at the paths shown
+□ Add 'earnings:results' to existing WS bridge channel list (skip File 6 if you have one)
+□ Mount route: app.use('/api/earnings', require('./routes/earnings'))
+□ Add <Route path="/earnings"> in App.tsx
+□ Wire buildEarningsSection() into morning email send loop
+□ Commit + push to GitHub
+□ Railway auto-deploys, runs migrations, starts web + poller
+□ Verify Railway logs: "→ applying 007_earnings_cache.sql ✓"
+□ Verify Railway logs: "WS bridge subscribed: earnings:results, ..."
+□ Manual test: railway run python backend/python/earnings_analyzer.py
+□ Hit /api/earnings/today as pro user → should return cached rows
+□ Wait for next BMO release → page should flash + email should include

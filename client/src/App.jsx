@@ -2078,6 +2078,222 @@ function SignalsDiagnosisPanel(){
   );
 }
 
+// ─── EARNINGS TAB ─────────────────────────────────────────
+// Three sections in one tab:
+//   1. This-week calendar for watchlist tickers
+//   2. Upcoming market-wide calendar with simple filters
+//   3. Reaction tracker — last 8 quarters per watchlist ticker (beat/miss vs estimate)
+// All three pull from FMP /stable/earnings-* endpoints (free-tier accessible).
+function EarningsTab({C,MONO,SERIF,watchlist}){
+  const [section,setSection]=useState("week");
+  const [marketDays,setMarketDays]=useState(7);
+  const [marketFilter,setMarketFilter]=useState("");
+  const [reactionSym,setReactionSym]=useState(watchlist[0]||"AAPL");
+
+  const fmtDate=(d)=>d.toISOString().slice(0,10);
+  const today=new Date();
+  const toDate=new Date(today.getTime()+marketDays*86400000);
+
+  const weekQuery=useQuery({
+    queryKey:["/api/earnings/calendar","watchlist",fmtDate(today),fmtDate(new Date(today.getTime()+7*86400000)),watchlist.join(",")],
+    queryFn:async()=>{
+      const from=fmtDate(today);
+      const to=fmtDate(new Date(today.getTime()+7*86400000));
+      const r=await fetch(`/api/earnings/calendar?from=${from}&to=${to}&symbols=${watchlist.join(",")}`);
+      return r.json();
+    },
+    enabled:section==="week",
+    refetchInterval:300000,
+  });
+
+  const marketQuery=useQuery({
+    queryKey:["/api/earnings/calendar","market",fmtDate(today),fmtDate(toDate)],
+    queryFn:async()=>{
+      const r=await fetch(`/api/earnings/calendar?from=${fmtDate(today)}&to=${fmtDate(toDate)}`);
+      return r.json();
+    },
+    enabled:section==="market",
+    refetchInterval:300000,
+  });
+
+  const historyQuery=useQuery({
+    queryKey:["/api/earnings/history",reactionSym],
+    queryFn:async()=>{
+      const r=await fetch(`/api/earnings/history?symbol=${reactionSym}&limit=8`);
+      return r.json();
+    },
+    enabled:section==="reaction"&&!!reactionSym,
+    refetchInterval:600000,
+  });
+
+  const notConfigured=(q)=>q.data&&q.data.configured===false;
+
+  const fmtNum=(n)=>n==null?"—":n.toLocaleString(undefined,{maximumFractionDigits:2});
+  const fmtPct=(n)=>n==null?"—":(n>=0?"+":"")+n.toFixed(2)+"%";
+  const fmtRev=(n)=>{
+    if(n==null) return "—";
+    if(Math.abs(n)>=1e9) return "$"+(n/1e9).toFixed(2)+"B";
+    if(Math.abs(n)>=1e6) return "$"+(n/1e6).toFixed(1)+"M";
+    return "$"+n.toLocaleString();
+  };
+  const beatMissColor=(actual,est)=>{
+    if(actual==null||est==null) return C.muted;
+    if(actual>est) return C.green;
+    if(actual<est) return C.red;
+    return C.muted2;
+  };
+  const beatMissLabel=(actual,est)=>{
+    if(actual==null||est==null) return "—";
+    const delta=actual-est;
+    const pct=est!==0?(delta/Math.abs(est))*100:0;
+    return (delta>=0?"BEAT ":"MISS ")+fmtPct(pct);
+  };
+
+  const SectionBtn=({k,label})=>(
+    <button data-testid={`tab-earnings-${k}`} onClick={()=>setSection(k)}
+      style={{background:section===k?C.gold:"none",color:section===k?C.bg:C.muted,
+              border:`1px solid ${section===k?C.gold:C.border}`,padding:"6px 12px",
+              fontFamily:MONO,fontSize:9,letterSpacing:"0.12em",cursor:"pointer",borderRadius:2}}>
+      {label}
+    </button>
+  );
+
+  const filteredMarket=section==="market"&&marketQuery.data?.rows
+    ? marketQuery.data.rows.filter(r=>!marketFilter||r.symbol.includes(marketFilter.toUpperCase()))
+    : [];
+
+  return (
+    <div data-testid="tab-earnings-root">
+      <div style={{marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.gold,letterSpacing:"-0.02em"}}>EARNINGS</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <SectionBtn k="week" label="THIS WEEK · WATCHLIST"/>
+          <SectionBtn k="market" label="UPCOMING · MARKET"/>
+          <SectionBtn k="reaction" label="REACTION TRACKER"/>
+        </div>
+      </div>
+
+      {/* ── THIS WEEK · WATCHLIST ── */}
+      {section==="week"&&<div>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
+          NEXT 7 DAYS · {watchlist.length} TICKERS IN WATCHLIST
+        </div>
+        {notConfigured(weekQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — earnings data unavailable.</div>}
+        {weekQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
+        {!weekQuery.isLoading&&weekQuery.data?.rows?.length===0&&!notConfigured(weekQuery)&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2}}>No upcoming watchlist earnings in the next 7 days.</div>}
+        {weekQuery.data?.rows?.length>0&&<div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:2}}>
+          <table data-testid="table-earnings-week" style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:MONO}}>
+            <thead><tr style={{background:C.bg,color:C.muted,textAlign:"left"}}>
+              <th style={{padding:"8px 10px"}}>DATE</th>
+              <th style={{padding:"8px 10px"}}>SYMBOL</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>EPS EST</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>REV EST</th>
+            </tr></thead>
+            <tbody>
+              {[...weekQuery.data.rows].sort((a,b)=>a.date.localeCompare(b.date)).map((r,i)=>(
+                <tr key={`${r.symbol}-${r.date}-${i}`} data-testid={`row-earnings-${r.symbol}`} style={{borderTop:`1px solid ${C.border}`}}>
+                  <td style={{padding:"8px 10px",color:C.gold}}>{r.date}</td>
+                  <td style={{padding:"8px 10px",fontWeight:700,color:C.text}}>{r.symbol}</td>
+                  <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
+                  <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>}
+      </div>}
+
+      {/* ── UPCOMING · MARKET ── */}
+      {section==="market"&&<div>
+        <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+          <span style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.08em"}}>WINDOW:</span>
+          {[3,7,14].map(d=>(
+            <button key={d} data-testid={`btn-earnings-days-${d}`} onClick={()=>setMarketDays(d)}
+              style={{background:marketDays===d?C.gold:"none",color:marketDays===d?C.bg:C.muted,
+                      border:`1px solid ${marketDays===d?C.gold:C.border}`,padding:"4px 10px",fontFamily:MONO,fontSize:9,cursor:"pointer",borderRadius:2}}>
+              {d}D
+            </button>
+          ))}
+          <input data-testid="input-earnings-filter" placeholder="filter symbol…" value={marketFilter} onChange={e=>setMarketFilter(e.target.value)}
+            style={{background:"none",border:`1px solid ${C.border}`,color:C.text,padding:"5px 10px",fontFamily:MONO,fontSize:10,borderRadius:2,marginLeft:"auto",width:180}}/>
+          <span style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>{filteredMarket.length} results</span>
+        </div>
+        {notConfigured(marketQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — earnings data unavailable.</div>}
+        {marketQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
+        {marketQuery.data?.rows?.length>0&&<div style={{overflowX:"auto",maxHeight:540,border:`1px solid ${C.border}`,borderRadius:2}}>
+          <table data-testid="table-earnings-market" style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:MONO}}>
+            <thead style={{position:"sticky",top:0,background:C.bg}}><tr style={{color:C.muted,textAlign:"left"}}>
+              <th style={{padding:"8px 10px"}}>DATE</th>
+              <th style={{padding:"8px 10px"}}>SYMBOL</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>EPS EST</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>REV EST</th>
+            </tr></thead>
+            <tbody>
+              {filteredMarket.slice(0,400).sort((a,b)=>a.date.localeCompare(b.date)).map((r,i)=>(
+                <tr key={`${r.symbol}-${r.date}-${i}`} style={{borderTop:`1px solid ${C.border}`}}>
+                  <td style={{padding:"6px 10px",color:C.gold}}>{r.date}</td>
+                  <td style={{padding:"6px 10px",fontWeight:700,color:C.text}}>{r.symbol}</td>
+                  <td style={{padding:"6px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
+                  <td style={{padding:"6px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filteredMarket.length>400&&<div style={{padding:"6px 10px",fontFamily:MONO,fontSize:9,color:C.muted2,borderTop:`1px solid ${C.border}`}}>showing first 400 of {filteredMarket.length}</div>}
+        </div>}
+      </div>}
+
+      {/* ── REACTION TRACKER ── */}
+      {section==="reaction"&&<div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+          {watchlist.map(s=>(
+            <button key={s} data-testid={`btn-earnings-sym-${s}`} onClick={()=>setReactionSym(s)}
+              style={{background:reactionSym===s?C.gold:"none",color:reactionSym===s?C.bg:C.muted2,
+                      border:`1px solid ${reactionSym===s?C.gold:C.border}`,padding:"4px 9px",fontFamily:MONO,fontSize:9,fontWeight:700,cursor:"pointer",borderRadius:2}}>
+              {s}
+            </button>
+          ))}
+        </div>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
+          LAST 8 QUARTERS · {reactionSym} · BEAT/MISS VS CONSENSUS ESTIMATE
+        </div>
+        {notConfigured(historyQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured.</div>}
+        {historyQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
+        {historyQuery.data?.rows?.length>0&&<div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:2}}>
+          <table data-testid="table-earnings-reaction" style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:MONO}}>
+            <thead><tr style={{background:C.bg,color:C.muted,textAlign:"left"}}>
+              <th style={{padding:"8px 10px"}}>DATE</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>EPS ACT</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>EPS EST</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>REV ACT</th>
+              <th style={{padding:"8px 10px",textAlign:"right"}}>REV EST</th>
+              <th style={{padding:"8px 10px"}}>EPS RESULT</th>
+              <th style={{padding:"8px 10px"}}>REV RESULT</th>
+            </tr></thead>
+            <tbody>
+              {historyQuery.data.rows.map((r,i)=>(
+                <tr key={`${r.date}-${i}`} style={{borderTop:`1px solid ${C.border}`}}>
+                  <td style={{padding:"8px 10px",color:C.gold}}>{r.date}</td>
+                  <td style={{padding:"8px 10px",textAlign:"right",color:C.text}}>{fmtNum(r.epsActual)}</td>
+                  <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
+                  <td style={{padding:"8px 10px",textAlign:"right",color:C.text}}>{fmtRev(r.revenueActual)}</td>
+                  <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
+                  <td style={{padding:"8px 10px",color:beatMissColor(r.epsActual,r.epsEstimated),fontWeight:700}}>{beatMissLabel(r.epsActual,r.epsEstimated)}</td>
+                  <td style={{padding:"8px 10px",color:beatMissColor(r.revenueActual,r.revenueEstimated),fontWeight:700}}>{beatMissLabel(r.revenueActual,r.revenueEstimated)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>}
+      </div>}
+
+      <div style={{marginTop:14,fontFamily:MONO,fontSize:8,color:C.muted2,letterSpacing:"0.08em"}}>
+        DATA · FINANCIAL MODELING PREP · CACHED 5 MIN
+      </div>
+    </div>
+  );
+}
+
 function TradeJournalTab({isElite,onUpgrade}){
   const{C}=useContext(ThemeCtx);
   const[showForm,setShowForm]=useState(false);
@@ -4230,6 +4446,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"prices",icon:"💹",label:i18n.markets},
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"brief",icon:"📰",label:i18n.brief},
+    {k:"earnings",icon:"📅",label:"EARNINGS"},
     {k:"signals",icon:"⚡",label:i18n.signals},
     {k:"insider",icon:"🏛",label:"INSIDER"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
@@ -5576,6 +5793,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           </>}
 
         </>}
+
+        {/* ══ EARNINGS ══ */}
+        {tab==="earnings"&&<EarningsTab C={C} MONO={MONO} SERIF={SERIF} watchlist={EQUITY_SYMS}/>}
 
         {/* ══ SIGNALS ══ */}
         {tab==="signals"&&<>
