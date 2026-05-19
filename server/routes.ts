@@ -4752,6 +4752,43 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     }
   });
 
+  // ── EARNINGS RADAR (AI verdicts, cached) ──────────────────────────────────
+  // Pro+ gated. Reads from earnings_cache populated by the daily 06:15 ET
+  // scheduler. Returns up to 50 upcoming events ordered by AI confidence.
+  app.get("/api/earnings/radar", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ rows: [], error: "Sign in required." });
+      const dbUser = await storage.getUser(userId);
+      if (!dbUser) return res.status(401).json({ rows: [], error: "Sign in required." });
+      const effectiveTier = await getEffectiveTier(dbUser);
+      const isPro = effectiveTier === "pro" || effectiveTier === "elite";
+      if (!isPro) return res.status(403).json({ rows: [], error: "Earnings Radar is a Pro feature. Upgrade to unlock AI earnings verdicts." });
+
+      const { listRadar } = await import("./lib/earningsAnalyzer");
+      const lookaheadDays = Math.min(30, Math.max(1, Number(req.query?.lookaheadDays) || 14));
+      const rows = await listRadar({ lookaheadDays });
+      res.json({ rows, lookaheadDays });
+    } catch (e: any) {
+      res.status(500).json({ rows: [], error: e?.message || "earnings radar failed" });
+    }
+  });
+
+  // Admin-only manual scan trigger.
+  app.post("/api/admin/earnings/run-scan", async (req, res) => {
+    const uid = await requireAdmin(req, res);
+    if (!uid) return;
+    try {
+      const { runEarningsScan } = await import("./lib/earningsAnalyzer");
+      const lookaheadDays = Math.min(14, Math.max(1, Number(req.body?.lookaheadDays) || 5));
+      const symbols: string[] | undefined = Array.isArray(req.body?.symbols) ? req.body.symbols : undefined;
+      const result = await runEarningsScan({ lookaheadDays, symbols });
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "scan failed" });
+    }
+  });
+
   app.get("/api/earnings/history", async (req, res) => {
     try {
       const { getEarningsHistory, isFmpEarningsConfigured } = await import("./services/fmpEarnings");

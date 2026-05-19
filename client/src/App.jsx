@@ -2085,7 +2085,7 @@ function SignalsDiagnosisPanel(){
 //   3. Reaction tracker — last 8 quarters per watchlist ticker (beat/miss vs estimate)
 // All three pull from FMP /stable/earnings-* endpoints (free-tier accessible).
 function EarningsTab({C,MONO,SERIF,watchlist}){
-  const [section,setSection]=useState("week");
+  const [section,setSection]=useState("radar");
   const [marketDays,setMarketDays]=useState(7);
   const [marketFilter,setMarketFilter]=useState("");
   const [reactionSym,setReactionSym]=useState(watchlist[0]||"AAPL");
@@ -2123,6 +2123,13 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
       return r.json();
     },
     enabled:section==="reaction"&&!!reactionSym,
+    refetchInterval:600000,
+  });
+
+  const radarQuery=useQuery({
+    queryKey:["/api/earnings/radar"],
+    queryFn:async()=>{const r=await fetch("/api/earnings/radar?lookaheadDays=14");return r.json();},
+    enabled:section==="radar",
     refetchInterval:600000,
   });
 
@@ -2167,11 +2174,61 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
       <div style={{marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.gold,letterSpacing:"-0.02em"}}>EARNINGS</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <SectionBtn k="radar" label="AI RADAR"/>
           <SectionBtn k="week" label="THIS WEEK · WATCHLIST"/>
           <SectionBtn k="market" label="UPCOMING · MARKET"/>
           <SectionBtn k="reaction" label="REACTION TRACKER"/>
         </div>
       </div>
+
+      {/* ── AI RADAR ── */}
+      {section==="radar"&&<div>
+        <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
+          CLAUDE AI VERDICTS · NEXT 14 DAYS · REFRESHED DAILY 6:15 AM ET
+        </div>
+        {radarQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
+        {radarQuery.data?.rows?.length===0&&!radarQuery.isLoading&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2}}>No AI verdicts cached yet. The daily 6:15 AM ET scan populates this view — first run will appear after the next scan or admin trigger.</div>}
+        {radarQuery.data?.rows?.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:10}}>
+          {radarQuery.data.rows.map((r,i)=>{
+            const ai=r.ai_analysis||{};
+            const verdict=ai.verdict||"AVOID";
+            const conf=Number(ai.confidence||0);
+            const vColor=verdict==="BULLISH"?C.green:verdict==="BEARISH"?C.red:C.muted;
+            return (
+              <div key={`${r.symbol}-${r.report_date}-${i}`} data-testid={`card-radar-${r.symbol}`}
+                style={{border:`1px solid ${C.border}`,borderLeft:`3px solid ${vColor}`,padding:12,borderRadius:2,background:C.cardBg||"transparent"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div>
+                    <div style={{fontFamily:SERIF,fontSize:18,fontWeight:900,color:C.text}}>{r.symbol}</div>
+                    <div style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>{r.report_date} · {r.report_time}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontFamily:MONO,fontSize:10,color:vColor,fontWeight:900,letterSpacing:"0.12em"}}>{verdict}</div>
+                    <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>conf {conf}%</div>
+                  </div>
+                </div>
+                {r.company_name&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:6}}>{r.company_name}</div>}
+                <div style={{fontFamily:MONO,fontSize:10,color:C.text,lineHeight:1.5,marginBottom:8}}>{ai.thesis||"—"}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                  {ai.directional_bias&&<span style={{fontFamily:MONO,fontSize:8,padding:"2px 6px",border:`1px solid ${C.border}`,color:C.muted}}>{ai.directional_bias}</span>}
+                  {ai.trade_structure&&ai.trade_structure!=="skip"&&<span style={{fontFamily:MONO,fontSize:8,padding:"2px 6px",border:`1px solid ${C.border}`,color:C.muted}}>{ai.trade_structure}</span>}
+                  {ai.entry_strategy&&ai.entry_strategy!=="skip"&&<span style={{fontFamily:MONO,fontSize:8,padding:"2px 6px",border:`1px solid ${C.border}`,color:C.muted}}>{ai.entry_strategy}</span>}
+                  {ai.expected_move_pct!=null&&<span style={{fontFamily:MONO,fontSize:8,padding:"2px 6px",border:`1px solid ${C.border}`,color:C.gold}}>EXP MOVE {Number(ai.expected_move_pct).toFixed(1)}%</span>}
+                </div>
+                {(ai.entry_level||ai.stop_loss||ai.target)&&<div style={{display:"flex",gap:10,fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:6}}>
+                  {ai.entry_level!=null&&<span>ENTRY <span style={{color:C.text}}>{Number(ai.entry_level).toFixed(2)}</span></span>}
+                  {ai.stop_loss!=null&&<span>SL <span style={{color:C.red}}>{Number(ai.stop_loss).toFixed(2)}</span></span>}
+                  {ai.target!=null&&<span>TGT <span style={{color:C.green}}>{Number(ai.target).toFixed(2)}</span></span>}
+                  {ai.kelly_size_pct!=null&&<span>SIZE <span style={{color:C.gold}}>{Number(ai.kelly_size_pct).toFixed(1)}%</span></span>}
+                </div>}
+                {Array.isArray(ai.key_risks)&&ai.key_risks.length>0&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted2,marginTop:6,paddingTop:6,borderTop:`1px solid ${C.border}`}}>
+                  RISKS · {ai.key_risks.slice(0,2).join(" · ")}
+                </div>}
+              </div>
+            );
+          })}
+        </div>}
+      </div>}
 
       {/* ── THIS WEEK · WATCHLIST ── */}
       {section==="week"&&<div>

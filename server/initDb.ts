@@ -1036,6 +1036,29 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS high_conv_review_signal_id_idx ON high_conviction_review (signal_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS high_conv_review_outcome_idx   ON high_conviction_review (outcome)`);
 
+    // ── earnings_cache (May 2026 — Earnings Radar) ───────────────────────────
+    // Stores AI verdicts + computed quant features per upcoming earnings
+    // event. Refreshed nightly at 06:15 ET by earningsScanScheduler. Used
+    // by /api/earnings/radar to render the EARNINGS → RADAR section.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS earnings_cache (
+        symbol            VARCHAR(10)  NOT NULL,
+        report_date       DATE         NOT NULL,
+        report_time       VARCHAR(10)  NOT NULL DEFAULT 'BMO',
+        company_name      TEXT,
+        market_cap        BIGINT,
+        eps_estimate      NUMERIC(12,4),
+        revenue_estimate  BIGINT,
+        features          JSONB        NOT NULL DEFAULT '{}'::jsonb,
+        ai_analysis       JSONB        NOT NULL DEFAULT '{}'::jsonb,
+        computed_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (symbol, report_date)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS earnings_cache_report_date_idx ON earnings_cache(report_date)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS earnings_cache_verdict_idx     ON earnings_cache((ai_analysis->>'verdict'))`);
+
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
 
