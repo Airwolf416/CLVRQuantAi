@@ -1,0 +1,309 @@
+"""
+CLVRQuantAI - Earnings Analyzer
+Generates pre-earnings AI trade signals using Claude Sonnet 4.6
+"""
+import os, json, asyncio, logging
+from datetime import datetime, timedelta
+from typing import Optional
+import asyncpg, httpx
+from anthropic import AsyncAnthropic
+
+log = logging.getLogger("earnings_analyzer")
+
+FMP_KEY = os.environ["FMP_API_KEY"]
+DB_URL = os.environ["DATABASE_URL"]
+anthropic = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+MODEL = "claude-sonnet-4-6"
+MIN_MARKET_CAP = 2_000_000_000
+LOOKAHEAD_DAYS = 5
+
+
+async def fetch_earnings_calendar(pool: asyncpg.Pool) -> list[dict]:
+    start = datetime.utcnow().date()
+    end = start + timedelta(days=LOOKAHEAD_DAYS)
+    url = (f"https://financialmodelingprep.com/api/v3/earning_calendar"
+           f"?from={start}&to={end}&apikey={FMP_KEY}")
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.get(url)
+        r.raise_for_status()
+        return r.json()
+
+
+async def compute_features(symbol: str, client: httpx.AsyncClient) -> Optional[dict]:
+    """Pull historical surprises, price moves, options data, sector RS."""
+    try:
+        surprises = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/earnings-surprises/"
+            f"{symbol}?apikey={FMP_KEY}")).json()[:8]
+
+        prices = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/historical-price-full/"
+            f"{symbol}?serietype=line&apikey={FMP_KEY}")).json().get("historical", [])
+
+        if not surprises or len(prices) < 30:
+            return None
+
+        # Avg 1d post-earnings move
+        moves = []
+        beats = 0
+        drift_beat, drift_miss = [], []
+        for s in surprises:
+            edate = s["date"]
+            actual = s.get("actualEarningResult")
+            est = s.get("estimatedEarning")
+            if actual is None or est is None:
+                continue
+            # find price t and t+1, t+5
+            idx = next((i for i, p in enumerate(prices) if p["date"] <= edate), None)
+            if idx is None or idx + 5 >= len(prices):
+                continue
+            p_t = prices[idx]["close"]
+            p_t1 = prices[max(idx - 1, 0)]["close"]
+            p_t5 = prices[max(idx - 5, 0)]["close"]
+            moves.append(abs(p_t1 / p_t - 1) * 100)
+            if actual > est:
+                beats += 1
+                drift_beat.append((p_t5 / p_t - 1) * 100)
+            else:
+                drift_miss.append((p_t5 / p_t - 1) * 100)
+
+        hist_avg_move = sum(moves) / len(moves) if moves else 0
+        beat_rate = beats / len(surprises) * 100 if surprises else 0
+
+        # Options implied move (front-week ATM straddle)
+        implied_move = await _implied_move(symbol, client)
+
+        # Analyst revisions
+        rev = (await client.get(
+            f"https://financialmodelingprep.com/api/v4/upgrades-downgrades-rss-feed"
+            f"?symbol={symbol}&apikey={FMP_KEY}")).json()
+        revisions = sum(1 if r.get("newGrade","").lower() in ("buy","outperform") else -1
+                        for r in rev[:20])
+
+        # Sector relative strength
+        profile = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/profile/"
+            f"{symbol}?apikey={FMP_KEY}")).json()
+        sector_etf = _sector_to_etf(profile[0].get("sector") if profile else "")
+        sector_rs = await _relative_strength(symbol, sector_etf, client)
+
+        return {
+            "hist_avg_move_1d": round(hist_avg_move, 2),
+            "beat_rate_8q": round(beat_rate, 1),
+            "drift_beat_5d": round(sum(drift_beat)/len(drift_beat), 2) if drift_beat else 0,
+            "drift_miss_5d": round(sum(drift_miss)/len(drift_miss), 2) if drift_miss else 0,
+            "implied_move_pct": implied_move,
+            "revisions_90d": revisions,
+            "sector_rs_30d": sector_rs,
+            "macro_overlay": await _macro_events_this_week(client),
+            "liquidity_score": _liquidity(prices, profile),
+        }
+    except Exception as e:
+        log.exception(f"feature compute failed {symbol}: {e}")
+        return None
+
+
+async def _implied_move(symbol, client):
+    # Use FMP options chain or fallback to historical IV proxy
+    try:
+        opts = (await client.get(
+            f"https://financialmodelingprep.com/api/v4/options/"
+            f"{symbol}?apikey={FMP_KEY}")).json()
+        if not opts: return 0
+        atm = min(opts, key=lambda o: abs(o.get("strike",0) - o.get("underlying",0)))
+        straddle = atm.get("call_price",0) + atm.get("put_price",0)
+        spot = atm.get("underlying", 1) or 1
+        return round(straddle / spot * 100, 2)
+    except Exception:
+        return 0
+
+
+def _sector_to_etf(sector: str) -> str:
+    return {
+        "Technology": "XLK", "Financial Services": "XLF", "Healthcare": "XLV",
+        "Consumer Cyclical": "XLY", "Consumer Defensive": "XLP",
+        "Energy": "XLE", "Industrials": "XLI", "Communication Services": "XLC",
+        "Utilities": "XLU", "Real Estate": "XLRE", "Basic Materials": "XLB",
+    }.get(sector, "SPY")
+
+
+async def _relative_strength(symbol, etf, client):
+    async def ret30(s):
+        p = (await client.get(
+            f"https://financialmodelingprep.com/api/v3/historical-price-full/"
+            f"{s}?serietype=line&apikey={FMP_KEY}")).json().get("historical", [])
+        if len(p) < 30: return 0
+        return (p[0]["close"] / p[29]["close"] - 1) * 100
+    a, b = await asyncio.gather(ret30(symbol), ret30(etf))
+    return round(a - b, 2)
+
+
+async def _macro_events_this_week(client):
+    today = datetime.utcnow().date()
+    end = today + timedelta(days=7)
+    url = (f"https://financialmodelingprep.com/api/v3/economic_calendar"
+           f"?from={today}&to={end}&apikey={FMP_KEY}")
+    try:
+        evs = (await client.get(url)).json()
+        return [e["event"] for e in evs
+                if e.get("country") == "US" and e.get("impact") == "High"][:5]
+    except Exception:
+        return []
+
+
+def _liquidity(prices, profile):
+    if not prices or not profile: return 0
+    avg_vol = sum(p.get("volume",0) for p in prices[:20]) / min(20, len(prices))
+    avg_px = sum(p["close"] for p in prices[:20]) / min(20, len(prices))
+    mcap = profile[0].get("mktCap", 1) or 1
+    return round((avg_vol * avg_px) / mcap, 4)
+
+
+async def get_claude_analysis(symbol: str, meta: dict, feats: dict) -> dict:
+    """Call Claude Sonnet 4.6 for pre-earnings verdict."""
+    prompt = f"""SYMBOL: {symbol} ({meta.get('company_name','')})
+REPORT: {meta['report_date']} {meta['report_time']}
+MARKET CAP: ${meta['market_cap']:,}
+CONSENSUS EPS: {meta.get('eps_estimate')}
+CONSENSUS REVENUE: ${meta.get('revenue_estimate') or 0:,}
+
+QUANT FEATURES
+- Avg 1d post-earnings move (8Q): {feats['hist_avg_move_1d']}%
+- Beat rate (8Q): {feats['beat_rate_8q']}%
+- 5d drift after beat vs miss: +{feats['drift_beat_5d']}% / {feats['drift_miss_5d']}%
+- Options implied move (front week): {feats['implied_move_pct']}%
+- Analyst revisions (90d net): {feats['revisions_90d']}
+- Sector RS (30d): {feats['sector_rs_30d']}%
+- Macro events this week: {feats['macro_overlay']}
+- Liquidity score: {feats['liquidity_score']}
+
+EDGE LOGIC
+- implied > 1.5x hist_avg → favor selling premium
+- implied < 0.7x hist_avg → favor long vol (straddle/strangle)
+- revisions positive + sector_rs positive → bias LONG
+- miss-prone history + elevated implied → bias SHORT / put spread
+- macro same day → prefer post_earnings_drift entry
+- liquidity < 0.02 → outright only
+
+Return STRICT JSON. confidence < 60 → verdict=AVOID, trade_structure=skip.
+{{
+  "verdict": "BULLISH|BEARISH|AVOID",
+  "confidence": 0-100,
+  "expected_move_pct": float,
+  "directional_bias": "LONG|SHORT|NEUTRAL",
+  "trade_structure": "outright_long|outright_short|long_call|long_put|call_spread|put_spread|long_straddle|short_strangle|iron_condor|skip",
+  "entry_strategy": "pre_earnings|post_earnings_drift|fade_reaction|skip",
+  "entry_level": float,
+  "stop_loss": float,
+  "target": float,
+  "kelly_size_pct": float,
+  "thesis": "2 sentences max",
+  "key_risks": ["risk1","risk2"]
+}}"""
+    msg = await anthropic.messages.create(
+        model=MODEL,
+        max_tokens=1000,
+        system="You are an institutional equity derivatives strategist. Output strict JSON only, no prose.",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    txt = msg.content[0].text.strip().replace("```json","").replace("```","")
+    try:
+        return json.loads(txt)
+    except json.JSONDecodeError:
+        log.warning(f"bad JSON {symbol}, marking AVOID")
+        return {"verdict":"AVOID","confidence":0,"trade_structure":"skip",
+                "thesis":"AI output parse failed","key_risks":[]}
+
+
+async def get_post_earnings_analysis(symbol: str, pre: dict, actual: dict) -> dict:
+    """Re-analyze after results drop: was the call right? what now?"""
+    prompt = f"""POST-EARNINGS REVIEW for {symbol}
+
+PRE-EARNINGS CALL:
+- Verdict: {pre.get('verdict')}  Confidence: {pre.get('confidence')}
+- Expected move: {pre.get('expected_move_pct')}%
+- Thesis: {pre.get('thesis')}
+
+ACTUAL RESULTS:
+- EPS actual: {actual.get('actual_eps')}  vs est: {actual.get('eps_estimate')}
+- Revenue actual: ${actual.get('actual_revenue',0):,}  vs est: ${actual.get('revenue_estimate',0):,}
+- EPS surprise: {actual.get('eps_surprise_pct')}%
+- Initial price reaction: {actual.get('price_reaction_pct')}%
+- Implied vs realized: implied {pre.get('expected_move_pct')}% vs realized {abs(actual.get('price_reaction_pct',0))}%
+
+Return STRICT JSON:
+{{
+  "call_outcome": "CORRECT|WRONG|MIXED",
+  "next_session_bias": "LONG|SHORT|NEUTRAL",
+  "drift_play": "fade|follow|skip",
+  "entry_level": float,
+  "stop_loss": float,
+  "target": float,
+  "kelly_size_pct": float,
+  "thesis": "1-2 sentences on what to do next 1-5 sessions",
+  "lessons": "1 sentence"
+}}"""
+    msg = await anthropic.messages.create(
+        model=MODEL, max_tokens=600,
+        system="Post-earnings drift strategist. JSON only.",
+        messages=[{"role":"user","content":prompt}],
+    )
+    txt = msg.content[0].text.strip().replace("```json","").replace("```","")
+    try: return json.loads(txt)
+    except: return {"drift_play":"skip","thesis":"parse failed"}
+
+
+async def analyze_and_cache(pool: asyncpg.Pool):
+    """Main batch job - runs 06:15 ET daily."""
+    calendar = await fetch_earnings_calendar(pool)
+    async with httpx.AsyncClient(timeout=30) as client:
+        for entry in calendar:
+            symbol = entry["symbol"]
+            # filter by market cap
+            try:
+                prof = (await client.get(
+                    f"https://financialmodelingprep.com/api/v3/profile/"
+                    f"{symbol}?apikey={FMP_KEY}")).json()
+                if not prof or (prof[0].get("mktCap") or 0) < MIN_MARKET_CAP:
+                    continue
+                mcap = prof[0]["mktCap"]
+                company = prof[0].get("companyName", symbol)
+            except Exception:
+                continue
+
+            meta = {
+                "company_name": company,
+                "market_cap": mcap,
+                "report_date": entry["date"],
+                "report_time": entry.get("time", "BMO"),
+                "eps_estimate": entry.get("epsEstimated"),
+                "revenue_estimate": entry.get("revenueEstimated"),
+            }
+
+            feats = await compute_features(symbol, client)
+            if not feats:
+                continue
+
+            ai = await get_claude_analysis(symbol, meta, feats)
+
+            await pool.execute("""
+                INSERT INTO earnings_cache
+                (symbol, report_date, report_time, company_name, market_cap,
+                 eps_estimate, revenue_estimate, features, ai_analysis, computed_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+                ON CONFLICT (symbol, report_date) DO UPDATE SET
+                  features=$8, ai_analysis=$9, computed_at=NOW()
+            """, symbol, datetime.fromisoformat(entry["date"]).date(),
+                meta["report_time"], company, mcap,
+                meta["eps_estimate"], meta["revenue_estimate"],
+                json.dumps(feats), json.dumps(ai))
+            log.info(f"cached {symbol} verdict={ai.get('verdict')}")
+            await asyncio.sleep(0.5)  # rate limit
+
+
+if __name__ == "__main__":
+    async def main():
+        pool = await asyncpg.create_pool(DB_URL)
+        await analyze_and_cache(pool)
+    asyncio.run(main())
