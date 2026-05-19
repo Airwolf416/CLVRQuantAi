@@ -1285,18 +1285,23 @@ async function detectMoves() {
       const { convictionCapEnabled } = await import("./lib/featureFlags");
       if (convictionCapEnabled()) {
         const { applyConvictionCap, recordHighConvictionReview } = await import("./lib/convictionCap");
+        const { getOiChangePct: _getOiChangePct } = await import("./lib/signalHardening");
         const rawPct = Number(signal.conf) || Number(signal.advancedScore) || 0;
         const capResult = applyConvictionCap(rawPct);
         if (capResult.capped) {
           (signal as any).displayedConviction = capResult.displayedConviction;
           (signal as any).highConvictionReview = true;
+          const capDir: "LONG" | "SHORT" =
+            signal.dir === "LONG" || signal.dir === "SHORT"
+              ? signal.dir
+              : (String(signal.dir || "").includes("LONG") ? "LONG" : "SHORT");
           recordHighConvictionReview({
             rawConviction: capResult.rawConviction,
             sourceEndpoint: "auto_scanner",
             token: sym,
-            direction: signal.dir,
+            direction: capDir,
             archetype: null,
-            signalId: signal.id ?? null,
+            signalId: signal.id != null ? String(signal.id) : null,
             aiSignalLogId: null,
             featureSnapshot: {
               advancedScore: signal.advancedScore ?? null,
@@ -1310,7 +1315,7 @@ async function detectMoves() {
               leverage: signal.lev ?? null,
               trend_filter: _scannerTrendFilter ?? null,
               fundingRate: hl?.funding ?? null,
-              oiChange6hPct: getOiChangePct(sym) ?? null,
+              oiChange6hPct: _getOiChangePct(sym) ?? null,
               scoreBreakdown: signal.scoreBreakdown ?? null,
               hardening_applied: !!(signal as any).hardening,
             },
