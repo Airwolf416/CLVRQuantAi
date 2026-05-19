@@ -30,7 +30,7 @@ export interface LogSuppressedSignalInput {
   ticker: string;
   intendedDirection: "LONG" | "SHORT";
   assetClass?: "crypto" | "equity" | "commodity" | "fx" | "spot" | string;
-  sourceEndpoint: "quant" | "analyze" | "kronos";
+  sourceEndpoint: "quant" | "analyze" | "kronos" | "auto_scanner";
   reason: SuppressionReason;
   rawSignalPayload?: unknown;
   classificationDiagnostics?: ClassificationDiagnostics | null;

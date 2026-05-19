@@ -69,6 +69,7 @@ function sign(n: number): -1 | 0 | 1 {
   return 0;
 }
 
+// Daily trend: slope-of-EMA20 AND price-vs-EMA20 (per spec).
 function classifyTrend(emaNow: number | null, emaPast: number | null, price: number): { trend: TrendState; slopeSign: -1 | 0 | 1 | null } {
   if (emaNow == null || emaPast == null || !Number.isFinite(price)) {
     return { trend: "NEUTRAL", slopeSign: null };
@@ -76,6 +77,17 @@ function classifyTrend(emaNow: number | null, emaPast: number | null, price: num
   const slope = sign(emaNow - emaPast);
   if (slope > 0 && price > emaNow) return { trend: "UP", slopeSign: slope };
   if (slope < 0 && price < emaNow) return { trend: "DOWN", slopeSign: slope };
+  return { trend: "NEUTRAL", slopeSign: slope };
+}
+
+// Hourly trend: slope-of-EMA20 ONLY (per spec — no price gate).
+function classifyTrendSlopeOnly(emaNow: number | null, emaPast: number | null): { trend: TrendState; slopeSign: -1 | 0 | 1 | null } {
+  if (emaNow == null || emaPast == null) {
+    return { trend: "NEUTRAL", slopeSign: null };
+  }
+  const slope = sign(emaNow - emaPast);
+  if (slope > 0) return { trend: "UP", slopeSign: slope };
+  if (slope < 0) return { trend: "DOWN", slopeSign: slope };
   return { trend: "NEUTRAL", slopeSign: slope };
 }
 
@@ -120,7 +132,7 @@ export function evaluateHardTrendFilter(input: HardTrendFilterInput): HardTrendF
   if (hourlyCloses.length >= hourlyMinBars) {
     hourlyEmaNow = emaSliceLast(hourlyCloses);
     hourlyEmaPast = emaSliceLast(hourlyCloses.slice(0, hourlyCloses.length - HOURLY_LOOKBACK_BARS));
-    const h = classifyTrend(hourlyEmaNow, hourlyEmaPast, input.currentPrice);
+    const h = classifyTrendSlopeOnly(hourlyEmaNow, hourlyEmaPast);
     intradayTrend = h.trend;
     hourlySlopeSign = h.slopeSign;
   }
