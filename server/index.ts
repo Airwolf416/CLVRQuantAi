@@ -781,6 +781,15 @@ function logDataSourceStatus() {
   } catch (err: any) {
     console.warn("[startup] statsRepository shadow compare init skipped:", err?.message);
   }
+  // Earnings Radar (May 2026) — daily 06:15 ET scan, Claude verdicts cached
+  // to earnings_cache. Auto-skips if FMP_API_KEY / ANTHROPIC_API_KEY absent.
+  try {
+    const { startEarningsScanScheduler } = await import("./lib/earningsScanScheduler");
+    startEarningsScanScheduler();
+  } catch (err: any) {
+    console.warn("[startup] earningsScanScheduler init skipped:", err?.message);
+  }
+
   // Catch up the system to historical reality on every startup (idempotent).
   // Suppresses any token+direction with <30% WR over 10+ resolved signals.
   suppressHistoricalBleeders().catch(e => console.error("[startup] suppressHistoricalBleeders failed:", e));
