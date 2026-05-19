@@ -1,0 +1,172 @@
+TASK: Add Earnings Calendar feature to CLVRQuantAI (Pro + Elite only)
+
+GOAL
+Earnings page showing today + this week's corporate earnings with AI-driven 
+trading guidance (long/short bias, expected move, trade structure, sizing). 
+Integrate top picks into the morning email. Server-side tier gating.
+
+DATA + AI
+- Source: Financial Modeling Prep earnings_calendar + earnings_surprises 
+  + historical_price_eod + options chain (already integrated)
+- AI engine: Claude Sonnet 4.6 (claude-sonnet-4-6) — existing
+- Caching: Postgres, refresh 06:00 ET daily, 4h TTL on AI analysis
+
+DB SCHEMA
+CREATE TABLE earnings_cache (
+  symbol VARCHAR(10),
+  report_date DATE,
+  report_time VARCHAR(10),   -- 'BMO' or 'AMC'
+  company_name TEXT,
+  market_cap BIGINT,
+  eps_estimate DECIMAL,
+  revenue_estimate BIGINT,
+  features JSONB,             -- quant features (see below)
+  ai_analysis JSONB,          -- Claude output
+  computed_at TIMESTAMP,
+  PRIMARY KEY (symbol, report_date)
+);
+CREATE INDEX idx_earnings_date ON earnings_cache(report_date);
+
+BACKEND ENDPOINTS (Node/Express, all tier-gated)
+GET  /api/earnings/today        → array of today's earnings + AI verdict
+GET  /api/earnings/week         → next 5 trading days grouped by date
+GET  /api/earnings/analysis/:symbol → full AI breakdown for one symbol
+POST /api/earnings/refresh      → cron-triggered, regenerates cache
+
+MIDDLEWARE
+const requireProOrElite = (req, res, next) => {
+  if (!['pro','elite'].includes(req.user?.tier)) {
+    return res.status(403).json({ error:'PRO_REQUIRED', feature:'earnings' });
+  }
+  next();
+};
+
+PYTHON/FASTAPI — earnings_analyzer.py
+For each symbol reporting in next 5 trading days where market_cap > $2B:
+
+1. Compute quant features:
+   - hist_avg_move_1d: mean |close T+1 / close T -1| over last 8 quarters
+   - beat_rate_8q: % of last 8 quarters where actual_eps > estimate
+   - drift_5d: mean 5-day return after last 8 beats vs misses
+   - implied_move_pct: ATM straddle (front-week expiry) / spot
+   - revision_trend_90d: net analyst EPS revisions last 90d
+   - sector_rs_30d: symbol 30d return − sector ETF 30d return
+   - iv_skew_25d: 25Δ put IV − 25Δ call IV (front month)
+   - macro_overlay: list of FOMC/CPI/NFP/PCE this week (from existing 
+     macro calendar)
+   - liquidity_score: avg dollar volume 20d / market_cap
+
+2. Send features to Claude Sonnet 4.6 with prompt below.
+
+3. Persist features + ai_analysis to earnings_cache.
+
+CLAUDE PROMPT (system + user)
+SYSTEM: You are an institutional equity derivatives strategist generating 
+pre-earnings trade signals. Be selective. Output STRICT JSON only, no prose. 
+Mark verdict=AVOID when signal is weak or noisy.
+
+USER:
+SYMBOL: {symbol}  ({company_name})
+REPORT: {report_date} {report_time}
+MARKET CAP: ${market_cap:,}
+CONSENSUS EPS: {eps_estimate}
+CONSENSUS REVENUE: ${revenue_estimate:,}
+
+QUANT FEATURES
+- Avg 1d post-earnings move (8Q): {hist_avg_move_1d}%
+- Beat rate (8Q): {beat_rate_8q}%
+- 5d drift after beat vs miss: +{drift_beat}% / {drift_miss}%
+- Options implied move (front week): {implied_move_pct}%
+- EPS revisions (90d, net): {revision_trend_90d}
+- Sector RS vs sector ETF (30d): {sector_rs_30d}%
+- 25Δ IV skew (put−call): {iv_skew_25d} vols
+- Macro events this week: {macro_overlay}
+- Liquidity score: {liquidity_score}
+
+EDGE LOGIC HINTS (for your reasoning, not output)
+- implied_move > 1.5x hist_avg_move → options expensive, favor selling premium
+- implied_move < 0.7x hist_avg_move → options cheap, favor long straddle/strangle
+- revision_trend strongly positive + sector_rs positive → bias LONG
+- iv_skew elevated + miss-prone history → bias SHORT or put spread
+- macro event same day → reduce confidence, prefer post-earnings_drift entry
+- liquidity_score low → outright only, no spreads
+
+OUTPUT (strict JSON):
+{
+  "verdict": "BULLISH" | "BEARISH" | "AVOID",
+  "confidence": 0-100,
+  "expected_move_pct": float,
+  "directional_bias": "LONG" | "SHORT" | "NEUTRAL",
+  "trade_structure": "outright_long" | "outright_short" | "long_call" | 
+    "long_put" | "call_spread" | "put_spread" | "long_straddle" | 
+    "short_strangle" | "iron_condor" | "skip",
+  "entry_strategy": "pre_earnings" | "post_earnings_drift" | 
+    "fade_reaction" | "skip",
+  "entry_level": float,
+  "stop_loss": float,
+  "target": float,
+  "kelly_size_pct": float,     // 0-5, use existing Kelly framework
+  "thesis": "2 sentences max, no fluff",
+  "key_risks": ["risk1", "risk2"]
+}
+Rule: confidence < 60 → verdict = AVOID, trade_structure = skip.
+
+REACT FRONTEND — /pages/Earnings.tsx
+- Tabs: [Today] [This Week]
+- Today view: two sections, "Before Open (BMO)" and "After Close (AMC)", 
+  sorted by market cap desc
+- Week view: collapsible by date
+- Row card (compact):
+  TICKER  CompanyName  $MktCap   ⏰BMO/AMC
+  Est EPS: $X.XX   Implied Move: ±X.X%
+  [VERDICT badge: BULLISH green / BEARISH red / AVOID gray]  conf: XX
+- Expand → full AI panel: thesis, entry/stop/target, kelly%, trade structure, 
+  key risks, quant feature snapshot
+- Filter chips: All / High conviction (≥75) / Mega cap / My watchlist
+- Free tier: blurred rows + "Unlock Earnings Radar — Upgrade to Pro"
+
+MORNING EMAIL — templates/morning.html
+Add new section above Signals:
+
+📊 TODAY'S EARNINGS RADAR
+- Pull top 3 BMO + top 3 AMC where ai_analysis.verdict != 'AVOID', 
+  sorted by confidence desc
+- Per row: SYMBOL | time | implied ±X% | verdict badge | 1-line thesis | 
+  size suggestion
+- Footer: "View full calendar →" → /earnings
+- Free tier: "{n} earnings today, {m} actionable — upgrade to see"
+
+SQUAWK BOX INTEGRATION (existing voice alerts)
+- Trigger voice alert post-release when:
+  actual_eps vs estimate beat/miss > 5% AND symbol had AI verdict != AVOID
+- Format: "{symbol} beat consensus by {x}%, our pre-earnings call was {verdict}"
+
+PUSH NOTIFICATIONS (existing infra)
+- 30 min before BMO opens: "Earnings Radar: {n} high-conviction plays today"
+- Post-release for any symbol where user holds related position
+
+CRON JOBS (add to existing scheduler)
+- 06:00 ET: fetch/refresh earnings_calendar next 5 trading days
+- 06:15 ET: run earnings_analyzer for new/stale entries
+- 06:45 ET: morning email job consumes cache (no new compute)
+- Intraday 16:30 ET: re-run analyzer for tomorrow's BMO names with 
+  fresh options data
+
+COST CONTROL
+- Cap Claude calls to ~50 symbols/day (mkt cap > $2B + index members)
+- Batch features in single prompt per symbol
+- Skip rerun if features changed < 5% AND cache < 4h old
+
+TESTING CHECKLIST
+[ ] /api/earnings/today returns 403 for free, 200 for pro/elite
+[ ] AI JSON parse handles malformed output (retry once, then mark AVOID)
+[ ] Morning email renders new section + free tier teaser
+[ ] Smoke test next reporting: NVDA, AAPL, TSLA, MSFT
+[ ] Feature flag EARNINGS_ENABLED gates the whole tab
+
+SHIP ORDER
+1. DB migration + backend endpoints (mocked AI output)
+2. Python analyzer + Claude integration
+3. React page
+4. Email template
+5. Squawk + push hooks
