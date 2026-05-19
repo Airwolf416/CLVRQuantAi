@@ -4734,19 +4734,61 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   app.get("/api/earnings/calendar", async (req, res) => {
     try {
       const { getEarningsCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
-      if (!isFmpEarningsConfigured()) return res.json({ rows: [], configured: false });
+      const { getNasdaqEarningsCalendar } = await import("./services/nasdaqEarnings");
       const today = new Date();
       const fmt = (d: Date) => d.toISOString().slice(0, 10);
       const defaultFrom = fmt(today);
       const defaultTo = fmt(new Date(today.getTime() + 7 * 86400000));
       const from = String(req.query?.from || defaultFrom).slice(0, 10);
       const to = String(req.query?.to || defaultTo).slice(0, 10);
-      const rows = await getEarningsCalendar(from, to);
+
+      // Pull both sources in parallel. FMP has richer numerics (EPS + revenue
+      // actuals/estimates) but tiny universe; Nasdaq has wide coverage (~100s/day)
+      // but only EPS forecast. Merge by (symbol,date) — FMP wins on numerics.
+      const fmpEnabled = isFmpEarningsConfigured();
+      const [fmpRows, ndqRows] = await Promise.all([
+        fmpEnabled ? getEarningsCalendar(from, to) : Promise.resolve([]),
+        getNasdaqEarningsCalendar(from, to),
+      ]);
+
+      const merged = new Map<string, any>();
+      // Seed with Nasdaq (wide universe)
+      for (const r of ndqRows) {
+        merged.set(`${r.symbol}__${r.date}`, { ...r, source: "nasdaq" });
+      }
+      // Overlay FMP (preferred for numerics) — non-null values win
+      for (const r of fmpRows) {
+        const k = `${r.symbol}__${r.date}`;
+        const prev = merged.get(k);
+        if (!prev) {
+          merged.set(k, { ...r, source: "fmp" });
+        } else {
+          merged.set(k, {
+            ...prev,
+            ...r,
+            epsActual: r.epsActual ?? prev.epsActual,
+            epsEstimated: r.epsEstimated ?? prev.epsEstimated,
+            revenueActual: r.revenueActual ?? prev.revenueActual,
+            revenueEstimated: r.revenueEstimated ?? prev.revenueEstimated,
+            lastUpdated: r.lastUpdated ?? prev.lastUpdated,
+            source: "fmp+nasdaq",
+          });
+        }
+      }
+      const allRows = Array.from(merged.values());
+
       const symFilter = String(req.query?.symbols || "").trim();
       const filtered = symFilter
-        ? rows.filter(r => symFilter.toUpperCase().split(",").map(s => s.trim()).includes(r.symbol))
-        : rows;
-      res.json({ rows: filtered, configured: true, from, to });
+        ? allRows.filter(r => symFilter.toUpperCase().split(",").map(s => s.trim()).includes(r.symbol))
+        : allRows;
+      filtered.sort((a: any, b: any) => a.date.localeCompare(b.date) || a.symbol.localeCompare(b.symbol));
+      res.json({
+        rows: filtered,
+        configured: fmpEnabled || ndqRows.length > 0,
+        sources: { fmp: fmpEnabled, nasdaq: true, fmpCount: fmpRows.length, nasdaqCount: ndqRows.length },
+        from,
+        to,
+      });
     } catch (e: any) {
       res.status(500).json({ rows: [], error: e?.message || "earnings calendar failed" });
     }
