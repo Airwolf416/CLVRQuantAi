@@ -4734,7 +4734,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   app.get("/api/earnings/calendar", async (req, res) => {
     try {
       const { getEarningsCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
-      const { getNasdaqEarningsCalendar } = await import("./services/nasdaqEarnings");
+      const { getNasdaqEarningsCalendar, getNasdaqDiag } = await import("./services/nasdaqEarnings");
       const today = new Date();
       const fmt = (d: Date) => d.toISOString().slice(0, 10);
       const defaultFrom = fmt(today);
@@ -4785,7 +4785,13 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       res.json({
         rows: filtered,
         configured: fmpEnabled || ndqRows.length > 0,
-        sources: { fmp: fmpEnabled, nasdaq: true, fmpCount: fmpRows.length, nasdaqCount: ndqRows.length },
+        sources: {
+          fmp: fmpEnabled,
+          nasdaq: true,
+          fmpCount: fmpRows.length,
+          nasdaqCount: ndqRows.length,
+          nasdaqDiag: getNasdaqDiag(),
+        },
         from,
         to,
       });
