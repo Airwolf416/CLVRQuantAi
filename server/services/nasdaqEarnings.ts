@@ -24,9 +24,15 @@ function parseDollar(s: any): number | null {
   return m ? Number(m[0]) : null;
 }
 
-async function fetchOneDay(date: string): Promise<EarningsRow[]> {
+// Surfaced via the route so /api/earnings/calendar can report blocked status
+// to the client (and we can spot Railway-IP blocking in production).
+export type NasdaqDiag = { ok: number; failed: number; lastError?: string; lastStatus?: number };
+let lastDiag: NasdaqDiag = { ok: 0, failed: 0 };
+export function getNasdaqDiag(): NasdaqDiag { return { ...lastDiag }; }
+
+async function fetchOneDay(date: string, diag: NasdaqDiag): Promise<EarningsRow[]> {
   const cached = dayCache.get(date);
-  if (cached && Date.now() - cached.ts < DAY_TTL_MS) return cached.data;
+  if (cached && Date.now() - cached.ts < DAY_TTL_MS) { diag.ok++; return cached.data; }
   try {
     const url = `${NASDAQ_BASE}?date=${encodeURIComponent(date)}`;
     const r = await fetch(url, {
@@ -34,10 +40,15 @@ async function fetchOneDay(date: string): Promise<EarningsRow[]> {
         "User-Agent": UA,
         Accept: "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://www.nasdaq.com/market-activity/earnings",
+        Origin: "https://www.nasdaq.com",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(5000),
     });
-    if (!r.ok) throw new Error(`nasdaq ${r.status}`);
+    if (!r.ok) { diag.lastStatus = r.status; throw new Error(`nasdaq ${r.status}`); }
+    // Some block-pages return 200 with HTML — detect by content-type and fall through.
+    const ct = r.headers.get("content-type") || "";
+    if (!ct.toLowerCase().includes("json")) { diag.lastError = `non-json ct=${ct}`; diag.failed++; return []; }
     const j: any = await r.json();
     const rows: any[] = (j?.data?.rows || []) as any[];
     const out: EarningsRow[] = rows
@@ -52,8 +63,11 @@ async function fetchOneDay(date: string): Promise<EarningsRow[]> {
       }))
       .filter(r => r.symbol);
     dayCache.set(date, { ts: Date.now(), data: out });
+    diag.ok++;
     return out;
   } catch (e: any) {
+    diag.failed++;
+    diag.lastError = e?.message || String(e);
     console.warn(`[nasdaq-earnings] day ${date} failed:`, e?.message || e);
     return [];
   }
@@ -76,13 +90,13 @@ function eachDay(from: string, to: string): string[] {
 export async function getNasdaqEarningsCalendar(from: string, to: string): Promise<EarningsRow[]> {
   const days = eachDay(from, to);
   if (days.length === 0) return [];
-  // Sequential to stay polite (and most days will hit cache after first call)
-  const all: EarningsRow[] = [];
-  for (const d of days) {
-    const rows = await fetchOneDay(d);
-    all.push(...rows);
-  }
-  return all;
+  // Parallel with per-day 5s timeout — total wall time bounded at ~5s regardless
+  // of range size. Polite enough: cache absorbs repeated calls, and the actual
+  // burst is small (≤31 requests per range).
+  const diag: NasdaqDiag = { ok: 0, failed: 0 };
+  const results = await Promise.all(days.map(d => fetchOneDay(d, diag)));
+  lastDiag = diag;
+  return results.flat();
 }
 
 export function isNasdaqEarningsConfigured(): boolean {
