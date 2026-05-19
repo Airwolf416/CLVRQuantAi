@@ -2094,17 +2094,22 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
   const today=new Date();
   const toDate=new Date(today.getTime()+marketDays*86400000);
 
+  // THIS WEEK shows the full earnings calendar (no watchlist filter — the
+  // FMP free tier returns only a handful of names per week, and filtering by
+  // a 16-symbol watchlist usually leaves the view nearly empty). Watchlist
+  // tickers are highlighted with a ★ marker so they're still easy to spot.
   const weekQuery=useQuery({
-    queryKey:["/api/earnings/calendar","watchlist",fmtDate(today),fmtDate(new Date(today.getTime()+7*86400000)),watchlist.join(",")],
+    queryKey:["/api/earnings/calendar","week",fmtDate(today),fmtDate(new Date(today.getTime()+7*86400000))],
     queryFn:async()=>{
       const from=fmtDate(today);
       const to=fmtDate(new Date(today.getTime()+7*86400000));
-      const r=await fetch(`/api/earnings/calendar?from=${from}&to=${to}&symbols=${watchlist.join(",")}`);
+      const r=await fetch(`/api/earnings/calendar?from=${from}&to=${to}`);
       return r.json();
     },
     enabled:section==="week",
     refetchInterval:300000,
   });
+  const watchlistSet=new Set((watchlist||[]).map(s=>String(s).toUpperCase()));
 
   const marketQuery=useQuery({
     queryKey:["/api/earnings/calendar","market",fmtDate(today),fmtDate(toDate)],
@@ -2175,7 +2180,7 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
         <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.gold,letterSpacing:"-0.02em"}}>EARNINGS</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           <SectionBtn k="radar" label="AI RADAR"/>
-          <SectionBtn k="week" label="THIS WEEK · WATCHLIST"/>
+          <SectionBtn k="week" label="THIS WEEK"/>
           <SectionBtn k="market" label="UPCOMING · MARKET"/>
           <SectionBtn k="reaction" label="REACTION TRACKER"/>
         </div>
@@ -2230,14 +2235,16 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
         </div>}
       </div>}
 
-      {/* ── THIS WEEK · WATCHLIST ── */}
+      {/* ── THIS WEEK ── */}
       {section==="week"&&<div>
         <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
-          NEXT 7 DAYS · {watchlist.length} TICKERS IN WATCHLIST
+          NEXT 7 DAYS · ★ = WATCHLIST TICKER · DATA · FMP FREE TIER
         </div>
         {notConfigured(weekQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — earnings data unavailable.</div>}
         {weekQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
-        {!weekQuery.isLoading&&weekQuery.data?.rows?.length===0&&!notConfigured(weekQuery)&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2}}>No upcoming watchlist earnings in the next 7 days.</div>}
+        {!weekQuery.isLoading&&weekQuery.data?.rows?.length===0&&!notConfigured(weekQuery)&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2,lineHeight:1.5}}>
+          No upcoming earnings returned by FMP for the next 7 days. The free tier covers a limited universe (typically US large/mid-caps); for the full institutional calendar, see Bloomberg or your broker. Try the UPCOMING · MARKET tab with a 14-day window for more coverage.
+        </div>}
         {weekQuery.data?.rows?.length>0&&<div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:2}}>
           <table data-testid="table-earnings-week" style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:MONO}}>
             <thead><tr style={{background:C.bg,color:C.muted,textAlign:"left"}}>
@@ -2247,14 +2254,26 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
               <th style={{padding:"8px 10px",textAlign:"right"}}>REV EST</th>
             </tr></thead>
             <tbody>
-              {[...weekQuery.data.rows].sort((a,b)=>a.date.localeCompare(b.date)).map((r,i)=>(
-                <tr key={`${r.symbol}-${r.date}-${i}`} data-testid={`row-earnings-${r.symbol}`} style={{borderTop:`1px solid ${C.border}`}}>
-                  <td style={{padding:"8px 10px",color:C.gold}}>{r.date}</td>
-                  <td style={{padding:"8px 10px",fontWeight:700,color:C.text}}>{r.symbol}</td>
-                  <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
-                  <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
-                </tr>
-              ))}
+              {[...weekQuery.data.rows]
+                .sort((a,b)=>{
+                  const wA=watchlistSet.has(a.symbol)?0:1;
+                  const wB=watchlistSet.has(b.symbol)?0:1;
+                  if(wA!==wB) return wA-wB;
+                  return a.date.localeCompare(b.date);
+                })
+                .map((r,i)=>{
+                  const isWatched=watchlistSet.has(r.symbol);
+                  return (
+                    <tr key={`${r.symbol}-${r.date}-${i}`} data-testid={`row-earnings-${r.symbol}`} style={{borderTop:`1px solid ${C.border}`,background:isWatched?"rgba(212,175,55,0.04)":"transparent"}}>
+                      <td style={{padding:"8px 10px",color:C.gold}}>{r.date}</td>
+                      <td style={{padding:"8px 10px",fontWeight:700,color:C.text}}>
+                        {isWatched&&<span style={{color:C.gold,marginRight:6}}>★</span>}{r.symbol}
+                      </td>
+                      <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
+                      <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>}
