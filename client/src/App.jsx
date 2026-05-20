@@ -6,7 +6,7 @@
 // Backend-proxied API calls (keys stored server-side)
 // ─────────────────────────────────────────────────────────
 
-import { useState, useEffect, useRef, useCallback, memo, createContext, useContext } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo, createContext, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SiInstagram, SiTiktok } from "react-icons/si";
 import { Menu, X, LogOut, Languages, QrCode, ScanLine } from "lucide-react";
@@ -2090,35 +2090,40 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
   const [marketFilter,setMarketFilter]=useState("");
   const [reactionSym,setReactionSym]=useState(watchlist[0]||"AAPL");
 
-  const fmtDate=(d)=>d.toISOString().slice(0,10);
-  const today=new Date();
-  const toDate=new Date(today.getTime()+marketDays*86400000);
+  // Memoize the date strings so the query keys are stable across re-renders.
+  // Without this, every parent re-render rebuilt `today` and `toDate`, which
+  // bumped the queryKey and made React Query think the input had changed,
+  // causing the tab to re-fetch on every render and feel laggy/unresponsive
+  // when the user tapped section buttons.
+  const todayStr=useMemo(()=>new Date().toISOString().slice(0,10),[]);
+  const weekToStr=useMemo(()=>new Date(Date.now()+7*86400000).toISOString().slice(0,10),[]);
+  const marketToStr=useMemo(()=>new Date(Date.now()+marketDays*86400000).toISOString().slice(0,10),[marketDays]);
+  const watchlistSet=useMemo(()=>new Set((watchlist||[]).map(s=>String(s).toUpperCase())),[watchlist]);
 
-  // THIS WEEK shows the full earnings calendar (no watchlist filter — the
-  // FMP free tier returns only a handful of names per week, and filtering by
-  // a 16-symbol watchlist usually leaves the view nearly empty). Watchlist
+  // THIS WEEK shows the full 7-day earnings calendar (no watchlist filter —
+  // the FMP free tier returns only a handful of names per week, and filtering
+  // by a 16-symbol watchlist usually leaves the view nearly empty). Watchlist
   // tickers are highlighted with a ★ marker so they're still easy to spot.
   const weekQuery=useQuery({
-    queryKey:["/api/earnings/calendar","week",fmtDate(today),fmtDate(new Date(today.getTime()+7*86400000))],
+    queryKey:["/api/earnings/calendar","week",todayStr,weekToStr],
     queryFn:async()=>{
-      const from=fmtDate(today);
-      const to=fmtDate(new Date(today.getTime()+7*86400000));
-      const r=await fetch(`/api/earnings/calendar?from=${from}&to=${to}`);
+      const r=await fetch(`/api/earnings/calendar?from=${todayStr}&to=${weekToStr}`);
       return r.json();
     },
     enabled:section==="week",
-    refetchInterval:300000,
+    staleTime:300000,
+    refetchInterval:false,
   });
-  const watchlistSet=new Set((watchlist||[]).map(s=>String(s).toUpperCase()));
 
   const marketQuery=useQuery({
-    queryKey:["/api/earnings/calendar","market",fmtDate(today),fmtDate(toDate)],
+    queryKey:["/api/earnings/calendar","market",todayStr,marketToStr],
     queryFn:async()=>{
-      const r=await fetch(`/api/earnings/calendar?from=${fmtDate(today)}&to=${fmtDate(toDate)}`);
+      const r=await fetch(`/api/earnings/calendar?from=${todayStr}&to=${marketToStr}`);
       return r.json();
     },
     enabled:section==="market",
-    refetchInterval:300000,
+    staleTime:300000,
+    refetchInterval:false,
   });
 
   const historyQuery=useQuery({
@@ -2128,14 +2133,18 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
       return r.json();
     },
     enabled:section==="reaction"&&!!reactionSym,
-    refetchInterval:600000,
+    staleTime:600000,
+    refetchInterval:false,
   });
 
+  // Radar window capped at 7 days (was 14) to keep the cache small and the
+  // initial render snappy. Server-side scheduler still refreshes daily.
   const radarQuery=useQuery({
-    queryKey:["/api/earnings/radar"],
-    queryFn:async()=>{const r=await fetch("/api/earnings/radar?lookaheadDays=14");return r.json();},
+    queryKey:["/api/earnings/radar","7d"],
+    queryFn:async()=>{const r=await fetch("/api/earnings/radar?lookaheadDays=7");return r.json();},
     enabled:section==="radar",
-    refetchInterval:600000,
+    staleTime:600000,
+    refetchInterval:false,
   });
 
   const notConfigured=(q)=>q.data&&q.data.configured===false;
@@ -2189,7 +2198,7 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
       {/* ── AI RADAR ── */}
       {section==="radar"&&<div>
         <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
-          CLAUDE AI VERDICTS · NEXT 14 DAYS · REFRESHED DAILY 6:15 AM ET
+          CLAUDE AI VERDICTS · NEXT 7 DAYS · REFRESHED DAILY 6:15 AM ET
         </div>
         {radarQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
         {radarQuery.data?.rows?.length===0&&!radarQuery.isLoading&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2}}>No AI verdicts cached yet. The daily 6:15 AM ET scan populates this view — first run will appear after the next scan or admin trigger.</div>}
@@ -2283,7 +2292,7 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
       {section==="market"&&<div>
         <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
           <span style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.08em"}}>WINDOW:</span>
-          {[3,7,14].map(d=>(
+          {[3,5,7].map(d=>(
             <button key={d} data-testid={`btn-earnings-days-${d}`} onClick={()=>setMarketDays(d)}
               style={{background:marketDays===d?C.gold:"none",color:marketDays===d?C.bg:C.muted,
                       border:`1px solid ${marketDays===d?C.gold:C.border}`,padding:"4px 10px",fontFamily:MONO,fontSize:9,cursor:"pointer",borderRadius:2}}>
