@@ -45,8 +45,18 @@ type Features = {
 };
 
 const RADAR_WATCHLIST = [
-  "TSLA","NVDA","AAPL","GOOGL","META","MSFT","AMZN","MSTR",
-  "AMD","PLTR","COIN","SQ","SHOP","CRM","NFLX","DIS",
+  // Mega-cap tech
+  "TSLA","NVDA","AAPL","GOOGL","GOOG","META","MSFT","AMZN","NFLX",
+  // High-beta / momentum names users actively trade
+  "AMD","PLTR","COIN","SQ","SHOP","CRM","DIS","MSTR","HOOD","RBLX",
+  "SMCI","MU","AVGO","INTC","ORCL","ADBE","NOW","SNOW","UBER","ABNB",
+  // Financials / mega caps
+  "JPM","BAC","GS","MS","WFC","V","MA",
+  // Industrials / consumer / health
+  "BA","CAT","WMT","COST","HD","NKE","KO","PEP","MCD","SBUX",
+  "LLY","UNH","JNJ","PFE","ABBV","MRK",
+  // Energy / commodities
+  "XOM","CVX","OXY",
 ];
 
 const YF_CHART = "https://query1.finance.yahoo.com/v8/finance/chart";

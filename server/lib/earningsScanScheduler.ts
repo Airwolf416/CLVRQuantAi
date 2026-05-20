@@ -35,8 +35,8 @@ async function alreadyScannedInDb(dateKey: string): Promise<boolean> {
 async function stampScanInDb(dateKey: string, cached: number, scanned: number) {
   try {
     await db.execute(sql`
-      INSERT INTO stats_refresh_log (mv_name, started_at, finished_at, success, error_message)
-      VALUES (${SCAN_MV_TAG}, NOW(), NOW(), true, ${`cached=${cached}/${scanned} dateKey=${dateKey}`})
+      INSERT INTO stats_refresh_log (mv_name, started_at, duration_ms, rows_refreshed, success, error_message)
+      VALUES (${SCAN_MV_TAG}, NOW(), 0, ${cached}, true, ${`cached=${cached}/${scanned} dateKey=${dateKey}`})
     `);
   } catch (e: any) {
     console.warn(`[earnings-radar] stampScanInDb failed: ${e?.message || e}`);
@@ -112,4 +112,35 @@ export function startEarningsScanScheduler() {
       attemptScan("boot-catchup", dateKey).catch(() => {});
     }
   }, 30 * 1000);
+
+  // Fire-on-empty-cache: if the radar cache is COMPLETELY empty after a
+  // 60s settle delay, force a scan regardless of the daily stamp. This
+  // covers the silent-fail case where the stamp got written but the scan
+  // produced no rows (the original Apr-30-style miss applied to earnings).
+  // Threshold is strictly 0 (not "sparse") so we don't burn the FMP daily
+  // free-tier quota (~250 calls/day; one full scan now costs ~110+ calls
+  // for the 55-name watchlist).
+  setTimeout(async () => {
+    try {
+      const r: any = await db.execute(sql`SELECT COUNT(*)::int AS n FROM earnings_cache`);
+      const rows = Array.isArray(r) ? r : (r?.rows || []);
+      const n = Number(rows?.[0]?.n || 0);
+      if (n === 0 && !inFlight) {
+        const { dateKey } = getETComponents();
+        console.log(`[earnings-radar] fire-on-empty — cache has only ${n} row(s), forcing scan`);
+        lastScanDate = null; // bypass in-memory dedupe
+        // Clear today's stamp so attemptScan's DB guard doesn't short-circuit.
+        try {
+          await db.execute(sql`
+            DELETE FROM stats_refresh_log
+             WHERE mv_name = ${SCAN_MV_TAG}
+               AND started_at::date = ${dateKey}::date
+          `);
+        } catch {}
+        attemptScan("fire-on-empty", dateKey).catch(() => {});
+      }
+    } catch (e: any) {
+      console.warn(`[earnings-radar] fire-on-empty check failed: ${e?.message || e}`);
+    }
+  }, 60 * 1000);
 }
