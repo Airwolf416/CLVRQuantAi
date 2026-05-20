@@ -2084,7 +2084,7 @@ function SignalsDiagnosisPanel(){
 //   2. Upcoming market-wide calendar with simple filters
 //   3. Reaction tracker — last 8 quarters per watchlist ticker (beat/miss vs estimate)
 // All three pull from FMP /stable/earnings-* endpoints (free-tier accessible).
-function EarningsTab({C,MONO,SERIF,watchlist}){
+const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   const [section,setSection]=useState("radar");
   const [marketDays,setMarketDays]=useState(7);
   const [marketFilter,setMarketFilter]=useState("");
@@ -2377,7 +2377,7 @@ function EarningsTab({C,MONO,SERIF,watchlist}){
       </div>
     </div>
   );
-}
+});
 
 function TradeJournalTab({isElite,onUpgrade}){
   const{C}=useContext(ThemeCtx);
