@@ -36,7 +36,7 @@ export default function TopTradeIdeas({
   const [preflight, setPreflight] = useState(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
 
-  const tradeCount = isElite ? 6 : isPro ? 4 : 2;
+  const tradeCount = isElite ? 6 : isPro ? 6 : 2;
   const maxTokens = isElite ? 6144 : 4096;
   const freeLimit = 2;
 
@@ -303,7 +303,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </div>
         {isPro && (
           <div style={{ display: "flex", gap: 4 }}>
-            {[{ k: "today", l: "Today" }, { k: "midterm", l: "Mid" }, { k: "longterm", l: "Long" }].map(t => (
+            {[{ k: "today", l: "Today" }, { k: "midterm", l: "Mid-Term" }, { k: "longterm", l: "Long-Term" }].map(t => (
               <button key={t.k} data-testid={`btn-tf-${t.k}`} onClick={() => setTimeframe(t.k)} style={{
                 padding: "5px 10px", borderRadius: 6, border: `1px solid ${timeframe === t.k ? "rgba(201,168,76,0.4)" : "rgba(255,255,255,0.08)"}`,
                 background: timeframe === t.k ? "rgba(201,168,76,0.1)" : "transparent",
