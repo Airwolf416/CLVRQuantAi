@@ -36,7 +36,7 @@ export default function TopTradeIdeas({
   const [preflight, setPreflight] = useState(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
 
-  const tradeCount = isElite ? 6 : isPro ? 6 : 2;
+  const tradeCount = isElite ? 6 : isPro ? 4 : 2;
   const maxTokens = isElite ? 6144 : 4096;
   const freeLimit = 2;
 
