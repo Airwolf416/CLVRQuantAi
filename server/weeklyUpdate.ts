@@ -115,6 +115,30 @@ export async function markLogEntriesShipped(entryIds: number[], updateId: number
   }
 }
 
+// Safety-net cleanup: stamps EVERY still-pending update_log_entries row as
+// shipped under the given update id. Used after a successful send (manual or
+// scheduled) so the buffer is empty for next week regardless of which path
+// generated the update — the AI flow already stamps the rows it consumed,
+// this catches anything that slipped through (manual editor publishes, entries
+// added between generate-and-send, etc.). Idempotent and fail-soft.
+export async function sweepPendingLogEntries(updateId: number): Promise<number> {
+  try {
+    const r = await pool.query(
+      `UPDATE update_log_entries
+          SET included_in_update_id=$1
+        WHERE included_in_update_id IS NULL
+        RETURNING id`,
+      [updateId]
+    );
+    const n = r.rowCount || 0;
+    if (n > 0) console.log(`[weekly-update] sweepPendingLogEntries: stamped ${n} pending entries under update id=${updateId}`);
+    return n;
+  } catch (e: any) {
+    console.log("[weekly-update] sweepPendingLogEntries failed:", e?.message || e);
+    return 0;
+  }
+}
+
 // Ask Claude to turn raw commit subjects into a polished WeeklyUpdate object.
 export async function synthesizeWeeklyUpdateFromCommits(
   commits: string[]
@@ -323,7 +347,7 @@ function renderWeeklyUpdateEmail(u: WeeklyUpdate, recipientEmail: string): strin
 export async function sendWeeklyUpdateNow(opts: {
   updateId?: number;            // if omitted, uses latest update
   ignoreFreshnessGate?: boolean; // if true, sends regardless of created_at age
-} = {}): Promise<{ sent: number; total: number; updateId: number; alreadySent?: boolean }> {
+} = {}): Promise<{ sent: number; total: number; updateId: number; alreadySent?: boolean; swept?: number }> {
   const u = opts.updateId
     ? (await pool.query(`SELECT * FROM weekly_updates WHERE id=$1`, [opts.updateId])).rows[0]
     : (await pool.query(`SELECT * FROM weekly_updates ORDER BY created_at DESC LIMIT 1`)).rows[0];
@@ -398,8 +422,12 @@ export async function sendWeeklyUpdateNow(opts: {
     `UPDATE weekly_updates SET email_sent_at=NOW(), email_recipient_count=$1 WHERE id=$2`,
     [sent, u.id]
   );
-  console.log(`[weekly-update] sent ${sent}/${subs.length} for update id=${u.id}`);
-  return { sent, total: subs.length, updateId: u.id };
+  // Auto-clean: sweep any still-pending update_log_entries into this update so
+  // they don't repeat next week. Safe even when the AI flow already stamped
+  // its consumed rows — this only touches whatever's still NULL.
+  const cleaned = await sweepPendingLogEntries(u.id);
+  console.log(`[weekly-update] sent ${sent}/${subs.length} for update id=${u.id}${cleaned ? ` (+swept ${cleaned} pending log entries)` : ""}`);
+  return { sent, total: subs.length, updateId: u.id, swept: cleaned };
 }
 
 // Saturday 10:00 ET scheduler. Polled once per minute; we use a saw-tooth guard

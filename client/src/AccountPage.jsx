@@ -1393,7 +1393,13 @@ function AIWeeklyUpdateControls({ C, MONO }) {
       const j = await r.json();
       if (!r.ok) { setMsg("✗ " + (j?.error || "Preview failed")); return; }
       setPreview(j);
-      if (!j.digest) setMsg("AI returned no digest — likely nothing user-visible shipped this week.");
+      if (!j.digest) {
+        if ((j.pendingCount || 0) === 0 && (j.commitCount || 0) === 0) {
+          setMsg("⚠ Nothing to summarize — Improvement Log is empty AND no commits found in the last 7 days. Add at least one log entry above, then preview again.");
+        } else {
+          setMsg(`⚠ AI returned an empty digest from ${j.pendingCount || 0} log entries + ${j.commitCount || 0} commits. Check that ANTHROPIC_API_KEY is set in production, or that the inputs aren't all pure-internal items.`);
+        }
+      }
     } catch (e) { setMsg("✗ " + (e?.message || "Network error")); }
     finally { setBusy(null); }
   };

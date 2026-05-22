@@ -7450,7 +7450,12 @@ Every level must be technically defensible. Return JSON only.`;
       if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
       const { sendWeeklyUpdateNow } = await import("./weeklyUpdate");
       const result = await sendWeeklyUpdateNow({ ignoreFreshnessGate: true });
-      res.json({ ok: true, ...result });
+      const parts: string[] = [];
+      if (result.alreadySent) parts.push("⚠ Already sent earlier — no duplicate emails went out");
+      else if (result.total === 0) parts.push("No active subscribers");
+      else parts.push(`✓ Sent ${result.sent}/${result.total} email${result.total === 1 ? "" : "s"}`);
+      if (result.swept && result.swept > 0) parts.push(`cleaned ${result.swept} pending log ${result.swept === 1 ? "entry" : "entries"}`);
+      res.json({ ok: true, message: parts.join(" · "), ...result });
     } catch (e: any) {
       console.error("weekly-update send-now error:", e);
       res.status(500).json({ error: e?.message || "Failed to send" });
