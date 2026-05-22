@@ -18,7 +18,7 @@ import { db } from "../db";
 
 export interface ConvictionCapInput {
   rawConviction: number;                       // 0–100
-  sourceEndpoint: "auto_scanner" | "analyze" | "kronos";
+  sourceEndpoint: "auto_scanner" | "analyze" | "kronos" | "quant";
   token: string;
   direction: "LONG" | "SHORT";
   archetype?: string | null;

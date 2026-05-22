@@ -2098,6 +2098,78 @@ function SignalsDiagnosisPanel(){
 // Major-cap filter (watchlist + curated MAJORS) so the user sees NVDA/AMD/
 // WMT/etc instead of 400 micro-caps. Logos load from FMP image-stock CDN
 // with an initial-letter fallback when the image 404s.
+// ── IpoList — upcoming public listings from FMP IPO calendar ──────────────
+// Surfaces incoming IPOs (e.g. SPCX) inside the Earnings tab so new tickers
+// flow into the user's view automatically. Same Phantom-style logo list
+// layout as the earnings sections for visual consistency.
+const IpoList=memo(function IpoList({C,MONO,SERIF}){
+  const ipoQuery=useQuery({
+    queryKey:["/api/ipo/calendar"],
+    queryFn:async()=>{
+      const r=await fetch("/api/ipo/calendar");
+      if(!r.ok) throw new Error("ipo fetch failed");
+      return r.json();
+    },
+    staleTime:5*60*1000,
+  });
+  const rows=ipoQuery.data?.rows||[];
+  const configured=ipoQuery.data?.configured!==false;
+  const logoUrl=(sym)=>`https://financialmodelingprep.com/image-stock/${sym}.png`;
+  return (
+    <div data-testid="ipo-list-root">
+      <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.14em",marginBottom:10}}>
+        UPCOMING IPOs · NEXT 30 DAYS · AUTO-SYNCED FROM FMP CALENDAR
+      </div>
+      {!configured&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — IPO calendar unavailable.</div>}
+      {configured&&ipoQuery.isLoading&&<div style={{padding:20,color:C.muted,fontFamily:MONO,fontSize:11}}>Loading…</div>}
+      {configured&&!ipoQuery.isLoading&&rows.length===0&&(
+        <div style={{padding:28,border:`1px dashed ${C.border}`,borderRadius:6,fontFamily:MONO,fontSize:11,color:C.muted2,textAlign:"center",lineHeight:1.6}}>
+          No upcoming IPOs in the next 30 days.
+        </div>
+      )}
+      {rows.length>0&&<div data-testid="list-ipos" style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",background:C.panel}}>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"10px 16px",
+                     background:C.bg,fontFamily:MONO,fontSize:9,color:C.muted2,
+                     letterSpacing:"0.14em",borderBottom:`1px solid ${C.border}`}}>
+          <span>COMPANY</span>
+          <span>PRICES ON</span>
+        </div>
+        {rows.slice(0,80).map((r,i)=>(
+          <div key={`${r.symbol}-${r.date}-${i}`} data-testid={`row-ipo-${r.symbol}`}
+            style={{display:"flex",alignItems:"center",padding:"14px 16px",
+                    borderBottom:i===Math.min(rows.length,80)-1?"none":`1px solid ${C.border}`}}>
+            <div style={{width:38,height:38,borderRadius:"50%",overflow:"hidden",
+                         marginRight:14,background:C.bg,flexShrink:0,position:"relative",
+                         border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <img src={logoUrl(r.symbol)} alt={r.symbol}
+                   style={{width:"100%",height:"100%",objectFit:"cover"}}
+                   onError={(e)=>{e.currentTarget.style.display="none";if(e.currentTarget.nextSibling)e.currentTarget.nextSibling.style.display="flex";}}/>
+              <span style={{display:"none",position:"absolute",inset:0,alignItems:"center",justifyContent:"center",
+                            fontFamily:MONO,fontSize:13,fontWeight:700,color:C.muted2}}>{r.symbol.slice(0,1)}</span>
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontFamily:MONO,fontSize:14,fontWeight:700,color:C.text,letterSpacing:"0.02em"}}>{r.symbol}</span>
+                <span style={{fontSize:9,padding:"2px 6px",borderRadius:2,background:"rgba(212,175,55,0.1)",color:C.gold,fontFamily:MONO,fontWeight:700,letterSpacing:"0.08em"}}>IPO</span>
+              </div>
+              <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {r.company||"—"}{r.exchange?` · ${r.exchange}`:""}{r.priceRange?` · ${r.priceRange}`:""}
+              </div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontFamily:MONO,fontSize:12,fontWeight:700,color:C.gold}}>{r.date}</div>
+              {r.shares&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>{(r.shares/1e6).toFixed(1)}M shares</div>}
+            </div>
+          </div>
+        ))}
+        {rows.length>80&&<div style={{padding:"8px 16px",fontFamily:MONO,fontSize:9,color:C.muted2,borderTop:`1px solid ${C.border}`,textAlign:"center"}}>
+          showing first 80 of {rows.length}
+        </div>}
+      </div>}
+    </div>
+  );
+});
+
 const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   const [section,setSection]=useState("all");
   const [reactionSym,setReactionSym]=useState(watchlist[0]||"AAPL");
@@ -2267,9 +2339,13 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
         <SectionBtn k="all" label="All" icon="📡"/>
         <SectionBtn k="reported" label={`Reported${reportedCount?` (${reportedCount})`:""}`} icon="✓"/>
         <SectionBtn k="upcoming" label={`Upcoming${upcomingCount?` (${upcomingCount})`:""}`} icon="🕓"/>
+        <SectionBtn k="ipos" label="IPOs" icon="🚀"/>
         <SectionBtn k="radar" label="AI Radar" icon="✦"/>
         <SectionBtn k="reaction" label="Reaction" icon="📊"/>
       </div>
+
+      {/* ── IPOs — upcoming public listings (next 30d) ── */}
+      {section==="ipos"&&<IpoList C={C} MONO={MONO} SERIF={SERIF}/>}
 
       {/* ── ALL / REPORTED / UPCOMING — Phantom-style logo list ── */}
       {(section==="all"||section==="reported"||section==="upcoming")&&<div>

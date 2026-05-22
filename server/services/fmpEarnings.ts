@@ -60,6 +60,61 @@ export async function getEarningsCalendar(from: string, to: string): Promise<Ear
   }
 }
 
+// ── IPO Calendar (May 2026) ────────────────────────────────────────────────
+// Wraps FMP's IPO calendar endpoint so the morning brief and the Earnings
+// tab can flag incoming public listings (e.g. SPCX). Same 5-min cache as the
+// earnings calendar to stay friendly with the 250-req/day quota. Fail-open
+// on any network/parse error — empty array degrades the IPO section to
+// "no upcoming IPOs" rather than breaking the brief or the tab.
+
+export type IpoRow = {
+  symbol: string;
+  company: string;
+  date: string;          // YYYY-MM-DD
+  exchange: string | null;
+  priceRange: string | null;
+  shares: number | null;
+  marketCap: number | null;
+};
+
+const ipoCache = new Map<string, CacheEntry<IpoRow[]>>();
+
+export async function getIpoCalendar(from: string, to: string): Promise<IpoRow[]> {
+  if (!FMP_KEY) return [];
+  const key = `${from}__${to}`;
+  const cached = fresh(ipoCache.get(key));
+  if (cached) return cached;
+  // FMP exposes IPO calendar under /stable/ipo-calendar (preferred) with
+  // fallback to /v3 path used by some plans.
+  const tryUrls = [
+    `${FMP_BASE}/ipos-calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&apikey=${FMP_KEY}`,
+    `https://financialmodelingprep.com/api/v3/ipo_calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&apikey=${FMP_KEY}`,
+  ];
+  for (const url of tryUrls) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) continue;
+      const data: any[] = await r.json();
+      if (!Array.isArray(data)) continue;
+      const rows: IpoRow[] = data.map(d => ({
+        symbol: String(d?.symbol || "").toUpperCase(),
+        company: String(d?.company || d?.companyName || ""),
+        date: String(d?.date || ""),
+        exchange: d?.exchange ? String(d.exchange) : null,
+        priceRange: d?.priceRange ? String(d.priceRange) : null,
+        shares: d?.shares == null ? null : Number(d.shares),
+        marketCap: d?.marketCap == null ? null : Number(d.marketCap),
+      })).filter(r => r.symbol && r.date);
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+      ipoCache.set(key, { ts: Date.now(), data: rows });
+      return rows;
+    } catch (e: any) {
+      console.warn("[fmp-ipo] fetch failed:", e?.message || e);
+    }
+  }
+  return [];
+}
+
 export async function getEarningsHistory(symbol: string, limit = 8): Promise<EarningsRow[]> {
   if (!FMP_KEY || !symbol) return [];
   const sym = symbol.toUpperCase();

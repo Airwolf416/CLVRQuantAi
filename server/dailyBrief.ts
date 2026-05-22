@@ -977,6 +977,38 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
     const { client } = await getUncachableResendClient();
     const chunks = chunkArray(subs, BATCH_SIZE);
 
+    // ── IPO flag injection (May 2026) ───────────────────────────────────────
+    // Prepend any IPOs pricing in the next 7 days to briefJson.impactfulNews
+    // so subscribers see incoming listings (e.g. SPCX) at the top of the
+    // brief. Fully fail-open: any fetch error leaves the brief unchanged.
+    try {
+      const { getIpoCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
+      if (isFmpEarningsConfigured()) {
+        const now = new Date();
+        const fromStr = now.toISOString().slice(0, 10);
+        const toObj = new Date(now); toObj.setDate(toObj.getDate() + 7);
+        const toStr = toObj.toISOString().slice(0, 10);
+        const ipos = await getIpoCalendar(fromStr, toStr);
+        if (ipos.length > 0) {
+          briefJson.impactfulNews = Array.isArray(briefJson.impactfulNews) ? briefJson.impactfulNews : [];
+          const ipoItems = ipos.slice(0, 5).map(ipo => ({
+            title: `🚀 IPO: ${ipo.symbol}${ipo.company ? ` (${ipo.company})` : ""} prices ${ipo.date}`,
+            impact: "NEUTRAL",
+            assets: ipo.symbol,
+            takeaway: [
+              ipo.exchange ? `Listing on ${ipo.exchange}` : null,
+              ipo.priceRange ? `range ${ipo.priceRange}` : null,
+              ipo.shares ? `${(ipo.shares / 1e6).toFixed(1)}M shares` : null,
+            ].filter(Boolean).join(" · ") || "Watch opening tape for liquidity.",
+          }));
+          briefJson.impactfulNews = [...ipoItems, ...briefJson.impactfulNews].slice(0, 5);
+          console.log(`[daily-brief] injected ${ipoItems.length} upcoming IPO(s) into impactfulNews`);
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[daily-brief] IPO injection skipped: ${e?.message || e}`);
+    }
+
     for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
       const chunk = chunks[chunkIdx];
       if (chunkIdx > 0) await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY_MS));

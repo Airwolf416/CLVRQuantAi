@@ -4731,6 +4731,28 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   // ── EARNINGS (FMP) ─────────────────────────────────────────────────────────
   // Public, cached. Calendar: from/to optional (default = today → +7d).
   // History: required symbol. Both fail-soft to [] when FMP_API_KEY absent.
+  // ── IPO Calendar ────────────────────────────────────────────────────────
+  // Surfaces upcoming public listings (e.g. SPCX) so the Earnings tab can
+  // flag them and the morning brief can prepend them to impactfulNews.
+  // 5-min cache lives in services/fmpEarnings.ts.
+  app.get("/api/ipo/calendar", async (req, res) => {
+    try {
+      const { getIpoCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
+      const now = new Date();
+      const fromDate = req.query.from ? String(req.query.from) : now.toISOString().slice(0, 10);
+      const toDateObj = new Date(now); toDateObj.setDate(toDateObj.getDate() + 30);
+      const toDate = req.query.to ? String(req.query.to) : toDateObj.toISOString().slice(0, 10);
+      if (!isFmpEarningsConfigured()) {
+        return res.json({ rows: [], configured: false, from: fromDate, to: toDate });
+      }
+      const rows = await getIpoCalendar(fromDate, toDate);
+      res.json({ rows, configured: true, from: fromDate, to: toDate });
+    } catch (e: any) {
+      console.warn("[ipo-calendar route]", e?.message || e);
+      res.json({ rows: [], configured: false, error: e?.message || "fetch_failed" });
+    }
+  });
+
   app.get("/api/earnings/calendar", async (req, res) => {
     try {
       const { getEarningsCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
@@ -6987,6 +7009,90 @@ Every level must be technically defensible. Return JSON only.`;
         } catch (e: any) {
           console.warn(`[HARDENING v1] ${ticker} ${hdDir} gate error, fail-open:`, e?.message || e);
         }
+
+        // ── HardTrendFilter + ConvictionCap (May 2026 publisher gates) ──────
+        // Mirrors the scanner / /analyze / /kronos wiring so /api/quant
+        // (the deterministic per-ticker quant scorer) cannot bypass the
+        // win-rate hardening that the other three publish paths enforce.
+        // Both gates wrapped in try/catch — any error leaves the signal
+        // flowing unmodified.
+        try {
+          const { evaluateHardTrendFilter, fetchBinanceTrendCandles } = await import("./lib/hardTrendFilter");
+          const { applyConvictionCap, recordHighConvictionReview } = await import("./lib/convictionCap");
+          const { hardTrendFilterEnabled, convictionCapEnabled } = await import("./lib/featureFlags");
+          const { logSuppressedSignal } = await import("./lib/suppressedSignalsLog");
+
+          // /api/quant is crypto-only today — fetch via Binance helper
+          // (10-min per-symbol cache). Fail-open returns empty arrays which
+          // the filter degrades to insufficient_data → PASS.
+          const { dailyCandles, hourlyCandles } = await fetchBinanceTrendCandles(ticker);
+          const trendRes = evaluateHardTrendFilter({
+            direction: hdDir,
+            archetype: (parsed as any).archetype ?? null,
+            currentPrice: Number(parsed.entry?.price ?? 0),
+            dailyCandles,
+            hourlyCandles,
+          });
+          (parsed as any).trendFilter = {
+            decision: trendRes.decision,
+            reason: trendRes.reason,
+            trend: trendRes.trend,
+            intradayTrend: trendRes.intradayTrend,
+            strong: trendRes.strong,
+          };
+          if (trendRes.decision === "SUPPRESS") {
+            const hot = hardTrendFilterEnabled();
+            logSuppressedSignal({
+              ticker, intendedDirection: hdDir, assetClass: cls,
+              sourceEndpoint: "quant",
+              reason: hot
+                ? "suppressed_counter_trend_no_mean_rev_archetype"
+                : "would_suppress_counter_trend_no_mean_rev_archetype",
+              rawSignalPayload: {
+                signal: parsed.signal, entry: parsed.entry?.price,
+                conviction: parsed.conviction, archetype: (parsed as any).archetype,
+                trend: trendRes.trend,
+              },
+            }).catch(() => {});
+            if (hot) {
+              parsed.signal = "SUPPRESSED";
+              parsed.suppressed = true;
+              parsed.suppression_message = `Counter-trend signal blocked — daily trend is ${trendRes.trend} and archetype is not MEAN_REVERSION_EXHAUSTION.`;
+              parsed.suppression_rules = ["counter_trend_no_mean_rev_archetype"];
+              return res.json(parsed);
+            }
+          }
+
+          if (convictionCapEnabled() && typeof parsed.conviction === "number") {
+            const capRes = applyConvictionCap(parsed.conviction);
+            (parsed as any).displayedConviction = capRes.displayedConviction;
+            if (capRes.capped) {
+              (parsed as any).highConvictionReview = true;
+              recordHighConvictionReview({
+                rawConviction: capRes.rawConviction,
+                sourceEndpoint: "quant",
+                token: ticker,
+                direction: hdDir,
+                archetype: (parsed as any).archetype ?? null,
+                signalId: null,
+                aiSignalLogId: null,
+                featureSnapshot: {
+                  bayesian_probability: bayesian?.probability ?? null,
+                  advanced_score: adjScore ?? null,
+                  confluence_direction: confluence?.direction ?? null,
+                  archetype: (parsed as any).archetype ?? null,
+                  trend: trendRes.trend,
+                  intraday_trend: trendRes.intradayTrend,
+                  strong_trend: trendRes.strong,
+                  rr: parsed.rr ?? null,
+                  source: "quant",
+                },
+              }, capRes).catch(() => {});
+            }
+          }
+        } catch (gateErr: any) {
+          console.warn(`[QUANT GATES] ${ticker} ${hdDir} fail-open:`, gateErr?.message || gateErr);
+        }
       }
 
       // Unified gate audit log — one line per signal attempt summarising every gate
@@ -7777,7 +7883,8 @@ Every level must be technically defensible. Return JSON only.`;
           // 336-bar fetch (same as /api/quant), fail-open to whatever we get.
           let archBars: any[] = [];
           try {
-            archBars = await fetchQuantCandles(symbol, cls, "1h", ARCHETYPE_LOOKBACK_1H);
+            const fetched = await fetchQuantCandles(symbol, cls, "1h", ARCHETYPE_LOOKBACK_1H);
+            archBars = Array.isArray(fetched) ? fetched : [];
           } catch { archBars = []; }
           if (Array.isArray(archBars) && archBars.length >= 24) {
             const micro = getMicrostructureSnapshot(symbol, microClass);
@@ -8905,7 +9012,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   await import("./lib/microstructureSnapshot");
                 let archBarsK: any[] = [];
                 try {
-                  archBarsK = await fetchQuantCandles(symbolK, "crypto", "1h", ARCHETYPE_LOOKBACK_1H);
+                  const fetchedK = await fetchQuantCandles(symbolK, "crypto", "1h", ARCHETYPE_LOOKBACK_1H);
+                  archBarsK = Array.isArray(fetchedK) ? fetchedK : [];
                 } catch { archBarsK = []; }
                 if (Array.isArray(archBarsK) && archBarsK.length >= 24) {
                   const microK = getMicrostructureSnapshot(symbolK, "crypto");
