@@ -1217,9 +1217,12 @@ function PerformanceHighlights(){
       .catch(()=>{if(on)setErr(true);});
     return()=>{on=false;};
   },[]);
-  if(err||!data||data.overallWinRate==null||data.sampleSize<25)return null;
+  // Gate lowered from 25 → 5 so the panel appears in production where the
+  // resolved-signals sample is small. WR color brightened: below 45 falls
+  // back to gold (not muted2) so the headline always reads at a glance.
+  if(err||!data||data.overallWinRate==null||data.sampleSize<5)return null;
   const wr=data.overallWinRate;
-  const wrColor=wr>=55?C.green:wr>=45?C.gold:C.muted2;
+  const wrColor=wr>=55?C.green:wr>=40?C.gold:C.orange||C.gold;
   return(
     <div data-testid="panel-performance-highlights" style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,padding:"12px 14px",marginBottom:12}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
@@ -2086,17 +2089,21 @@ function SignalsDiagnosisPanel(){
   );
 }
 
-// ─── EARNINGS TAB ─────────────────────────────────────────
-// Three sections in one tab:
-//   1. This-week calendar for watchlist tickers
-//   2. Upcoming market-wide calendar with simple filters
-//   3. Reaction tracker — last 8 quarters per watchlist ticker (beat/miss vs estimate)
-// All three pull from FMP /stable/earnings-* endpoints (free-tier accessible).
+// ─── EARNINGS TAB (Phantom-style, May 2026 redesign) ─────────────────────
+// Four tabs in this order:
+//   1. All       — reported (this week + last 2 weeks) and upcoming (next 30d)
+//   2. Reported  — only rows with epsActual populated, green/red Beat/Miss%
+//   3. Upcoming  — only rows with no actual yet, sorted soonest-first
+//   4. AI Radar  — Claude verdicts cached from the daily 6:15 ET scan (Pro)
+// Major-cap filter (watchlist + curated MAJORS) so the user sees NVDA/AMD/
+// WMT/etc instead of 400 micro-caps. Logos load from FMP image-stock CDN
+// with an initial-letter fallback when the image 404s.
 const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
-  const [section,setSection]=useState("radar");
-  const [marketDays,setMarketDays]=useState(7);
-  const [marketFilter,setMarketFilter]=useState("");
+  const [section,setSection]=useState("all");
   const [reactionSym,setReactionSym]=useState(watchlist[0]||"AAPL");
+  const [showHistory,setShowHistory]=useState(false);
+  const [refreshing,setRefreshing]=useState(false);
+  const [refreshMsg,setRefreshMsg]=useState("");
 
   // Memoize the date strings so the query keys are stable across re-renders.
   // Without this, every parent re-render rebuilt `today` and `toDate`, which
@@ -2104,32 +2111,35 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   // causing the tab to re-fetch on every render and feel laggy/unresponsive
   // when the user tapped section buttons.
   const todayStr=useMemo(()=>new Date().toISOString().slice(0,10),[]);
-  const weekToStr=useMemo(()=>new Date(Date.now()+7*86400000).toISOString().slice(0,10),[]);
-  const marketToStr=useMemo(()=>new Date(Date.now()+marketDays*86400000).toISOString().slice(0,10),[marketDays]);
+  // Pull 14 days BACK (this week's reported results) + 30 days FORWARD
+  // (upcoming). One single API call powers All/Reported/Upcoming filters.
+  const fromStr=useMemo(()=>new Date(Date.now()-14*86400000).toISOString().slice(0,10),[]);
+  const toStr=useMemo(()=>new Date(Date.now()+30*86400000).toISOString().slice(0,10),[]);
   const watchlistSet=useMemo(()=>new Set((watchlist||[]).map(s=>String(s).toUpperCase())),[watchlist]);
+  // Curated major-cap whitelist — the names users actually care about. Filters
+  // out the 380+ micro-caps FMP+Nasdaq dump into the raw calendar payload.
+  const MAJORS=useMemo(()=>new Set([
+    "TSLA","NVDA","AAPL","GOOGL","GOOG","META","MSFT","AMZN","NFLX","AMD",
+    "PLTR","COIN","MSTR","HOOD","RBLX","MU","AVGO","INTC","ORCL","ADBE",
+    "SMCI","SNOW","CRM","NOW","ZS","CRWD","NET","DDOG","OKTA","TWLO",
+    "JPM","BAC","GS","MS","WFC","V","MA","AXP","BLK","SCHW",
+    "WMT","COST","HD","NKE","KO","PEP","MCD","SBUX","CMG","TGT","LULU",
+    "DIS","UBER","ABNB","SHOP","SQ","PYPL","ROKU","DKNG","SPOT",
+    "BIDU","BILI","BABA","JD","PDD","NIO","ZM","LI","XPEV",
+    "JNJ","PFE","ABBV","MRK","LLY","UNH","CVS","BMY","TMO","ABT",
+    "XOM","CVX","OXY","COP","SLB","BA","CAT","DE","LMT","RTX",
+    "F","GM","RIVN","LCID","CRCL","SNDK","SOFI","UPST","CHWY","ETSY",
+  ]),[]);
 
-  // THIS WEEK shows the full 7-day earnings calendar (no watchlist filter —
-  // the FMP free tier returns only a handful of names per week, and filtering
-  // by a 16-symbol watchlist usually leaves the view nearly empty). Watchlist
-  // tickers are highlighted with a ★ marker so they're still easy to spot.
-  const weekQuery=useQuery({
-    queryKey:["/api/earnings/calendar","week",todayStr,weekToStr],
+  // Single calendar query for All/Reported/Upcoming (Phantom-style tabs all
+  // slice the same dataset client-side, so we fetch once and filter in memory).
+  const calQuery=useQuery({
+    queryKey:["/api/earnings/calendar","range",fromStr,toStr],
     queryFn:async()=>{
-      const r=await fetch(`/api/earnings/calendar?from=${todayStr}&to=${weekToStr}`);
+      const r=await fetch(`/api/earnings/calendar?from=${fromStr}&to=${toStr}`);
       return r.json();
     },
-    enabled:section==="week",
-    staleTime:300000,
-    refetchInterval:false,
-  });
-
-  const marketQuery=useQuery({
-    queryKey:["/api/earnings/calendar","market",todayStr,marketToStr],
-    queryFn:async()=>{
-      const r=await fetch(`/api/earnings/calendar?from=${todayStr}&to=${marketToStr}`);
-      return r.json();
-    },
-    enabled:section==="market",
+    enabled:section!=="radar"&&section!=="reaction",
     staleTime:300000,
     refetchInterval:false,
   });
@@ -2145,17 +2155,36 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
     refetchInterval:false,
   });
 
-  // Radar window capped at 7 days (was 14) to keep the cache small and the
-  // initial render snappy. Server-side scheduler still refreshes daily.
+  // Radar lookahead extended to 30d so post-NVDA-week the panel still has
+  // names to render (was 7d which mostly returned empty after big-week earnings).
   const radarQuery=useQuery({
-    queryKey:["/api/earnings/radar","7d"],
-    queryFn:async()=>{const r=await fetch("/api/earnings/radar?lookaheadDays=7");return r.json();},
+    queryKey:["/api/earnings/radar","30d"],
+    queryFn:async()=>{const r=await fetch("/api/earnings/radar?lookaheadDays=30");return r.json();},
     enabled:section==="radar",
     staleTime:600000,
     refetchInterval:false,
   });
 
   const notConfigured=(q)=>q.data&&q.data.configured===false;
+
+  // Admin-triggered manual radar refresh — bridges the gap when the daily
+  // 6:15 ET cron didn't run (e.g. Railway restart) or the cache is stale.
+  // No-ops gracefully for non-admin users (endpoint enforces auth).
+  const refreshRadar=async()=>{
+    setRefreshing(true);setRefreshMsg("");
+    try{
+      const r=await fetch("/api/admin/earnings/run-scan",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({lookaheadDays:30})});
+      if(r.ok){
+        const j=await r.json();
+        setRefreshMsg(`Refreshed · ${j.cached||j.count||0} cached`);
+        radarQuery.refetch();
+      }else{
+        setRefreshMsg(r.status===401||r.status===403?"Admin only":"Refresh failed");
+      }
+    }catch{setRefreshMsg("Refresh failed");}
+    setRefreshing(false);
+    setTimeout(()=>setRefreshMsg(""),5000);
+  };
 
   const fmtNum=(n)=>n==null?"—":n.toLocaleString(undefined,{maximumFractionDigits:2});
   const fmtPct=(n)=>n==null?"—":(n>=0?"+":"")+n.toFixed(2)+"%";
@@ -2178,38 +2207,153 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
     return (delta>=0?"BEAT ":"MISS ")+fmtPct(pct);
   };
 
-  const SectionBtn=({k,label})=>(
+  const SectionBtn=({k,label,icon})=>(
     <button data-testid={`tab-earnings-${k}`} onClick={()=>setSection(k)}
-      style={{background:section===k?C.gold:"none",color:section===k?C.bg:C.muted,
-              border:`1px solid ${section===k?C.gold:C.border}`,padding:"6px 12px",
-              fontFamily:MONO,fontSize:9,letterSpacing:"0.12em",cursor:"pointer",borderRadius:2}}>
-      {label}
+      style={{background:section===k?C.text:"transparent",color:section===k?C.bg:C.muted,
+              border:`1px solid ${section===k?C.text:C.border}`,padding:"8px 16px",
+              fontFamily:MONO,fontSize:10,fontWeight:700,letterSpacing:"0.1em",
+              cursor:"pointer",borderRadius:999,display:"inline-flex",alignItems:"center",gap:6}}>
+      {icon&&<span style={{fontSize:11}}>{icon}</span>}{label}
     </button>
   );
 
-  const filteredMarket=section==="market"&&marketQuery.data?.rows
-    ? marketQuery.data.rows.filter(r=>!marketFilter||r.symbol.includes(marketFilter.toUpperCase()))
-    : [];
+  // Phantom-style: filter raw calendar to (watchlist ∪ MAJORS), then dedupe
+  // (FMP+Nasdaq sometimes double-up the same ticker/date), compute beatPct
+  // from epsActual vs epsEstimated, and split by section.
+  const rawRows=calQuery.data?.rows||[];
+  const enriched=rawRows
+    .filter(r=>watchlistSet.has(r.symbol)||MAJORS.has(r.symbol))
+    .map(r=>{
+      const reported=r.epsActual!=null&&r.epsEstimated!=null;
+      const beatPct=reported&&r.epsEstimated!==0
+        ?((r.epsActual-r.epsEstimated)/Math.abs(r.epsEstimated))*100
+        :null;
+      return {...r,reported,beatPct};
+    });
+  const dedupMap=new Map();
+  for(const r of enriched){
+    const k=`${r.symbol}__${r.date}`;
+    const prev=dedupMap.get(k);
+    if(!prev||(r.reported&&!prev.reported)) dedupMap.set(k,r);
+  }
+  const allRows=Array.from(dedupMap.values());
+  const sectionRows=allRows.filter(r=>{
+    if(section==="reported") return r.reported;
+    if(section==="upcoming") return !r.reported&&r.date>=todayStr;
+    return true; // "all"
+  }).sort((a,b)=>{
+    // Reported first (most recent first), then upcoming (soonest first)
+    if(a.reported&&!b.reported) return -1;
+    if(!a.reported&&b.reported) return 1;
+    if(a.reported) return b.date.localeCompare(a.date);
+    return a.date.localeCompare(b.date);
+  });
+  const reportedCount=allRows.filter(r=>r.reported).length;
+  const upcomingCount=allRows.filter(r=>!r.reported&&r.date>=todayStr).length;
+
+  // FMP free-tier company logos. Fails → fallback letter circle via onError.
+  const logoUrl=(sym)=>`https://financialmodelingprep.com/image-stock/${sym}.png`;
 
   return (
     <div data-testid="tab-earnings-root">
-      <div style={{marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-        <div style={{fontFamily:SERIF,fontSize:22,fontWeight:900,color:C.gold,letterSpacing:"-0.02em"}}>EARNINGS</div>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          <SectionBtn k="radar" label="AI RADAR"/>
-          <SectionBtn k="week" label="THIS WEEK"/>
-          <SectionBtn k="market" label="UPCOMING · MARKET"/>
-          <SectionBtn k="reaction" label="REACTION TRACKER"/>
+      <div style={{marginBottom:18}}>
+        <div style={{fontFamily:SERIF,fontSize:28,fontWeight:900,color:C.gold,letterSpacing:"-0.02em"}}>Earnings</div>
+        <div style={{fontFamily:SANS,fontSize:12,color:C.muted,marginTop:4,lineHeight:1.5}}>
+          Stay ahead of every major report. This week's results and the next 30 days of upcoming earnings.
         </div>
       </div>
 
+      <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
+        <SectionBtn k="all" label="All" icon="📡"/>
+        <SectionBtn k="reported" label={`Reported${reportedCount?` (${reportedCount})`:""}`} icon="✓"/>
+        <SectionBtn k="upcoming" label={`Upcoming${upcomingCount?` (${upcomingCount})`:""}`} icon="🕓"/>
+        <SectionBtn k="radar" label="AI Radar" icon="✦"/>
+        <SectionBtn k="reaction" label="Reaction" icon="📊"/>
+      </div>
+
+      {/* ── ALL / REPORTED / UPCOMING — Phantom-style logo list ── */}
+      {(section==="all"||section==="reported"||section==="upcoming")&&<div>
+        {notConfigured(calQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — earnings data unavailable.</div>}
+        {calQuery.isLoading&&<div style={{padding:20,color:C.muted,fontFamily:MONO,fontSize:11}}>Loading…</div>}
+        {!calQuery.isLoading&&sectionRows.length===0&&!notConfigured(calQuery)&&(
+          <div style={{padding:28,border:`1px dashed ${C.border}`,borderRadius:6,fontFamily:MONO,fontSize:11,color:C.muted2,textAlign:"center",lineHeight:1.6}}>
+            No {section==="all"?"":section+" "}major-cap earnings in this window.<br/>
+            <span style={{fontSize:9,color:C.muted}}>Window: last 14d → next 30d · major-cap whitelist + your watchlist</span>
+          </div>
+        )}
+        {sectionRows.length>0&&<div data-testid="list-earnings" style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",background:C.panel}}>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"10px 16px",
+                       background:C.bg,fontFamily:MONO,fontSize:9,color:C.muted2,
+                       letterSpacing:"0.14em",borderBottom:`1px solid ${C.border}`}}>
+            <span>COMPANY</span>
+            <span>{section==="upcoming"?"REPORTS ON":"RESULT"}</span>
+          </div>
+          {sectionRows.slice(0,80).map((r,i)=>{
+            const isWatched=watchlistSet.has(r.symbol);
+            return (
+              <div key={`${r.symbol}-${r.date}-${i}`} data-testid={`row-earnings-${r.symbol}`}
+                style={{display:"flex",alignItems:"center",padding:"14px 16px",
+                        borderBottom:i===Math.min(sectionRows.length,80)-1?"none":`1px solid ${C.border}`,
+                        background:isWatched?"rgba(212,175,55,0.04)":"transparent"}}>
+                <div style={{width:38,height:38,borderRadius:"50%",overflow:"hidden",
+                             marginRight:14,background:C.bg,flexShrink:0,position:"relative",
+                             border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <img src={logoUrl(r.symbol)} alt={r.symbol}
+                       style={{width:"100%",height:"100%",objectFit:"cover"}}
+                       onError={(e)=>{e.currentTarget.style.display="none";if(e.currentTarget.nextSibling)e.currentTarget.nextSibling.style.display="flex";}}/>
+                  <span style={{display:"none",position:"absolute",inset:0,alignItems:"center",justifyContent:"center",
+                                fontFamily:MONO,fontSize:13,fontWeight:700,color:C.muted2}}>{r.symbol.slice(0,1)}</span>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    {isWatched&&<span style={{color:C.gold,fontSize:11}}>★</span>}
+                    <span style={{fontFamily:MONO,fontSize:14,fontWeight:700,color:C.text,letterSpacing:"0.02em"}}>{r.symbol}</span>
+                  </div>
+                  <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>
+                    {r.reported?`Reported ${r.date}`:`Est ${fmtNum(r.epsEstimated)} EPS`}
+                  </div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  {r.reported&&r.beatPct!=null?(
+                    <>
+                      <div style={{fontFamily:MONO,fontSize:14,fontWeight:800,color:r.beatPct>=0?C.green:C.red,letterSpacing:"-0.01em"}}>
+                        {r.beatPct>=0?"Beat":"Miss"} {Math.abs(r.beatPct).toFixed(2)}%
+                      </div>
+                      <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>
+                        {fmtNum(r.epsActual)} vs {fmtNum(r.epsEstimated)}
+                      </div>
+                    </>
+                  ):(
+                    <div style={{fontFamily:MONO,fontSize:12,fontWeight:700,color:C.gold}}>{r.date}</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {sectionRows.length>80&&<div style={{padding:"8px 16px",fontFamily:MONO,fontSize:9,color:C.muted2,borderTop:`1px solid ${C.border}`,textAlign:"center"}}>
+            showing first 80 of {sectionRows.length}
+          </div>}
+        </div>}
+      </div>}
+
       {/* ── AI RADAR ── */}
       {section==="radar"&&<div>
-        <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
-          CLAUDE AI VERDICTS · NEXT 7 DAYS · REFRESHED DAILY 6:15 AM ET
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:10,flexWrap:"wrap"}}>
+          <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.08em"}}>
+            CLAUDE AI VERDICTS · NEXT 30 DAYS · DAILY 6:15 AM ET SCAN
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {refreshMsg&&<span style={{fontFamily:MONO,fontSize:9,color:refreshMsg.startsWith("Refreshed")?C.green:C.muted}}>{refreshMsg}</span>}
+            <button data-testid="btn-radar-refresh" onClick={refreshRadar} disabled={refreshing}
+              style={{background:"transparent",color:C.gold,border:`1px solid ${C.gold}`,padding:"6px 12px",
+                      fontFamily:MONO,fontSize:9,fontWeight:700,letterSpacing:"0.12em",cursor:refreshing?"wait":"pointer",
+                      borderRadius:999,opacity:refreshing?0.5:1}}>
+              {refreshing?"REFRESHING…":"↻ REFRESH"}
+            </button>
+          </div>
         </div>
         {radarQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
-        {radarQuery.data?.rows?.length===0&&!radarQuery.isLoading&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2}}>No AI verdicts cached yet. The daily 6:15 AM ET scan populates this view — first run will appear after the next scan or admin trigger.</div>}
+        {radarQuery.data?.rows?.length===0&&!radarQuery.isLoading&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2,lineHeight:1.5}}>No AI verdicts cached. The daily 6:15 AM ET scan populates this view — tap <strong style={{color:C.gold}}>↻ REFRESH</strong> above to trigger an on-demand scan (admin/Pro only).</div>}
         {radarQuery.data?.rows?.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:10}}>
           {radarQuery.data.rows.map((r,i)=>{
             const ai=r.ai_analysis||{};
@@ -2249,90 +2393,6 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
               </div>
             );
           })}
-        </div>}
-      </div>}
-
-      {/* ── THIS WEEK ── */}
-      {section==="week"&&<div>
-        <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
-          NEXT 7 DAYS · ★ = WATCHLIST TICKER · DATA · FMP FREE TIER
-        </div>
-        {notConfigured(weekQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — earnings data unavailable.</div>}
-        {weekQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
-        {!weekQuery.isLoading&&weekQuery.data?.rows?.length===0&&!notConfigured(weekQuery)&&<div style={{padding:18,border:`1px solid ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted2,lineHeight:1.5}}>
-          No upcoming earnings returned by FMP for the next 7 days. The free tier covers a limited universe (typically US large/mid-caps); for the full institutional calendar, see Bloomberg or your broker. Try the UPCOMING · MARKET tab with a 14-day window for more coverage.
-        </div>}
-        {weekQuery.data?.rows?.length>0&&<div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:2}}>
-          <table data-testid="table-earnings-week" style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:MONO}}>
-            <thead><tr style={{background:C.bg,color:C.muted,textAlign:"left"}}>
-              <th style={{padding:"8px 10px"}}>DATE</th>
-              <th style={{padding:"8px 10px"}}>SYMBOL</th>
-              <th style={{padding:"8px 10px",textAlign:"right"}}>EPS EST</th>
-              <th style={{padding:"8px 10px",textAlign:"right"}}>REV EST</th>
-            </tr></thead>
-            <tbody>
-              {[...weekQuery.data.rows]
-                .sort((a,b)=>{
-                  const wA=watchlistSet.has(a.symbol)?0:1;
-                  const wB=watchlistSet.has(b.symbol)?0:1;
-                  if(wA!==wB) return wA-wB;
-                  return a.date.localeCompare(b.date);
-                })
-                .map((r,i)=>{
-                  const isWatched=watchlistSet.has(r.symbol);
-                  return (
-                    <tr key={`${r.symbol}-${r.date}-${i}`} data-testid={`row-earnings-${r.symbol}`} style={{borderTop:`1px solid ${C.border}`,background:isWatched?"rgba(212,175,55,0.04)":"transparent"}}>
-                      <td style={{padding:"8px 10px",color:C.gold}}>{r.date}</td>
-                      <td style={{padding:"8px 10px",fontWeight:700,color:C.text}}>
-                        {isWatched&&<span style={{color:C.gold,marginRight:6}}>★</span>}{r.symbol}
-                      </td>
-                      <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
-                      <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
-                    </tr>
-                  );
-                })}
-            </tbody>
-          </table>
-        </div>}
-      </div>}
-
-      {/* ── UPCOMING · MARKET ── */}
-      {section==="market"&&<div>
-        <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
-          <span style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.08em"}}>WINDOW:</span>
-          {[3,5,7].map(d=>(
-            <button key={d} data-testid={`btn-earnings-days-${d}`} onClick={()=>setMarketDays(d)}
-              style={{background:marketDays===d?C.gold:"none",color:marketDays===d?C.bg:C.muted,
-                      border:`1px solid ${marketDays===d?C.gold:C.border}`,padding:"4px 10px",fontFamily:MONO,fontSize:9,cursor:"pointer",borderRadius:2}}>
-              {d}D
-            </button>
-          ))}
-          <input data-testid="input-earnings-filter" placeholder="filter symbol…" value={marketFilter} onChange={e=>setMarketFilter(e.target.value)}
-            style={{background:"none",border:`1px solid ${C.border}`,color:C.text,padding:"5px 10px",fontFamily:MONO,fontSize:10,borderRadius:2,marginLeft:"auto",width:180}}/>
-          <span style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>{filteredMarket.length} results</span>
-        </div>
-        {notConfigured(marketQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — earnings data unavailable.</div>}
-        {marketQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
-        {marketQuery.data?.rows?.length>0&&<div style={{overflowX:"auto",maxHeight:540,border:`1px solid ${C.border}`,borderRadius:2}}>
-          <table data-testid="table-earnings-market" style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:MONO}}>
-            <thead style={{position:"sticky",top:0,background:C.bg}}><tr style={{color:C.muted,textAlign:"left"}}>
-              <th style={{padding:"8px 10px"}}>DATE</th>
-              <th style={{padding:"8px 10px"}}>SYMBOL</th>
-              <th style={{padding:"8px 10px",textAlign:"right"}}>EPS EST</th>
-              <th style={{padding:"8px 10px",textAlign:"right"}}>REV EST</th>
-            </tr></thead>
-            <tbody>
-              {filteredMarket.slice(0,400).sort((a,b)=>a.date.localeCompare(b.date)).map((r,i)=>(
-                <tr key={`${r.symbol}-${r.date}-${i}`} style={{borderTop:`1px solid ${C.border}`}}>
-                  <td style={{padding:"6px 10px",color:C.gold}}>{r.date}</td>
-                  <td style={{padding:"6px 10px",fontWeight:700,color:C.text}}>{r.symbol}</td>
-                  <td style={{padding:"6px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
-                  <td style={{padding:"6px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {filteredMarket.length>400&&<div style={{padding:"6px 10px",fontFamily:MONO,fontSize:9,color:C.muted2,borderTop:`1px solid ${C.border}`}}>showing first 400 of {filteredMarket.length}</div>}
         </div>}
       </div>}
 
