@@ -857,14 +857,21 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
   const lastVol=vH[vH.length-1]||0;const volumeMultiplier=avgVol>0?lastVol/avgVol:1;
   const{total:computedScore,factors}=scoreSignal({priceMoveAbs,direction:isLong?"long":"short",fundingRate,oiM,volumeMultiplier});
   const qScore=sig.advancedScore!=null?sig.advancedScore:computedScore;
-  const isStrong=sig.isStrongSignal||qScore>=80;
-  const conviction=qScore>=80?"STRONG":qScore>=70?"HIGH":qScore>=55?"MED":"LOW";
-  const convColor=qScore>=80?C.green:qScore>=70?C.green:qScore>=55?C.orange:C.red;
+  // ConvictionCap (May 2026): when server set displayedConviction we render
+  // the capped value instead of the raw score, and surface an amber REVIEW
+  // chip so the user knows the engine flagged this for manual review.
+  const convCapped=sig.displayedConviction!=null&&sig.displayedConviction<qScore;
+  const displayScore=convCapped?sig.displayedConviction:qScore;
+  const isStrong=(sig.isStrongSignal||qScore>=80)&&!convCapped;
+  const conviction=displayScore>=80?"STRONG":displayScore>=70?"HIGH":displayScore>=55?"MED":"LOW";
+  const convColor=displayScore>=80?C.green:displayScore>=70?C.green:displayScore>=55?C.orange:C.red;
   const moveType=priceMoveAbs>=3?"MAJOR MOVE":priceMoveAbs>=2?"BREAKOUT":"MOMENTUM";
   const minutesAgo=sig.ts?Math.floor((Date.now()-sig.ts)/60000):0;
-  const strength=bullProbability({priceMoveAbs,fundingRate,oiM,volumeMultiplier,dir:sig.dir,masterScore:sig.masterScore});
+  // When ConvictionCap fires, drive the strength meter + border off the capped
+  // value so the meter, ring, chip, and border all tell the same story.
+  const strength=bullProbability({priceMoveAbs,fundingRate,oiM,volumeMultiplier,dir:sig.dir,masterScore:convCapped?displayScore:sig.masterScore});
   const whaleMatch=wAlerts&&wAlerts.some(w=>w.sym===sig.token&&Math.abs(w.ts-sig.ts)<300000);
-  const isHighConf=qScore>=75;
+  const isHighConf=displayScore>=75;
   return(
     <div data-testid={`signal-card-${sig.id}`} className={isStrong?"high-confidence-glow":whaleMatch?"high-confidence-glow":""} style={{background:C.panel,border:`1px solid ${isStrong?"rgba(0,199,135,.6)":whaleMatch?C.gold+"88":isHighConf?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
       {isStrong&&<div style={{background:"linear-gradient(90deg,rgba(0,199,135,.15),rgba(0,199,135,.05))",borderBottom:"1px solid rgba(0,199,135,.25)",padding:"5px 14px",display:"flex",alignItems:"center",gap:8}}>
@@ -938,13 +945,14 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
               {sig.tags.map((tg,j)=><Badge key={j} label={tg.l} color={tg.c}/>)}
               <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.purple,fontFamily:MONO,letterSpacing:"0.08em"}}>{moveType}</span>
               <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.muted2,fontFamily:MONO}}>⚡ {sig.lev||"2x"}</span>
-              <span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${convColor}44`,color:convColor,fontFamily:MONO,fontWeight:700}}>📊 {conviction}</span>
+              <span data-testid={`chip-conviction-${sig.id}`} style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${convColor}44`,color:convColor,fontFamily:MONO,fontWeight:700}}>📊 {conviction}</span>
+              {convCapped&&<span data-testid={`chip-review-${sig.id}`} title="Engine raw conviction was ≥50 but historical data shows that bucket underperforms. Conviction capped at 49 pending manual review." style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:"rgba(255,176,0,.08)",border:"1px solid rgba(255,176,0,.45)",color:"#ffb000",fontFamily:MONO,fontWeight:700,letterSpacing:"0.08em"}}>⚑ REVIEW</span>}
               {sig.timeframe&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.gold}44`,color:C.gold,fontFamily:MONO}}>⏱ {sig.timeframe}</span>}
               {sig.session&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.border}`,color:C.muted2,fontFamily:MONO}}>{sig.session}</span>}
               {volumeMultiplier>1.5&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:2,background:C.bg,border:`1px solid ${C.cyan}44`,color:C.cyan,fontFamily:MONO}}>Vol {volumeMultiplier.toFixed(1)}x</span>}
             </div>
           </div>
-          <ScoreRing score={qScore} C={C}/>
+          <ScoreRing score={displayScore} C={C}/>
         </div>
       </div>
       {expanded&&<div style={{padding:"0 14px 14px",position:"relative"}}>
