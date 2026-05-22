@@ -8038,8 +8038,36 @@ Every level must be technically defensible. Return JSON only.`;
       }
     }));
 
-    const finalCards = out.filter(Boolean);
-    return { cards: finalCards, inCount, dropped, vetoed, regenerated };
+    // ── FINAL DEFENSIVE R:R FLOOR ────────────────────────────────────────────
+    // Belt-and-suspenders: drop any card whose TP1 R:R is below the friction
+    // floor (1.65), no matter how it got there. Both fail-open paths above
+    // (L7683 missing fields, L8037 per-card exception) leave the LLM's raw
+    // card in `out`, which can carry a sub-1.65 R:R the hardener never saw.
+    // This filter catches those leaks AFTER the fact so an unhardened card
+    // can never ship to a user (e.g. the May 22 2026 BTC LONG R:R 1.07).
+    const MIN_DISPLAYED_RR = 1.65;
+    const safeCards: IdeaCard[] = [];
+    let postFloorDropped = 0;
+    for (const c of out.filter(Boolean)) {
+      const e = Number(c?.entry);
+      const sl = Number(c?.sl);
+      const t1 = Number(c?.tp1?.price ?? c?.tp1);
+      if (!Number.isFinite(e) || !Number.isFinite(sl) || !Number.isFinite(t1) || Math.abs(e - sl) <= 0) {
+        // Can't validate R:R — drop rather than ship a malformed card.
+        postFloorDropped++;
+        console.warn(`[hardenTradeIdeas DEFENSE] dropping ${c?.asset || "?"} ${c?.direction || "?"} — cannot compute R:R (e=${e} sl=${sl} tp1=${t1})`);
+        continue;
+      }
+      const rr = Math.abs(t1 - e) / Math.abs(e - sl);
+      if (rr < MIN_DISPLAYED_RR) {
+        postFloorDropped++;
+        console.warn(`[hardenTradeIdeas DEFENSE] dropping ${c?.asset || "?"} ${c?.direction || "?"} — R:R ${rr.toFixed(2)} < ${MIN_DISPLAYED_RR} (hardener likely fail-open: entry=${e} sl=${sl} tp1=${t1} hardenerApplied=${!!c?.hardener?.applied})`);
+        continue;
+      }
+      safeCards.push(c);
+    }
+    if (postFloorDropped > 0) dropped += postFloorDropped;
+    return { cards: safeCards, inCount, dropped, vetoed, regenerated };
   }
 
   app.post("/api/ai/analyze", aiIpLimiter, async (req, res) => {
@@ -9065,6 +9093,40 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         }
       } catch (e: any) {
         console.warn("[kronos hardener] skipped:", e?.message || e);
+      }
+
+      // ── FINAL DEFENSIVE R:R FLOOR (mirror of hardenTradeIdeas defense) ──
+      // If the hardener block above threw OR was skipped (LLM produced bad
+      // fields, brain lookup failed, etc), the LLM's raw trade_plan with a
+      // potentially sub-1.65 R:R would ship as-is. Coerce to NO_TRADE rather
+      // than let an unhardened plan reach the user.
+      try {
+        const tpFinal = (parsed as any)?.trade_plan;
+        if (tpFinal && (tpFinal.direction === "LONG" || tpFinal.direction === "SHORT")) {
+          const eF  = Number(tpFinal.entry);
+          const slF = Number(tpFinal.sl);
+          const t1F = Number(tpFinal.tp1);
+          if (Number.isFinite(eF) && Number.isFinite(slF) && Number.isFinite(t1F) && Math.abs(eF - slF) > 0) {
+            const rrF = Math.abs(t1F - eF) / Math.abs(eF - slF);
+            if (rrF < 1.65) {
+              console.warn(`[kronos DEFENSE] coercing ${parsed?.asset || "?"} ${tpFinal.direction} to NO_TRADE — R:R ${rrF.toFixed(2)} < 1.65 (hardener fail-open)`);
+              (parsed as any).trade_plan = {
+                ...tpFinal,
+                direction: "NO_TRADE",
+                notes: `Defensive R:R floor: ${rrF.toFixed(2)} < 1.65. ${tpFinal.notes || ""}`.trim(),
+              };
+            }
+          } else {
+            console.warn(`[kronos DEFENSE] coercing ${parsed?.asset || "?"} ${tpFinal.direction} to NO_TRADE — cannot compute R:R (e=${eF} sl=${slF} tp1=${t1F})`);
+            (parsed as any).trade_plan = {
+              ...tpFinal,
+              direction: "NO_TRADE",
+              notes: `Defensive R:R floor: malformed entry/sl/tp1. ${tpFinal.notes || ""}`.trim(),
+            };
+          }
+        }
+      } catch (defErr: any) {
+        console.warn("[kronos DEFENSE] floor check error (fail-open):", defErr?.message || defErr);
       }
 
       res.json(parsed);
