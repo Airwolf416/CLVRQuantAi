@@ -731,6 +731,66 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_source_signal ON signal_shadow_inversions (source_signal_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_outcome       ON signal_shadow_inversions (outcome)`);
 
+    // ── One-shot backfill: shadow rows for ai_signal_log entries that were
+    // logged BEFORE signalLogger gained the shadow-writer (May 2026). Without
+    // this, prod's ShadowInversionsPanel is empty even though the writer is
+    // live, because no historical signal ever produced a shadow twin.
+    // Idempotent — only inserts where source_signal_id has no shadow yet.
+    // Resolved outcome on the parent signal is propagated to the shadow as
+    // PENDING so the resolver picks them up on the next live-price tick.
+    try {
+      const bf = await client.query(`
+        INSERT INTO signal_shadow_inversions (
+          source_signal_id, token, original_direction, inverted_direction,
+          entry_price, inverted_sl, inverted_tp1, inverted_tp2, inverted_tp3,
+          kill_clock_expires, outcome, created_at
+        )
+        SELECT
+          s.id,
+          s.token,
+          s.direction,
+          CASE WHEN s.direction = 'LONG' THEN 'SHORT' ELSE 'LONG' END,
+          s.entry_price,
+          CASE WHEN s.stop_loss IS NOT NULL
+               AND (2 * s.entry_price - s.stop_loss) > 0
+               THEN (2 * s.entry_price - s.stop_loss) END,
+          CASE WHEN s.tp1_price IS NOT NULL
+               AND (2 * s.entry_price - s.tp1_price) > 0
+               THEN (2 * s.entry_price - s.tp1_price) END,
+          CASE WHEN s.tp2_price IS NOT NULL
+               AND (2 * s.entry_price - s.tp2_price) > 0
+               THEN (2 * s.entry_price - s.tp2_price) END,
+          CASE WHEN s.tp3_price IS NOT NULL
+               AND (2 * s.entry_price - s.tp3_price) > 0
+               THEN (2 * s.entry_price - s.tp3_price) END,
+          s.kill_clock_expires,
+          -- Pre-expire stale rows so the resolver isn't flooded with
+          -- months-old signals. Only signals still inside their kill-clock
+          -- (or with no clock, but created in the last 7d) start as PENDING.
+          CASE
+            WHEN s.kill_clock_expires IS NOT NULL AND s.kill_clock_expires < NOW()
+              THEN 'EXPIRED_TIME'
+            WHEN s.kill_clock_expires IS NULL AND s.created_at < NOW() - INTERVAL '7 days'
+              THEN 'EXPIRED_TIME'
+            ELSE 'PENDING'
+          END,
+          s.created_at
+        FROM ai_signal_log s
+        WHERE s.direction IN ('LONG','SHORT')
+          AND s.entry_price IS NOT NULL
+          -- Only backfill last 90d so we don't churn through ancient history.
+          AND s.created_at > NOW() - INTERVAL '90 days'
+          AND NOT EXISTS (
+            SELECT 1 FROM signal_shadow_inversions x WHERE x.source_signal_id = s.id
+          )
+      `);
+      if ((bf.rowCount || 0) > 0) {
+        console.log(`[initDb] shadow-inversion backfill: created ${bf.rowCount} rows for historical ai_signal_log entries`);
+      }
+    } catch (bfErr: any) {
+      console.warn("[initDb] shadow-inversion backfill failed (non-fatal):", bfErr?.message || bfErr);
+    }
+
     // ── adaptive_thresholds (auto-tuning per token + direction) ───────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS adaptive_thresholds (
