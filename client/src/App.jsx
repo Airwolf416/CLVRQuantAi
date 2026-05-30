@@ -25,6 +25,7 @@ import AIQuantTab from "./tabs/AITab";
 import PricingModal from "./components/PricingModal.jsx";
 import ArchetypeAdminPanel from "./components/admin/ArchetypeAdminPanel.jsx";
 import MyBasket from "./components/MyBasket.jsx";
+import EarningsContent from "./components/EarningsContent.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
 import { playMarketBell, unlockAudio, unlockSpeech, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
@@ -2173,6 +2174,10 @@ const IpoList=memo(function IpoList({C,MONO,SERIF}){
 const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   const [section,setSection]=useState("all");
   const [reactionSym,setReactionSym]=useState(watchlist[0]||"AAPL");
+  // Reported/Upcoming/All all render via <EarningsContent/>, which fetches
+  // /api/earnings (Finnhub) itself and reports its payload back up via onData
+  // so the tab labels can show live counts.
+  const [earningsData,setEarningsData]=useState(null);
   const [showHistory,setShowHistory]=useState(false);
   const [refreshing,setRefreshing]=useState(false);
   const [refreshMsg,setRefreshMsg]=useState("");
@@ -2206,19 +2211,6 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   // Pass the displayed universe (watchlist ∪ MAJORS) so the server can (a) align
   // its actuals-enrichment to the names we actually render and (b) trim payload.
   const calSymbols=useMemo(()=>Array.from(new Set([...MAJORS,...watchlistSet])).join(","),[MAJORS,watchlistSet]);
-
-  // Single calendar query for All/Reported/Upcoming (Phantom-style tabs all
-  // slice the same dataset client-side, so we fetch once and filter in memory).
-  const calQuery=useQuery({
-    queryKey:["/api/earnings/calendar","range",fromStr,toStr,calSymbols],
-    queryFn:async()=>{
-      const r=await fetch(`/api/earnings/calendar?from=${fromStr}&to=${toStr}&symbols=${encodeURIComponent(calSymbols)}`);
-      return r.json();
-    },
-    enabled:section!=="radar"&&section!=="reaction",
-    staleTime:300000,
-    refetchInterval:false,
-  });
 
   const historyQuery=useQuery({
     queryKey:["/api/earnings/history",reactionSym],
@@ -2293,42 +2285,10 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
     </button>
   );
 
-  // Phantom-style: filter raw calendar to (watchlist ∪ MAJORS), then dedupe
-  // (FMP+Nasdaq sometimes double-up the same ticker/date), compute beatPct
-  // from epsActual vs epsEstimated, and split by section.
-  const rawRows=calQuery.data?.rows||[];
-  const enriched=rawRows
-    .filter(r=>watchlistSet.has(r.symbol)||MAJORS.has(r.symbol))
-    .map(r=>{
-      const reported=r.epsActual!=null&&r.epsEstimated!=null;
-      const beatPct=reported&&r.epsEstimated!==0
-        ?((r.epsActual-r.epsEstimated)/Math.abs(r.epsEstimated))*100
-        :null;
-      return {...r,reported,beatPct};
-    });
-  const dedupMap=new Map();
-  for(const r of enriched){
-    const k=`${r.symbol}__${r.date}`;
-    const prev=dedupMap.get(k);
-    if(!prev||(r.reported&&!prev.reported)) dedupMap.set(k,r);
-  }
-  const allRows=Array.from(dedupMap.values());
-  const sectionRows=allRows.filter(r=>{
-    if(section==="reported") return r.reported;
-    if(section==="upcoming") return !r.reported&&r.date>=todayStr;
-    return true; // "all"
-  }).sort((a,b)=>{
-    // Reported first (most recent first), then upcoming (soonest first)
-    if(a.reported&&!b.reported) return -1;
-    if(!a.reported&&b.reported) return 1;
-    if(a.reported) return b.date.localeCompare(a.date);
-    return a.date.localeCompare(b.date);
-  });
-  const reportedCount=allRows.filter(r=>r.reported).length;
-  const upcomingCount=allRows.filter(r=>!r.reported&&r.date>=todayStr).length;
-
-  // FMP free-tier company logos. Fails → fallback letter circle via onError.
-  const logoUrl=(sym)=>`https://financialmodelingprep.com/image-stock/${sym}.png`;
+  // Counts for the tab labels come straight from the /api/earnings (Finnhub)
+  // payload reported up via <EarningsContent onData={…}/>.
+  const reportedCount=earningsData?.reported?.length||0;
+  const upcomingCount=earningsData?.upcomingCount??(earningsData?.upcoming?.length||0);
 
   return (
     <div data-testid="tab-earnings-root">
@@ -2351,70 +2311,10 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
       {/* ── IPOs — upcoming public listings (next 30d) ── */}
       {section==="ipos"&&<IpoList C={C} MONO={MONO} SERIF={SERIF}/>}
 
-      {/* ── ALL / REPORTED / UPCOMING — Phantom-style logo list ── */}
-      {(section==="all"||section==="reported"||section==="upcoming")&&<div>
-        {notConfigured(calQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — earnings data unavailable.</div>}
-        {calQuery.isLoading&&<div style={{padding:20,color:C.muted,fontFamily:MONO,fontSize:11}}>Loading…</div>}
-        {!calQuery.isLoading&&sectionRows.length===0&&!notConfigured(calQuery)&&(
-          <div style={{padding:28,border:`1px dashed ${C.border}`,borderRadius:6,fontFamily:MONO,fontSize:11,color:C.muted2,textAlign:"center",lineHeight:1.6}}>
-            No {section==="all"?"":section+" "}major-cap earnings in this window.<br/>
-            <span style={{fontSize:9,color:C.muted}}>Window: last 14d → next 30d · major-cap whitelist + your watchlist</span>
-          </div>
-        )}
-        {sectionRows.length>0&&<div data-testid="list-earnings" style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",background:C.panel}}>
-          <div style={{display:"flex",justifyContent:"space-between",padding:"10px 16px",
-                       background:C.bg,fontFamily:MONO,fontSize:9,color:C.muted2,
-                       letterSpacing:"0.14em",borderBottom:`1px solid ${C.border}`}}>
-            <span>COMPANY</span>
-            <span>{section==="upcoming"?"REPORTS ON":"RESULT"}</span>
-          </div>
-          {sectionRows.slice(0,80).map((r,i)=>{
-            const isWatched=watchlistSet.has(r.symbol);
-            return (
-              <div key={`${r.symbol}-${r.date}-${i}`} data-testid={`row-earnings-${r.symbol}`}
-                style={{display:"flex",alignItems:"center",padding:"14px 16px",
-                        borderBottom:i===Math.min(sectionRows.length,80)-1?"none":`1px solid ${C.border}`,
-                        background:isWatched?"rgba(212,175,55,0.04)":"transparent"}}>
-                <div style={{width:38,height:38,borderRadius:"50%",overflow:"hidden",
-                             marginRight:14,background:C.bg,flexShrink:0,position:"relative",
-                             border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  <img src={logoUrl(r.symbol)} alt={r.symbol}
-                       style={{width:"100%",height:"100%",objectFit:"cover"}}
-                       onError={(e)=>{e.currentTarget.style.display="none";if(e.currentTarget.nextSibling)e.currentTarget.nextSibling.style.display="flex";}}/>
-                  <span style={{display:"none",position:"absolute",inset:0,alignItems:"center",justifyContent:"center",
-                                fontFamily:MONO,fontSize:13,fontWeight:700,color:C.muted2}}>{r.symbol.slice(0,1)}</span>
-                </div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:"flex",alignItems:"center",gap:6}}>
-                    {isWatched&&<span style={{color:C.gold,fontSize:11}}>★</span>}
-                    <span style={{fontFamily:MONO,fontSize:14,fontWeight:700,color:C.text,letterSpacing:"0.02em"}}>{r.symbol}</span>
-                  </div>
-                  <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>
-                    {r.reported?`Reported ${r.date}`:`Est ${fmtNum(r.epsEstimated)} EPS`}
-                  </div>
-                </div>
-                <div style={{textAlign:"right"}}>
-                  {r.reported&&r.beatPct!=null?(
-                    <>
-                      <div style={{fontFamily:MONO,fontSize:14,fontWeight:800,color:r.beatPct>=0?C.green:C.red,letterSpacing:"-0.01em"}}>
-                        {r.beatPct>=0?"Beat":"Miss"} {Math.abs(r.beatPct).toFixed(2)}%
-                      </div>
-                      <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>
-                        {fmtNum(r.epsActual)} vs {fmtNum(r.epsEstimated)}
-                      </div>
-                    </>
-                  ):(
-                    <div style={{fontFamily:MONO,fontSize:12,fontWeight:700,color:C.gold}}>{r.date}</div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {sectionRows.length>80&&<div style={{padding:"8px 16px",fontFamily:MONO,fontSize:9,color:C.muted2,borderTop:`1px solid ${C.border}`,textAlign:"center"}}>
-            showing first 80 of {sectionRows.length}
-          </div>}
-        </div>}
-      </div>}
+      {/* ── ALL / REPORTED / UPCOMING — Finnhub-backed list ── */}
+      {(section==="all"||section==="reported"||section==="upcoming")&&(
+        <EarningsContent filter={section} watchlist={calSymbols} onData={setEarningsData}/>
+      )}
 
       {/* ── AI RADAR ── */}
       {section==="radar"&&<div>
@@ -2490,7 +2390,7 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
         <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:10,letterSpacing:"0.08em"}}>
           LAST 8 QUARTERS · {reactionSym} · BEAT/MISS VS CONSENSUS ESTIMATE
         </div>
-        {notConfigured(historyQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured.</div>}
+        {notConfigured(historyQuery)&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>Finnhub not configured.</div>}
         {historyQuery.isLoading&&<div style={{fontFamily:MONO,fontSize:10,color:C.muted}}>Loading…</div>}
         {historyQuery.data?.rows?.length>0&&<div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:2}}>
           <table data-testid="table-earnings-reaction" style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:MONO}}>
@@ -2498,10 +2398,7 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
               <th style={{padding:"8px 10px"}}>DATE</th>
               <th style={{padding:"8px 10px",textAlign:"right"}}>EPS ACT</th>
               <th style={{padding:"8px 10px",textAlign:"right"}}>EPS EST</th>
-              <th style={{padding:"8px 10px",textAlign:"right"}}>REV ACT</th>
-              <th style={{padding:"8px 10px",textAlign:"right"}}>REV EST</th>
               <th style={{padding:"8px 10px"}}>EPS RESULT</th>
-              <th style={{padding:"8px 10px"}}>REV RESULT</th>
             </tr></thead>
             <tbody>
               {historyQuery.data.rows.map((r,i)=>(
@@ -2509,10 +2406,7 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
                   <td style={{padding:"8px 10px",color:C.gold}}>{r.date}</td>
                   <td style={{padding:"8px 10px",textAlign:"right",color:C.text}}>{fmtNum(r.epsActual)}</td>
                   <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtNum(r.epsEstimated)}</td>
-                  <td style={{padding:"8px 10px",textAlign:"right",color:C.text}}>{fmtRev(r.revenueActual)}</td>
-                  <td style={{padding:"8px 10px",textAlign:"right",color:C.muted2}}>{fmtRev(r.revenueEstimated)}</td>
                   <td style={{padding:"8px 10px",color:beatMissColor(r.epsActual,r.epsEstimated),fontWeight:700}}>{beatMissLabel(r.epsActual,r.epsEstimated)}</td>
-                  <td style={{padding:"8px 10px",color:beatMissColor(r.revenueActual,r.revenueEstimated),fontWeight:700}}>{beatMissLabel(r.revenueActual,r.revenueEstimated)}</td>
                 </tr>
               ))}
             </tbody>
@@ -2521,7 +2415,7 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
       </div>}
 
       <div style={{marginTop:14,fontFamily:MONO,fontSize:8,color:C.muted2,letterSpacing:"0.08em"}}>
-        DATA · FINANCIAL MODELING PREP · CACHED 5 MIN
+        DATA · FINNHUB · CACHED 5 MIN
       </div>
     </div>
   );

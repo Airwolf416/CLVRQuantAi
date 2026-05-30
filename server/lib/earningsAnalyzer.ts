@@ -3,9 +3,9 @@
 //
 // Why Node (not Python): the user's "Drizzle only" + "no raw pg" + single-
 // service rule rules out the Python cron from the attached spec. We mirror
-// the spec's feature set using FMP free-tier endpoints + Yahoo daily prices
-// (paid endpoints — options, upgrades-downgrades, historical-price-full,
-// economic_calendar — are intentionally omitted).
+// the spec's feature set using Finnhub free-tier endpoints + Yahoo daily
+// prices. Finnhub's per-symbol earnings history is EPS-only on the free tier,
+// so revenue_growth_yoy degrades to null (handled downstream as nullable).
 //
 // Output: one Claude verdict per (symbol, report_date), upserted into
 // earnings_cache via Drizzle's db.execute(sql`...`).
@@ -13,10 +13,10 @@
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import { CLAUDE_MODEL } from "../config";
-import { getEarningsCalendar, getEarningsHistory, type EarningsRow } from "../services/fmpEarnings";
+import { getEarningsCalendar, getEarningsHistory, getCompanyProfile, type EarningsRow } from "../services/finnhubEarnings";
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
-const FMP_KEY = process.env.FMP_API_KEY || "";
+const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
 
 type AiVerdict = {
   verdict: "BULLISH" | "BEARISH" | "AVOID";
@@ -86,21 +86,7 @@ async function fetchYahooDailyCloses(symbol: string, range = "6mo"): Promise<Yah
 }
 
 async function fetchProfile(symbol: string): Promise<{ companyName?: string; mktCap?: number }> {
-  if (!FMP_KEY) return {};
-  try {
-    const r = await fetch(`https://financialmodelingprep.com/stable/profile?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}`, {
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!r.ok) return {};
-    const data: any = await r.json();
-    const row = Array.isArray(data) ? data[0] : data;
-    return {
-      companyName: row?.companyName || row?.name || undefined,
-      mktCap: row?.mktCap || row?.marketCap || undefined,
-    };
-  } catch {
-    return {};
-  }
+  return getCompanyProfile(symbol);
 }
 
 function nearestPriorClose(bars: YahooBar[], targetDate: string): { idx: number; bar: YahooBar } | null {
@@ -116,7 +102,7 @@ export async function computeFeatures(symbol: string): Promise<Features | null> 
       getEarningsHistory(symbol, 12),
       fetchYahooDailyCloses(symbol, "2y"),
     ]);
-    // history is sorted newest first by fmpEarnings.ts
+    // history is sorted newest first by finnhubEarnings.ts
     const resolved = history.filter(h => h.epsActual != null && h.epsEstimated != null);
     if (resolved.length === 0 || bars.length < 30) return null;
 
@@ -302,33 +288,19 @@ export async function runEarningsScan(opts?: { lookaheadDays?: number; symbols?:
   const to = fmt(new Date(today.getTime() + lookaheadDays * 86400000));
 
   console.log(`[earnings-radar] scan starting from=${from} to=${to} symbols=${whitelist.length}`);
-  // Merge FMP + Nasdaq calendars (same as /api/earnings/calendar). FMP's free
-  // tier has a tiny universe, so a FMP-only scan misses most watchlist names —
-  // Nasdaq's wide coverage ensures we catch every upcoming reporter. FMP wins
-  // on numeric estimates when both have the row.
-  const { getNasdaqEarningsCalendar } = await import("../services/nasdaqEarnings");
-  const [fmpRows, ndqRows] = await Promise.all([
-    FMP_KEY ? getEarningsCalendar(from, to) : Promise.resolve([] as EarningsRow[]),
-    getNasdaqEarningsCalendar(from, to),
-  ]);
-  const merged = new Map<string, EarningsRow>();
-  for (const r of ndqRows) merged.set(`${r.symbol}__${r.date}`, r);
-  for (const r of fmpRows) {
-    const k = `${r.symbol}__${r.date}`;
-    const prev = merged.get(k);
-    merged.set(k, prev ? {
-      ...prev, ...r,
-      epsEstimated: r.epsEstimated ?? prev.epsEstimated,
-      revenueEstimated: r.revenueEstimated ?? prev.revenueEstimated,
-    } : r);
-  }
-  const calendar = Array.from(merged.values());
-  const targets = calendar.filter(r => whitelist.includes(r.symbol));
+  // Candidate list comes from the SAME Finnhub /calendar/earnings feed that
+  // powers GET /api/earnings (response.upcoming). We keep only un-reported
+  // events (epsActual still null) within the whitelist — those are the
+  // "upcoming" reporters we want a pre-earnings AI verdict for.
+  const calendar = FINNHUB_KEY ? await getEarningsCalendar(from, to) : [] as EarningsRow[];
+  const targets = calendar.filter(r =>
+    whitelist.includes(r.symbol) && r.epsActual == null
+  );
   console.log(`[earnings-radar] ${targets.length} upcoming events match watchlist`);
 
   let cached = 0;
   let errors = 0;
-  // Sequential to stay polite to FMP free tier + Anthropic rate limits.
+  // Sequential to stay polite to Finnhub + Anthropic rate limits.
   for (const row of targets) {
     try {
       const ok = await analyzeAndCache(row.symbol, row.date, row);

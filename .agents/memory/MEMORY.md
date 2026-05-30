@@ -1,1 +1,2 @@
 - [FMP/Nasdaq earnings data-tier limits](fmp-earnings-data-tiers.md) — calendar feeds carry forecasts only (epsActual null); actuals only via per-symbol endpoint; IPO endpoint 403 on free tier.
+- [Finnhub earnings flow](finnhub-earnings.md) — earnings now all-Finnhub via finnhubEarnings service (FMP=IPO only); /api/earnings filters per-watchlist (no global cache); history is EPS-only.

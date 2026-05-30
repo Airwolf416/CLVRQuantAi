@@ -1,0 +1,164 @@
+// client/src/components/EarningsContent.jsx
+import { useEffect, useState } from "react";
+
+const C = {
+  bg: "#050709", card: "#0a1020", cardAlt: "#0c1424",
+  border: "#1a2840", borderDim: "#141e35",
+  gold: "#e8c96d", goldDeep: "#c9a84c",
+  white: "#f0f4ff", body: "#c8d4ee", muted: "#6b7fa8", dim: "#4a5d80",
+  green: "#00c787", red: "#ff5d6c",
+};
+const MONO = "'IBM Plex Mono','Space Mono','Courier New',monospace";
+
+const fmtEps = (v) => (v == null ? "—" : `$${Number(v).toFixed(2)}`);
+const fmtRev = (v) => {
+  if (v == null) return "—";
+  const n = Number(v);
+  if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  return `$${n.toLocaleString()}`;
+};
+const hourLabel = (h) =>
+  ({ bmo: "Before Open", amc: "After Close", dmh: "Mid-Day" }[h] || "Time TBD");
+const daysUntil = (dateStr) => {
+  const d = new Date(dateStr + "T00:00:00");
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.round((d - t) / 86400000);
+};
+const fmtDate = (s) =>
+  new Date(s + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+function ReportedRow({ e }) {
+  const beat = e.surprisePct != null && e.surprisePct >= 0;
+  return (
+    <div data-testid={`row-earnings-${e.symbol}`} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${beat ? C.green : C.red}`, borderRadius: 4, padding: "14px 16px", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 16, color: C.gold }}>{e.symbol}</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>Q{e.quarter} {e.year} · {fmtDate(e.date)}</span>
+        </div>
+        {e.surprisePct != null && (
+          <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: beat ? C.green : C.red, background: beat ? "rgba(0,199,135,0.08)" : "rgba(255,93,108,0.08)", border: `1px solid ${beat ? C.green : C.red}33`, borderRadius: 3, padding: "3px 8px" }}>
+            {beat ? "▲" : "▼"} {Math.abs(e.surprisePct).toFixed(1)}%
+          </span>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontFamily: MONO, fontSize: 12 }}>
+        <Metric label="EPS ACT" value={fmtEps(e.epsActual)} hl color={C.white} />
+        <Metric label="EPS EST" value={fmtEps(e.epsEstimate)} />
+        <Metric label="REV ACT" value={fmtRev(e.revenueActual)} hl color={C.white} />
+        <Metric label="REV EST" value={fmtRev(e.revenueEstimate)} />
+      </div>
+    </div>
+  );
+}
+
+function UpcomingRow({ e }) {
+  const d = daysUntil(e.date);
+  const when = d <= 0 ? "Today" : d === 1 ? "Tomorrow" : `in ${d}d`;
+  return (
+    <div data-testid={`row-earnings-${e.symbol}`} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.goldDeep}`, borderRadius: 4, padding: "14px 16px", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 16, color: C.gold }}>{e.symbol}</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{fmtDate(e.date)} · {hourLabel(e.hour)}</span>
+        </div>
+        <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: C.goldDeep, background: "rgba(201,168,76,0.08)", border: `1px solid ${C.goldDeep}33`, borderRadius: 3, padding: "3px 8px" }}>{when}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontFamily: MONO, fontSize: 12 }}>
+        <Metric label="EPS EST" value={fmtEps(e.epsEstimate)} color={C.body} />
+        <Metric label="REV EST" value={fmtRev(e.revenueEstimate)} color={C.body} />
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value, hl, color }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: `1px solid ${C.borderDim}` }}>
+      <span style={{ color: C.muted, letterSpacing: "0.06em" }}>{label}</span>
+      <span style={{ color: color || C.body, fontWeight: hl ? 700 : 400 }}>{value}</span>
+    </div>
+  );
+}
+
+function EmptyState({ text }) {
+  return (
+    <div style={{ border: `1px dashed ${C.border}`, borderRadius: 6, padding: "32px 20px", textAlign: "center", fontFamily: MONO, fontSize: 14, color: C.muted }}>
+      {text}
+    </div>
+  );
+}
+
+function SectionLabel({ text }) {
+  return (
+    <div style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", color: C.dim, margin: "4px 0 10px" }}>
+      {text}
+    </div>
+  );
+}
+
+export default function EarningsContent({ filter = "reported", watchlist = "", onData }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    const q = watchlist ? `?watchlist=${encodeURIComponent(watchlist)}` : "";
+    fetch(`/api/earnings${q}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!live) return;
+        if (d.error) throw new Error(d.error);
+        setData(d);
+        onData && onData(d); // lets parent set the "Upcoming (N)" tab label from d.upcomingCount
+      })
+      .catch((e) => live && setErr(e.message))
+      .finally(() => live && setLoading(false));
+    return () => { live = false; };
+  }, [watchlist]);
+
+  if (loading) return <EmptyState text="Loading earnings…" />;
+  if (err) return <EmptyState text={`Earnings feed error: ${err}`} />;
+
+  const reported = data?.reported || [];
+  const upcoming = data?.upcoming || [];
+
+  // "all" — stitch reported then upcoming under labelled sub-headers.
+  if (filter === "all") {
+    if (reported.length === 0 && upcoming.length === 0) {
+      return <EmptyState text="No major-cap earnings in this window." />;
+    }
+    return (
+      <div data-testid="list-earnings">
+        {reported.length > 0 && <SectionLabel text="REPORTED · LAST 14 DAYS" />}
+        {reported.map((e, i) => <ReportedRow key={`r-${e.symbol}-${e.date}-${i}`} e={e} />)}
+        {upcoming.length > 0 && <SectionLabel text="UPCOMING · NEXT 30 DAYS" />}
+        {upcoming.map((e, i) => <UpcomingRow key={`u-${e.symbol}-${e.date}-${i}`} e={e} />)}
+      </div>
+    );
+  }
+
+  const rows = filter === "upcoming" ? upcoming : reported;
+  if (!rows || rows.length === 0) {
+    return (
+      <EmptyState
+        text={filter === "upcoming"
+          ? "No upcoming major-cap earnings in the next 30 days."
+          : "No reported major-cap earnings in the last 14 days."}
+      />
+    );
+  }
+
+  return (
+    <div data-testid="list-earnings">
+      {rows.map((e, i) =>
+        filter === "upcoming"
+          ? <UpcomingRow key={`${e.symbol}-${e.date}-${i}`} e={e} />
+          : <ReportedRow key={`${e.symbol}-${e.date}-${i}`} e={e} />
+      )}
+    </div>
+  );
+}

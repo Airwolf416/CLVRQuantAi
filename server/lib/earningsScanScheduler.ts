@@ -87,8 +87,8 @@ async function attemptScan(reason: string, dateKey: string) {
 }
 
 export function startEarningsScanScheduler() {
-  if (!process.env.FMP_API_KEY || !process.env.ANTHROPIC_API_KEY) {
-    console.log("[earnings-radar] scheduler not started — missing FMP_API_KEY or ANTHROPIC_API_KEY");
+  if (!process.env.FINNHUB_KEY || !process.env.ANTHROPIC_API_KEY) {
+    console.log("[earnings-radar] scheduler not started — missing FINNHUB_KEY or ANTHROPIC_API_KEY");
     return;
   }
   console.log(`[earnings-radar] scheduler started — daily ${SCAN_HOUR_ET}:${String(SCAN_MINUTE_ET).padStart(2, "0")} ET`);

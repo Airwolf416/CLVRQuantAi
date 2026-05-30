@@ -9,7 +9,7 @@
 //   • Per-day endpoint — iterate over the requested range, dedupe by symbol+date.
 //   • In-memory cache per-day (1h TTL) to avoid hammering on every request.
 
-import type { EarningsRow } from "./fmpEarnings";
+import type { EarningsRow } from "./finnhubEarnings";
 
 const NASDAQ_BASE = "https://api.nasdaq.com/api/calendar/earnings";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
