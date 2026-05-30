@@ -1,0 +1,54 @@
+// server/routes/earnings.ts
+import type { Express, Request, Response } from "express";
+
+const FINNHUB_KEY = process.env.FINNHUB_KEY || process.env.REACT_APP_FINNHUB_KEY;
+
+const MAJOR_CAP = new Set([
+  "AAPL","MSFT","NVDA","GOOGL","GOOG","AMZN","META","TSLA","AVGO","JPM",
+  "V","UNH","XOM","MA","COST","HD","PG","JNJ","ABBV","NFLX","AMD","CRM",
+  "ORCL","WMT","BAC","KO","PEP","LLY","MRK","TMUS","CSCO","ADBE","INTC"
+]);
+
+let cache: { ts: number; data: any } | null = null;
+const TTL = 5 * 60 * 1000;
+const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+export function registerEarningsRoute(app: Express) {
+  app.get("/api/earnings", async (req: Request, res: Response) => {
+    try {
+      if (cache && Date.now() - cache.ts < TTL) return res.json(cache.data);
+      if (!FINNHUB_KEY) return res.status(500).json({ error: "FINNHUB_KEY not set" });
+
+      const now = new Date();
+      const from = new Date(now); from.setDate(now.getDate() - 14);
+      const to   = new Date(now); to.setDate(now.getDate() + 30);
+
+      const url = `https://finnhub.io/api/v1/calendar/earnings?from=${fmt(from)}&to=${fmt(to)}&token=${FINNHUB_KEY}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`Finnhub ${r.status}`);
+      const all: any[] = (await r.json()).earningsCalendar || [];
+
+      const watchlist = String(req.query.watchlist || "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+      const allowed = (s: string) => MAJOR_CAP.has(s) || watchlist.includes(s);
+      const filtered = all.filter(e => allowed(String(e.symbol || "").toUpperCase()));
+
+      const shape = (e: any) => ({
+        symbol: e.symbol, date: e.date, hour: e.hour, quarter: e.quarter, year: e.year,
+        epsEstimate: e.epsEstimate, epsActual: e.epsActual,
+        revenueEstimate: e.revenueEstimate, revenueActual: e.revenueActual,
+        surprisePct: (e.epsActual != null && e.epsEstimate)
+          ? +(((e.epsActual - e.epsEstimate) / Math.abs(e.epsEstimate)) * 100).toFixed(1) : null,
+      });
+
+      const reported = filtered.filter(e => e.epsActual != null).sort((a,b) => a.date < b.date ? 1 : -1).map(shape);
+      const upcoming = filtered.filter(e => e.epsActual == null).sort((a,b) => a.date < b.date ? -1 : 1).map(shape);
+
+      const data = { source: "FINNHUB", window: { from: fmt(from), to: fmt(to) }, reported, upcoming, upcomingCount: upcoming.length };
+      cache = { ts: Date.now(), data };
+      res.json(data);
+    } catch (e: any) {
+      console.error("[earnings] error:", e.message);
+      res.status(502).json({ error: e.message, reported: [], upcoming: [] });
+    }
+  });
+}
