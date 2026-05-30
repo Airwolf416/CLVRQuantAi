@@ -731,6 +731,18 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_source_signal ON signal_shadow_inversions (source_signal_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_outcome       ON signal_shadow_inversions (outcome)`);
 
+    // Ensure columns referenced by the backfill exist — use SAVEPOINTs so
+    // any failure does not abort the outer transaction.
+    await client.query('SAVEPOINT pre_shadow_cols');
+    try {
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS original_direction TEXT`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS inverted_direction TEXT`);
+      await client.query('RELEASE SAVEPOINT pre_shadow_cols');
+    } catch (e: any) {
+      await client.query('ROLLBACK TO SAVEPOINT pre_shadow_cols');
+      console.warn('[initDb] shadow column migration skipped:', e?.message);
+    }
+
     // ── One-shot backfill: shadow rows for ai_signal_log entries that were
     // logged BEFORE signalLogger gained the shadow-writer (May 2026). Without
     // this, prod's ShadowInversionsPanel is empty even though the writer is
@@ -738,6 +750,7 @@ export async function initializeDatabase(): Promise<void> {
     // Idempotent — only inserts where source_signal_id has no shadow yet.
     // Resolved outcome on the parent signal is propagated to the shadow as
     // PENDING so the resolver picks them up on the next live-price tick.
+    await client.query('SAVEPOINT pre_shadow_backfill');
     try {
       const bf = await client.query(`
         INSERT INTO signal_shadow_inversions (
@@ -784,11 +797,13 @@ export async function initializeDatabase(): Promise<void> {
             SELECT 1 FROM signal_shadow_inversions x WHERE x.source_signal_id = s.id
           )
       `);
+      await client.query('RELEASE SAVEPOINT pre_shadow_backfill');
       if ((bf.rowCount || 0) > 0) {
         console.log(`[initDb] shadow-inversion backfill: created ${bf.rowCount} rows for historical ai_signal_log entries`);
       }
     } catch (bfErr: any) {
-      console.warn("[initDb] shadow-inversion backfill failed (non-fatal):", bfErr?.message || bfErr);
+      await client.query('ROLLBACK TO SAVEPOINT pre_shadow_backfill');
+      console.error(`[initDb] shadow-inversion backfill failed (non-fatal): ${bfErr?.message || bfErr}`);
     }
 
     // ── adaptive_thresholds (auto-tuning per token + direction) ───────────────
