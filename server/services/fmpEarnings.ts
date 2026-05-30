@@ -20,6 +20,10 @@ export type EarningsRow = {
 
 type CacheEntry<T> = { ts: number; data: T };
 const TTL_MS = 5 * 60 * 1000;
+// Earnings ACTUALS for past quarters never change; cache per-symbol history far
+// longer than the forward-looking calendar so the /api/earnings/calendar actuals
+// enrichment fan-out stays well under FMP's free-tier daily quota (250/day).
+const HISTORY_TTL_MS = 6 * 60 * 60 * 1000;
 const calendarCache = new Map<string, CacheEntry<EarningsRow[]>>();
 const historyCache = new Map<string, CacheEntry<EarningsRow[]>>();
 
@@ -27,9 +31,9 @@ export function isFmpEarningsConfigured(): boolean {
   return !!FMP_KEY;
 }
 
-function fresh<T>(e: CacheEntry<T> | undefined): T | null {
+function fresh<T>(e: CacheEntry<T> | undefined, ttl: number = TTL_MS): T | null {
   if (!e) return null;
-  if (Date.now() - e.ts > TTL_MS) return null;
+  if (Date.now() - e.ts > ttl) return null;
   return e.data;
 }
 
@@ -118,7 +122,7 @@ export async function getIpoCalendar(from: string, to: string): Promise<IpoRow[]
 export async function getEarningsHistory(symbol: string, limit = 8): Promise<EarningsRow[]> {
   if (!FMP_KEY || !symbol) return [];
   const sym = symbol.toUpperCase();
-  const cached = fresh(historyCache.get(sym));
+  const cached = fresh(historyCache.get(sym), HISTORY_TTL_MS);
   if (cached) return cached.slice(0, limit);
   try {
     const url = `${FMP_BASE}/earnings?symbol=${encodeURIComponent(sym)}&apikey=${FMP_KEY}`;

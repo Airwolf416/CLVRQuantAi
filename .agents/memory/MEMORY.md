@@ -1,0 +1,1 @@
+- [FMP/Nasdaq earnings data-tier limits](fmp-earnings-data-tiers.md) — calendar feeds carry forecasts only (epsActual null); actuals only via per-symbol endpoint; IPO endpoint 403 on free tier.

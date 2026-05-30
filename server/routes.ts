@@ -4799,9 +4799,72 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       }
       const allRows = Array.from(merged.values());
 
+      // Optional client-supplied universe (watchlist ∪ MAJORS). Used BOTH to
+      // align actuals-enrichment with the names the client actually renders and
+      // to trim the response payload.
       const symFilter = String(req.query?.symbols || "").trim();
-      const filtered = symFilter
-        ? allRows.filter(r => symFilter.toUpperCase().split(",").map(s => s.trim()).includes(r.symbol))
+      const symFilterSet = symFilter
+        ? new Set(symFilter.toUpperCase().split(",").map(s => s.trim()).filter(Boolean))
+        : null;
+
+      // ── Enrich past-dated rows with ACTUALS ──────────────────────────────
+      // Neither calendar feed (FMP /stable/earnings-calendar nor Nasdaq) ever
+      // carries epsActual — both return forecasts only. Actuals live on the
+      // per-symbol /stable/earnings?symbol=X endpoint (free-tier accessible).
+      // Without this, the "Reported" tab (which keys on epsActual) is ALWAYS
+      // empty. We enrich only past-dated rows missing actuals, restricted to the
+      // client's displayed universe when provided (else FMP-covered names first),
+      // capped at 40 symbols. Per-symbol history is cached 6h (actuals are
+      // immutable) so fan-out stays well under the FMP daily quota.
+      // Fail-open: any error leaves the original (estimate-only) rows intact.
+      if (fmpEnabled) {
+        try {
+          const todayStr = fmt(today);
+          const fmpSymbols = new Set(fmpRows.map(r => r.symbol));
+          let needActuals = allRows.filter(r => r.date <= todayStr && r.epsActual == null);
+          if (symFilterSet) needActuals = needActuals.filter(r => symFilterSet.has(r.symbol));
+          needActuals.sort((a, b) =>
+            ((fmpSymbols.has(b.symbol) ? 1 : 0) - (fmpSymbols.has(a.symbol) ? 1 : 0)) ||
+            b.date.localeCompare(a.date));
+          const symbols = Array.from(new Set(needActuals.map(r => r.symbol))).slice(0, 40);
+          if (symbols.length) {
+            const { getEarningsHistory } = await import("./services/fmpEarnings");
+            const histories = await Promise.all(symbols.map(async s => {
+              try { return await getEarningsHistory(s, 8); } catch { return []; }
+            }));
+            const bySymDate = new Map<string, any>();
+            for (const hist of histories) for (const h of hist) {
+              if (h?.epsActual != null) bySymDate.set(`${h.symbol}__${h.date}`, h);
+            }
+            // Reporting dates drift ±1 day between feeds (BMO/AMC, timezone), so
+            // match exact date first, then ±1 day. Nearest real actual is a full
+            // quarter away, so a ±1 day window can't grab the wrong period.
+            const shiftDay = (ds: string, n: number) => {
+              const d = new Date(ds + "T00:00:00Z");
+              d.setUTCDate(d.getUTCDate() + n);
+              return d.toISOString().slice(0, 10);
+            };
+            for (const r of allRows) {
+              if (r.epsActual != null) continue;
+              const h = bySymDate.get(`${r.symbol}__${r.date}`)
+                || bySymDate.get(`${r.symbol}__${shiftDay(r.date, -1)}`)
+                || bySymDate.get(`${r.symbol}__${shiftDay(r.date, 1)}`);
+              if (h) {
+                r.epsActual = h.epsActual;
+                r.epsEstimated = r.epsEstimated ?? h.epsEstimated;
+                r.revenueActual = r.revenueActual ?? h.revenueActual;
+                r.revenueEstimated = r.revenueEstimated ?? h.revenueEstimated;
+                r.source = r.source ? `${r.source}+hist` : "fmp-hist";
+              }
+            }
+          }
+        } catch (e: any) {
+          console.warn("[earnings-calendar] actuals enrichment failed:", e?.message || e);
+        }
+      }
+
+      const filtered = symFilterSet
+        ? allRows.filter(r => symFilterSet.has(r.symbol))
         : allRows;
       filtered.sort((a: any, b: any) => a.date.localeCompare(b.date) || a.symbol.localeCompare(b.symbol));
       res.json({

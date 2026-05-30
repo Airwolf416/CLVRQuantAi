@@ -2203,12 +2203,16 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
     "F","GM","RIVN","LCID","CRCL","SNDK","SOFI","UPST","CHWY","ETSY",
   ]),[]);
 
+  // Pass the displayed universe (watchlist ∪ MAJORS) so the server can (a) align
+  // its actuals-enrichment to the names we actually render and (b) trim payload.
+  const calSymbols=useMemo(()=>Array.from(new Set([...MAJORS,...watchlistSet])).join(","),[MAJORS,watchlistSet]);
+
   // Single calendar query for All/Reported/Upcoming (Phantom-style tabs all
   // slice the same dataset client-side, so we fetch once and filter in memory).
   const calQuery=useQuery({
-    queryKey:["/api/earnings/calendar","range",fromStr,toStr],
+    queryKey:["/api/earnings/calendar","range",fromStr,toStr,calSymbols],
     queryFn:async()=>{
-      const r=await fetch(`/api/earnings/calendar?from=${fromStr}&to=${toStr}`);
+      const r=await fetch(`/api/earnings/calendar?from=${fromStr}&to=${toStr}&symbols=${encodeURIComponent(calSymbols)}`);
       return r.json();
     },
     enabled:section!=="radar"&&section!=="reaction",
