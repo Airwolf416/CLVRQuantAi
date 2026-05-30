@@ -290,7 +290,11 @@ export async function analyzeAndCache(symbol: string, reportDate: string, calRow
 }
 
 export async function runEarningsScan(opts?: { lookaheadDays?: number; symbols?: string[] }): Promise<{ scanned: number; cached: number; errors: number }> {
-  const lookaheadDays = opts?.lookaheadDays ?? 5;
+  // Default matches the radar display window (listRadar/route look ahead up to
+  // 30 days). A short 5-day scan was the root cause of the "always empty" radar:
+  // only a handful of watchlist names report in any given 5-day window, so the
+  // cache was almost never populated.
+  const lookaheadDays = opts?.lookaheadDays ?? 30;
   const whitelist = (opts?.symbols && opts.symbols.length) ? opts.symbols.map(s => s.toUpperCase()) : RADAR_WATCHLIST;
   const today = new Date();
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
@@ -298,7 +302,27 @@ export async function runEarningsScan(opts?: { lookaheadDays?: number; symbols?:
   const to = fmt(new Date(today.getTime() + lookaheadDays * 86400000));
 
   console.log(`[earnings-radar] scan starting from=${from} to=${to} symbols=${whitelist.length}`);
-  const calendar = await getEarningsCalendar(from, to);
+  // Merge FMP + Nasdaq calendars (same as /api/earnings/calendar). FMP's free
+  // tier has a tiny universe, so a FMP-only scan misses most watchlist names —
+  // Nasdaq's wide coverage ensures we catch every upcoming reporter. FMP wins
+  // on numeric estimates when both have the row.
+  const { getNasdaqEarningsCalendar } = await import("../services/nasdaqEarnings");
+  const [fmpRows, ndqRows] = await Promise.all([
+    FMP_KEY ? getEarningsCalendar(from, to) : Promise.resolve([] as EarningsRow[]),
+    getNasdaqEarningsCalendar(from, to),
+  ]);
+  const merged = new Map<string, EarningsRow>();
+  for (const r of ndqRows) merged.set(`${r.symbol}__${r.date}`, r);
+  for (const r of fmpRows) {
+    const k = `${r.symbol}__${r.date}`;
+    const prev = merged.get(k);
+    merged.set(k, prev ? {
+      ...prev, ...r,
+      epsEstimated: r.epsEstimated ?? prev.epsEstimated,
+      revenueEstimated: r.revenueEstimated ?? prev.revenueEstimated,
+    } : r);
+  }
+  const calendar = Array.from(merged.values());
   const targets = calendar.filter(r => whitelist.includes(r.symbol));
   console.log(`[earnings-radar] ${targets.length} upcoming events match watchlist`);
 

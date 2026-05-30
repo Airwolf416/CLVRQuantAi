@@ -4736,20 +4736,34 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   // flag them and the morning brief can prepend them to impactfulNews.
   // 5-min cache lives in services/fmpEarnings.ts.
   app.get("/api/ipo/calendar", async (req, res) => {
+    // Primary source: Nasdaq's free public IPO calendar (no key). FMP's
+    // /stable/ipos-calendar is 403-restricted on the free tier, so it's only
+    // a best-effort fallback. Window spans ~2 weeks back (recently priced) to
+    // 30 days forward (upcoming) so the tab shows real "recent & upcoming" data.
+    const now = new Date();
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const fromDate = req.query.from ? String(req.query.from) : fmt(new Date(now.getTime() - 14 * 86400000));
+    const toDate = req.query.to ? String(req.query.to) : fmt(new Date(now.getTime() + 30 * 86400000));
     try {
-      const { getIpoCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
-      const now = new Date();
-      const fromDate = req.query.from ? String(req.query.from) : now.toISOString().slice(0, 10);
-      const toDateObj = new Date(now); toDateObj.setDate(toDateObj.getDate() + 30);
-      const toDate = req.query.to ? String(req.query.to) : toDateObj.toISOString().slice(0, 10);
-      if (!isFmpEarningsConfigured()) {
-        return res.json({ rows: [], configured: false, from: fromDate, to: toDate });
+      const { getNasdaqIpoCalendar, getNasdaqIpoDiag } = await import("./services/nasdaqIpo");
+      let rows = await getNasdaqIpoCalendar(fromDate, toDate);
+      let source = "nasdaq";
+      // Fallback to FMP only if Nasdaq is blocked/empty (e.g. Railway IP block).
+      if (rows.length === 0) {
+        try {
+          const { getIpoCalendar, isFmpEarningsConfigured } = await import("./services/fmpEarnings");
+          if (isFmpEarningsConfigured()) {
+            const fmpRows = await getIpoCalendar(fromDate, toDate);
+            if (fmpRows.length) { rows = fmpRows; source = "fmp"; }
+          }
+        } catch (e: any) {
+          console.warn("[ipo-calendar route] fmp fallback failed:", e?.message || e);
+        }
       }
-      const rows = await getIpoCalendar(fromDate, toDate);
-      res.json({ rows, configured: true, from: fromDate, to: toDate });
+      res.json({ rows, configured: true, source, from: fromDate, to: toDate, diag: getNasdaqIpoDiag() });
     } catch (e: any) {
       console.warn("[ipo-calendar route]", e?.message || e);
-      res.json({ rows: [], configured: false, error: e?.message || "fetch_failed" });
+      res.json({ rows: [], configured: false, error: e?.message || "fetch_failed", from: fromDate, to: toDate });
     }
   });
 
@@ -4913,7 +4927,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     if (!uid) return;
     try {
       const { runEarningsScan } = await import("./lib/earningsAnalyzer");
-      const lookaheadDays = Math.min(14, Math.max(1, Number(req.body?.lookaheadDays) || 5));
+      const lookaheadDays = Math.min(30, Math.max(1, Number(req.body?.lookaheadDays) || 30));
       const symbols: string[] | undefined = Array.isArray(req.body?.symbols) ? req.body.symbols : undefined;
       const result = await runEarningsScan({ lookaheadDays, symbols });
       res.json(result);

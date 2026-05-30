@@ -2118,13 +2118,13 @@ const IpoList=memo(function IpoList({C,MONO,SERIF}){
   return (
     <div data-testid="ipo-list-root">
       <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.14em",marginBottom:10}}>
-        UPCOMING IPOs · NEXT 30 DAYS · AUTO-SYNCED FROM FMP CALENDAR
+        RECENT &amp; UPCOMING IPOs · NASDAQ IPO CALENDAR
       </div>
-      {!configured&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>FMP API key not configured — IPO calendar unavailable.</div>}
+      {!configured&&<div style={{padding:18,border:`1px dashed ${C.border}`,fontFamily:MONO,fontSize:11,color:C.muted}}>IPO calendar temporarily unavailable.</div>}
       {configured&&ipoQuery.isLoading&&<div style={{padding:20,color:C.muted,fontFamily:MONO,fontSize:11}}>Loading…</div>}
       {configured&&!ipoQuery.isLoading&&rows.length===0&&(
         <div style={{padding:28,border:`1px dashed ${C.border}`,borderRadius:6,fontFamily:MONO,fontSize:11,color:C.muted2,textAlign:"center",lineHeight:1.6}}>
-          No upcoming IPOs in the next 30 days.
+          No recent or upcoming IPOs found.
         </div>
       )}
       {rows.length>0&&<div data-testid="list-ipos" style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",background:C.panel}}>
