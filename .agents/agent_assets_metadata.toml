@@ -66,3 +66,9 @@ id = "pCRvo0e8k_z1s82lmHLSA"
 uri = "file://exports/equity_curve.svg"
 type = "image"
 title = "CLVRQuant Signal Equity Curve — Backtest (1,260 resolved signals)"
+
+[[outputs]]
+id = "XvM8Mw_z73sXS0dPoFw_G"
+uri = "file://exports/signal_trade_log.csv"
+type = "table"
+title = "Per-trade signal log — entry/exit/PnL + planned-risk% + realized R (1,260 trades)"
