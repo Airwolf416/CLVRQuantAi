@@ -1,1 +1,1 @@
-- [Railway prod access](railway-prod-access.md) — Railway prod DB unreachable from Replit workspace; mass-prod email/data ops must run on the live Railway deploy via owner-only admin endpoints.
+- [Binance server-side geo-block in dev](binance-server-geo-block.md) — Binance REST 451 / CCXT 403 server-side in Replit dev but fine on Railway prod; server-side Binance features only activate in prod.

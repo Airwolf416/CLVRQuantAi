@@ -475,7 +475,32 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 // Tabs that require Pro (fully locked for free users)
 const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 // Tabs that require Elite (locked for both free AND pro users)
-const ELITE_TABS_GATE=["insider","basket","chartai"];
+const ELITE_TABS_GATE=["insider","basket","chartai","earnings","pulse"];
+
+function UnusualPulse({ data, C, MONO }) {
+  const signals = data?.signals || [];
+  const bandColor = (b) => b === "EXTREME" ? "#ff5d6c" : b === "HIGH" ? "#e8c96d" : b === "ELEVATED" ? "#00c787" : "#5a6b86";
+  return (
+    <div style={{ padding: "4px 0" }} data-testid="tab-pulse-root">
+      <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", color: "#e8c96d", marginBottom: 10 }}>UNUSUAL ACTIVITY — CONDITIONS, NOT PREDICTIONS</div>
+      {signals.length === 0 && <div style={{ fontFamily: MONO, fontSize: 11, color: "#5a6b86", padding: "24px 0", textAlign: "center" }} data-testid="text-pulse-empty">No unusual activity right now. Markets quiet.</div>}
+      {signals.map((s) => (
+        <div key={s.symbol} data-testid={`card-pulse-${s.symbol}`} style={{ background: "#0a1020", border: `1px solid ${bandColor(s.band)}55`, borderLeft: `3px solid ${bandColor(s.band)}`, borderRadius: 4, padding: "10px 12px", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: "#fff" }}>{s.symbol}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 2, background: bandColor(s.band) + "22", color: bandColor(s.band) }}>{s.band}</span>
+              <span style={{ fontFamily: MONO, fontSize: 16, fontWeight: 700, color: bandColor(s.band) }}>{s.score}</span>
+            </div>
+          </div>
+          <div style={{ height: 4, background: "#1a2540", borderRadius: 2, marginBottom: 8, overflow: "hidden" }}><div style={{ height: "100%", width: `${s.score}%`, background: bandColor(s.band) }} /></div>
+          <ul style={{ margin: 0, paddingLeft: 14 }}>{(s.reasons || []).map((r, i) => <li key={i} style={{ fontFamily: MONO, fontSize: 10, color: "#c8d2e0", marginBottom: 3, lineHeight: 1.4 }}>{r}</li>)}</ul>
+        </div>
+      ))}
+      <div style={{ fontFamily: MONO, fontSize: 8.5, color: "#5a6b86", lineHeight: 1.5, marginTop: 12, padding: "8px 10px", border: "1px solid #1a2540", borderRadius: 4 }}>{data?.disclaimer || "Information and education only. Not a prediction or financial advice. DYOR."}</div>
+    </div>
+  );
+}
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",chartai:"Chart AI",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
@@ -3361,6 +3386,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [newsFilteredCount,setNewsFilteredCount]=useState(0);
   const [spikeFilter,setSpikeFilter]=useState(null);
   const [insiderData,setInsiderData]=useState([]);
+  const [unusualData,setUnusualData]=useState(null);
   const [sigTracking,setSigTracking]=useState(32);
   const [flashSigId,setFlashSigId]=useState(null);
   const [sigCount,setSigCount]=useState(0);
@@ -3741,6 +3767,15 @@ function Dashboard({user,setUser,onShowAuth}){
     const iv=setInterval(doInsider,15*60*1000);
     return()=>clearInterval(iv);
   },[userTier]);
+
+  // ── Unusual Activity (Pulse) — auto-refreshes every 30s (Elite only) ──────
+  useEffect(()=>{
+    if(!isElite)return;
+    const doUnusual=async()=>{try{const r=await fetch("/api/unusual",{credentials:"include"});if(r.ok){const d=await r.json();setUnusualData(d);}}catch{}};
+    doUnusual();
+    const iv=setInterval(doUnusual,30000);
+    return()=>clearInterval(iv);
+  },[isElite]);
 
   // ── Finnhub ──────────────────────────────────────────
   const doFH=useCallback(async()=>{
@@ -4576,6 +4611,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"earnings",icon:"📅",label:"EARNINGS"},
     {k:"signals",icon:"⚡",label:i18n.signals},
     {k:"insider",icon:"🏛",label:"INSIDER"},
+    {k:"pulse",icon:"⚡",label:"PULSE"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
@@ -5921,8 +5957,11 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
         </>}
 
-        {/* ══ EARNINGS ══ */}
-        {tab==="earnings"&&<EarningsTab C={C} MONO={MONO} SERIF={SERIF} watchlist={EQUITY_SYMS}/>}
+        {/* ══ EARNINGS (Elite only) ══ */}
+        {tab==="earnings"&&isElite&&<EarningsTab C={C} MONO={MONO} SERIF={SERIF} watchlist={EQUITY_SYMS}/>}
+
+        {/* ══ PULSE — Unusual Activity feed (Elite only) ══ */}
+        {tab==="pulse"&&isElite&&<UnusualPulse data={unusualData} C={C} MONO={MONO}/>}
 
         {/* ══ SIGNALS ══ */}
         {tab==="signals"&&<>

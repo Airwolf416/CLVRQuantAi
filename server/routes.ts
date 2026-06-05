@@ -493,6 +493,13 @@ function getVolumeZ(sym: string): { z: number; ratio: number } {
   return { z: (last - mean) / sd, ratio: mean > 0 ? last / mean : 1 };
 }
 
+// Start the real-1m-volume poller (warms volHistory). Runs at import time like
+// the other module-scope pollers — safe because it only fills a cache and every
+// per-symbol fetch is wrapped in its own try/catch. BINANCE_MAP is an import, so
+// it is already initialized here (no temporal-dead-zone risk).
+pollVolumes();
+setInterval(pollVolumes, 60000);
+
 // ── UNUSUAL ACTIVITY DETECTOR ────────────────────────────────────────────────
 // Probabilistic "conditions" score. NOT a forecast. Flags abnormal
 // positioning/activity that historically PRECEDES volatility — with a high
@@ -1499,6 +1506,20 @@ async function detectMoves() {
       }
     } catch (capErr: any) {
       console.warn(`[SCANNER CONV-CAP] ${sym} fail-open:`, capErr?.message || capErr);
+    }
+
+    // ── HARD R:R FLOOR — must run after vol-regime TP-compression / SL-widening ──
+    // Published Target = tp2, Stop = stopLoss (the same vars feeding the card and
+    // the existing rr2 = actualTP2/actualStop readout). High-vol hardening can
+    // compress TP / widen SL into a sub-1.5:1 setup (e.g. ~1.1:1) that violates
+    // the stated 1.5:1 rule — suppress and skip those before they ever publish.
+    const _rewardDist = Math.abs(signal.tp2 - signal.entry);
+    const _riskDist = Math.abs(signal.entry - signal.stopLoss);
+    const _rrFloor = _riskDist > 0 ? _rewardDist / _riskDist : 0;
+    const RR_FLOOR = 1.5;
+    if (_rrFloor > 0 && _rrFloor < RR_FLOOR) {
+      console.log(`[SIGNAL] ${sym} SUPPRESSED — R:R ${_rrFloor.toFixed(2)}:1 below ${RR_FLOOR}:1 floor (vol compression)`);
+      continue;
     }
 
     liveSignals.unshift(signal);

@@ -1,0 +1,44 @@
+Wire REAL 1m volume into the QuantBrain signal scanner, replacing the tick-density proxy. No new API keys; reuse BINANCE_SYMBOLS and the existing delay() helper.
+
+STEP A — If the volume poller is NOT already in server/routes.ts (search for "volHistory", "getVolumeZ", "pollVolumes"), add it near the signal scanner scope:
+
+    const volHistory: Record<string, number[]> = {}; // last 30 closed 1m candle quote-volumes
+    async function pollVolumes() {
+      for (const [base, symbol] of Object.entries(BINANCE_SYMBOLS)) {
+        try {
+          const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=31`, { signal: AbortSignal.timeout(5000) });
+          const data: any = await r.json();
+          if (!Array.isArray(data) || data.length < 6) continue;
+          const vols = data.slice(0, -1).map((c: any) => parseFloat(c[7])).filter((v: number) => v > 0);
+          if (vols.length >= 5) volHistory[base] = vols.slice(-30);
+        } catch {}
+        await delay(150);
+      }
+    }
+    function getVolumeZ(sym: string): { z: number; ratio: number } {
+      const v = volHistory[sym];
+      if (!v || v.length < 8) return { z: 0, ratio: 0 };
+      const last = v[v.length - 1];
+      const prior = v.slice(0, -1);
+      const mean = prior.reduce((a, b) => a + b, 0) / prior.length;
+      const sd = Math.sqrt(prior.reduce((a, b) => a + (b - mean) ** 2, 0) / prior.length) || 1;
+      return { z: (last - mean) / sd, ratio: mean > 0 ? last / mean : 0 };
+    }
+  Start it: add `pollVolumes(); setInterval(pollVolumes, 60000);` where the other intervals start.
+
+STEP B — In the signal scanner, FIND the two lines computing volumeMult from point density:
+    const avgRecentVol = olderPts.length ? olderPts.length / 3 : 1;
+    const volumeMult = avgRecentVol > 0 ? recentPts.length / avgRecentVol : 1;
+  REPLACE with:
+    const avgRecentVol = olderPts.length ? olderPts.length / 3 : 1;
+    const tickMult = avgRecentVol > 0 ? recentPts.length / avgRecentVol : 1;
+    const volReal = (function () { try { return getVolumeZ(sym); } catch { return { z: 0, ratio: 0 }; } })();
+    const hasRealVol = volReal.ratio > 0;
+    const volumeMult = hasRealVol ? volReal.ratio : tickMult;
+
+STEP C — In the `checks` object, REPLACE the `volume` entry's label line so it reads honestly:
+    label: hasRealVol ? `Volume ${volumeMult.toFixed(1)}x 1m avg` : `Activity ${volumeMult.toFixed(1)}x avg (tick est.)`,
+
+ACCEPTANCE
+- Crypto symbols use real 1m volume ratio; label reads "Volume Nx 1m avg". Non-crypto falls back to tick proxy labeled "(tick est.)". Build compiles.
+Then commit and push.
