@@ -223,6 +223,26 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── concierge_bookings ───────────────────────────────────────────────────
+    // 30-min 1-on-1 platform training sessions booked via the AI Concierge.
+    // price_usd=0 rows are free (eligible Elite); paid rows go through Stripe
+    // checkout (status flips pending→confirmed on webhook / success).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS concierge_bookings (
+        id                SERIAL PRIMARY KEY,
+        user_id           VARCHAR NOT NULL,
+        slot_date         TEXT NOT NULL,
+        slot_time         TEXT NOT NULL,
+        timezone          TEXT NOT NULL DEFAULT 'America/Toronto',
+        price_usd         INTEGER NOT NULL DEFAULT 0,
+        tier              TEXT,
+        status            TEXT NOT NULL DEFAULT 'pending',
+        stripe_session_id TEXT,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS concierge_bookings_user_idx ON concierge_bookings (user_id, created_at DESC)`);
+
     // ── referrals ────────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS referrals (

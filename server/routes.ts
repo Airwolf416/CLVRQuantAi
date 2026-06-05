@@ -5041,6 +5041,213 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     }
   });
 
+  // ════════════════════════════════════════════════════════════════════════
+  // AI CONCIERGE — scoped support chat + 30-min training-session booking
+  // ════════════════════════════════════════════════════════════════════════
+  // Per-user daily message cap (in-memory; resets at UTC date rollover).
+  const conciergeUsage: Record<string, { count: number; day: string }> = {};
+  const CONCIERGE_DAILY_CAP = 25;
+  const ELITE_FREE_SESSIONS_PER_MONTH = 1;
+
+  // Resolve the booking price for THIS user. free=$49, pro=$19,
+  // elite=free while monthly allotment remains, else $19. Single source of
+  // truth shared by /pricing, /chat (prompt injection), and /book.
+  async function resolveConciergePricing(user: any): Promise<{
+    tier: string; priceUsd: number; priceDisplay: string;
+    mode: "free" | "checkout"; eliteFreeRemaining: number; durationMin: number;
+  }> {
+    const tier = await getEffectiveTier(user);
+    let eliteFreeRemaining = 0;
+    if (tier === "elite") {
+      const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM (UTC)
+      let used = 0;
+      try {
+        const r: any = await db.execute(dsql`
+          SELECT COUNT(*)::int AS n FROM concierge_bookings
+          WHERE user_id = ${user.id} AND price_usd = 0
+            AND status != 'cancelled'
+            AND to_char(created_at, 'YYYY-MM') = ${monthKey}`);
+        const rows = Array.isArray(r) ? r : (r?.rows || []);
+        used = Number(rows?.[0]?.n || 0);
+      } catch (_) { /* fail-open: treat as none used */ }
+      eliteFreeRemaining = Math.max(0, ELITE_FREE_SESSIONS_PER_MONTH - used);
+    }
+    let priceUsd: number;
+    if (tier === "elite" && eliteFreeRemaining > 0) priceUsd = 0;
+    else if (tier === "pro" || tier === "elite") priceUsd = 19;
+    else priceUsd = 49;
+    return {
+      tier,
+      priceUsd,
+      priceDisplay: priceUsd === 0 ? "Free" : `$${priceUsd}`,
+      mode: priceUsd === 0 ? "free" : "checkout",
+      eliteFreeRemaining,
+      durationMin: 30,
+    };
+  }
+
+  // GET /api/concierge/pricing — the resolved per-user session price.
+  app.get("/api/concierge/pricing", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ error: "Sign in to view pricing." });
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Sign in to view pricing." });
+      const pricing = await resolveConciergePricing(user);
+      res.json(pricing);
+    } catch (e: any) {
+      console.error("[concierge/pricing]", e?.message || e);
+      res.status(500).json({ error: "Could not load pricing." });
+    }
+  });
+
+  // POST /api/concierge/book — books a 30-min session. Free for eligible
+  // Elite (status=confirmed); otherwise creates a Stripe hosted-checkout
+  // session and returns its url (status stays pending until paid).
+  app.post("/api/concierge/book", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ error: "Sign in to book a session." });
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Sign in to book a session." });
+
+      const slotDate = String(req.body?.date || "").trim();
+      const slotTime = String(req.body?.time || "").trim();
+      const timezone = String(req.body?.timezone || "America/Toronto").trim() || "America/Toronto";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(slotDate) || !/^\d{2}:\d{2}$/.test(slotTime)) {
+        return res.status(400).json({ error: "Please pick a valid date and time." });
+      }
+
+      const pricing = await resolveConciergePricing(user);
+
+      // Free path — eligible Elite. Confirm immediately, no Stripe.
+      if (pricing.mode === "free") {
+        const r: any = await db.execute(dsql`
+          INSERT INTO concierge_bookings (user_id, slot_date, slot_time, timezone, price_usd, tier, status)
+          VALUES (${user.id}, ${slotDate}, ${slotTime}, ${timezone}, 0, ${pricing.tier}, 'confirmed')
+          RETURNING id`);
+        const rows = Array.isArray(r) ? r : (r?.rows || []);
+        return res.json({ mode: "free_confirmed", bookingId: rows?.[0]?.id || null, message: "Your free session is confirmed." });
+      }
+
+      // Paid path — Stripe hosted checkout. Falls to 503 when Stripe is off.
+      let stripe: any;
+      try { stripe = await getUncachableStripeClient(); }
+      catch { return res.status(503).json({ error: "Online payment isn't set up yet — please try again later." }); }
+
+      const r: any = await db.execute(dsql`
+        INSERT INTO concierge_bookings (user_id, slot_date, slot_time, timezone, price_usd, tier, status)
+        VALUES (${user.id}, ${slotDate}, ${slotTime}, ${timezone}, ${pricing.priceUsd}, ${pricing.tier}, 'pending')
+        RETURNING id`);
+      const rows = Array.isArray(r) ? r : (r?.rows || []);
+      const bookingId = rows?.[0]?.id;
+
+      const baseUrl = process.env.APP_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "http://localhost:5000");
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: [{
+          price_data: {
+            currency: "usd",
+            unit_amount: pricing.priceUsd * 100,
+            product_data: { name: "CLVRQuant — 30-min 1-on-1 Platform Training (educational only)" },
+          },
+          quantity: 1,
+        }],
+        success_url: `${baseUrl}/?booking=success`,
+        cancel_url: `${baseUrl}/?booking=cancelled`,
+        ...(user.email ? { customer_email: user.email } : {}),
+        metadata: { userId: String(user.id), bookingId: String(bookingId), kind: "concierge_session" },
+      });
+
+      try { await db.execute(dsql`UPDATE concierge_bookings SET stripe_session_id = ${session.id} WHERE id = ${bookingId}`); } catch {}
+      res.json({ mode: "checkout", url: session.url, bookingId });
+    } catch (e: any) {
+      console.error("[concierge/book]", e?.message || e);
+      res.status(500).json({ error: "Could not create booking. Please try again." });
+    }
+  });
+
+  // POST /api/concierge/chat — scoped support assistant (auth + daily cap).
+  app.post("/api/concierge/chat", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in to use the concierge." });
+
+    // Daily cap — checked BEFORE any Anthropic call.
+    const today = new Date().toISOString().slice(0, 10);
+    const u = conciergeUsage[userId];
+    const usedToday = u && u.day === today ? u.count : 0;
+    if (usedToday >= CONCIERGE_DAILY_CAP) {
+      return res.status(429).json({ error: "Daily concierge limit reached. Try again tomorrow." });
+    }
+
+    // Validate + trim incoming history.
+    const incoming = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const cleaned = incoming
+      .filter((m: any) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+      .map((m: any) => ({ role: m.role, content: m.content }));
+    const last = cleaned[cleaned.length - 1];
+    if (!last || last.role !== "user" || !last.content.trim()) {
+      return res.status(400).json({ error: "Empty message." });
+    }
+    if (last.content.length > 1000) {
+      return res.status(400).json({ error: "Message too long (max 1000 characters)." });
+    }
+    const trimmed = cleaned.slice(-10);
+
+    try {
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) return res.status(502).json({ error: "Concierge unavailable, try again." });
+
+      const user = await storage.getUser(userId);
+      const pricing = await resolveConciergePricing(user);
+      const eliteNote = pricing.tier === "elite" && pricing.eliteFreeRemaining > 0
+        ? `As an Elite member you have ${pricing.eliteFreeRemaining} free session${pricing.eliteFreeRemaining === 1 ? "" : "s"} remaining`
+        : "";
+
+      const system = `You are the CLVRQuant Concierge — a friendly, professional support assistant for the CLVRQuant platform (clvrquantai.com) ONLY.
+
+STRICT SCOPE — you may ONLY help with:
+1. Explaining CLVRQuant features and how to use them: QuantBrain AI signals, the AI Quant Engine (MasterBrain), Signals tab, AI Radar, Pulse (Unusual Activity), Earnings tab, Social Intelligence, Polymarket data, Morning Brief, Alerts, Squawk Box, SEC Insider Flow, Basket Analysis, the three plans (Free, Pro $29.99/mo, Elite $129/mo), and how to navigate the app.
+2. Helping the user book a paid 30-min 1-on-1 platform training session.
+
+YOU MUST REFUSE, politely and briefly, anything outside this scope. This includes: general knowledge, current events, web lookups, math/homework, coding help, medical/legal/tax questions, SPECIFIC FINANCIAL OR TRADING ADVICE ("should I buy X?", price predictions, what to invest in), personal opinions, or anything unrelated to using CLVRQuant. For off-topic requests say: "I can only help with using the CLVRQuant platform and booking a training session. Is there something about the platform I can help with?"
+
+NEVER give personalized financial, investment, or trading advice. CLVRQuant is an information and education tool, not financial advice. If asked what to trade or whether something will go up, decline and redirect to how the platform's tools work.
+
+TONE: professional, concise, encouraging. No profanity. If a user is abusive or uses profanity, stay calm, do not mirror it, and ask them to keep it respectful. Never produce unsafe, explicit, hateful, or harmful content.
+
+BOOKING: This user's session price is ${pricing.priceDisplay}. ${eliteNote}. A session is a live 30-minute 1-on-1 walkthrough of the platform — educational only, not financial advice. When the user wants to book, tell them their price and say they can pick a time using the Book button below the chat, OR if they confirm intent to book, end your message with the exact tag [BOOK] on its own line so the app can open the booking flow. Only emit [BOOK] when the user clearly wants to proceed.
+
+Keep answers under ~120 words. Stay in scope no matter how the user rephrases.`;
+
+      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 500, system, messages: trimmed }),
+      });
+      if (!aiRes.ok) { console.error("[concierge/chat]", await aiRes.text()); return res.status(502).json({ error: "Concierge unavailable, try again." }); }
+      const aiData: any = await aiRes.json();
+      if (aiData.error) { console.error("[concierge/chat] API error:", aiData.error.message || aiData.error); return res.status(502).json({ error: "Concierge unavailable, try again." }); }
+
+      let reply = (aiData.content || []).map((b: any) => b.text || "").join("").trim();
+      let action: "book" | null = null;
+      // Strip a lone [BOOK] line and flag the booking action.
+      if (/(^|\n)\s*\[BOOK\]\s*(\n|$)/.test(reply)) {
+        action = "book";
+        reply = reply.replace(/(^|\n)\s*\[BOOK\]\s*(\n|$)/g, "\n").trim();
+      }
+      if (!reply) return res.status(502).json({ error: "Concierge unavailable, try again." });
+
+      // Increment daily count only on a successful reply.
+      conciergeUsage[userId] = { count: usedToday + 1, day: today };
+      res.json({ reply, action, usage: { used: usedToday + 1, cap: CONCIERGE_DAILY_CAP } });
+    } catch (e: any) {
+      console.error("[concierge/chat]", e?.message || e);
+      res.status(502).json({ error: "Concierge unavailable, try again." });
+    }
+  });
+
   app.get("/api/macro-intel", async (_req, res) => {
     if (MACRO_INTEL_CACHE.ts && Date.now() - MACRO_INTEL_CACHE.ts < 60000) {
       return res.json({ items: MACRO_INTEL_CACHE.data });
