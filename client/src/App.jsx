@@ -4611,7 +4611,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"earnings",icon:"📅",label:"EARNINGS"},
     {k:"signals",icon:"⚡",label:i18n.signals},
     {k:"insider",icon:"🏛",label:"INSIDER"},
-    {k:"pulse",icon:"⚡",label:"PULSE"},
+    {k:"pulse",icon:"💥",label:"PULSE"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
     {k:"ai",icon:"✦",label:i18n.ai},
