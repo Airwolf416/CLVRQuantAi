@@ -35,6 +35,11 @@ process.on('SIGINT', () => { shuttingDown = true; });
 const app = express();
 const httpServer = createServer(app);
 
+// Lightweight liveness probe — registered before any heavy middleware so the
+// Railway healthcheck gets a 200 the instant the port binds, even while DB /
+// Stripe / route init is still running (or failing) in the background.
+app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
+
 const isProduction = process.env.NODE_ENV === "production";
 
 // ── Security headers (helmet) ─────────────────────────────────────────────────
@@ -721,7 +726,32 @@ function logDataSourceStatus() {
   console.log("└─────────────────────────────────────────────────────────────");
 }
 
+// Bind the port FIRST so Railway's healthcheck (/health) gets a 200 the instant
+// the process is up — even if DB/Stripe/route init below hangs or throws. Heavy
+// init runs afterward in a try/catch that never crashes the process, so a
+// Postgres-in-recovery or Stripe outage logs an error instead of crash-looping.
+const port = parseInt(process.env.PORT || "5000", 10);
+
+httpServer.listen(
+  {
+    port,
+    host: "0.0.0.0",
+    reusePort: true,
+  },
+  () => {
+    log(`serving on port ${port}`);
+  },
+);
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
 (async () => {
+ try {
   logDataSourceStatus();
   startQuantService();
   await initializeDatabase();
@@ -811,15 +841,9 @@ function logDataSourceStatus() {
     await setupVite(httpServer, app);
   }
 
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+  log("startup complete");
+ } catch (err) {
+   console.error("STARTUP ERROR:", err);
+   // Server stays up on /health so Railway stops crash-looping and logs stay readable.
+ }
 })();
