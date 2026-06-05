@@ -32,7 +32,7 @@ function shape(e: EarningsRow) {
     epsActual: e.epsActual,
     revenueEstimate: e.revenueEstimated,
     revenueActual: e.revenueActual,
-    surprisePct: e.epsActual != null && e.epsEstimated
+    surprisePct: e.epsActual != null && e.epsEstimated != null && e.epsEstimated !== 0
       ? +(((e.epsActual - e.epsEstimated) / Math.abs(e.epsEstimated)) * 100).toFixed(1)
       : null,
   };

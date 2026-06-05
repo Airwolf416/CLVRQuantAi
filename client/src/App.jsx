@@ -3150,6 +3150,230 @@ function WhatsNewPanel({ panel, ph, PTitle, Badge, C, SERIF, SANS }){
   );
 }
 
+// ── AI Concierge ──────────────────────────────────────────────────────────
+// Floating, logged-in-only support widget. Scoped chat (platform help + booking
+// a 30-min 1-on-1 session) backed by /api/concierge/{chat,pricing,book}. The
+// assistant can surface a booking flow via the [BOOK]-derived action flag, and
+// the user can open it any time from the header button.
+function ConciergeWidget({ user, C, isMobile, MONO, SERIF }){
+  const [open,setOpen]=useState(false);
+  const [messages,setMessages]=useState([
+    {role:"assistant",content:"Hi — I'm the CLVRQuant Concierge. I can help you use the platform (signals, the AI engine, alerts, plans) or book a 30-min 1-on-1 training session. What can I help with?"},
+  ]);
+  const [input,setInput]=useState("");
+  const [sending,setSending]=useState(false);
+  const [limit,setLimit]=useState(false);
+  // booking flow
+  const [booking,setBooking]=useState(false);
+  const [pricing,setPricing]=useState(null);
+  const [pLoading,setPLoading]=useState(false);
+  const [bDate,setBDate]=useState("");
+  const [bTime,setBTime]=useState("10:00");
+  const [bMsg,setBMsg]=useState("");
+  const [bConfirmed,setBConfirmed]=useState(false);
+  const [bWorking,setBWorking]=useState(false);
+  const scrollRef=useRef(null);
+
+  useEffect(()=>{
+    if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight;
+  },[messages,sending,open,booking]);
+
+  const openBooking=async()=>{
+    setBooking(true); setBMsg(""); setBConfirmed(false); setPLoading(true);
+    if(!bDate){ const t=new Date(); t.setDate(t.getDate()+1); setBDate(t.toISOString().slice(0,10)); }
+    try{
+      const r=await fetch("/api/concierge/pricing",{credentials:"include"});
+      if(r.ok){ setPricing(await r.json()); }
+      else{ setBMsg("Could not load pricing. Please try again."); }
+    }catch{ setBMsg("Could not load pricing. Please try again."); }
+    finally{ setPLoading(false); }
+  };
+
+  const send=async()=>{
+    const text=input.trim();
+    if(!text||sending||limit) return;
+    const next=[...messages,{role:"user",content:text}];
+    setMessages(next); setInput(""); setSending(true);
+    try{
+      const r=await fetch("/api/concierge/chat",{
+        method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({messages:next.filter(m=>m.role==="user"||m.role==="assistant")}),
+      });
+      if(r.status===429){
+        setLimit(true);
+        setMessages(m=>[...m,{role:"assistant",content:"You've reached today's concierge message limit. Please try again tomorrow — or book a session below."}]);
+        return;
+      }
+      if(!r.ok){
+        setMessages(m=>[...m,{role:"assistant",content:"Sorry, I'm having trouble right now. Please try again in a moment."}]);
+        return;
+      }
+      const d=await r.json();
+      setMessages(m=>[...m,{role:"assistant",content:d.reply||"…"}]);
+      if(d.action==="book") openBooking();
+    }catch{
+      setMessages(m=>[...m,{role:"assistant",content:"Sorry, I'm having trouble right now. Please try again in a moment."}]);
+    }finally{ setSending(false); }
+  };
+
+  const confirmBooking=async()=>{
+    if(!bDate||!bTime||bWorking) return;
+    setBWorking(true); setBMsg("");
+    try{
+      const r=await fetch("/api/concierge/book",{
+        method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({date:bDate,time:bTime,timezone:"America/Toronto"}),
+      });
+      const d=await r.json().catch(()=>({}));
+      if(r.status===503){ setBMsg(d.error||"Online payment isn't set up yet — please try again later."); return; }
+      if(!r.ok){ setBMsg(d.error||"Could not create booking. Please try again."); return; }
+      if(d.mode==="checkout"&&d.url){ window.location.href=d.url; return; }
+      if(d.mode==="free_confirmed"){ setBConfirmed(true); setBMsg(d.message||"Your free session is confirmed."); }
+      else{ setBMsg("Booking received."); }
+    }catch{ setBMsg("Could not create booking. Please try again."); }
+    finally{ setBWorking(false); }
+  };
+
+  const SLOTS=[];
+  for(let h=9;h<=17;h++){ SLOTS.push(`${String(h).padStart(2,"0")}:00`); if(h<17) SLOTS.push(`${String(h).padStart(2,"0")}:30`); }
+
+  const panelBottom=isMobile?86:20;
+  const panelW=isMobile?"calc(100vw - 24px)":380;
+  const panelH=isMobile?"min(70vh, 560px)":560;
+
+  if(!open){
+    return (
+      <button data-testid="button-concierge-open" onClick={()=>setOpen(true)} aria-label="Open Concierge"
+        style={{position:"fixed",bottom:panelBottom,right:18,zIndex:9000,width:54,height:54,borderRadius:"50%",
+          background:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,border:`1px solid ${C.gold3}`,
+          boxShadow:"0 6px 22px rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:22,color:C.navy,cursor:"pointer"}}>
+        <span style={{fontFamily:SERIF,fontWeight:900,fontSize:20}}>C</span>
+      </button>
+    );
+  }
+
+  return (
+    <div data-testid="panel-concierge" style={{position:"fixed",bottom:panelBottom,right:isMobile?12:18,zIndex:9000,
+      width:panelW,maxWidth:420,height:panelH,display:"flex",flexDirection:"column",
+      background:C.navy,border:`1px solid ${C.border2}`,borderRadius:12,overflow:"hidden",
+      boxShadow:"0 18px 50px rgba(0,0,0,0.55)",fontFamily:SANS}}>
+
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",
+        borderBottom:`1px solid ${C.border}`,background:C.panel}}>
+        <div style={{display:"flex",alignItems:"center",gap:9}}>
+          <div style={{width:26,height:26,borderRadius:"50%",background:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,
+            display:"flex",alignItems:"center",justifyContent:"center",color:C.navy,fontFamily:SERIF,fontWeight:900,fontSize:14}}>C</div>
+          <div>
+            <div style={{fontFamily:SERIF,fontWeight:700,fontSize:14,color:C.gold2,lineHeight:1}}>CLVRQuant Concierge</div>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,letterSpacing:"0.12em",marginTop:2}}>PLATFORM SUPPORT · BOOKING</div>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          {!booking&&<button data-testid="button-concierge-book" onClick={openBooking}
+            style={{background:"none",border:`1px solid ${C.gold}`,color:C.gold2,fontFamily:MONO,fontSize:9,fontWeight:700,
+              letterSpacing:"0.06em",padding:"5px 9px",borderRadius:999,cursor:"pointer"}}>BOOK</button>}
+          <button data-testid="button-concierge-close" onClick={()=>setOpen(false)} aria-label="Close"
+            style={{background:"none",border:"none",color:C.muted2,fontSize:18,lineHeight:1,cursor:"pointer",padding:"0 2px"}}>×</button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div ref={scrollRef} style={{flex:1,overflowY:"auto",padding:"14px",display:"flex",flexDirection:"column",gap:10}}>
+        {!booking&&messages.map((m,i)=>(
+          <div key={i} data-testid={`msg-concierge-${m.role}-${i}`} style={{alignSelf:m.role==="user"?"flex-end":"flex-start",maxWidth:"85%"}}>
+            <div style={{background:m.role==="user"?`linear-gradient(145deg, ${C.gold2}, ${C.gold})`:C.panel,
+              color:m.role==="user"?C.navy:C.text,border:m.role==="user"?"none":`1px solid ${C.border}`,
+              borderRadius:10,padding:"9px 12px",fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {!booking&&sending&&(
+          <div style={{alignSelf:"flex-start",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"9px 12px",fontFamily:MONO,fontSize:11,color:C.muted2}}>Concierge is typing…</div>
+        )}
+
+        {/* Booking view */}
+        {booking&&(
+          <div data-testid="panel-concierge-booking" style={{display:"flex",flexDirection:"column",gap:12}}>
+            <button data-testid="button-concierge-back" onClick={()=>setBooking(false)}
+              style={{alignSelf:"flex-start",background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>← Back to chat</button>
+            <div style={{fontFamily:SERIF,fontWeight:700,fontSize:16,color:C.gold2}}>Book a 1-on-1 session</div>
+            <div style={{fontFamily:MONO,fontSize:11,color:C.muted2,lineHeight:1.5}}>
+              A live 30-minute walkthrough of the platform — educational only, not financial advice.
+            </div>
+
+            {pLoading&&<div style={{fontFamily:MONO,fontSize:11,color:C.muted}}>Loading pricing…</div>}
+            {pricing&&!bConfirmed&&(
+              <>
+                <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+                  <span style={{fontFamily:SERIF,fontSize:26,fontWeight:900,color:C.gold3}} data-testid="text-concierge-price">{pricing.priceDisplay}</span>
+                  <span style={{fontFamily:MONO,fontSize:10,color:C.muted2}}>· 30 min</span>
+                </div>
+                {pricing.tier==="elite"&&pricing.eliteFreeRemaining>0&&(
+                  <div style={{fontFamily:MONO,fontSize:10,color:C.green}}>Elite perk: {pricing.eliteFreeRemaining} free session{pricing.eliteFreeRemaining===1?"":"s"} remaining this month.</div>
+                )}
+                <label style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.08em"}}>DATE
+                  <input data-testid="input-concierge-date" type="date" value={bDate} min={new Date().toISOString().slice(0,10)}
+                    onChange={e=>setBDate(e.target.value)}
+                    style={{display:"block",marginTop:5,width:"100%",background:C.panel,color:C.text,border:`1px solid ${C.border2}`,
+                      borderRadius:6,padding:"8px 10px",fontFamily:MONO,fontSize:12}}/>
+                </label>
+                <label style={{fontFamily:MONO,fontSize:9,color:C.muted2,letterSpacing:"0.08em"}}>TIME (America/Toronto)
+                  <select data-testid="select-concierge-time" value={bTime} onChange={e=>setBTime(e.target.value)}
+                    style={{display:"block",marginTop:5,width:"100%",background:C.panel,color:C.text,border:`1px solid ${C.border2}`,
+                      borderRadius:6,padding:"8px 10px",fontFamily:MONO,fontSize:12}}>
+                    {SLOTS.map(s=><option key={s} value={s}>{s}</option>)}
+                  </select>
+                </label>
+                <button data-testid="button-concierge-confirm" onClick={confirmBooking} disabled={bWorking}
+                  style={{marginTop:4,background:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,color:C.navy,border:"none",
+                    borderRadius:8,padding:"11px 14px",fontFamily:MONO,fontSize:12,fontWeight:700,letterSpacing:"0.06em",
+                    cursor:bWorking?"default":"pointer",opacity:bWorking?0.6:1}}>
+                  {bWorking?"Working…":pricing.mode==="free"?"Confirm free session":`Pay ${pricing.priceDisplay} & book`}
+                </button>
+              </>
+            )}
+            {bConfirmed&&(
+              <div data-testid="text-concierge-confirmed" style={{background:"rgba(0,199,135,0.08)",border:`1px solid ${C.green}55`,
+                borderRadius:8,padding:"12px 14px",color:C.green,fontFamily:MONO,fontSize:12,lineHeight:1.5}}>
+                ✓ {bMsg||"Your session is confirmed."}<div style={{color:C.muted2,marginTop:6,fontSize:10}}>{bDate} · {bTime} America/Toronto</div>
+              </div>
+            )}
+            {bMsg&&!bConfirmed&&(
+              <div data-testid="text-concierge-bmsg" style={{color:C.red,fontFamily:MONO,fontSize:11}}>{bMsg}</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Composer */}
+      {!booking&&(
+        <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 12px",background:C.panel}}>
+          <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+            <textarea data-testid="input-concierge-message" rows={1} value={input} maxLength={1000} disabled={limit}
+              onChange={e=>setInput(e.target.value)}
+              onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); send(); } }}
+              placeholder={limit?"Daily limit reached":"Ask about the platform…"}
+              style={{flex:1,resize:"none",background:C.navy,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,
+                padding:"9px 11px",fontFamily:SANS,fontSize:13,lineHeight:1.4,maxHeight:90,outline:"none",
+                opacity:limit?0.5:1}}/>
+            <button data-testid="button-concierge-send" onClick={send} disabled={sending||limit||!input.trim()}
+              style={{background:(sending||limit||!input.trim())?C.border2:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,
+                color:(sending||limit||!input.trim())?C.muted2:C.navy,border:"none",borderRadius:8,padding:"10px 14px",
+                fontFamily:MONO,fontSize:12,fontWeight:700,cursor:(sending||limit||!input.trim())?"default":"pointer"}}>➤</button>
+          </div>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.06em",marginTop:7,textAlign:"center"}}>
+            Educational support only — not financial advice.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App(){
   // ── Path-based routing for embedded Stripe Checkout (no router dependency) ──
   const _path = typeof window !== "undefined" ? window.location.pathname : "/";
@@ -4626,6 +4850,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
   return(
     <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:isMobile?76:24,paddingTop:"env(safe-area-inset-top,0px)",paddingLeft:isMobile?0:sidebarW,maxWidth:isMobile?780:undefined,margin:isMobile?"0 auto":0,position:"relative"}}>
+      {user&&!isPreview&&<ConciergeWidget user={user} C={C} isMobile={isMobile} MONO={MONO} SERIF={SERIF}/>}
       {!isMobile&&<SideNav items={NAV} tab={tab} onTab={setTab} C={C} MONO={MONO} SERIF={SERIF} PRO_TABS_GATE2={PRO_TABS_GATE} isPro={isPro} isElite={isElite} isPreview={isPreview} upcomingCount={upcomingCount} isDark={isDark} toggleTheme={toggleTheme} wide={isDesktop}/>}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=IBM+Plex+Mono:wght@300;400;500;600&family=Barlow:wght@300;400;500;600;700&display=swap');

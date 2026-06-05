@@ -5061,6 +5061,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     if (tier === "elite") {
       const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM (UTC)
       let used = 0;
+      let countOk = true;
       try {
         const r: any = await db.execute(dsql`
           SELECT COUNT(*)::int AS n FROM concierge_bookings
@@ -5069,8 +5070,8 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
             AND to_char(created_at, 'YYYY-MM') = ${monthKey}`);
         const rows = Array.isArray(r) ? r : (r?.rows || []);
         used = Number(rows?.[0]?.n || 0);
-      } catch (_) { /* fail-open: treat as none used */ }
-      eliteFreeRemaining = Math.max(0, ELITE_FREE_SESSIONS_PER_MONTH - used);
+      } catch (_) { countOk = false; /* fail-closed: do not grant free on error */ }
+      eliteFreeRemaining = countOk ? Math.max(0, ELITE_FREE_SESSIONS_PER_MONTH - used) : 0;
     }
     let priceUsd: number;
     if (tier === "elite" && eliteFreeRemaining > 0) priceUsd = 0;
@@ -5120,14 +5121,33 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
 
       const pricing = await resolveConciergePricing(user);
 
-      // Free path — eligible Elite. Confirm immediately, no Stripe.
+      // Free path — eligible Elite. Re-check the monthly allotment atomically
+      // (advisory lock serializes concurrent attempts by the same user) and
+      // only confirm if a free slot is genuinely still available; otherwise
+      // fall through to the paid checkout path below.
       if (pricing.mode === "free") {
-        const r: any = await db.execute(dsql`
-          INSERT INTO concierge_bookings (user_id, slot_date, slot_time, timezone, price_usd, tier, status)
-          VALUES (${user.id}, ${slotDate}, ${slotTime}, ${timezone}, 0, ${pricing.tier}, 'confirmed')
-          RETURNING id`);
-        const rows = Array.isArray(r) ? r : (r?.rows || []);
-        return res.json({ mode: "free_confirmed", bookingId: rows?.[0]?.id || null, message: "Your free session is confirmed." });
+        const monthKey = new Date().toISOString().slice(0, 7);
+        const booked = await db.transaction(async (tx) => {
+          await tx.execute(dsql`SELECT pg_advisory_xact_lock(hashtext(${"concierge_free:" + user.id}))`);
+          const c: any = await tx.execute(dsql`
+            SELECT COUNT(*)::int AS n FROM concierge_bookings
+            WHERE user_id = ${user.id} AND price_usd = 0 AND status != 'cancelled'
+              AND to_char(created_at, 'YYYY-MM') = ${monthKey}`);
+          const crows = Array.isArray(c) ? c : (c?.rows || []);
+          if (Number(crows?.[0]?.n || 0) >= ELITE_FREE_SESSIONS_PER_MONTH) return null;
+          const ins: any = await tx.execute(dsql`
+            INSERT INTO concierge_bookings (user_id, slot_date, slot_time, timezone, price_usd, tier, status)
+            VALUES (${user.id}, ${slotDate}, ${slotTime}, ${timezone}, 0, ${pricing.tier}, 'confirmed')
+            RETURNING id`);
+          const irows = Array.isArray(ins) ? ins : (ins?.rows || []);
+          return irows?.[0]?.id || null;
+        });
+        if (booked) {
+          return res.json({ mode: "free_confirmed", bookingId: booked, message: "Your free session is confirmed." });
+        }
+        // Allotment was just exhausted by a concurrent booking — re-price as paid.
+        pricing.priceUsd = pricing.tier === "pro" || pricing.tier === "elite" ? 19 : 49;
+        pricing.mode = "checkout";
       }
 
       // Paid path — Stripe hosted checkout. Falls to 503 when Stripe is off.
@@ -5200,6 +5220,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       if (!apiKey) return res.status(502).json({ error: "Concierge unavailable, try again." });
 
       const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Sign in to use the concierge." });
       const pricing = await resolveConciergePricing(user);
       const eliteNote = pricing.tier === "elite" && pricing.eliteFreeRemaining > 0
         ? `As an Elite member you have ${pricing.eliteFreeRemaining} free session${pricing.eliteFreeRemaining === 1 ? "" : "s"} remaining`
@@ -5239,9 +5260,13 @@ Keep answers under ~120 words. Stay in scope no matter how the user rephrases.`;
       }
       if (!reply) return res.status(502).json({ error: "Concierge unavailable, try again." });
 
-      // Increment daily count only on a successful reply.
-      conciergeUsage[userId] = { count: usedToday + 1, day: today };
-      res.json({ reply, action, usage: { used: usedToday + 1, cap: CONCIERGE_DAILY_CAP } });
+      // Increment daily count only on a successful reply. Read the current
+      // value at write time (not the pre-await snapshot) so interleaved
+      // requests don't clobber each other's increment.
+      const cur = conciergeUsage[userId] && conciergeUsage[userId].day === today ? conciergeUsage[userId].count : 0;
+      const newCount = cur + 1;
+      conciergeUsage[userId] = { count: newCount, day: today };
+      res.json({ reply, action, usage: { used: newCount, cap: CONCIERGE_DAILY_CAP } });
     } catch (e: any) {
       console.error("[concierge/chat]", e?.message || e);
       res.status(502).json({ error: "Concierge unavailable, try again." });
