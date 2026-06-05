@@ -60,3 +60,9 @@ id = "S9dNyOnxjIQICEmiwgfJS"
 uri = "file://exports/signal_track_record_2026-05-18.json"
 type = "unspecified"
 title = "Signal Track Record (JSON — full data + aggregate summary)"
+
+[[outputs]]
+id = "pCRvo0e8k_z1s82lmHLSA"
+uri = "file://exports/equity_curve.svg"
+type = "image"
+title = "CLVRQuant Signal Equity Curve — Backtest (1,260 resolved signals)"
