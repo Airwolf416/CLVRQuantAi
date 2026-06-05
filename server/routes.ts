@@ -5193,13 +5193,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Sign in to use the concierge." });
 
-    // Daily cap — checked BEFORE any Anthropic call.
     const today = new Date().toISOString().slice(0, 10);
-    const u = conciergeUsage[userId];
-    const usedToday = u && u.day === today ? u.count : 0;
-    if (usedToday >= CONCIERGE_DAILY_CAP) {
-      return res.status(429).json({ error: "Daily concierge limit reached. Try again tomorrow." });
-    }
 
     // Validate + trim incoming history.
     const incoming = Array.isArray(req.body?.messages) ? req.body.messages : [];
@@ -5216,15 +5210,52 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     const trimmed = cleaned.slice(-10);
 
     try {
-      const apiKey = process.env.ANTHROPIC_API_KEY;
-      if (!apiKey) return res.status(502).json({ error: "Concierge unavailable, try again." });
-
       const user = await storage.getUser(userId);
       if (!user) return res.status(401).json({ error: "Sign in to use the concierge." });
       const pricing = await resolveConciergePricing(user);
-      const eliteNote = pricing.tier === "elite" && pricing.eliteFreeRemaining > 0
-        ? `As an Elite member you have ${pricing.eliteFreeRemaining} free session${pricing.eliteFreeRemaining === 1 ? "" : "s"} remaining`
+      const isFreeElite = pricing.tier === "elite" && pricing.eliteFreeRemaining > 0;
+      const freeRemaining = pricing.eliteFreeRemaining;
+      const eliteNote = isFreeElite
+        ? `As an Elite member you have ${freeRemaining} free training session${freeRemaining === 1 ? "" : "s"} remaining`
         : "";
+
+      // ── Canned-answer layer — instant pre-written replies for common
+      // questions. Runs BEFORE the daily cap + Anthropic call: no token cost,
+      // and these do NOT count against the cap. Unmatched messages fall
+      // through to the AI flow below unchanged.
+      const q = String(last.content || "").toLowerCase().trim();
+      const bookingLine = isFreeElite
+        ? `As an Elite member you have ${freeRemaining} free 30-minute training session${freeRemaining === 1 ? "" : "s"} left. Tap Book above to pick a time and I'll set it up.`
+        : `A 30-minute 1-on-1 training session is ${pricing.priceDisplay} for your account. Tap Book above to choose a time.`;
+      const CANNED: { match: RegExp; answer: string }[] = [
+        { match: /(differ|compare|free.*pro|pro.*elite|which (plan|tier)|what.*plans?)/i,
+          answer: `Quick version of the three plans. Free gets you live prices, the macro calendar, basic signals and one morning brief idea. Pro at 29.99 a month adds the CLVR AI market chat, full signals, the sentiment feed and custom alerts. Elite at 129 a month unlocks everything, including the AI Quant Engine, SEC Insider Flow, Basket Analysis, the Squawk Box and whale tracking. Want me to go deeper on any one of them?` },
+        { match: /(book|session|1.?on.?1|one.?on.?one|training|call with|talk to|consult)/i,
+          answer: `Happy to help you book. {BOOKING_LINE} The session is a live walkthrough of the platform, just education on how to use the tools, not financial advice.` },
+        { match: /(pulse|unusual activity)/i,
+          answer: `Pulse flags assets showing unusual conditions right now, things like a sudden volume jump, accelerating price, or extreme funding. It scores each one and sorts them, so it is a heads up to go look, not a prediction or a signal to trade. It pairs well with the Signals tab for confirmation. Want me to show you where it lives in the app?` },
+        { match: /(quant engine|masterbrain|master brain)/i,
+          answer: `The Quant Engine, or MasterBrain, is the Elite deep-analysis tool. It stacks multiple factors together, price action, funding, open interest, momentum and macro context, then lays out a full trade blueprint with entry, stop, targets and a suggested position size. Think of it as the heavyweight analysis on top of the quick signals. Want a live walkthrough of it?` },
+        { match: /(quantbrain|signal|how.*signal|what.*signal)/i,
+          answer: `QuantBrain reads price action on any ticker and flags entry and exit zones along with trend strength and momentum. Open a ticker, check the Signals tab, and it does the rest. The Quant Engine then adds extra confluence on top for higher-probability setups. Want me to walk you through reading one?` },
+        { match: /(upgrade|how.*pay|subscribe|change.*plan|go (pro|elite))/i,
+          answer: `To upgrade, tap your tier badge in the header and pick Pro or Elite. Checkout is handled securely through Stripe and you can cancel anytime. Want me to explain what you'd unlock on each tier first?` },
+      ];
+      const cannedHit = CANNED.find((c) => c.match.test(q));
+      if (cannedHit) {
+        const reply = cannedHit.answer.replace("{BOOKING_LINE}", bookingLine);
+        const used = conciergeUsage[userId] && conciergeUsage[userId].day === today ? conciergeUsage[userId].count : 0;
+        return res.json({ reply, action: null, usage: { used, cap: CONCIERGE_DAILY_CAP }, canned: true });
+      }
+
+      // Daily cap — applies only to AI-backed replies (canned answers are free).
+      const usedToday = conciergeUsage[userId] && conciergeUsage[userId].day === today ? conciergeUsage[userId].count : 0;
+      if (usedToday >= CONCIERGE_DAILY_CAP) {
+        return res.status(429).json({ error: "Daily concierge limit reached. Try again tomorrow." });
+      }
+
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) return res.status(502).json({ error: "Concierge unavailable, try again." });
 
       const system = `You are the CLVRQuant Concierge — a friendly, professional support assistant for the CLVRQuant platform (clvrquantai.com) ONLY.
 
@@ -5238,9 +5269,17 @@ NEVER give personalized financial, investment, or trading advice. CLVRQuant is a
 
 TONE: professional, concise, encouraging. No profanity. If a user is abusive or uses profanity, stay calm, do not mirror it, and ask them to keep it respectful. Never produce unsafe, explicit, hateful, or harmful content.
 
+WRITING STYLE — sound like a friendly human teammate, not a brochure:
+- Plain conversational text. NO markdown symbols at all: no **, no ##, no backticks, no bullet characters like - or *.
+- Do NOT output long numbered feature lists. Explain in 2–4 short sentences, like you're talking to someone.
+- If you must list steps, weave them into a sentence or use simple short lines with no symbols, max 3 lines.
+- No emojis. No exclamation spam. Warm but professional.
+- Keep the whole reply under ~80 words unless the user asks for detail.
+- End naturally — only mention booking when it's relevant, and state the user's real free-session count if they're Elite.
+
 BOOKING: This user's session price is ${pricing.priceDisplay}. ${eliteNote}. A session is a live 30-minute 1-on-1 walkthrough of the platform — educational only, not financial advice. When the user wants to book, tell them their price and say they can pick a time using the Book button below the chat, OR if they confirm intent to book, end your message with the exact tag [BOOK] on its own line so the app can open the booking flow. Only emit [BOOK] when the user clearly wants to proceed.
 
-Keep answers under ~120 words. Stay in scope no matter how the user rephrases.`;
+Stay in scope no matter how the user rephrases.`;
 
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",

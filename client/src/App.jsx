@@ -3155,6 +3155,18 @@ function WhatsNewPanel({ panel, ph, PTitle, Badge, C, SERIF, SANS }){
 // a 30-min 1-on-1 session) backed by /api/concierge/{chat,pricing,book}. The
 // assistant can surface a booking flow via the [BOOK]-derived action flag, and
 // the user can open it any time from the header button.
+// Safety net: the concierge now replies in plain text, but strip any stray
+// leading markdown markers (* - #) per line and inline ** / backticks so the
+// bubble never shows raw symbols.
+function stripConciergeMd(text){
+  if(typeof text!=="string") return text;
+  return text.split("\n")
+    .map(line=>line.replace(/^\s*(?:[-*]|#{1,6})\s+/,"").trimEnd())
+    .join("\n")
+    .replace(/\*\*/g,"")
+    .replace(/`/g,"");
+}
+
 function ConciergeWidget({ user, C, isMobile, MONO, SERIF }){
   const [open,setOpen]=useState(false);
   const [messages,setMessages]=useState([
@@ -3286,7 +3298,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF }){
             <div style={{background:m.role==="user"?`linear-gradient(145deg, ${C.gold2}, ${C.gold})`:C.panel,
               color:m.role==="user"?C.navy:C.text,border:m.role==="user"?"none":`1px solid ${C.border}`,
               borderRadius:10,padding:"9px 12px",fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
-              {m.content}
+              {m.role==="assistant"?stripConciergeMd(m.content):m.content}
             </div>
           </div>
         ))}

@@ -1,0 +1,32 @@
+Fix the AI Concierge output formatting and the free-session count. Two changes.
+
+═══════════════════════════════════════════
+CHANGE 1 — humanize the concierge writing style
+═══════════════════════════════════════════
+In the /api/concierge/chat system prompt, ADD this STYLE section (keep all existing scope/safety rules):
+
+  WRITING STYLE — sound like a friendly human teammate, not a brochure:
+  - Plain conversational text. NO markdown symbols at all: no **, no ##, no backticks, no bullet characters like - or *.
+  - Do NOT output long numbered feature lists. Explain in 2–4 short sentences, like you're talking to someone.
+  - If you must list steps, weave them into a sentence or use simple short lines with no symbols, max 3 lines.
+  - No emojis. No exclamation spam. Warm but professional.
+  - Keep the whole reply under ~80 words unless the user asks for detail.
+  - End naturally — only mention booking when it's relevant, and state the user's real free-session count if they're Elite.
+
+Example of the TONE you want (do not reuse verbatim): "QuantBrain reads price action on any ticker and flags entry and exit zones with a trend and momentum read. The Quant Engine then stacks extra confluence on top for higher-probability setups. Want me to walk you through it live?"
+
+═══════════════════════════════════════════
+CHANGE 2 — use the REAL free-session count
+═══════════════════════════════════════════
+The concierge must NOT hardcode or guess the free-session number. Before building the system prompt, call the same resolver used by /api/concierge/pricing to get { isFreeElite, freeRemaining } for THIS user, and inject the real value. The {ELITE_NOTE} must read, e.g., "As an Elite member you have 3 free training sessions remaining" using the actual freeRemaining integer. If freeRemaining is 0 or user isn't elite, do not claim any free sessions.
+
+═══════════════════════════════════════════
+CHANGE 3 — render replies cleanly in the UI
+═══════════════════════════════════════════
+In the concierge chat component, the assistant text is rendering raw markdown. Since the AI will now send plain text, ensure the bubble preserves line breaks: render the reply with white-space: pre-wrap (or split on "\n" into lines). Strip any stray leading "*", "-", or "#" characters at the start of a line as a safety net before display.
+
+ACCEPTANCE
+- Concierge replies are short, conversational, contain NO asterisks/markdown/emoji, and read like a human.
+- The Elite free-session count shown matches the real freeRemaining from the pricing resolver (3 for a fresh Elite account).
+- Chat bubbles preserve line breaks and show no raw markdown symbols.
+Then commit and push.

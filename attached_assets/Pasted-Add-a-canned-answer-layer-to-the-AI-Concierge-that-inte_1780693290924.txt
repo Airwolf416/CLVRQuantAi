@@ -1,0 +1,61 @@
+Add a canned-answer layer to the AI Concierge that intercepts common questions BEFORE calling Anthropic. Matched questions return a pre-written plain-text answer instantly (no Anthropic call, no token cost, and they do NOT count against the daily cap). Unmatched messages fall through to the existing AI flow unchanged.
+
+═══════════════════════════════════════════
+In POST /api/concierge/chat, AFTER auth + resolving the user's pricing ({ tier, priceDisplay, isFreeElite, freeRemaining }) but BEFORE the daily-cap check and Anthropic call:
+═══════════════════════════════════════════
+
+1) Take the last user message, lowercase + trim it as `q`.
+
+2) Build the booking line from the user's REAL resolved price (no hardcoding):
+   let bookingLine;
+   if (isFreeElite) bookingLine = `As an Elite member you have ${freeRemaining} free 30-minute training sessions left. Tap Book above to pick a time and I'll set it up.`;
+   else bookingLine = `A 30-minute 1-on-1 training session is ${priceDisplay} for your account. Tap Book above to choose a time.`;
+
+3) Define canned answers (plain text, conversational, NO markdown symbols, NO emoji):
+
+   const CANNED = [
+     {
+       match: (q) => /(differ|compare|free.*pro|pro.*elite|which (plan|tier)|what.*plans?)/i.test(q),
+       answer:
+`Quick version of the three plans. Free gets you live prices, the macro calendar, basic signals and one morning brief idea. Pro at 29.99 a month adds the CLVR AI market chat, full signals, the sentiment feed and custom alerts. Elite at 129 a month unlocks everything, including the AI Quant Engine, SEC Insider Flow, Basket Analysis, the Squawk Box and whale tracking. Want me to go deeper on any one of them?`
+     },
+     {
+       match: (q) => /(book|session|1.?on.?1|one.?on.?one|training|call with|talk to|consult)/i.test(q),
+       answer:
+`Happy to help you book. ${'{BOOKING_LINE}'} The session is a live walkthrough of the platform, just education on how to use the tools, not financial advice.`
+     },
+     {
+       match: (q) => /(pulse|unusual activity)/i.test(q),
+       answer:
+`Pulse flags assets showing unusual conditions right now, things like a sudden volume jump, accelerating price, or extreme funding. It scores each one and sorts them, so it is a heads up to go look, not a prediction or a signal to trade. It pairs well with the Signals tab for confirmation. Want me to show you where it lives in the app?`
+     },
+     {
+       match: (q) => /(quant engine|masterbrain|master brain)/i.test(q),
+       answer:
+`The Quant Engine, or MasterBrain, is the Elite deep-analysis tool. It stacks multiple factors together, price action, funding, open interest, momentum and macro context, then lays out a full trade blueprint with entry, stop, targets and a suggested position size. Think of it as the heavyweight analysis on top of the quick signals. Want a live walkthrough of it?`
+     },
+     {
+       match: (q) => /(quantbrain|signal|how.*signal|what.*signal)/i.test(q),
+       answer:
+`QuantBrain reads price action on any ticker and flags entry and exit zones along with trend strength and momentum. Open a ticker, check the Signals tab, and it does the rest. The Quant Engine then adds extra confluence on top for higher-probability setups. Want me to walk you through reading one?`
+     },
+     {
+       match: (q) => /(upgrade|how.*pay|subscribe|change.*plan|go (pro|elite))/i.test(q),
+       answer:
+`To upgrade, tap your tier badge in the header and pick Pro or Elite. Checkout is handled securely through Stripe and you can cancel anytime. Want me to explain what you'd unlock on each tier first?`
+     },
+   ];
+
+4) Find the first canned entry whose match(q) is true. If found:
+   - Replace the literal {BOOKING_LINE} placeholder in its answer with bookingLine.
+   - Return { reply: <answer>, action: null, usage: { used: <current>, cap: 25 }, canned: true }
+   - Do NOT call Anthropic and do NOT increment the daily count.
+
+5) If no canned match, continue to the existing cap check + Anthropic call exactly as before.
+
+ACCEPTANCE
+- Asking about plans, booking, Pulse, the Quant Engine, signals, or upgrading returns the clean pre-written answer with NO markdown symbols or emoji, instantly.
+- The booking answer shows the user's REAL price (49 / 19 / free-with-count) pulled from the resolver, never hardcoded.
+- Canned answers do not call Anthropic and do not consume the daily cap.
+- Non-matching questions still go to the AI as before.
+Then commit and push.
