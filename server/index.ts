@@ -455,28 +455,37 @@ import connectPgSimple from "connect-pg-simple";
 import { pool } from "./db";
 const PgSession = connectPgSimple(session);
 app.set("trust proxy", 1);
-app.use(session({
-  store: new PgSession({
-    pool,
-    tableName: "user_sessions",
-    createTableIfMissing: true,
-    pruneSessionInterval: 60 * 60,
-  }),
-  secret: process.env.SESSION_SECRET!,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    maxAge: 30 * 24 * 60 * 60 * 1000,
-    httpOnly: true,
-    // SameSite=None + Secure is required so the session cookie is sent inside
-    // cross-site iframes (e.g. the Replit preview pane). Replit serves the dev
-    // and production URLs over HTTPS, so Secure=true works in both. Without
-    // this, Safari/Firefox silently drop the cookie inside the preview iframe
-    // and every authed request returns 401 even though the user is signed in.
-    sameSite: "none",
-    secure: true,
-  },
-}));
+// Wrapped in try/catch so a DB error here (e.g. Postgres in recovery mode,
+// 57P03) can never abort the rest of startup. createTableIfMissing is FALSE so
+// boot does NOT issue a DDL call against the DB on every start — that ensure-
+// table call is what crashes during recovery mode.
+try {
+  app.use(session({
+    store: new PgSession({
+      pool,
+      tableName: "user_sessions",
+      createTableIfMissing: false,
+      pruneSessionInterval: 60 * 60,
+      errorLog: (err: any) => console.error("SESSION STORE:", err?.message || err),
+    }),
+    secret: process.env.SESSION_SECRET!,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      // SameSite=None + Secure is required so the session cookie is sent inside
+      // cross-site iframes (e.g. the Replit preview pane). Replit serves the dev
+      // and production URLs over HTTPS, so Secure=true works in both. Without
+      // this, Safari/Firefox silently drop the cookie inside the preview iframe
+      // and every authed request returns 401 even though the user is signed in.
+      sameSite: "none",
+      secure: true,
+    },
+  }));
+} catch (e) {
+  console.error("SESSION SETUP FAILED (continuing without DB sessions):", e);
+}
 
 // Bearer-token fallback for cookieless contexts (Safari/iOS Intelligent
 // Tracking Prevention silently drops cross-site cookies inside the Replit
@@ -834,16 +843,20 @@ process.on("uncaughtException", (err) => {
     return res.status(status).json({ message });
   });
 
-  if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
-  } else {
+  if (process.env.NODE_ENV !== "production") {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
-
-  log("startup complete");
  } catch (err) {
    console.error("STARTUP ERROR:", err);
    // Server stays up on /health so Railway stops crash-looping and logs stay readable.
+ } finally {
+   // ALWAYS serve the production frontend, even if init above failed, so a DB
+   // outage never blanks the whole site. Runs last so the static catch-all
+   // doesn't swallow /api routes registered above.
+   if (process.env.NODE_ENV === "production") {
+     try { serveStatic(app); } catch (e) { console.error("serveStatic failed:", e); }
+   }
+   log("startup complete");
  }
 })();

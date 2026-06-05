@@ -956,7 +956,14 @@ async function detectMoves() {
     const recentPts = hist.filter(p => now - p.ts <= MOVE_WINDOW);
     const olderPts = hist.filter(p => now - p.ts > MOVE_WINDOW && now - p.ts <= MOVE_WINDOW * 4);
     const avgRecentVol = olderPts.length > 0 ? olderPts.length / 3 : 0;
-    const volumeMult = avgRecentVol > 1 ? recentPts.length / avgRecentVol : 1;
+    const tickMult = avgRecentVol > 1 ? recentPts.length / avgRecentVol : 1;
+    // Prefer REAL 1m volume ratio when available (crypto in BINANCE_SYMBOLS);
+    // fall back to the tick-density proxy for symbols without 1m volume history
+    // (equities/forex). getVolumeZ() returns ratio=1 for unknown symbols, so we
+    // detect real volume from volHistory presence rather than the ratio value.
+    const hasRealVol = Array.isArray(volHistory[sym]) && volHistory[sym].length >= 8;
+    const volReal = hasRealVol ? getVolumeZ(sym) : { z: 0, ratio: 0 };
+    const volumeMult = hasRealVol ? volReal.ratio : tickMult;
 
     // ── MULTI-FACTOR SIGNAL QUALITY CHECKS (FIX 6b) ─────────────────────────
     const prev1minPts = hist.filter(p => now - p.ts <= 60000 && now - p.ts > 5000);
@@ -971,8 +978,13 @@ async function detectMoves() {
         detail: `≥${thresh.minMove}% required`,
       },
       volume: {
-        pass: volumeMult >= thresh.minVolMult || avgRecentVol <= 1,
-        label: avgRecentVol <= 1 ? "Volume baseline insufficient — passed" : `Activity ${volumeMult.toFixed(1)}x avg`,
+        // Real-volume path is gated strictly on minVolMult (threshold behavior
+        // unchanged). The baseline-insufficient bypass applies ONLY to the tick
+        // proxy fallback, so a genuine 1.0x crypto volume ratio never auto-passes.
+        pass: volumeMult >= thresh.minVolMult || (!hasRealVol && volumeMult === 1),
+        label: hasRealVol
+          ? `Volume ${volumeMult.toFixed(1)}x 1m avg`
+          : `Activity ${volumeMult.toFixed(1)}x avg (tick est.)`,
         detail: `≥${thresh.minVolMult}x required`,
       },
       minOI: {

@@ -1,0 +1,74 @@
+Make the app resilient to the database being temporarily unavailable (Postgres recovery mode, error 57P03). Goal: when Postgres is down, the React frontend STILL LOADS and the server stays up on /health — DB-backed features can fail, but the site is never fully blank or 500. No new dependencies.
+
+═══════════════════════════════════════════
+CHANGE 1 — make session store non-fatal
+═══════════════════════════════════════════
+Find where the PostgreSQL session store is created (search for "connect-pg-simple", "PgSession", "pgStore", "createTableIfMissing", or "_rawEnsureSessionStoreTable").
+
+(a) Set createTableIfMissing to FALSE so it does NOT try to create/ensure the session table on every boot (that DB call is what crashes during recovery mode). Example shape:
+
+    const PgSession = connectPgSimple(session);
+    const sessionStore = new PgSession({
+      pool: pgPool,                 // reuse the existing pg pool
+      tableName: "session",
+      createTableIfMissing: false,
+      errorLog: (err) => console.error("SESSION STORE:", err.message),
+    });
+
+(b) Wrap the session store creation + app.use(session({...})) in its own try/catch so a DB error here cannot abort the rest of startup:
+
+    try {
+      // session store + app.use(session(...)) setup here
+    } catch (e) {
+      console.error("SESSION SETUP FAILED (continuing without DB sessions):", e);
+    }
+
+═══════════════════════════════════════════
+CHANGE 2 — frontend serves even if DB/init fails
+═══════════════════════════════════════════
+In server/index.ts, the startup init runs inside a try/catch AFTER httpServer.listen() and the /health route. Right now serveStatic(app) lives inside that try block, so if DB/session setup throws, the React app never gets served and the site goes fully blank.
+
+Change the bottom init so the production static frontend is served REGARDLESS of any earlier failure. Use a finally block:
+
+    (async () => {
+      try {
+        await initializeDatabase();
+        await initStripe();
+        await registerRoutes(httpServer, app);
+        startDailyBriefScheduler();
+
+        app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+          const status = err.status || err.statusCode || 500;
+          const message = err.message || "Internal Server Error";
+          console.error("Internal Server Error:", err);
+          if (res.headersSent) return next(err);
+          return res.status(status).json({ message });
+        });
+
+        if (process.env.NODE_ENV !== "production") {
+          const { setupVite } = await import("./vite");
+          await setupVite(httpServer, app);
+        }
+      } catch (err) {
+        console.error("STARTUP ERROR:", err);
+      } finally {
+        // ALWAYS serve the frontend in production, even if init above failed,
+        // so a DB outage never blanks the whole site. Must run last so the
+        // catch-all doesn't swallow /api routes registered above.
+        if (process.env.NODE_ENV === "production") {
+          try { serveStatic(app); } catch (e) { console.error("serveStatic failed:", e); }
+        }
+        log("startup complete");
+      }
+    })();
+
+Do NOT change imports or the Stripe webhook route. Keep API route registration before serveStatic so the static catch-all stays last.
+
+═══════════════════════════════════════════
+ACCEPTANCE
+═══════════════════════════════════════════
+- With Postgres unavailable, GET / still returns the React app (not blank, not 500). DB-backed API calls may fail individually, but the site loads.
+- No createTableIfMissing / _rawEnsureSessionStoreTable call runs on boot.
+- Session setup failure logs "SESSION SETUP FAILED"; "startup complete" logs on every boot.
+- /health returns 200 within ~1s of boot.
+Then commit and push so Railway auto-deploys.

@@ -18,7 +18,7 @@ dev app's `pool`/Drizzle connects to the dev `DATABASE_URL`, NOT to Railway prod
   `PROD_DATABASE_URL` reaches Railway — neither does from here.
 - Anything that must touch the live user base (mass emails, prod counts, prod data writes)
   has to run **inside the Railway deployment**. The app already exposes owner-only
-  (mikeclaver@gmail.com session) admin endpoints for the email blasts, surfaced as buttons
+  (project-owner session) admin endpoints for the email blasts, surfaced as buttons
   on the Account → ⚡ Owner tab. Trigger those on the live site after deploying.
 - If a direct connection from the workspace is truly needed, the user must supply Railway's
   **public** proxy connection string (DATABASE_PUBLIC_URL / *.proxy.rlwy.net), not the
