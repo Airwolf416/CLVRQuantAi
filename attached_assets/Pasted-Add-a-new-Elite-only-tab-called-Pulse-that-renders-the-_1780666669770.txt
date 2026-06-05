@@ -1,0 +1,64 @@
+Add a new Elite-only tab called "Pulse" that renders the /api/unusual feed. Follow the EXISTING tab + Elite-gate patterns already in the frontend (the same way the "insider" tab uses TabUpgradeGate with tier="elite", and how other tabs poll their endpoints every 30s). Use the existing theme color object and MONO font already passed around in the app.
+
+1) NAV: add a tab key "pulse" with label "PULSE" (or "⚡ PULSE") next to the existing tabs, in the same nav array/structure the other tabs use.
+
+2) ELITE GATE: for non-Elite users, render <TabUpgradeGate tab="pulse" tier="elite" .../> exactly like the insider tab does (open the pricing modal with elite default tier on upgrade).
+
+3) DATA: add a poller that fetches /api/unusual every 30s (credentials: "include"), stores { signals, disclaimer } in state, with a loading state.
+
+4) RENDER (Elite users): add this self-contained component and render it when tab==="pulse". Wire its props to the app's existing color object and mono font (the same ones other components receive):
+
+    function UnusualPulse({ data, C, MONO }) {
+      const signals = data?.signals || [];
+      const bandColor = (b) =>
+        b === "EXTREME" ? "#ff5d6c" :
+        b === "HIGH" ? "#e8c96d" :
+        b === "ELEVATED" ? "#00c787" : "#5a6b86";
+      return (
+        <div style={{ padding: "4px 0" }}>
+          <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", color: "#e8c96d", marginBottom: 10 }}>
+            UNUSUAL ACTIVITY — CONDITIONS, NOT PREDICTIONS
+          </div>
+          {signals.length === 0 && (
+            <div style={{ fontFamily: MONO, fontSize: 11, color: "#5a6b86", padding: "24px 0", textAlign: "center" }}>
+              No unusual activity right now. Markets quiet.
+            </div>
+          )}
+          {signals.map((s) => (
+            <div key={s.symbol} style={{
+              background: "#0a1020", border: `1px solid ${bandColor(s.band)}55`,
+              borderLeft: `3px solid ${bandColor(s.band)}`, borderRadius: 4,
+              padding: "10px 12px", marginBottom: 8,
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: "#fff" }}>{s.symbol}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 2, background: bandColor(s.band) + "22", color: bandColor(s.band) }}>{s.band}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 16, fontWeight: 700, color: bandColor(s.band) }}>{s.score}</span>
+                </div>
+              </div>
+              <div style={{ height: 4, background: "#1a2540", borderRadius: 2, marginBottom: 8, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${s.score}%`, background: bandColor(s.band) }} />
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 14 }}>
+                {(s.reasons || []).map((r, i) => (
+                  <li key={i} style={{ fontFamily: MONO, fontSize: 10, color: "#c8d2e0", marginBottom: 3, lineHeight: 1.4 }}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <div style={{ fontFamily: MONO, fontSize: 8.5, color: "#5a6b86", lineHeight: 1.5, marginTop: 12, padding: "8px 10px", border: "1px solid #1a2540", borderRadius: 4 }}>
+            {data?.disclaimer || "Information and education only. Not a prediction or financial advice. DYOR."}
+          </div>
+        </div>
+      );
+    }
+
+5) Render <UnusualPulse data={unusualData} C={C} MONO={MONO} /> inside the tab==="pulse" branch for Elite users, passing the same color/font props the app already uses.
+
+ACCEPTANCE
+- Non-Elite users see the elite upgrade gate on the Pulse tab.
+- Elite users see band-colored cards (EXTREME red, HIGH gold, ELEVATED green, QUIET grey), score bar, reasons list, disclaimer footer.
+- Polls /api/unusual every 30s.
+- Matches the dark navy/gold theme; build compiles.
+Then commit and push.

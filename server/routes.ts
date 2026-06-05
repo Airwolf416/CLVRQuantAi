@@ -457,7 +457,169 @@ function calc50MA(sym: string): number {
   return pts.reduce((s, p) => s + p.price, 0) / pts.length;
 }
 
+// ── REAL VOLUME TRACKING (1m klines, quote volume) ───────────────────────────
+// Polls Binance 1m klines for the existing BINANCE_MAP tickers and keeps the
+// last 30 CLOSED candles' quote-volume (USDT) per base symbol. No new keys —
+// reuses the public Binance REST endpoint and the shared `delay` helper.
+const volHistory: Record<string, number[]> = {};
+
+async function pollVolumes() {
+  for (const [base, symbol] of Object.entries(BINANCE_MAP)) {
+    try {
+      const r = await fetch(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=31`,
+        { signal: AbortSignal.timeout(5000) },
+      );
+      const data: any = await r.json();
+      if (!Array.isArray(data) || data.length < 6) continue;
+      const closed = data.slice(0, -1); // drop the still-forming candle
+      const vols = closed
+        .map((c: any) => parseFloat(c[7])) // index 7 = quote volume (USDT)
+        .filter((v: number) => v > 0);
+      if (vols.length >= 5) volHistory[base] = vols.slice(-30);
+    } catch {}
+    await delay(150); // gentle on rate limits
+  }
+}
+
+function getVolumeZ(sym: string): { z: number; ratio: number } {
+  const v = volHistory[sym];
+  if (!v || v.length < 8) return { z: 0, ratio: 1 };
+  const last = v[v.length - 1];
+  const prior = v.slice(0, -1);
+  const mean = prior.reduce((a, b) => a + b, 0) / prior.length;
+  const sd =
+    Math.sqrt(prior.reduce((a, b) => a + (b - mean) ** 2, 0) / prior.length) || 1;
+  return { z: (last - mean) / sd, ratio: mean > 0 ? last / mean : 1 };
+}
+
+// ── UNUSUAL ACTIVITY DETECTOR ────────────────────────────────────────────────
+// Probabilistic "conditions" score. NOT a forecast. Flags abnormal
+// positioning/activity that historically PRECEDES volatility — with a high
+// false-positive rate. Education/information only. Reuses priceHistory (ticks),
+// hlData (funding/OI, same key as priceHistory), volHistory (real 1m volume),
+// and taCalcATR — no new data sources.
+type UnusualSignal = {
+  symbol: string;
+  score: number; // 0..100
+  band: "QUIET" | "ELEVATED" | "HIGH" | "EXTREME";
+  reasons: string[];
+  components: Record<string, number>; // 0..1 each, for transparency
+  ts: number;
+};
+
+function computeUnusualActivity(): UnusualSignal[] {
+  const now = Date.now();
+  const out: UnusualSignal[] = [];
+  const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+
+  for (const sym of Object.keys(priceHistory)) {
+    const hist = priceHistory[sym];
+    if (!hist || hist.length < 8) continue;
+
+    const current = hist[hist.length - 1];
+
+    // --- 1) ACCELERATION: short-window return vs medium-window baseline
+    const shortPts = hist.filter((p) => now - p.ts <= 120000); // ~2min
+    const medPts = hist.filter((p) => now - p.ts <= 600000); // ~10min
+    const shortStart = shortPts.length ? shortPts[0] : current;
+    const medStart = medPts.length ? medPts[0] : current;
+    const shortRet = shortStart.price
+      ? Math.abs((current.price - shortStart.price) / shortStart.price)
+      : 0;
+    const medRet = medStart.price
+      ? Math.abs((current.price - medStart.price) / medStart.price)
+      : 0;
+    const shortPerMin = shortRet / 2;
+    const medPerMin = medRet / 10 || 0.0001;
+    const accel = clamp01((shortPerMin / medPerMin - 1) / 3); // 4x run-rate => ~1.0
+
+    // --- 2) REAL VOLUME SURGE (1m quote volume z-score)
+    const { z: volZ, ratio: volRatio } = (function () {
+      try {
+        return getVolumeZ(sym);
+      } catch {
+        return { z: 0, ratio: 1 };
+      }
+    })();
+    const activity = clamp01((volZ - 1) / 3); // z 1..4 => 0..1
+
+    // --- 3) FUNDING EXTREMITY (crowded positioning => squeeze fuel)
+    // NOTE: hlData funding is stored in PERCENT/8h (hlRefreshWorker multiplies
+    // the raw HL decimal by 100), so thresholds are in percent: |0.05%|..|0.30%|.
+    const hl = hlData[sym];
+    const funding = hl?.funding || 0;
+    const fundingExtremity = clamp01((Math.abs(funding) - 0.05) / 0.25);
+
+    // --- 4) OPEN INTEREST PRESENCE (raw USD; more OI => more fuel if it moves)
+    const oi = hl?.oi || 0;
+    const oiWeight = clamp01((oi - 5e6) / 95e6); // $5M..$100M => 0..1
+
+    // --- 5) RANGE COMPRESSION→EXPANSION (ATR on the tick history)
+    let expansion = 0;
+    try {
+      const atr = taCalcATR(hist);
+      if (atr > 0 && current.price > 0) {
+        const atrPct = atr / current.price;
+        expansion = clamp01((atrPct - 0.004) / 0.02); // 0.4%..2.4% ATR
+      }
+    } catch {}
+
+    const components = {
+      acceleration: accel,
+      volume: activity,
+      fundingExtremity,
+      openInterest: oiWeight,
+      rangeExpansion: expansion,
+    };
+
+    // Weights — acceleration + volume dominate; funding/OI are context.
+    const score100 = Math.round(
+      (accel * 0.34 +
+        activity * 0.26 +
+        fundingExtremity * 0.2 +
+        oiWeight * 0.1 +
+        expansion * 0.1) *
+        100,
+    );
+
+    if (score100 < 35) continue; // only surface meaningful readings
+
+    const reasons: string[] = [];
+    if (accel >= 0.4)
+      reasons.push(
+        `Price velocity accelerating (${(shortPerMin * 100).toFixed(2)}%/min vs ${(medPerMin * 100).toFixed(2)}%/min baseline)`,
+      );
+    if (activity >= 0.4)
+      reasons.push(`Volume ${volRatio.toFixed(1)}x its 1m average (z=${volZ.toFixed(1)})`);
+    if (fundingExtremity >= 0.4)
+      reasons.push(
+        `Funding extreme at ${funding.toFixed(4)}%/8h — crowded ${funding >= 0 ? "longs" : "shorts"}, squeeze risk`,
+      );
+    if (oiWeight >= 0.5)
+      reasons.push(`Open interest $${(oi / 1e6).toFixed(0)}M — elevated positioning`);
+    if (expansion >= 0.4) reasons.push(`Volatility range expanding`);
+    if (reasons.length === 0)
+      reasons.push("Mild composite anomaly across multiple inputs");
+
+    const band: UnusualSignal["band"] =
+      score100 >= 80
+        ? "EXTREME"
+        : score100 >= 65
+          ? "HIGH"
+          : score100 >= 50
+            ? "ELEVATED"
+            : "QUIET";
+
+    out.push({ symbol: sym, score: score100, band, reasons, components, ts: now });
+  }
+
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, 20);
+}
+
 let regimeCache: { data: any; ts: number } | null = null;
+let unusualCache: { data: any; ts: number } | null = null;
 
 async function checkAndGrantReferralReward(userId: string) {
   try {
@@ -4271,6 +4433,22 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     const liquidity = calcLiquidityIndex();
     const data = { regime, crash, liquidity, ts: Date.now() };
     regimeCache = { data, ts: Date.now() };
+    res.json(data);
+  });
+
+  app.get("/api/unusual", (_req, res) => {
+    if (unusualCache && Date.now() - unusualCache.ts < 30000) {
+      return res.json(unusualCache.data);
+    }
+    const signals = computeUnusualActivity();
+    const data = {
+      signals,
+      count: signals.length,
+      ts: Date.now(),
+      disclaimer:
+        "Unusual Activity flags abnormal market conditions that can precede volatility. This is information and education only — NOT a prediction, signal to trade, or financial advice. High false-positive rate. Always do your own research.",
+    };
+    unusualCache = { data, ts: Date.now() };
     res.json(data);
   });
 

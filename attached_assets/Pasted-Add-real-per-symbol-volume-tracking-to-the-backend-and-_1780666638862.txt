@@ -1,0 +1,65 @@
+Add real per-symbol volume tracking to the backend and feed it into the Unusual Activity detector. Reuse the existing BINANCE_SYMBOLS map and the existing delay() helper. No new API keys.
+
+═══════════════════════════════════════════
+CHANGE 1 — volume poller + z-score helper
+═══════════════════════════════════════════
+Add near the signal scanner (same scope as priceHistory):
+
+    // ── REAL VOLUME TRACKING (1m klines, quote volume) ───────────────
+    const volHistory: Record<string, number[]> = {}; // last 30 CLOSED 1m candle quote-volumes
+
+    async function pollVolumes() {
+      for (const [base, symbol] of Object.entries(BINANCE_SYMBOLS)) {
+        try {
+          const r = await fetch(
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=31`,
+            { signal: AbortSignal.timeout(5000) }
+          );
+          const data: any = await r.json();
+          if (!Array.isArray(data) || data.length < 6) continue;
+          const closed = data.slice(0, -1);            // drop still-forming candle
+          const vols = closed.map((c: any) => parseFloat(c[7])) // index 7 = quote volume (USDT)
+                             .filter((v: number) => v > 0);
+          if (vols.length >= 5) volHistory[base] = vols.slice(-30);
+        } catch {}
+        await delay(150); // gentle on rate limits
+      }
+    }
+
+    function getVolumeZ(sym: string): { z: number; ratio: number } {
+      const v = volHistory[sym];
+      if (!v || v.length < 8) return { z: 0, ratio: 1 };
+      const last = v[v.length - 1];
+      const prior = v.slice(0, -1);
+      const mean = prior.reduce((a, b) => a + b, 0) / prior.length;
+      const sd = Math.sqrt(prior.reduce((a, b) => a + (b - mean) ** 2, 0) / prior.length) || 1;
+      return { z: (last - mean) / sd, ratio: mean > 0 ? last / mean : 1 };
+    }
+
+Start the poller at startup and every 60s. Add near where the other intervals/schedulers start:
+
+    pollVolumes();
+    setInterval(pollVolumes, 60000);
+
+═══════════════════════════════════════════
+CHANGE 2 — use real volume in computeUnusualActivity()
+═══════════════════════════════════════════
+In computeUnusualActivity(), REPLACE the entire "--- 2) TICK ACTIVITY SURGE" block (the one computing `recent`, `older`, `activityMult`, `activity`) with:
+
+        // --- 2) REAL VOLUME SURGE (1m quote volume z-score)
+        const { z: volZ, ratio: volRatio } = (function () {
+          try { return getVolumeZ(sym); } catch { return { z: 0, ratio: 1 }; }
+        })();
+        const activity = Math.max(0, Math.min(1, (volZ - 1) / 3)); // z 1..4 => 0..1
+
+And REPLACE the matching reason line (the "Tick activity ... proxy" push) with:
+
+        if (activity >= 0.4) reasons.push(`Volume ${volRatio.toFixed(1)}x its 1m average (z=${volZ.toFixed(1)})`);
+
+═══════════════════════════════════════════
+ACCEPTANCE
+═══════════════════════════════════════════
+- volHistory populates within ~1 min of boot for the BINANCE_SYMBOLS tickers.
+- /api/unusual now reflects real volume z-scores; the "Volume Nx its 1m average" reason appears when volume spikes.
+- No new keys; build compiles; existing routes unchanged.
+Then commit and push.
