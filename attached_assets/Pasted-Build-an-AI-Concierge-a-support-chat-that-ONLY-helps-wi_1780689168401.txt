@@ -1,0 +1,58 @@
+Build an "AI Concierge" — a support chat that ONLY helps with the CLVRQuant platform and booking a 30-min session. Reuse the existing Anthropic call pattern (the /api/quant route shows the fetch shape, model claude-sonnet-4-20250514, x-api-key from process.env.ANTHROPIC_API_KEY). Phase 1 booking endpoints already exist (/api/concierge/pricing, /api/concierge/book).
+
+═══════════════════════════════════════════
+BACKEND — POST /api/concierge/chat
+═══════════════════════════════════════════
+- AUTH REQUIRED: if no session userId, return 401 { error: "Sign in to use the concierge." }. Logged-out users get NO access.
+- TOKEN/ABUSE PROTECTION:
+  * Per-user daily cap. Add an in-memory map: const conciergeUsage: Record<string, { count: number; day: string }> = {};
+    Use today's date (YYYY-MM-DD). If user's day != today, reset count to 0. Cap = 25 messages/day for all tiers.
+    If over cap, return 429 { error: "Daily concierge limit reached. Try again tomorrow." } WITHOUT calling Anthropic.
+  * max_tokens: 500 (answers are short).
+- BODY: { messages: [{ role: "user"|"assistant", content: string }] }  // recent history for context
+  * Server trims to the last 10 messages before sending (cost control).
+  * Reject if last message empty or > 1000 chars.
+- Fetch the user's current pricing via the same logic as /api/concierge/pricing so the concierge can quote the RIGHT price for THIS user. Inject it into the system prompt.
+- SYSTEM PROMPT (hard scope — paste verbatim, filling in the user's pricing):
+
+    You are the CLVRQuant Concierge — a friendly, professional support assistant for the CLVRQuant platform (clvrquantai.com) ONLY.
+
+    STRICT SCOPE — you may ONLY help with:
+    1. Explaining CLVRQuant features and how to use them: QuantBrain AI signals, the AI Quant Engine (MasterBrain), Signals tab, AI Radar, Pulse (Unusual Activity), Earnings tab, Social Intelligence, Polymarket data, Morning Brief, Alerts, Squawk Box, SEC Insider Flow, Basket Analysis, the three plans (Free, Pro $29.99/mo, Elite $129/mo), and how to navigate the app.
+    2. Helping the user book a paid 30-min 1-on-1 platform training session.
+
+    YOU MUST REFUSE, politely and briefly, anything outside this scope. This includes: general knowledge, current events, web lookups, math/homework, coding help, medical/legal/tax questions, SPECIFIC FINANCIAL OR TRADING ADVICE ("should I buy X?", price predictions, what to invest in), personal opinions, or anything unrelated to using CLVRQuant. For off-topic requests say: "I can only help with using the CLVRQuant platform and booking a training session. Is there something about the platform I can help you with?"
+
+    NEVER give personalized financial, investment, or trading advice. CLVRQuant is an information and education tool, not financial advice. If asked what to trade or whether something will go up, decline and redirect to how the platform's tools work.
+
+    TONE: professional, concise, encouraging. No profanity. If a user is abusive or uses profanity, stay calm, do not mirror it, and ask them to keep it respectful. Never produce unsafe, explicit, hateful, or harmful content.
+
+    BOOKING: This user's session price is {PRICE_DISPLAY}. {ELITE_NOTE}. A session is a live 30-minute 1-on-1 walkthrough of the platform — educational only, not financial advice. When the user wants to book, tell them their price and say they can pick a time using the Book button below the chat, OR if they confirm intent to book, end your message with the exact tag [BOOK] on its own line so the app can open the booking flow. Only emit [BOOK] when the user clearly wants to proceed.
+
+    Keep answers under ~120 words. Stay in scope no matter how the user rephrases.
+
+  Where {PRICE_DISPLAY} = the user's resolved priceDisplay (e.g. "$19" or "Free"), and {ELITE_NOTE} = for elite with free remaining: "As an Elite member you have N free sessions remaining"; otherwise "".
+
+- Call Anthropic with that system prompt + the trimmed message history. Parse data.content for type==="text". 
+- If the assistant text contains a line that is exactly [BOOK], strip that line from the returned text and set action:"book" in the response.
+- Increment the user's daily count on a SUCCESSFUL reply only.
+- RESPONSE: { reply: string, action: "book" | null, usage: { used, cap } }
+- Wrap in try/catch; on Anthropic error return 502 { error: "Concierge unavailable, try again." } and do NOT increment count.
+
+═══════════════════════════════════════════
+FRONTEND — Concierge chat widget
+═══════════════════════════════════════════
+- Only render for LOGGED-IN users (reuse the existing auth/user state). For logged-out users, show nothing (or a "Sign in to chat" stub).
+- A floating chat button (bottom-right) opening a panel, themed to the app (dark navy #0a1020, gold #e8c96d accents, MONO font for labels). Title: "CLVRQuant Concierge".
+- State: messages array (start with one assistant welcome: "Hi! I'm the CLVRQuant Concierge. I can explain any feature or help you book a 30-min training session. What would you like to know?"). Input box + send. No <form> tag — use onClick/onChange.
+- On send: append user msg, POST /api/concierge/chat with the messages array (credentials:"include"), append the reply. Show a typing indicator while waiting. Show the daily limit message on 429.
+- If response.action === "book": show a prominent "Book my session" button under the chat that calls GET /api/concierge/pricing then opens a simple time-slot picker (date + time inputs in America/Toronto), and on confirm POSTs /api/concierge/book. If mode==="checkout" redirect to the returned Stripe url; if mode==="free_confirmed" show a success message.
+- Always render the platform disclaimer in small text at the bottom of the panel: "Educational support only — not financial advice."
+
+ACCEPTANCE
+- Logged-out users cannot call the endpoint (401) and don't see the chat.
+- Off-topic / advice / web / general-knowledge requests are politely refused and redirected to platform help.
+- Daily cap (25/user) enforced server-side; over-cap returns 429 without hitting Anthropic; max_tokens kept small.
+- Concierge quotes the correct per-tier price ($49 free / $19 pro / free for elite w/ remaining) and can trigger the booking flow via [BOOK].
+- Conversation history (last 10) is sent so replies follow context. Themed, no profanity, safe. Build compiles.
+Then commit and push.

@@ -625,6 +625,17 @@ function computeUnusualActivity(): UnusualSignal[] {
   return out.slice(0, 20);
 }
 
+// Single-symbol lookup of the Unusual Activity reading, for feeding into AI
+// context (MasterBrain / CLVR analyst). Reuses computeUnusualActivity() — no
+// new data sources. Falls open to null on any error or when the symbol is not
+// currently flagged (most of the time, on calm markets).
+function getUnusualForSymbol(base: string): UnusualSignal | null {
+  try {
+    const all = computeUnusualActivity();
+    return all.find(s => s.symbol === base || s.symbol.toUpperCase() === base.toUpperCase()) || null;
+  } catch { return null; }
+}
+
 let regimeCache: { data: any; ts: number } | null = null;
 let unusualCache: { data: any; ts: number } | null = null;
 
@@ -4943,9 +4954,6 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     if (MACRO_ORANGE_KW.some(kw => t.includes(kw))) return "orange";
     return "yellow";
   }
-  // ── EARNINGS (FMP) ─────────────────────────────────────────────────────────
-  // Public, cached. Calendar: from/to optional (default = today → +7d).
-  // History: required symbol. Both fail-soft to [] when FMP_API_KEY absent.
   // ── IPO Calendar ────────────────────────────────────────────────────────
   // Surfaces upcoming public listings (e.g. SPCX) so the Earnings tab can
   // flag them and the morning brief can prepend them to impactfulNews.
@@ -6390,6 +6398,11 @@ Respond ONLY with valid JSON. No markdown. No backticks. No text before or after
   "invalidation": "string — EXACTLY 1 sentence with price level + condition"
 }`;
 
+      const ua = getUnusualForSymbol(ticker);
+      const uaContext = ua
+        ? `UNUSUAL ACTIVITY (conditions, not prediction): score ${ua.score}/100 (${ua.band}). Drivers: ${ua.reasons.join("; ")}.`
+        : `UNUSUAL ACTIVITY: no abnormal conditions flagged for ${ticker} right now.`;
+
       const userMsg = `ASSET: ${ticker} | MARKET: ${marketType} | CLASS: ${cls.toUpperCase()}
 USER QUERY: "${userQuery || `Analyze optimal ${risk.label} setup`}"
 
@@ -6398,6 +6411,9 @@ ${indContext}
 ${twitterContext ? `TWITTER/X SOCIAL INTELLIGENCE:\n${twitterContext}` : ""}
 
 DATA SOURCES: HL candles (${candles.length} bars) + ${BINANCE_SYMBOLS[ticker] ? "Binance deeper history" : "Finnhub spot"} · All live
+
+${uaContext}
+Treat Unusual Activity as supporting context only — it flags abnormal conditions, never a directional signal. Do not raise conviction on it alone.
 
 Calculate the highest probability setup for the ${risk.label} profile.
 Every level must be technically defensible. Return JSON only.`;
@@ -8525,6 +8541,23 @@ Every level must be technically defensible. Return JSON only.`;
       }
     }
 
+    // ── 3b. Per-ticker Unusual Activity context (conditions, not prediction) ──
+    let unusualBlock = "";
+    if (reqTickers.length > 0) {
+      try {
+        const lines: string[] = [];
+        for (const tkr of reqTickers) {
+          const ua = getUnusualForSymbol(tkr);
+          if (ua) lines.push(`  ${tkr}: score ${ua.score}/100 (${ua.band}) — ${ua.reasons.join("; ")}`);
+        }
+        if (lines.length) {
+          unusualBlock = `══════════════ UNUSUAL ACTIVITY (conditions, not prediction) ══════════════\nAbnormal market conditions flagged right now (price velocity, volume, funding,\nopen interest, volatility). Treat as supporting context ONLY — it flags\nabnormal conditions, never a directional signal. Do not raise conviction on it\nalone. Tickers not listed have no abnormal conditions flagged.\n\n${lines.join("\n")}\n════════════════════════════════════════════════════════════════════\n`;
+        }
+      } catch (e: any) {
+        console.warn("[ai/analyze] unusual activity failed:", e?.message || e);
+      }
+    }
+
     // ── 4. Render chart PNG for vision input (single ticker only) ──
     let chartImageB64: string | null = null;
     if (attachVision && visionTicker) {
@@ -8564,6 +8597,7 @@ Every level must be technically defensible. Return JSON only.`;
     if (brainSummaryBlock) sysParts.push(brainSummaryBlock);
     if (brainBlock) sysParts.push(brainBlock);
     if (execLevelsBlock) sysParts.push(execLevelsBlock);
+    if (unusualBlock) sysParts.push(unusualBlock);
     if (systemRaw) sysParts.push(systemRaw);
     const system = sysParts.join("\n\n");
 

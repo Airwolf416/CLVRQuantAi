@@ -1,0 +1,77 @@
+Build the backend for paid 1-on-1 "30-min platform training" booking. Prices resolve SERVER-SIDE only — never trust a client-sent price. Reuse the existing Drizzle setup, Stripe init, and the existing Stripe webhook route.
+
+═══════════════════════════════════════════
+PRICING (server-side constants)
+═══════════════════════════════════════════
+    const SESSION_FREE_CENTS = 4900;    // $49 — Free users
+    const SESSION_PRO_CENTS  = 1900;    // $19 — Pro users, and Elite after free allotment
+    const ELITE_FREE_LIFETIME = 3;      // Elite free sessions, lifetime
+
+═══════════════════════════════════════════
+SCHEMA (Drizzle)
+═══════════════════════════════════════════
+1) users table: add column eliteFreeSessionsUsed integer NOT NULL default 0.
+2) New table "bookings":
+   id (pk), userId (fk users), tier (text), priceCents (int), isFreeElite (bool default false),
+   status (text default 'pending'),  // pending|paid|confirmed|cancelled
+   slotStart (timestamp), slotEnd (timestamp), stripeSessionId (text null), createdAt (timestamp default now).
+Generate the migration.
+
+═══════════════════════════════════════════
+PRICE RESOLVER (authoritative)
+═══════════════════════════════════════════
+    async function resolveSessionPrice(userId: string) {
+      const u = await storage.getUser(userId);
+      const tier = u?.tier || "free";
+      if (tier === "elite") {
+        const used = u?.eliteFreeSessionsUsed ?? 0;
+        if (used < ELITE_FREE_LIFETIME)
+          return { cents: 0, isFreeElite: true, tier, freeRemaining: ELITE_FREE_LIFETIME - used };
+        return { cents: SESSION_PRO_CENTS, isFreeElite: false, tier, freeRemaining: 0 };
+      }
+      if (tier === "pro") return { cents: SESSION_PRO_CENTS, isFreeElite: false, tier, freeRemaining: null };
+      return { cents: SESSION_FREE_CENTS, isFreeElite: false, tier, freeRemaining: null };
+    }
+
+═══════════════════════════════════════════
+ENDPOINTS (all require auth; reject with 401 if no session userId)
+═══════════════════════════════════════════
+GET /api/concierge/pricing
+  → { tier, priceCents, priceDisplay: `$${(priceCents/100).toFixed(0)}`, isFreeElite, freeRemaining }
+
+POST /api/concierge/book   body: { slotStart: ISO, slotEnd: ISO }
+  - Resolve price server-side via resolveSessionPrice(userId). IGNORE any price/tier in the body.
+  - Validate slotStart is in the future and slotEnd > slotStart; reject otherwise.
+  - If isFreeElite (cents === 0):
+      * insert booking (status 'confirmed', priceCents 0, isFreeElite true, tier, slots)
+      * increment users.eliteFreeSessionsUsed by 1
+      * return { mode: "free_confirmed", bookingId }
+  - Else (paid):
+      * insert booking (status 'pending', priceCents = cents, tier, slots)
+      * create a Stripe Checkout Session in PAYMENT mode (one-off, NOT subscription):
+          line_items: [{ price_data: { currency:'usd', unit_amount: cents,
+            product_data: {
+              name: '30-Min CLVRQuant Platform Training',
+              description: 'Live 1-on-1 walkthrough of the CLVRQuant platform. Educational/training session — not personalized financial advice.'
+            } }, quantity: 1 }]
+          mode: 'payment',
+          success_url / cancel_url back into the app,
+          metadata: { bookingId, userId, type: 'session_booking' }
+      * save stripeSessionId on the booking row
+      * return { mode: "checkout", url: session.url }
+
+GET /api/concierge/bookings  → current user's bookings (most recent first), for "my sessions" display.
+
+═══════════════════════════════════════════
+WEBHOOK (extend the EXISTING Stripe webhook handler — keep signature verification intact)
+═══════════════════════════════════════════
+On checkout.session.completed: if metadata.type === 'session_booking', find booking by metadata.bookingId, set status='paid'. Do NOT alter any existing subscription handling.
+
+═══════════════════════════════════════════
+ACCEPTANCE
+═══════════════════════════════════════════
+- Price computed server-side; client-supplied price ignored. Free=$49, Pro=$19, Elite=free until 3 used then $19.
+- Elite free booking confirms instantly + increments lifetime counter; 4th Elite booking → $19 paid checkout.
+- Paid bookings create a Stripe payment-mode Checkout session and confirm via webhook.
+- Existing subscription + webhook logic unchanged; migration generated; build compiles.
+Then commit and push.

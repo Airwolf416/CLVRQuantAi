@@ -1,0 +1,39 @@
+Add real 1m volume tracking and feed it into BOTH the Unusual Activity detector and the signal scanner. No new API keys; reuse BINANCE_SYMBOLS and delay().
+
+1) If not already present (search "volHistory"/"getVolumeZ"/"pollVolumes"), add near the scanner scope:
+
+    const volHistory: Record<string, number[]> = {};
+    async function pollVolumes() {
+      for (const [base, symbol] of Object.entries(BINANCE_SYMBOLS)) {
+        try {
+          const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=31`, { signal: AbortSignal.timeout(5000) });
+          const data: any = await r.json();
+          if (!Array.isArray(data) || data.length < 6) continue;
+          const vols = data.slice(0, -1).map((c: any) => parseFloat(c[7])).filter((v: number) => v > 0);
+          if (vols.length >= 5) volHistory[base] = vols.slice(-30);
+        } catch {}
+        await delay(150);
+      }
+    }
+    function getVolumeZ(sym: string): { z: number; ratio: number } {
+      const v = volHistory[sym];
+      if (!v || v.length < 8) return { z: 0, ratio: 0 };
+      const last = v[v.length - 1];
+      const prior = v.slice(0, -1);
+      const mean = prior.reduce((a, b) => a + b, 0) / prior.length;
+      const sd = Math.sqrt(prior.reduce((a, b) => a + (b - mean) ** 2, 0) / prior.length) || 1;
+      return { z: (last - mean) / sd, ratio: mean > 0 ? last / mean : 0 };
+    }
+
+   Start it where other intervals start: pollVolumes(); setInterval(pollVolumes, 60000);
+
+2) In computeUnusualActivity(), replace the tick-activity block with:
+    const { z: volZ, ratio: volRatio } = (function () { try { return getVolumeZ(sym); } catch { return { z: 0, ratio: 0 }; } })();
+    const activity = Math.max(0, Math.min(1, (volZ - 1) / 3));
+   And replace its activity reason push with:
+    if (activity >= 0.4) reasons.push(`Volume ${volRatio.toFixed(1)}x its 1m average (z=${volZ.toFixed(1)})`);
+
+ACCEPTANCE
+- /api/unusual shows "Volume Nx its 1m average" reasons when volume spikes.
+- volHistory fills within ~1 min of boot for BINANCE_SYMBOLS tickers. Build compiles.
+Then commit and push.

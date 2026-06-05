@@ -117,8 +117,8 @@ export function startEarningsScanScheduler() {
   // 60s settle delay, force a scan regardless of the daily stamp. This
   // covers the silent-fail case where the stamp got written but the scan
   // produced no rows (the original Apr-30-style miss applied to earnings).
-  // Threshold is strictly 0 (not "sparse") so we don't burn the FMP daily
-  // free-tier quota (~250 calls/day; one full scan now costs ~110+ calls
+  // Threshold is strictly 0 (not "sparse") so we don't burn the Finnhub
+  // free-tier rate limit (~60 calls/min; one full scan now costs ~110+ calls
   // for the 55-name watchlist).
   setTimeout(async () => {
     try {
