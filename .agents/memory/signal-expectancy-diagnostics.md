@@ -17,3 +17,14 @@ description: Empirical findings on why raw scanner signal expectancy is negative
 **How to apply:** treat conviction>50 and leverage>2x as risk flags, not green lights. The log has no MFE/MAE per trade, so trailing-exit / "let winners run" hypotheses can't be backtested yet — logging MFE going forward is the prerequisite.
 
 **Gotcha:** `hold_hours` and `realized_R` are NOT columns on `ai_signal_log`; they are derived (hold = resolved-created; R = pnl_pct / planned-risk%). Backtest scripts that `SELECT` them from the table will fail — feed them the derived CSV export instead.
+
+## These findings are now WIRED LIVE (June 2026) — `server/lib/empiricalFilters.ts`
+
+Three flag-gated levers (all default ON) inject the above into the live signal path at `/api/ai/analyze` (hardenTradeIdeas), `/api/kronos`, and `/api/chart-ai`. Flags live in `server/lib/featureFlags.ts` (`EMPIRICAL_LEVERAGE_CAP_ENABLED`, `CONVICTION_TAIL_SUPPRESS_ENABLED`, `TOKEN_SOFT_GATE_ENABLED`, `CHART_AI_CONFIDENCE_WARNING_ENABLED`).
+
+**Non-obvious decisions (the durable part):**
+- **Downweight ≠ drop.** `recalibrateConviction` already caps raw≥50 conviction to 40 for NORMAL/CAUTION but the trade still FIRES. The new conviction-tail rule DROPS instead, and it keys on the **RAW pre-recalibration** conviction — otherwise the cap hides the toxic input from the filter. **Why:** the 50+ band is net-losing; capping its size isn't enough, it must be removed.
+- **PREFERRED verdicts are exempt** from tail-suppress (proven ≥60% WR is real edge, not unverified over-confidence) — mirrors recalibrate's own PREFERRED carve-out.
+- **Off-list is SOFT but not immune.** Token gate only down-weights off-list crypto (conviction capped 40, `off-list` flag) — it never drops "for being off-list." But an off-list coin can still be dropped by the **independent** conviction-tail rule (same as any coin). "Soft, nothing hidden" = we don't hide it *for the token reason*, not "never filtered."
+- **Scope = crypto only.** The evidence is crypto; equities/forex/commodities are left untouched (analyze gates on `cls==="crypto"`; kronos is all-crypto). Chart AI gets only a non-blocking caution (>50 confidence), never a drop.
+- **Parse confidence defensively.** Use `parseConfidencePct` (handles `"55%"` strings, NaN→fail-open). Tail-suppress fails OPEN on unparseable conviction (keep the trade) rather than coercing a missing value into a false suppress.

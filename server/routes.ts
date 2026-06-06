@@ -4235,6 +4235,20 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
             return res.status(502).json({ error: "AI response failed validation. Try again." });
           }
 
+          // ── Empirical confidence warning (June 2026) ─────────────────────────
+          // Scanner study shows confidence >50 has historically been unreliable.
+          // Keep the plan (user's choice) but surface a caution; nothing dropped.
+          try {
+            const { chartAiConfidenceWarningEnabled } = await import("./lib/featureFlags");
+            const { parseConfidencePct } = await import("./lib/empiricalFilters");
+            const confPct = parseConfidencePct(analysis.confidence);
+            if (chartAiConfidenceWarningEnabled() && Number.isFinite(confPct) && confPct > 50) {
+              if (!Array.isArray(analysis.warnings)) analysis.warnings = [];
+              analysis.warnings.push("High-confidence calls (>50%) have historically been less reliable in our data — size conservatively and confirm with structure.");
+              analysis.high_confidence_caution = true;
+            }
+          } catch { /* non-fatal — never block the analysis on the warning */ }
+
           // ── PROMPT_V2 shadow run (fire-and-forget) ─────────────────────────
           if (getPromptV2Mode() !== "off") {
             void (async () => {
@@ -8334,6 +8348,24 @@ Every level must be technically defensible. Return JSON only.`;
         }
 
         const cls = detectClass(symbol);
+
+        // ── Empirical filters (June 2026) — flags + helpers (crypto leaks) ────
+        const { convictionTailSuppressEnabled, tokenSoftGateEnabled, empiricalLeverageCapEnabled } =
+          await import("./lib/featureFlags");
+        const { isConvictionTailToxic, applyTokenSoftGate, empiricalLeverageCeiling } =
+          await import("./lib/empiricalFilters");
+
+        // Conviction-tail suppression: the 1,260-signal study shows RAW
+        // conviction >=50 INVERTS (PF 0.13-0.40). Drop the toxic tail outright
+        // (crypto only; PREFERRED brain verdicts exempt). Keys on the LLM's raw
+        // conviction, BEFORE recalibration/hardening haircuts.
+        if (cls === "crypto" &&
+            isConvictionTailToxic(card.conviction, edge.brainVerdict, convictionTailSuppressEnabled())) {
+          vetoed++; dropped++;
+          console.log(`[empirical-filter] ${symbol} ${llmDirection} SUPPRESSED: raw conviction ${rawConvPct} >= 50 (inverted tail)`);
+          return;
+        }
+
         const [atr1h, brain] = await Promise.all([
           computeAtr1h(symbol, cls),
           getBrainFor(symbol, direction).catch(() => null as any),
@@ -8607,6 +8639,19 @@ Every level must be technically defensible. Return JSON only.`;
         const risk = Math.abs(entry - h.stop);
         const rrStr = (target: number) => risk > 0 ? `${(Math.abs(target - entry) / risk).toFixed(1)}:1` : card.tp1?.rr || "";
 
+        // ── Empirical token soft-gate + leverage cap (June 2026) ─────────────
+        // Off-list crypto coins still publish but their displayed conviction is
+        // capped (nothing hidden). Leverage folds the 2x empirical ceiling into
+        // the existing regime cap.
+        const hardenedConvPct = Math.round(h.finalConviction * 100);
+        const softGate = applyTokenSoftGate(symbol, cls === "crypto", hardenedConvPct, tokenSoftGateEnabled());
+        const finalConvPct = softGate.conviction;
+        const cappedLeverage = Math.min(
+          Number(String(card.leverage || "1x").replace(/[^\d.]/g, "")) || 1,
+          h.leverageCap,
+          empiricalLeverageCeiling(empiricalLeverageCapEnabled()),
+        );
+
         out[idx] = {
           ...card,
           direction,                                    // <- reflects edge-policy flip when INVERT
@@ -8620,9 +8665,9 @@ Every level must be technically defensible. Return JSON only.`;
           tp3: card.tp3 && typeof card.tp3 === "object" && Number.isFinite(h.targets[2])
             ? { ...card.tp3, price: Number(h.targets[2].toFixed(6)) }
             : (Number.isFinite(h.targets[2]) ? Number(h.targets[2].toFixed(6)) : card.tp3),
-          conviction: Math.round(h.finalConviction * 100),
-          edge: `${Math.round(h.finalConviction * 100)}%`,
-          leverage: `${Math.min(Number(String(card.leverage || "1x").replace(/[^\d.]/g, "")) || 1, h.leverageCap).toFixed(0)}x`,
+          conviction: finalConvPct,
+          edge: `${finalConvPct}%`,
+          leverage: `${cappedLeverage.toFixed(0)}x`,
           thesis,
           hardener: {
             applied: true,
@@ -8658,6 +8703,7 @@ Every level must be technically defensible. Return JSON only.`;
             ...(inverted ? ["edge-inverted"] : []),
             ...(cardTrendFilter?.decision === "SUPPRESS" && !cardTrendFilter?.enforced ? ["shadow-counter-trend"] : []),
             ...(cardConvictionReview ? ["review"] : []),
+            ...(softGate.offList ? ["off-list"] : []),
           ])),
         };
       } catch (e: any) {
@@ -9449,6 +9495,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
           if ([e, sl, t1].every(Number.isFinite)) {
             const { hardenSignal, getOiChangePct } = await import("./lib/signalHardening");
             const { getBrainFor, applyEdgePolicy, mirrorPrice } = await import("./lib/statisticalBrain");
+            const { convictionTailSuppressEnabled, tokenSoftGateEnabled, empiricalLeverageCapEnabled } =
+              await import("./lib/featureFlags");
+            const { isConvictionTailToxic, applyTokenSoftGate, empiricalLeverageCeiling } =
+              await import("./lib/empiricalFilters");
             const symbolK = String(parsed.asset || ticker).split("/")[0].toUpperCase();
             const llmDirK: "LONG" | "SHORT" = tp.direction;
             const bus = getDataBusStatus();
@@ -9469,6 +9519,16 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
               };
               parsed.edgePolicy = { action: "SUPPRESS", brainVerdict: edgeK.brainVerdict, reason: edgeK.reason };
               console.log(`[kronos edge-policy] ${symbolK} ${llmDirK} SUPPRESSED: ${edgeK.reason}`);
+            } else if (isConvictionTailToxic(parsed.ensemble_confidence, edgeK.brainVerdict, convictionTailSuppressEnabled())) {
+              // Empirical conviction-tail suppression (June 2026): RAW conviction
+              // >=50 INVERTS (PF 0.13-0.40). Drop the toxic tail (PREFERRED exempt).
+              parsed.trade_plan = {
+                ...tp,
+                direction: "NO_TRADE",
+                notes: `Empirical conviction-tail suppress: raw ${rawConfPct} >= 50 (inverted band). ${tp.notes || ""}`,
+              };
+              parsed.edgePolicy = { action: "SUPPRESS", brainVerdict: edgeK.brainVerdict, reason: `raw conviction ${rawConfPct} in toxic >=50 tail` };
+              console.log(`[kronos empirical-filter] ${symbolK} ${llmDirK} SUPPRESSED: raw conviction ${rawConfPct} >= 50 (inverted tail)`);
             } else {
               const dirK = edgeK.recommendedDirection;
               let slK = sl, t1K = t1, t2K = t2;
@@ -9526,7 +9586,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   tp2: Number.isFinite(hK.targets[1]) ? parseFloat(hK.targets[1].toFixed(6)) : tp.tp2,
                   rr_tp1: rrK(hK.targets[0]),
                   rr_tp2: Number.isFinite(hK.targets[1]) ? rrK(hK.targets[1]) : tp.rr_tp2,
-                  leverage: `${Math.min(parseFloat(String(tp.leverage || "1").replace(/[^\d.]/g, "")) || 1, hK.leverageCap).toFixed(0)}x (capped by ${regimeK})`,
+                  leverage: `${Math.min(parseFloat(String(tp.leverage || "1").replace(/[^\d.]/g, "")) || 1, hK.leverageCap, empiricalLeverageCeiling(empiricalLeverageCapEnabled())).toFixed(0)}x (capped by ${regimeK})`,
                   notes: `${invertedNote}${hK.notes.length ? hK.notes.join("; ") + ". " : ""}${tp.notes || ""}`.trim(),
                 };
                 parsed.edgePolicy = {
@@ -9539,6 +9599,13 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   reason: edgeK.reason,
                 };
               parsed.ensemble_confidence = Math.round(hK.finalConviction * 100);
+              // ── Empirical token soft-gate (June 2026) — off-list crypto keeps
+              // publishing but its displayed conviction is capped (nothing hidden).
+              const softGateK = applyTokenSoftGate(symbolK, true, parsed.ensemble_confidence, tokenSoftGateEnabled());
+              if (softGateK.offList) {
+                parsed.ensemble_confidence = softGateK.conviction;
+                (parsed as any).offList = true;
+              }
               // ── Module 2 (Setup Taxonomy) — classify the FINAL (post-edge,
               // post-hardener) Kronos plan. Like /api/ai/analyze, /api/kronos
               // does NOT auto-flip; it surfaces `recommendedFlip` for the UI.
@@ -9731,6 +9798,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   ...(hK.crowdingFlag ? ["crowded"] : []),
                   ...(hK.lowSampleFlag ? ["low-sample"] : []),
                   ...(edgeK.action === "INVERT" ? ["edge-inverted"] : []),
+                  ...(softGateK.offList ? ["off-list"] : []),
                 ],
                 materiallyMutated: edgeK.action === "INVERT" ? true : hK.materiallyMutated,
               };

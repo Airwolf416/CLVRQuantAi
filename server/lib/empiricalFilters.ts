@@ -45,6 +45,17 @@ export function isPositiveExpectancyToken(token: string): boolean {
   return POSITIVE_EXPECTANCY_TOKENS.has(String(token || "").toUpperCase().trim());
 }
 
+/**
+ * Parse a confidence/conviction value to a 0..100 number, tolerating strings
+ * like "55%" or "60". Returns NaN when unparseable so callers can fail open
+ * (i.e. NOT suppress) rather than coerce a missing value into a false signal.
+ */
+export function parseConfidencePct(val: unknown): number {
+  if (typeof val === "number") return Number.isFinite(val) ? val : NaN;
+  const n = parseFloat(String(val ?? "").replace(/[^\d.\-]/g, ""));
+  return Number.isFinite(n) ? n : NaN;
+}
+
 /** Parse a leverage value ("3x", "3", 3) to a positive number; defaults to 1. */
 export function parseLeverageNum(lev: unknown): number {
   if (typeof lev === "number" && Number.isFinite(lev) && lev > 0) return lev;
@@ -68,13 +79,15 @@ export function empiricalLeverageCeiling(enabled: boolean): number {
  * proven edge.
  */
 export function isConvictionTailToxic(
-  rawConvictionPct: number,
+  rawConviction: unknown,
   brainVerdict: string | null | undefined,
   enabled: boolean,
 ): boolean {
   if (!enabled) return false;
   if (brainVerdict === "PREFERRED") return false;
-  return Number(rawConvictionPct) >= CONVICTION_TAIL_THRESHOLD;
+  const pct = parseConfidencePct(rawConviction);
+  if (!Number.isFinite(pct)) return false; // fail open: don't suppress on unparseable/missing conviction
+  return pct >= CONVICTION_TAIL_THRESHOLD;
 }
 
 export interface TokenSoftGateResult {

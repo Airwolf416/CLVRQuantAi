@@ -127,3 +127,29 @@ export function ptaWeeklyReportEnabled(): boolean {
 export function ptaModelAdjustmentsEnabled(): boolean {
   return envBool("PTA_MODEL_ADJUSTMENTS_ENABLED", false);
 }
+
+// ── Empirical expectancy filters (June 2026) ────────────────────────────────
+// Wired from the 1,260-signal backtest (see server/lib/empiricalFilters.ts and
+// .agents/memory/signal-expectancy-diagnostics.md). All default ON because the
+// owner explicitly approved deploying them; flip any to "0" in Secrets to
+// disable that lever independently without a code change.
+
+/** Hard-cap live-signal leverage at 2x (the 3x+ tail is where losses concentrate). */
+export function empiricalLeverageCapEnabled(): boolean {
+  return envBool("EMPIRICAL_LEVERAGE_CAP_ENABLED", true);
+}
+
+/** Drop signals whose RAW conviction is in the empirically-inverted >=50 tail. */
+export function convictionTailSuppressEnabled(): boolean {
+  return envBool("CONVICTION_TAIL_SUPPRESS_ENABLED", true);
+}
+
+/** Soft gate: off-list crypto coins still publish but their conviction is capped. */
+export function tokenSoftGateEnabled(): boolean {
+  return envBool("TOKEN_SOFT_GATE_ENABLED", true);
+}
+
+/** Add a caution to Chart AI calls whose confidence is above 50 (kept, not dropped). */
+export function chartAiConfidenceWarningEnabled(): boolean {
+  return envBool("CHART_AI_CONFIDENCE_WARNING_ENABLED", true);
+}
