@@ -72,3 +72,9 @@ id = "XvM8Mw_z73sXS0dPoFw_G"
 uri = "file://exports/signal_trade_log.csv"
 type = "table"
 title = "Per-trade signal log — entry/exit/PnL + planned-risk% + realized R (1,260 trades)"
+
+[[outputs]]
+id = "LmUAQNVU38u7K7LkrMdI0"
+uri = "file://exports/clvr_ai_features_code.md"
+type = "text"
+title = "CLVR AI Features — Full Source (Trade Ideas, Quant Scanner, Kronos, Ask AI, Chart AI)"
