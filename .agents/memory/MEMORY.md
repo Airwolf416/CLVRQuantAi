@@ -1,2 +1,4 @@
 - [Binance server-side geo-block in dev](binance-server-geo-block.md) — Binance REST 451 / CCXT 403 server-side in Replit dev but fine on Railway prod; server-side Binance features only activate in prod.
 - [Signal expectancy diagnostics](signal-expectancy-diagnostics.md) — raw scanner signals net-negative (PF~0.74); conviction inverts above 50; conv30-50 + 2x + whitelist holds OOS at PF~1.41. NOW WIRED LIVE via empiricalFilters.ts (drop≠downweight, off-list soft, crypto-only, flag-gated).
+- [Finnhub earnings flow](finnhub-earnings.md) — earnings is Finnhub-only after FMP rip-out; go through the finnhubEarnings service; route filters cached calendar per watchlist (no global response cache); free tier is EPS-only.
+- [IPO calendar data sources](fmp-earnings-data-tiers.md) — IPO calendar uses Nasdaq public API (primary) with FMP as best-effort fallback; FMP free tier 403s the IPO endpoint, Nasdaq IP-blocks Railway egress.
