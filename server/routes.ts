@@ -3546,6 +3546,7 @@ export async function registerRoutes(
         .map(c => ({ token: c.token, direction: c.direction, winRate: Math.round((c.wins/c.total)*100), n: c.total }))
         .sort((a,b) => b.winRate - a.winRate)
         .slice(0, 3);
+      console.log(`[performance-highlights] window=${sinceDays}d resolved=${total} wins=${wins} wr=${overallWinRate==null?"n/a":overallWinRate+"%"} topCombos=${top.length}`);
       return res.json({
         windowDays: sinceDays,
         sampleSize: total,
@@ -8781,6 +8782,9 @@ Every level must be technically defensible. Return JSON only.`;
     return { cards: safeCards, inCount, dropped, vetoed, regenerated };
   }
 
+  // In-flight map for single-flight coalescing of identical concurrent
+  // /api/ai/analyze requests (keyed by the same cacheKey used for aiCache).
+  const aiInFlight = new Map<string, Promise<void>>();
   app.post("/api/ai/analyze", aiIpLimiter, async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
@@ -9001,10 +9005,44 @@ Every level must be technically defensible. Return JSON only.`;
       `|vt:${visionTicker || "-"}` +
       `|vd:${visionDirection || "-"}` +
       `|tk:${reqTickers.join(",")}`;
-    const cacheKey = hashPrompt(system, userMessageStr) + flagSuffix;
+    // Trade Ideas: USER-AGNOSTIC cache key from the stable filter set + a coarse
+    // time bucket, so Pro/Elite users with the same filters share ONE result
+    // instead of each rolling their own live (price-jittered, non-deterministic)
+    // generation. Falls back to the legacy prompt hash for every other caller
+    // (Ask AI chat, Morning Brief), so they are unaffected.
+    const ideaParams = req.body.ideaParams && typeof req.body.ideaParams === "object" ? req.body.ideaParams : null;
+    const cacheKey = ideaParams
+      ? `ideas:${ideaParams.timeframe || "?"}|${ideaParams.horizon || "?"}|${ideaParams.assetClass || "?"}|${ideaParams.marketType || "?"}|${ideaParams.tradeCount || "?"}|b${Math.floor(Date.now() / AI_CACHE_TTL)}` + flagSuffix
+      : hashPrompt(system, userMessageStr) + flagSuffix;
+
+    // Elite-only cache bypass: lets an Elite user force a fresh re-roll within
+    // the cache window. Pro users — and Elite's DEFAULT press — still share the
+    // stable batch. Free never reaches here (403'd above).
+    const forceFresh = req.body.forceFresh === true && effectiveTier === "elite";
+
     const cached = aiCache.get(cacheKey);
-    if (cached && Date.now() - cached.ts < AI_CACHE_TTL) {
+    if (!forceFresh && cached && Date.now() - cached.ts < AI_CACHE_TTL) {
       return res.json({ text: cached.text, response: cached.text, cached: true });
+    }
+
+    // ── Single-flight coalescing (skipped for an Elite force-fresh re-roll) ──
+    // Two users pressing "Generate" at the same instant both miss the cache and
+    // would otherwise fire two independent (non-deterministic) Claude calls —
+    // one can get ideas while the other gets "no setups". If a request for this
+    // key is already in flight, wait for it and serve its freshly-cached result
+    // so concurrent identical requests get IDENTICAL output.
+    let __resolveFlight: () => void = () => {};
+    if (!forceFresh) {
+      const inflight = aiInFlight.get(cacheKey);
+      if (inflight) {
+        try { await inflight; } catch { /* first caller errored — compute below */ }
+        const after = aiCache.get(cacheKey);
+        if (after && Date.now() - after.ts < AI_CACHE_TTL) {
+          return res.json({ text: after.text, response: after.text, cached: true, coalesced: true });
+        }
+      }
+      const __flight = new Promise<void>((r) => { __resolveFlight = r; });
+      aiInFlight.set(cacheKey, __flight);
     }
 
     // Pro users always get the latest Claude model for best quality analysis
@@ -9026,6 +9064,10 @@ Every level must be technically defensible. Return JSON only.`;
         max_tokens: maxTokens,
         system: system || "",
         messages,
+        // Lower temperature = more stable output, so two users generating at the
+        // same time get materially the same setups. Callers can override with a
+        // numeric `temperature` in the body.
+        temperature: typeof req.body.temperature === "number" ? req.body.temperature : 0.3,
       };
       const tools: any[] = [];
       if (withTools) tools.push(...AI_TOOLS);
@@ -9169,12 +9211,20 @@ Every level must be technically defensible. Return JSON only.`;
         console.warn("[ai/analyze] hardener skipped:", e?.message || e);
       }
 
-      // Only cache valid non-empty responses (now post-hardening)
+      // Only cache valid non-empty responses (post-hardening). A force-fresh
+      // re-roll also writes the shared key, so the window re-syncs to the newest
+      // batch and subsequent users stay consistent again.
       aiCache.set(cacheKey, { text, ts: Date.now() });
 
-      res.json({ text, response: text, cached: false, model });
+      res.json({ text, response: text, cached: false, fresh: forceFresh, model });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    } finally {
+      // Release the single-flight lock (only set for non-bypass requests).
+      if (!forceFresh) {
+        aiInFlight.delete(cacheKey);
+        __resolveFlight();
+      }
     }
   });
 

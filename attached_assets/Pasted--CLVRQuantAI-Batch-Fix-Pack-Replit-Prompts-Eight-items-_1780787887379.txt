@@ -1,0 +1,228 @@
+# CLVRQuantAI — Batch Fix Pack (Replit Prompts)
+
+Eight items. Work top to bottom. Items 1–3 are anchored to your real code; items 4–8 describe exact behavior and where to look, because those parts of the app have grown past the code export I had — tell Replit to locate the current component first.
+
+> **Guardrail (paste at top of every prompt):**
+> *“Do not change tier gating. Free has NO access to the AI suite (existing 403 / upgrade card stays). Pro = 4 trade ideas, Elite = 6, Basket + Kronos + Chart AI are Elite. Only Elite may bypass the cache. Preserve all existing access rules and disclaimers.”*
+
+-----
+
+## 1 — Basket: make the AI as smart as Trade Ideas / Ask AI
+
+**File:** `client/src/components/MyBasket.jsx` (the basket analyze call). Basket stays Elite-only.
+
+**Problem:** Basket calls `/api/ai/analyze` with only `{ system, userMessage }`. It gets none of the context that makes the other tools smart — no Statistical Edge Brain, no execution levels (VWAP/opening range), no unusual-activity flags, no macro pre-flight, and none of the writing-discipline guardrails. So it reasons blind.
+
+**Fix:** mirror the Ask AI request. Before the fetch, pull macro pre-flight; pass the selected symbols as `tickers` and set `attachBrainSummary: true` so the server injects per-asset brain + exec + unusual-activity context; and append the same discipline rules to the system prompt.
+
+**Step A — fetch macro pre-flight + build the symbol list** just above the existing `const r = await fetch("/api/ai/analyze", ...)`:
+
+```jsx
+      // Macro pre-flight + smart context (mirrors Ask AI / Trade Ideas).
+      let basketPreflight = null;
+      try {
+        const pf = await fetch("/api/macro/preflight", { credentials: "include" });
+        if (pf.ok) basketPreflight = await pf.json();
+      } catch {}
+      const macroLine = basketPreflight?.clear === false
+        ? `MACRO PRE-FLIGHT: CAUTION — ${basketPreflight?.nextEvent || "event window"} active. Dampen conviction and avoid fresh entries near the event.`
+        : `MACRO PRE-FLIGHT: CLEAR — no blocking macro event in the basket's trade window.`;
+      // Server validates tickers as 1–10 char A–Z0–9, so international symbols
+      // like 2222.SR / 9984.T are dropped automatically (they just won't get a
+      // brain block — that's fine).
+      const basketTickers = selList.map(a => String(a.sym).toUpperCase());
+```
+
+**Step B — add discipline + macro to the system prompt.** FIND the end of the basket `system` string (the closing backtick after “Be specific, numerical, and direct.`”) and extend it:
+
+```jsx
+Be specific, numerical, and direct.
+
+${macroLine}
+
+WRITING DISCIPLINE (mandatory):
+- No superlatives ("best/highest/largest/most") without ranked data in the snapshot — use "elevated/notable".
+- Funding |x| < 0.01%/8h is "near-flat", not "momentum".
+- A LONG after >+4% (or SHORT after <-4%) in 24h is a CHASE — say so, don't call it a fresh breakout.
+- If a Statistical Brain block shows < 30 resolved trades for a (token, direction), call it "small sample (n=X)".
+- Account for correlation across the basket; flag geographic/sector concentration.
+- Any price/%/RR/leverage in prose must match the structured numbers exactly.
+- This is information/education, not financial advice.`;
+```
+
+**Step C — enrich the request body.** FIND:
+
+```jsx
+        body: JSON.stringify({ system, userMessage }),
+```
+
+REPLACE:
+
+```jsx
+        body: JSON.stringify({
+          system,
+          userMessage,
+          tickers: basketTickers,        // → per-asset Statistical Brain + VWAP/OR + unusual-activity context
+          attachBrainSummary: true,      // → global top/suppressed combos
+        }),
+```
+
+**Acceptance:** the basket analysis now references empirical edge stats, session levels, macro state, and obeys the discipline rules; international tickers degrade gracefully; Basket remains Elite-only; temperature is already pinned by the earlier `/api/ai/analyze` change.
+
+-----
+
+## 2 — Markets tab: auto-scroll to top on open
+
+**File:** `client/src/App.jsx` (the shell that owns `tab` / `setTab` and the bottom nav).
+
+**Problem:** opening the Markets tab can land mid/bottom of the list instead of the top.
+
+**Fix:** reset scroll to top whenever the active tab changes (covers Markets and every tab). Add this effect near the other `useEffect`s in the App component (it owns `tab`):
+
+```jsx
+  // Reset scroll to the top whenever the user switches tabs (fixes Markets
+  // opening part-scrolled). Targets window + the main scroll container.
+  useEffect(() => {
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      const main = document.querySelector("[data-app-scroll]") || document.scrollingElement || document.documentElement;
+      if (main) main.scrollTop = 0;
+    } catch {}
+  }, [tab]);
+```
+
+If the main scrollable content container doesn’t already have it, add `data-app-scroll` to that container’s wrapper div so the selector hits it.
+
+**Acceptance:** switching to Markets (or any tab) always starts at the top; no change to tab logic or gating.
+
+-----
+
+## 3 — “Enable alerts” works for everyone (honest capability handling)
+
+**File:** `client/src/App.jsx` — the `requestPush` handler (the LIVE ALERTS “ENABLE” button).
+
+**Problem:** on devices where web push isn’t available (iOS Safari in a normal tab, in-app webviews), the handler shows “In-app alerts enabled” but never actually wires anything, and `Notification.requestPermission()` silently no-ops. So users think alerts are on when they aren’t, and in-app alerts may not turn on either.
+
+**Fix:** make the flow capability-aware and always enable IN-APP alerts regardless of OS-push support, with an honest message and an iOS “Add to Home Screen” hint.
+
+Replace the `if(typeof Notification==="undefined"){...}` branch and the final fallback with capability detection:
+
+```jsx
+    // ── Capability-aware enable ─────────────────────────────────────────────
+    const isStandalone = (typeof window !== "undefined") &&
+      (window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone === true);
+    const pushCapable = (typeof Notification !== "undefined") &&
+      (typeof navigator !== "undefined") && !!navigator.serviceWorker && ("PushManager" in window);
+
+    // Always turn ON in-app alerts (toasts + alert history) — works everywhere.
+    setPushDisabled(false);
+    try { localStorage.removeItem("clvr_push_disabled"); } catch (e) {}
+    setInAppAlertsEnabled?.(true);            // if such a state exists; otherwise persist a flag:
+    try { localStorage.setItem("clvr_inapp_alerts","1"); } catch (e) {}
+
+    if (!pushCapable) {
+      setToast(isStandalone
+        ? "In-app alerts on. Lock-screen push isn't available on this device."
+        : "In-app alerts on. For lock-screen alerts, add CLVRQuant to your Home Screen, then enable again.");
+      return;
+    }
+    // pushCapable → existing requestPermission + pushManager.subscribe flow runs as before.
+```
+
+Keep the existing granted/disabled re-subscribe branches. The key changes: (1) in-app alerts always flip on; (2) the success/【toast】 text tells the truth about lock-screen push; (3) iOS Safari users get the Home-Screen instruction instead of a false “enabled.”
+
+Also confirm the in-app alert stream (ALERT HISTORY + floating banner) renders off the in-app flag, NOT off `Notification.permission` — so a user with push denied still sees in-app alerts.
+
+**Acceptance:** every signed-in user can enable in-app alerts; the toast never claims push is on when it isn’t; iOS tab users get the Add-to-Home-Screen hint; ALERT HISTORY populates regardless of OS push permission.
+
+-----
+
+## 4 — Performance Highlights missing in production (shows 42% on Replit dev)
+
+**Where:** the Radar/Command Center “PERFORMANCE HIGHLIGHTS · LAST 30D” card and its data source (a resolved-signals/win-rate endpoint, e.g. the same data behind `buildPerformanceContext`).
+
+**Problem:** the card renders on the Replit dev URL (42%, n=253) but not on the live Railway build. This is almost always a **prod data/DB difference**, not a UI bug: the Railway production Postgres doesn’t have the resolved-signal history the dev DB has, OR the endpoint errors/returns empty in prod and the component hides the whole card on empty.
+
+**Prompt for Replit:**
+
+> Locate the component that renders “PERFORMANCE HIGHLIGHTS · LAST 30D” and the API/query that feeds its win-rate + sample size (likely the resolved-signals table / the same source as buildPerformanceContext). Then:
+> 
+> 1. Add server logging to that endpoint: log row count, the computed win rate, and any query error, tagged `[perf-highlights]`, so we can see what prod returns.
+> 1. Confirm the production (Railway) database actually has the resolved-signals rows. If the table is empty or not migrated in prod, that’s the root cause — surface it.
+> 1. Make the card degrade gracefully instead of disappearing: if there’s no/low data, render “Building track record — N resolved signals so far” instead of hiding the section, so it’s never a silent blank in prod.
+> 1. Verify the endpoint isn’t gated behind `NODE_ENV !== "production"` or a dev-only flag.
+>    Do not change tier gating or the win-rate math.
+
+**Acceptance:** prod either shows the real 30-day win rate or an explicit “building track record” state — never a blank; logs reveal whether the gap is empty-prod-data or a failing query.
+
+-----
+
+## 5 — Concierge (“C”) also reachable from the burger menu
+
+**Where:** the header hamburger (☰) menu and the floating gold “C” concierge launcher.
+
+**Prompt for Replit:**
+
+> Keep the floating gold “C” concierge button exactly where it is. Additionally, in the header hamburger (☰) menu, add a menu row labeled “Ask Concierge” (with the same C / chat icon) that opens the SAME concierge chat the floating button opens — reuse the existing open handler/state (e.g. `setConciergeOpen(true)` or whatever the float button calls), do not create a second concierge instance. Close the burger menu when the row is tapped. Respect the concierge’s existing access rules (don’t expose it to tiers that can’t currently use it). Match the menu’s existing styling.
+
+**Acceptance:** the burger menu has an “Ask Concierge” entry that opens the existing concierge; the floating C button is unchanged; only one concierge component/state exists.
+
+-----
+
+## 6 — Help tab: refresh with current features
+
+**Where:** the Help tab content.
+
+**Prompt for Replit:** *Update the Help tab so its how-to content matches the current app. Merge into the existing layout/styling — don’t replace the whole component. Cover these, in plain language:*
+
+- **Plans & access:** Free = live prices, macro calendar, basic market data (no AI signals). **Pro ($29.99/mo)** = CLVR AI Trade Ideas (4/run), Quant Scanner, Ask AI chat, full signals, sentiment feed, custom alerts. **Elite ($129/mo)** = everything in Pro plus 6 trade ideas, Kronos Forecast Engine, Chart AI, My Basket, SEC Insider Flow, Squawk Box, whale tracking, and one free 30-min 1-on-1 session each month.
+- **Trade Ideas:** pick timeframe (Today / Mid / Long), horizon (Quick / Hours / Full Day), asset class, and PERP/SPOT/BOTH, then Generate. Everyone with the same filters sees the same batch; Elite can tap “↻ Re-roll fresh” for a new one.
+- **Kronos (Elite):** 5-candle BULL/BASE/BEAR forecast with an EV-aligned headline. It’s a forecast (mean-reversion aware) and can differ from a pure trend read like Chart AI — different horizons.
+- **Chart AI (Elite):** upload a chart, pick a horizon, get a structured read using real server-computed RSI/ATR.
+- **Ask AI (Pro/Elite):** chat for any asset; choose PERP/SPOT/BOTH first.
+- **Pulse / Radar:** flags unusual conditions (volume, funding, OI) — a heads-up, not a signal.
+- **Alerts:** tap Enable for in-app alerts; on iPhone, add to Home Screen first for lock-screen push.
+- **My Basket (Elite):** pick up to 5 assets + a style (scalp/day/swing) → personalized recommendations.
+- Disclaimer line: information & education only, not financial advice; DYOR.
+
+**Acceptance:** Help reflects current tiers, features, and the alerts/Home-Screen note; styling preserved.
+
+-----
+
+## 7 — About tab: refresh with current state
+
+**Where:** the About tab content.
+
+**Prompt for Replit:** *Update the About tab, merging into existing styling. Use this copy:*
+
+> CLVRQuant is an AI-powered market-intelligence and education platform for active traders across crypto, equities, forex, and commodities. It is an information and education tool — not a trading-execution platform and not financial advice.
+> 
+> What’s inside: QuantBrain multi-factor analysis, the Kronos Forecast Engine (Elite), Chart AI (Elite), Ask AI chat, AI Trade Ideas with a regime gate and Kelly-based sizing, AI Radar / Pulse for unusual activity, a macro pre-flight calendar, Social Intelligence, Earnings, SEC Insider Flow, My Basket (Elite), Morning Brief, customizable Alerts, and the Squawk Box.
+> 
+> Plans: Free, Pro ($29.99/mo), Elite ($129/mo). Built on a live data stack (Hyperliquid, Binance, Finnhub and others) with Claude-powered analysis.
+> 
+> Disclaimer: All content is for informational and educational purposes only. Nothing here is financial, investment, or trading advice. Markets are risky; do your own research and manage your own risk.
+
+Keep version/contact ([support@clvrquantai.com](mailto:support@clvrquantai.com)) if already present.
+
+**Acceptance:** About reflects the current feature set, pricing, and the information/education framing; styling preserved.
+
+-----
+
+## 8 — (Quick check) make sure items 1–3 don’t regress gating
+
+After applying, verify on three accounts:
+
+- **Free:** no Trade Ideas / Kronos / Basket / Chart AI — upgrade card only. Alerts enable still works (in-app).
+- **Pro:** Trade Ideas (4), Quant Scanner, Ask AI. No Basket/Kronos/Chart AI. No Elite re-roll.
+- **Elite:** all of the above + Basket (now smarter), Kronos, Chart AI, re-roll.
+- Concierge opens from both the floating C and the burger menu.
+- Markets opens scrolled to top.
+- Performance Highlights shows a value or an explicit “building track record” in prod.
+
+-----
+
+### Notes
+
+- Items 1–3 reference real code from your repo export; the variable names (`selList`, `tab`/`setTab`, `requestPush`, `notifPerm`, `pushDisabled`) are from that export — if any were renamed since, tell Replit to map to the current names.
+- Items 4–7 are intentionally written as “locate then change” because those components evolved past the export I had. They’re specific on behavior and acceptance so Replit can execute reliably.

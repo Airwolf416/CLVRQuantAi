@@ -57,7 +57,7 @@ export default function TopTradeIdeas({
 
   useEffect(() => { fetchPreflight(); }, [fetchPreflight]);
 
-  const runTradeIdeas = async () => {
+  const runTradeIdeas = async (forceFresh = false) => {
     if (loading) return;
     setLoading(true);
     setError(null);
@@ -214,6 +214,17 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           maxTokens,
           attachBrainSummary: true,
           tickers: focusTickers,
+          // Stable, user-agnostic cache descriptor so every Pro/Elite user with
+          // the same filters shares one generated batch.
+          ideaParams: {
+            timeframe,                      // today | midterm | longterm
+            horizon: todayMode,             // quick | hours | fullDay
+            assetClass,                     // ALL | CRYPTO | EQUITY | COMMODITY | FOREX
+            marketType: marketTypeFilter,   // PERP | SPOT | BOTH
+            tradeCount,                     // 6 Elite / 4 Pro
+          },
+          // Elite-only: force a fresh re-roll, bypassing the shared cache.
+          forceFresh,
         }),
       });
 
@@ -400,7 +411,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
       <button
         data-testid="btn-generate-trades"
-        onClick={runTradeIdeas}
+        onClick={() => runTradeIdeas(false)}
         disabled={loading}
         style={{
           width: "100%", height: 48, marginBottom: 16,
@@ -414,6 +425,24 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
       >
         {loading ? "QuantBrain Analyzing..." : `Generate Top ${tradeCount} Trade Ideas ✦`}
       </button>
+
+      {isElite && trades && !loading && (
+        <button
+          data-testid="btn-reroll-trades"
+          onClick={() => runTradeIdeas(true)}
+          style={{
+            width: "100%", height: 38, marginBottom: 16,
+            background: "transparent",
+            border: "1px solid rgba(201,168,76,0.25)",
+            borderRadius: 10, cursor: "pointer",
+            color: "#c9a84c",
+            fontFamily: MONO, fontWeight: 700, fontSize: 11,
+            letterSpacing: "0.08em", transition: "all 0.2s",
+          }}
+        >
+          ↻ RE-ROLL FRESH (ELITE) — bypass shared cache
+        </button>
+      )}
 
       {error === "PRO_REQUIRED" && (
         <div style={{ textAlign: "center", padding: "32px 16px", background: "rgba(201,168,76,0.04)", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 10 }}>

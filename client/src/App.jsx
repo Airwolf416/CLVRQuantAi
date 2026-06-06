@@ -1243,10 +1243,23 @@ function PerformanceHighlights(){
       .catch(()=>{if(on)setErr(true);});
     return()=>{on=false;};
   },[]);
-  // Gate lowered from 25 → 5 so the panel appears in production where the
-  // resolved-signals sample is small. WR color brightened: below 45 falls
-  // back to gold (not muted2) so the headline always reads at a glance.
-  if(err||!data||data.overallWinRate==null||data.sampleSize<5)return null;
+  // Never blank the panel: on a small/empty resolved sample we show a
+  // "building track record" state instead of disappearing. Only a hard fetch
+  // failure (err) or still-loading (!data) hides it.
+  if(err||!data)return null;
+  const insufficient=data.overallWinRate==null||data.sampleSize<5;
+  if(insufficient){
+    const n=data.sampleSize||0;
+    return(
+      <div data-testid="panel-performance-highlights" style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:4,padding:"12px 14px",marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.18em"}}>PERFORMANCE HIGHLIGHTS · LAST {data.windowDays||30}D</div>
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted2,letterSpacing:"0.1em"}}>n={n}</div>
+        </div>
+        <div data-testid="text-perf-building" style={{fontFamily:MONO,fontSize:11,color:C.muted2,lineHeight:1.5}}>Building track record — {n} resolved signal{n===1?"":"s"}. Win-rate stats appear once enough trades resolve.</div>
+      </div>
+    );
+  }
   const wr=data.overallWinRate;
   const wrColor=wr>=55?C.green:wr>=40?C.gold:C.orange||C.gold;
   return(
@@ -3167,8 +3180,11 @@ function stripConciergeMd(text){
     .replace(/`/g,"");
 }
 
-function ConciergeWidget({ user, C, isMobile, MONO, SERIF }){
+function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const [open,setOpen]=useState(false);
+  // Allow opening from outside (e.g. the burger menu "Ask Concierge" row) by
+  // bumping openSignal — reuses this single concierge instance + its state.
+  useEffect(()=>{ if(openSignal) setOpen(true); },[openSignal]);
   const [messages,setMessages]=useState([
     {role:"assistant",content:"Hi — I'm the CLVRQuant Concierge. I can help you use the platform (signals, the AI engine, alerts, plans) or book a 30-min 1-on-1 training session. What can I help with?"},
   ]);
@@ -3702,6 +3718,15 @@ function Dashboard({user,setUser,onShowAuth}){
   },[]);
   // Sync pushDisabled state → module-level flag so sendPush respects toggle
   useEffect(()=>{_pushDisabledFlag=pushDisabled;},[pushDisabled]);
+  // Reset scroll to the top whenever the user switches tabs (fixes Markets and
+  // other tabs opening part-scrolled). Targets window + the main scroll container.
+  useEffect(()=>{
+    try{
+      window.scrollTo({top:0,left:0,behavior:"auto"});
+      const main=document.querySelector("[data-app-scroll]")||document.scrollingElement||document.documentElement;
+      if(main) main.scrollTop=0;
+    }catch{}
+  },[tab]);
   const [activeAlerts,setActiveAlerts]=useState([]); // floating banner — auto-dismisses after 5s
   const [alertHistory,setAlertHistory]=useState(()=>{try{const s=localStorage.getItem("clvr_alert_history");return s?JSON.parse(s):[];}catch{return[];}});
 
@@ -3734,6 +3759,8 @@ function Dashboard({user,setUser,onShowAuth}){
   const [accessCodeMsg,setAccessCodeMsg]=useState("");
   const [showQRScanner,setShowQRScanner]=useState(false);
   const [drawerOpen,setDrawerOpen]=useState(false);
+  // Bumped by the burger-menu "Ask Concierge" row to open the single ConciergeWidget.
+  const [conciergeOpenSignal,setConciergeOpenSignal]=useState(0);
   useEffect(()=>{
     if(!drawerOpen) return;
     const onKey=(e)=>{ if(e.key==="Escape") setDrawerOpen(false); };
@@ -4802,8 +4829,29 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
       }
       return;
     }
-    // ── Not granted → REQUEST PERMISSION ────────────────────────────────────
-    if(typeof Notification==="undefined"){setNotifPerm("granted");setToast("In-app alerts enabled");return;}
+    // ── Not granted → CAPABILITY-AWARE ENABLE ───────────────────────────────
+    // Some devices (iOS Safari in a normal tab, in-app webviews) can't do OS /
+    // lock-screen push at all. We always turn ON in-app alerts (they work
+    // everywhere) and only attempt OS push when the platform actually supports
+    // it — with an honest message either way.
+    const isStandalone = (typeof window!=="undefined") &&
+      (window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone===true);
+    const pushCapable = (typeof Notification!=="undefined") &&
+      (typeof navigator!=="undefined") && !!navigator.serviceWorker && ("PushManager" in window);
+
+    // Always turn ON in-app alerts (toasts + alert history) — works everywhere.
+    setPushDisabled(false);
+    try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
+    try{localStorage.setItem("clvr_inapp_alerts","1");}catch(e){}
+
+    if(!pushCapable){
+      setToast(isStandalone
+        ? "In-app alerts on. Lock-screen push isn't available on this device."
+        : "In-app alerts on. For lock-screen alerts, add CLVRQuant to your Home Screen, then enable again.");
+      return;
+    }
+
+    // pushCapable → request OS permission + subscribe (existing flow).
     try{
       const perm=await Notification.requestPermission();
       setNotifPerm(perm);
@@ -4824,8 +4872,11 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         }catch(e){setToast("Alerts enabled (in-app only)");}
         return;
       }
-    }catch(e){}
-    setToast("In-app alerts enabled");
+      // Permission denied/dismissed — in-app alerts stay on regardless.
+      setToast("In-app alerts on. Allow notifications in your browser settings for lock-screen push.");
+    }catch(e){
+      setToast("In-app alerts on.");
+    }
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- clockTick forces periodic recompute so expired events disappear
@@ -4862,7 +4913,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
   return(
     <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:isMobile?76:24,paddingTop:"env(safe-area-inset-top,0px)",paddingLeft:isMobile?0:sidebarW,maxWidth:isMobile?780:undefined,margin:isMobile?"0 auto":0,position:"relative"}}>
-      {user&&!isPreview&&<ConciergeWidget user={user} C={C} isMobile={isMobile} MONO={MONO} SERIF={SERIF}/>}
+      {user&&!isPreview&&<ConciergeWidget user={user} C={C} isMobile={isMobile} MONO={MONO} SERIF={SERIF} openSignal={conciergeOpenSignal}/>}
       {!isMobile&&<SideNav items={NAV} tab={tab} onTab={setTab} C={C} MONO={MONO} SERIF={SERIF} PRO_TABS_GATE2={PRO_TABS_GATE} isPro={isPro} isElite={isElite} isPreview={isPreview} upcomingCount={upcomingCount} isDark={isDark} toggleTheme={toggleTheme} wide={isDesktop}/>}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=IBM+Plex+Mono:wght@300;400;500;600&family=Barlow:wght@300;400;500;600;700&display=swap');
@@ -4944,6 +4995,17 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             <span style={{flex:1}}>LANGUAGE · {lang}</span>
             <span style={{fontFamily:MONO,fontSize:9,color:C.gold,padding:"2px 8px",border:`1px solid rgba(201,168,76,.35)`,borderRadius:2,letterSpacing:"0.1em"}}>{lang==="EN"?"→ FR":"→ EN"}</span>
           </button>
+
+          {/* Ask Concierge — opens the SAME widget the floating gold "C" opens */}
+          {user&&!isPreview&&(
+            <button data-testid="drawer-btn-concierge" onClick={()=>{setDrawerOpen(false);setConciergeOpenSignal(n=>n+1);}}
+              style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"none",border:"none",borderRadius:4,color:C.muted2,fontFamily:MONO,fontSize:11,cursor:"pointer",textAlign:"left",letterSpacing:"0.06em"}}
+              onMouseEnter={(e)=>e.currentTarget.style.background="rgba(255,255,255,.04)"}
+              onMouseLeave={(e)=>e.currentTarget.style.background="none"}>
+              <span style={{width:16,height:16,borderRadius:"50%",background:"rgba(201,168,76,.15)",border:`1px solid rgba(201,168,76,.5)`,color:C.gold,fontFamily:SERIF,fontWeight:900,fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>C</span>
+              <span style={{flex:1}}>ASK CONCIERGE</span>
+            </button>
+          )}
 
           {/* ── Owner-only admin tabs (RECORD / REJECTS / REVIEW / ARCH) ── */}
           {isOwnerOnly&&<>
@@ -6502,6 +6564,21 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             </button>
           </div>
 
+          {/* ── ABOUT (current feature set / pricing / framing) ── */}
+          <div style={panel}>
+            <div style={ph}><PTitle>About CLVRQuant</PTitle></div>
+            <div style={{padding:"8px 16px 16px"}}>
+              {[
+                "CLVRQuant is an AI-powered market-intelligence and education platform for active traders across crypto, equities, forex, and commodities. It is an information and education tool — not a trading-execution platform and not financial advice.",
+                "What's inside: QuantBrain multi-factor analysis, the Kronos Forecast Engine (Elite), Chart AI (Elite), Ask AI chat, AI Trade Ideas with a regime gate and Kelly-based sizing, AI Radar / Pulse for unusual activity, a macro pre-flight calendar, Social Intelligence, Earnings, SEC Insider Flow, My Basket (Elite), Morning Brief, customizable Alerts, and the Squawk Box.",
+                "Plans: Free, Pro ($29.99/mo), Elite ($129/mo). Built on a live data stack (Hyperliquid, Binance, Yahoo Finance and others) with Claude-powered analysis.",
+              ].map((p,i)=>(
+                <div key={i} style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.8,marginBottom:10}}>{p}</div>
+              ))}
+              <div style={{fontFamily:SANS,fontSize:11,color:C.muted,lineHeight:1.7,fontStyle:"italic",borderTop:`1px solid ${C.border}`,paddingTop:10,marginTop:4}}>Disclaimer: All content is for informational and educational purposes only. Nothing here is financial, investment, or trading advice. Markets are risky; do your own research and manage your own risk.</div>
+            </div>
+          </div>
+
           {/* ── WHAT'S NEW THIS WEEK (admin-driven, latest replaces prior) ── */}
           <WhatsNewPanel panel={panel} ph={ph} PTitle={PTitle} Badge={Badge} C={C} SERIF={SERIF} SANS={SANS}/>
           <div style={panel}>
@@ -6675,6 +6752,17 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           </div>
 
           {[
+            {cat:"Plans & Features (Current)",color:C.gold2,items:[
+              {q:"What do Free, Pro, and Elite include?",a:"Free: live prices, the macro calendar, and basic market data — no AI signals. Pro ($29.99/mo): CLVR AI Trade Ideas (4 per run), the Quant Scanner, Ask AI chat, full signals, the sentiment feed, and custom alerts. Elite ($129/mo): everything in Pro plus 6 trade ideas, the Kronos Forecast Engine, Chart AI, My Basket, SEC Insider Flow, the Squawk Box, whale tracking, and one free 30-min 1-on-1 session each month."},
+              {q:"How do AI Trade Ideas work?",a:"Pick a timeframe (Today / Mid / Long), a horizon (Quick / Hours / Full Day), an asset class, and PERP / SPOT / BOTH, then tap Generate. Everyone using the same filters sees the same batch. Elite members can tap '↻ Re-roll fresh' for a brand-new set."},
+              {q:"What is Kronos? (Elite)",a:"Kronos is a 5-candle BULL / BASE / BEAR forecast with an EV-aligned headline. It's a forecast (mean-reversion aware), so it can differ from a pure trend read like Chart AI — they look at different horizons."},
+              {q:"What is Chart AI? (Elite)",a:"Upload a chart, pick a horizon, and get a structured read built on real server-computed RSI and ATR — not a guess from the image alone."},
+              {q:"What is Ask AI? (Pro/Elite)",a:"A chat for any asset. Choose PERP / SPOT / BOTH first, then ask — you'll get analysis grounded in live data."},
+              {q:"What are Pulse and Radar?",a:"They flag unusual conditions (volume, funding, open interest). Treat them as a heads-up to go look — not a buy/sell signal."},
+              {q:"How do I turn on Alerts?",a:"Tap Enable for in-app alerts — these work on every device. On iPhone, add CLVRQuant to your Home Screen first if you want lock-screen push notifications."},
+              {q:"What is My Basket? (Elite)",a:"Pick up to 5 assets plus a style (scalp / day / swing) and get personalized recommendations across the whole basket, with correlation and concentration flagged."},
+              {q:"Is any of this financial advice?",a:"No. Everything in CLVRQuant is information and education only — not financial advice. Always do your own research."},
+            ]},
             {cat:"What's New (April 2026)",color:"#00e5ff",items:[
               {q:"What changed with the price feeds?",a:"Migrated off Finnhub. Equities, forex, and commodity-spot now stream from Yahoo Finance (primary) with FMP as fallback — same real-time refresh, far higher rate limits, no more 429 outages. Crypto spot also opens a direct browser→Binance WebSocket for sub-second tick updates on top of Hyperliquid."},
               {q:"Why did 'Generate Trade Idea' sometimes show 'Load failed'?",a:"Safari and some mobile browsers silently abort fetch requests longer than ~60 seconds, and Claude trade-idea generation occasionally takes 70-90s on heavy market data. We added an explicit 90-second controller — you'll now see a clean '⏱ Trade Ideas timed out (90s)' message instead of a confusing 'Load failed' if it ever runs over."},

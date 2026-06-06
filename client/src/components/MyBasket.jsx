@@ -305,6 +305,20 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
       ? `MARKET TYPE: SPOT ONLY (cash / no leverage). Every signal must set "marketType":"SPOT" and "leverage":"1x". SL can be wider, kill clock longer, thesis should reference accumulation zones / DCA / portfolio allocation.`
       : `MARKET TYPE: BOTH. Mix PERP and SPOT. Label each crypto signal "marketType":"PERP" (with leverage) or "SPOT" ("leverage":"1x"). Non-crypto assets always SPOT, "leverage":"1x".`;
 
+    // Macro pre-flight + smart context (mirrors Ask AI / Trade Ideas).
+    let basketPreflight = null;
+    try {
+      const pf = await fetch("/api/macro/preflight", { credentials: "include" });
+      if (pf.ok) basketPreflight = await pf.json();
+    } catch {}
+    const macroLine = basketPreflight?.clear === false
+      ? `MACRO PRE-FLIGHT: CAUTION — ${basketPreflight?.nextEvent || "event window"} active. Dampen conviction and avoid fresh entries near the event.`
+      : `MACRO PRE-FLIGHT: CLEAR — no blocking macro event in the basket's trade window.`;
+    // Server validates tickers as 1–10 char A–Z0–9, so international symbols
+    // like 2222.SR / 9984.T are dropped automatically (they just won't get a
+    // brain block — that's fine).
+    const basketTickers = syms.map(s => String(s).toUpperCase());
+
     const system = `You are CLVR AI's Basket Analyst — multi-asset portfolio specialist (crypto, US/EU/Asia/MidEast equities, commodities, FX). You MUST respond with ONLY valid JSON — no conversational text, no preamble, no "let me analyze", no markdown fences. Start with { and end with }.
 
 ${mtRule}
@@ -340,7 +354,18 @@ Return this EXACT JSON structure — one object per asset the user selected. NEV
       "killClock": "72H"
     }
   ]
-}`;
+}
+
+${macroLine}
+
+WRITING DISCIPLINE (mandatory):
+- No superlatives ("best/highest/largest/most") without ranked data in the snapshot — use "elevated/notable".
+- Funding |x| < 0.01%/8h is "near-flat", not "momentum".
+- A LONG after >+4% (or SHORT after <-4%) in 24h is a CHASE — say so, don't call it a fresh breakout.
+- If a Statistical Brain block shows < 30 resolved trades for a (token, direction), call it "small sample (n=X)".
+- Account for correlation across the basket; flag geographic/sector concentration.
+- Any price/%/RR/leverage in prose must match the structured numbers exactly.
+- This is information/education, not financial advice.`;
 
     const userMessage = `Analyze my basket and return ${styleKey} signals as valid JSON only.
 
@@ -356,7 +381,13 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system, userMessage, maxTokens: 6144 }),
+        body: JSON.stringify({
+          system,
+          userMessage,
+          maxTokens: 6144,
+          tickers: basketTickers,        // → per-asset Statistical Brain + VWAP/OR + unusual-activity context
+          attachBrainSummary: true,      // → global top/suppressed combos
+        }),
       });
       const data = await r.json();
       if (!r.ok) {
