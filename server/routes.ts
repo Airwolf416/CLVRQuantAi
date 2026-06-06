@@ -4088,12 +4088,49 @@ Output JSON only, no prose, no code fences.`;
             }
           }
 
+          // ── Server-computed indicators (when the asset is known) ───────────
+          // Chart AI otherwise estimates RSI/MACD from pixels. When we can
+          // resolve the asset to candle data, compute the real RSI(14)/ATR(14)
+          // so the reading matches Kronos / Quant for the same ticker.
+          let indicatorsBlock = "";
+          if (asset) {
+            try {
+              const aUp = asset.toUpperCase();
+              const aCls: string = ["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(aUp)
+                ? "equity"
+                : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(aUp)
+                ? "commodity" : "crypto";
+              const tfForHorizon = horizon === "scalp" ? "15m" : horizon === "intraday" ? "1h" : horizon === "swing" ? "4h" : "1d";
+              const cd = await fetchQuantCandles(aUp, aCls, tfForHorizon, 48);
+              if (cd && cd.length >= 20) {
+                const cl = cd.map((c: any) => Number(c.close ?? c.c)).filter((n: number) => n > 0);
+                const hi = cd.map((c: any) => Number(c.high ?? c.h));
+                const lo = cd.map((c: any) => Number(c.low ?? c.l));
+                const per = Math.min(14, cl.length - 1);
+                let g = 0, ls = 0;
+                for (let i = cl.length - per; i < cl.length; i++) { const d = cl[i] - cl[i-1]; if (d >= 0) g += d; else ls -= d; }
+                const ag = g / per, al = ls / per;
+                const rsiV = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+                const zone = rsiV >= 70 ? "OVERBOUGHT" : rsiV <= 30 ? "OVERSOLD" : rsiV >= 55 ? "BULLISH" : rsiV <= 45 ? "BEARISH" : "NEUTRAL";
+                let trs = 0;
+                for (let i = cl.length - per; i < cl.length; i++) {
+                  trs += Math.max(hi[i]-lo[i], Math.abs(hi[i]-cl[i-1]), Math.abs(lo[i]-cl[i-1]));
+                }
+                const atrV = trs / per;
+                const px = cl[cl.length - 1];
+                indicatorsBlock = `\n\n═══ SERVER-COMPUTED INDICATORS (${aUp}, ${tfForHorizon} candles — TRUST THESE OVER THE CHART) ═══\nRSI(14): ${rsiV.toFixed(1)} (${zone})\nATR(14): ${atrV.toFixed(6)} (${((atrV/px)*100).toFixed(2)}% of price)\nLatest close: ${px}\nUse these exact values for the "rsi" field and ATR-based stop sizing. Only infer indicators NOT listed here from price action.`;
+              }
+            } catch (e: any) {
+              console.error("[chart-ai] indicator compute failed (fail-open):", e?.message);
+            }
+          }
+
           const system = `You are an elite quantitative technical analyst for CLVRQuantAI. Analyze the attached chart and return ONLY a JSON object — no prose, no markdown fences, no explanation outside the JSON.
 
 Context:
 - Trading horizon: ${horizon}
 - Asset (user-provided): ${assetLabel}
-- Current UTC time: ${nowIso}${cachedNewsBlock}${inAppNewsBlock}${execContextBlock}${execEligibleNote ? "\n\n" + execEligibleNote : ""}
+- Current UTC time: ${nowIso}${cachedNewsBlock}${inAppNewsBlock}${execContextBlock}${indicatorsBlock}${execEligibleNote ? "\n\n" + execEligibleNote : ""}
 
 ═══ MANDATORY ANALYSIS CHECKLIST — complete EVERY step before deciding ═══
 
@@ -4108,7 +4145,7 @@ Step 3 — TECHNICAL INDICATORS. From what is visible on the chart, evaluate ALL
   • Volume (climactic, fading, divergence with price)
   • Bollinger Bands / volatility (squeeze, expansion, band ride)
   • Any other indicators visible (Stoch RSI, ATR, OBV, VWAP, Ichimoku, etc.)
-If an indicator is NOT visible on the chart, infer the likely state from price action alone — do not invent a reading.
+If a SERVER-COMPUTED INDICATORS block is present above, use those exact values (especially RSI) instead of estimating from the chart pixels. If an indicator is NOT visible on the chart AND not in that block, infer the likely state from price action alone — do not invent a reading.
 
 Step 4 — NEWS + CATALYST CHECK.
   ${cachedNews ? "Use the FRESH WEB NEWS CONTEXT above (already cached) and the IN-APP NEWS FEED above. DO NOT re-run web search."
@@ -8752,6 +8789,28 @@ Every level must be technically defensible. Return JSON only.`;
     const userMessageRaw = req.body.userMessage || req.body.prompt || "";
     if (!userMessageRaw) return res.status(400).json({ error: "userMessage is required" });
 
+    // Auth check — AI is Pro-only
+    const userId = (req.session as any)?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Sign in required to use AI." });
+    }
+    const dbUser = await storage.getUser(userId);
+    if (!dbUser) {
+      return res.status(401).json({ error: "Sign in required to use AI." });
+    }
+    const effectiveTier = await getEffectiveTier(dbUser);
+    const isPro = effectiveTier === "pro" || effectiveTier === "elite";
+    if (!isPro) {
+      return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock CLVR AI analysis." });
+    }
+
+    if (!checkAiRateLimit(userId, true)) {
+      return res.status(429).json({
+        error: "Rate limit: 60 AI requests/hour on Pro.",
+        cached: false,
+      });
+    }
+
     // ── Optional brain / vision / exec-level injection (Trade Ideas, QuantBrain) ──
     // Callers can opt-in to surface the same Statistical Brain + Chart Vision +
     // VWAP/ORH/ORL execution context that /api/quant uses. Falls open on every
@@ -8926,28 +8985,6 @@ Every level must be technically defensible. Return JSON only.`;
           { type: "text", text: `A live 1h candlestick chart of ${visionTicker} with EMA20/EMA50 overlays and S/R levels is attached above. Use it to confirm visual structure (clean trends, fakeout wicks, double tops/bottoms at key levels) before answering.\n\n${userMessageRaw}` },
         ]
       : userMessageRaw;
-
-    // Auth check — AI is Pro-only
-    const userId = (req.session as any)?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: "Sign in required to use AI." });
-    }
-    const dbUser = await storage.getUser(userId);
-    if (!dbUser) {
-      return res.status(401).json({ error: "Sign in required to use AI." });
-    }
-    const effectiveTier = await getEffectiveTier(dbUser);
-    const isPro = effectiveTier === "pro" || effectiveTier === "elite";
-    if (!isPro) {
-      return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock CLVR AI analysis." });
-    }
-
-    if (!checkAiRateLimit(userId, true)) {
-      return res.status(429).json({
-        error: "Rate limit: 60 AI requests/hour on Pro.",
-        cached: false,
-      });
-    }
 
     // Check shared response cache — same prompt for any user = cached response
     // The cache key must distinguish callers using different brain/vision/exec
@@ -9146,17 +9183,19 @@ Every level must be technically defensible. Return JSON only.`;
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
 
-    // Tier check — Elite only
+    // Tier check — Elite only. Logged-out requests are rejected (they can't be
+    // any tier). Free/Pro still receive 403; Elite passes. On a transient DB
+    // error we fail open ONLY for an authenticated session, so a real Elite
+    // user is never locked out by a momentary lookup failure.
     const userId = (req.session as any)?.userId;
-    if (userId) {
-      try {
-        const dbUser = await storage.getUser(userId);
-        if (dbUser) {
-          const tier = await getEffectiveTier(dbUser);
-          if (tier !== "elite") return res.status(403).json({ error: "Kronos Forecast Engine requires Elite tier." });
-        }
-      } catch { /* allow through if check fails */ }
-    }
+    if (!userId) return res.status(401).json({ error: "Sign in required to use Kronos." });
+    try {
+      const dbUser = await storage.getUser(userId);
+      if (dbUser) {
+        const tier = await getEffectiveTier(dbUser);
+        if (tier !== "elite") return res.status(403).json({ error: "Kronos Forecast Engine requires Elite tier." });
+      }
+    } catch { /* transient DB error: allow the authenticated request through */ }
 
     try {
       const { ticker = "BTC", timeframe = "4h" } = req.body;
@@ -9191,7 +9230,12 @@ Every level must be technically defensible. Return JSON only.`;
       const logReturns = closes.slice(1).map((c: number, i: number) => Math.log(c / closes[i]));
       const meanR = logReturns.reduce((a: number, b: number) => a + b, 0) / logReturns.length;
       const variance = logReturns.reduce((a: number, b: number) => a + Math.pow(b - meanR, 2), 0) / logReturns.length;
-      const histVolAnnualized = Math.sqrt(variance * 252) * 100;
+      const PERIODS_PER_YEAR: Record<string, number> = {
+        "15m": 35040, "1h": 8760, "4h": 2190,
+        "1d": cls === "crypto" ? 365 : 252,
+      };
+      const ppy = PERIODS_PER_YEAR[timeframe] || (cls === "crypto" ? 365 : 252);
+      const histVolAnnualized = Math.sqrt(variance * ppy) * 100;
       const nextCandleRangePct = Math.sqrt(variance) * 100 * 2;
 
       // ── RSI(14) ──
@@ -9321,11 +9365,8 @@ Rules:
 - trade_plan MUST be internally consistent with ensemble_signal: LONG plans for LONG/STRONG_LONG, SHORT plans for SHORT/STRONG_SHORT, NO_TRADE for NEUTRAL or when R:R < 1.5:1.
 - Derive entry using RSI: oversold (<30) → enter LONG on reclaim of recent pivot; overbought (>70) → enter SHORT on rejection; in-range → enter on pullback to key level.
 - SL must be placed beyond the nearest invalidation level (support for LONG, resistance for SHORT), typically 1.0–1.5x ATR away.
-- TP1 at 1.5–2x ATR (R:R ≥ 1.5:1). TP2 at 2.5–4x ATR.
-- Use the suggested_leverage provided unless you have strong reason to deviate.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-KRONOS OVERLAY: Only fire when ALL conditions met: edge>72%, vol NORMAL or HIGH, macro clear for full kill clock, OI confirms direction, 3+ factors score >70, R:R to TP1 >= 1.5:1. If any fail, output: "Kronos: No qualifying setup. Failed: [list]". Tag qualifying signals with "⚡ KRONOS — HIGH CONVICTION". If rolling win rate drops below 60% over 20 signals, self-mute 24H.`;
+- TP1 at 1.65–2x ATR (R:R ≥ 1.65:1). TP2 at 2.5–4x ATR.
+- Use the suggested_leverage provided unless you have strong reason to deviate.`;
 
       const userMsg = `Asset: ${ticker} | Market: ${cls.toUpperCase()} | Timeframe: ${timeframe}
 Current Price: $${currentPrice}
@@ -9339,7 +9380,7 @@ Suggested leverage: ${suggestedLeverage}
 OHLCV K-LINE SEQUENCE — ${recent.length} candles (T-${recent.length - 1} oldest → T+0 current):
 ${ohlcvStr}
 
-Detect the dominant K-line pattern, generate probabilistic 5-candle forecast trajectories, AND produce a concrete trade_plan (entry based on RSI zone, TP1/TP2 sized from ATR, SL beyond nearest invalidation, using the suggested leverage). If the setup does not meet R:R ≥ 1.5:1, set trade_plan.direction = "NO_TRADE".`;
+Detect the dominant K-line pattern, generate probabilistic 5-candle forecast trajectories, AND produce a concrete trade_plan (entry based on RSI zone, TP1/TP2 sized from ATR, SL beyond nearest invalidation, using the suggested leverage). If the setup does not meet R:R ≥ 1.65:1, set trade_plan.direction = "NO_TRADE".`;
 
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -9843,6 +9884,68 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       } catch (defErr: any) {
         console.warn("[kronos DEFENSE] floor check error (fail-open):", defErr?.message || defErr);
       }
+
+      // ── Headline reconciliation (DISPLAY layer only) ──────────────────────
+      // The model writes ensemble_signal/ensemble_confidence and the
+      // bull/base/bear trajectories independently, so the headline can
+      // contradict its own probability-weighted math. We do NOT mutate
+      // ensemble_signal/ensemble_confidence (hardener, edge policy, flip-cache
+      // and conviction-cap all key off them — left exactly as built). We
+      // publish reconciled DISPLAY fields the UI shows instead.
+      try {
+        const tj = parsed.trajectories || {};
+        const leg = (x: any) => ({
+          p: Math.max(0, Number(x?.probability) || 0),
+          r: Number(x?.final_pct_change) || 0,
+        });
+        const legs = [leg(tj.bull), leg(tj.base), leg(tj.bear)];
+        const pSum = legs.reduce((a, l) => a + l.p, 0) || 1;            // normalize (model doesn't always sum to 100)
+        const ev   = legs.reduce((a, l) => a + (l.p / pSum) * l.r, 0);  // expected % move over the 5 candles
+        const pUp  = legs.filter(l => l.r > 0).reduce((a, l) => a + l.p, 0) / pSum;
+
+        parsed.trajectory_ev_pct = parseFloat(ev.toFixed(2));
+        parsed.trajectory_p_up   = Math.round(pUp * 100);
+
+        const headline = String(parsed.ensemble_signal || "NEUTRAL").toUpperCase();
+        const sideOf = (s: string) => /LONG/.test(s) ? "L" : /SHORT/.test(s) ? "S" : "N";
+        const evSide = ev >= 0.4 ? "L" : ev <= -0.4 ? "S" : "N";        // |EV| < 0.4% over 5 candles = no edge
+
+        let dispSignal = headline;
+        let dispConf   = Math.round(Number(parsed.ensemble_confidence) || 50);
+        let divergence: string | null = null;
+
+        if (sideOf(headline) === evSide && evSide !== "N") {
+          // Direction agrees with the math — never show more confidence than
+          // the probability mass behind that direction supports.
+          const mass = evSide === "L" ? pUp : (1 - pUp);
+          dispConf = Math.min(dispConf, Math.round(mass * 100));
+        } else if (evSide === "N" || sideOf(headline) === "N") {
+          // Math is flat (or headline already neutral) but they disagree →
+          // the honest call is NEUTRAL, not a directional bet.
+          if (sideOf(headline) !== "N") {
+            dispSignal = "NEUTRAL";
+            dispConf = 50;
+            divergence = `Headline ${headline} but trajectories are net-flat (EV ${ev.toFixed(2)}%, ${Math.round(pUp*100)}% up). Shown as NEUTRAL.`;
+          }
+        } else {
+          // Headline and math point opposite ways, both with conviction →
+          // trust the probability-weighted trajectories.
+          dispSignal = evSide === "L" ? "LONG" : "SHORT";
+          const mass = evSide === "L" ? pUp : (1 - pUp);
+          dispConf = Math.round(mass * 100);
+          divergence = `Headline ${headline} contradicted trajectory EV ${ev.toFixed(2)}% (${Math.round(pUp*100)}% up). Re-aligned to ${dispSignal}.`;
+        }
+
+        parsed.forecast_signal     = dispSignal;
+        parsed.forecast_confidence = Math.max(0, Math.min(100, dispConf));
+        if (divergence) {
+          parsed.signal_divergence = divergence;
+          console.log(`[kronos reconcile] ${parsed.asset || ticker} ${timeframe}: ${divergence}`);
+        }
+      } catch (e: any) {
+        console.warn("[kronos] headline reconcile failed (fail-open):", e?.message || e);
+      }
+      // ──────────────────────────────────────────────────────────────────────
 
       res.json(parsed);
 

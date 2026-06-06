@@ -133,7 +133,7 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
           window.__clvrKronosCache[asset] = {
             ts: Date.now(),
             timeframe: tf,
-            ensemble_signal: data.ensemble_signal,
+            ensemble_signal: data.forecast_signal || data.ensemble_signal,
             volatility_regime: data.volatility_forecast?.regime,
             annualized_vol_pct: data.volatility_forecast?.annualized_pct,
             next_candle_range_pct: data.volatility_forecast?.next_candle_range_pct,
@@ -152,7 +152,9 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
     }
   };
 
-  const ensigCol = result ? (SIG_COLOR[result.ensemble_signal] || "#f59e0b") : "#f59e0b";
+  const kSignal = result ? (result.forecast_signal || result.ensemble_signal) : null;
+  const kConf   = result ? (result.forecast_confidence ?? result.ensemble_confidence ?? 0) : 0;
+  const ensigCol = result ? (SIG_COLOR[kSignal] || "#f59e0b") : "#f59e0b";
   const volCol   = result ? (VOL_COLOR[result.volatility_forecast?.regime] || "#f59e0b") : "#f59e0b";
 
   return (
@@ -194,7 +196,7 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
               background:`${ensigCol}12`, border:`1px solid ${ensigCol}33`,
               borderRadius:3, padding:"2px 7px", letterSpacing:0.5,
             }}>
-              {SIG_LABEL[result.ensemble_signal] || result.ensemble_signal}
+              {SIG_LABEL[kSignal] || kSignal}
             </div>
           )}
           <div style={{ fontSize:10, color:"#3a4560" }}>{open ? "▲" : "▼"}</div>
@@ -279,6 +281,18 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
           {/* Results */}
           {result && !loading && (
             <>
+              <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:0.5, marginBottom:8, lineHeight:1.5 }}>
+                Kronos is a 5-candle probabilistic forecast (mean-reversion aware). It can point the opposite way to a pure trend read like Chart AI — different tools, different horizons.
+              </div>
+              {result.signal_divergence && (
+                <div style={{
+                  background:"rgba(245,158,11,0.07)", border:"1px solid rgba(245,158,11,0.3)",
+                  color:"#f59e0b", padding:"7px 10px", borderRadius:6,
+                  fontFamily:mono, fontSize:8.5, lineHeight:1.5, marginBottom:10,
+                }}>
+                  ⚠ {result.signal_divergence}
+                </div>
+              )}
               <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
                 {/* Ensemble signal */}
                 <div style={{
@@ -289,20 +303,25 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
                 }}>
                   <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:1.5 }}>ENSEMBLE SIGNAL</div>
                   <div style={{ fontSize:16, fontWeight:900, color:ensigCol, fontFamily:mono, letterSpacing:0.5 }}>
-                    {SIG_LABEL[result.ensemble_signal] || result.ensemble_signal}
+                    {SIG_LABEL[kSignal] || kSignal}
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                     <div style={{ flex:1, height:4, background:"rgba(255,255,255,0.05)", borderRadius:2, overflow:"hidden" }}>
                       <div style={{
-                        height:"100%", width:`${result.ensemble_confidence || 0}%`,
+                        height:"100%", width:`${kConf || 0}%`,
                         background:`linear-gradient(90deg,${ensigCol}60,${ensigCol})`,
                         borderRadius:2, transition:"width 1s",
                       }} />
                     </div>
                     <span style={{ fontSize:9, fontWeight:800, color:ensigCol, fontFamily:mono }}>
-                      {result.ensemble_confidence}%
+                      {kConf}%
                     </span>
                   </div>
+                  {result.trajectory_ev_pct != null && (
+                    <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:0.5 }}>
+                      EV {result.trajectory_ev_pct >= 0 ? "+" : ""}{result.trajectory_ev_pct}% · {result.trajectory_p_up}% up over 5 candles
+                    </div>
+                  )}
                 </div>
 
                 {/* Volatility */}
