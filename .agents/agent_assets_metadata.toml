@@ -78,3 +78,9 @@ id = "LmUAQNVU38u7K7LkrMdI0"
 uri = "file://exports/clvr_ai_features_code.md"
 type = "text"
 title = "CLVR AI Features — Full Source (Trade Ideas, Quant Scanner, Kronos, Ask AI, Chart AI)"
+
+[[outputs]]
+id = "oj2Cr9g2YZJf96BcPtHQO"
+uri = "file://.local/exports/quant-ai-signals-source.zip"
+type = "unspecified"
+title = "Quant AI Signals — Full Source Code (41 files)"

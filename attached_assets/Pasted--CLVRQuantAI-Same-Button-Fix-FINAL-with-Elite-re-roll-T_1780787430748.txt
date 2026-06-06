@@ -1,0 +1,280 @@
+# CLVRQuantAI — Same-Button Fix (FINAL: with Elite re-roll)
+
+This **supersedes Prompt A and Prompt B** in `CLVR_SameButton_Fix.md`. Use the versions here instead — they include everything from before plus an Elite-only cache bypass. Prompt C (the honest empty-state) from the previous file is unchanged and still applies.
+
+### Gating (confirmed — no code change needed for this)
+
+The whole AI suite is **Pro/Elite only**. Free users hit the existing 403 → the client already shows the “AI Trade Ideas are exclusive to Pro subscribers” card. Free never reaches generation. The per-tier counts stay as built: **Elite 6, Pro 4** (Free = none).
+
+> Guardrail line for each prompt:
+> *“Do not change tier gating. Free has NO access (existing 403 / PRO_REQUIRED card stays). Pro = 4 ideas, Elite = 6. Only Elite may bypass the cache.”*
+
+-----
+
+## PROMPT A (FINAL) — Server: coalescing + shared key + temperature + Elite bypass
+
+**File:** `server/routes.ts` — inside `app.post("/api/ai/analyze", ...)`
+
+**A1 — in-flight map.** FIND:
+
+```ts
+  app.post("/api/ai/analyze", aiIpLimiter, async (req, res) => {
+```
+
+REPLACE:
+
+```ts
+  // In-flight map for single-flight coalescing of identical concurrent
+  // /api/ai/analyze requests (keyed by the same cacheKey used for aiCache).
+  const aiInFlight = new Map<string, Promise<void>>();
+  app.post("/api/ai/analyze", aiIpLimiter, async (req, res) => {
+```
+
+**A2 — user-agnostic Trade Ideas cache key.** FIND:
+
+```ts
+    const cacheKey = hashPrompt(system, userMessageStr) + flagSuffix;
+```
+
+REPLACE:
+
+```ts
+    // Trade Ideas: USER-AGNOSTIC cache key from the stable filter set + a coarse
+    // time bucket, so Pro/Elite users with the same filters share ONE result
+    // instead of each rolling their own live (price-jittered, non-deterministic)
+    // generation. Falls back to the legacy prompt hash for every other caller
+    // (Ask AI chat, Morning Brief), so they are unaffected.
+    const ideaParams = req.body.ideaParams && typeof req.body.ideaParams === "object" ? req.body.ideaParams : null;
+    const cacheKey = ideaParams
+      ? `ideas:${ideaParams.timeframe || "?"}|${ideaParams.horizon || "?"}|${ideaParams.assetClass || "?"}|${ideaParams.marketType || "?"}|${ideaParams.tradeCount || "?"}|b${Math.floor(Date.now() / AI_CACHE_TTL)}` + flagSuffix
+      : hashPrompt(system, userMessageStr) + flagSuffix;
+```
+
+**A3 — bypass-aware cache read + coalescing.** FIND:
+
+```ts
+    const cached = aiCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < AI_CACHE_TTL) {
+      return res.json({ text: cached.text, response: cached.text, cached: true });
+    }
+```
+
+REPLACE:
+
+```ts
+    // Elite-only cache bypass: lets an Elite user force a fresh re-roll within
+    // the cache window. Pro users — and Elite's DEFAULT press — still share the
+    // stable batch. Free never reaches here (403'd above).
+    const forceFresh = req.body.forceFresh === true && effectiveTier === "elite";
+
+    const cached = aiCache.get(cacheKey);
+    if (!forceFresh && cached && Date.now() - cached.ts < AI_CACHE_TTL) {
+      return res.json({ text: cached.text, response: cached.text, cached: true });
+    }
+
+    // ── Single-flight coalescing (skipped for an Elite force-fresh re-roll) ──
+    // Two users pressing "Generate" at the same instant both miss the cache and
+    // would otherwise fire two independent (non-deterministic) Claude calls —
+    // one can get ideas while the other gets "no setups". If a request for this
+    // key is already in flight, wait for it and serve its freshly-cached result
+    // so concurrent identical requests get IDENTICAL output.
+    let __resolveFlight: () => void = () => {};
+    if (!forceFresh) {
+      const inflight = aiInFlight.get(cacheKey);
+      if (inflight) {
+        try { await inflight; } catch { /* first caller errored — compute below */ }
+        const after = aiCache.get(cacheKey);
+        if (after && Date.now() - after.ts < AI_CACHE_TTL) {
+          return res.json({ text: after.text, response: after.text, cached: true, coalesced: true });
+        }
+      }
+      const __flight = new Promise<void>((r) => { __resolveFlight = r; });
+      aiInFlight.set(cacheKey, __flight);
+    }
+```
+
+**A4 — stable temperature (callers may override).** FIND:
+
+```ts
+      const body: any = {
+        model,
+        max_tokens: maxTokens,
+        system: system || "",
+        messages,
+      };
+```
+
+REPLACE:
+
+```ts
+      const body: any = {
+        model,
+        max_tokens: maxTokens,
+        system: system || "",
+        messages,
+        // Lower temperature = more stable output, so two users generating at the
+        // same time get materially the same setups. Callers can override with a
+        // numeric `temperature` in the body.
+        temperature: typeof req.body.temperature === "number" ? req.body.temperature : 0.3,
+      };
+```
+
+**A5 — cache write + lock release.** FIND:
+
+```ts
+      // Only cache valid non-empty responses (now post-hardening)
+      aiCache.set(cacheKey, { text, ts: Date.now() });
+
+      res.json({ text, response: text, cached: false, model });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+```
+
+REPLACE:
+
+```ts
+      // Only cache valid non-empty responses (post-hardening). A force-fresh
+      // re-roll also writes the shared key, so the window re-syncs to the newest
+      // batch and subsequent users stay consistent again.
+      aiCache.set(cacheKey, { text, ts: Date.now() });
+
+      res.json({ text, response: text, cached: false, fresh: forceFresh, model });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    } finally {
+      // Release the single-flight lock (only set for non-bypass requests).
+      if (!forceFresh) {
+        aiInFlight.delete(cacheKey);
+        __resolveFlight();
+      }
+    }
+  });
+```
+
+**Acceptance (server):**
+
+- Two simultaneous identical Trade Ideas requests → ONE Claude call; the second returns `coalesced: true`, same `text`.
+- An Elite request with `forceFresh: true` skips cache + coalescing, computes fresh, returns `fresh: true`, and updates the shared key.
+- A Pro request (or any request without `forceFresh`) can never bypass — `forceFresh` only flips true when `effectiveTier === "elite"`.
+- Free still 403 (unchanged). Ask AI / Morning Brief (no `ideaParams`) unchanged.
+
+-----
+
+## PROMPT B (FINAL) — Client: send filter descriptor + Elite re-roll button
+
+**File:** `client/src/components/ai/TopTradeIdeas.jsx`
+
+**B1 — let the generate function take a bypass flag.** FIND:
+
+```jsx
+  const runTradeIdeas = async () => {
+```
+
+REPLACE:
+
+```jsx
+  const runTradeIdeas = async (forceFresh = false) => {
+```
+
+**B2 — fix the main button so it does NOT pass the click event as `forceFresh`.** (Critical — `onClick={runTradeIdeas}` would hand the event object in as a truthy `forceFresh`.) FIND:
+
+```jsx
+        data-testid="btn-generate-trades"
+        onClick={runTradeIdeas}
+```
+
+REPLACE:
+
+```jsx
+        data-testid="btn-generate-trades"
+        onClick={() => runTradeIdeas(false)}
+```
+
+**B3 — send the stable descriptor + the bypass flag.** FIND:
+
+```jsx
+        body: JSON.stringify({
+          system: sys,
+          userMessage: userMsg,
+          maxTokens,
+          attachBrainSummary: true,
+          tickers: focusTickers,
+        }),
+```
+
+REPLACE:
+
+```jsx
+        body: JSON.stringify({
+          system: sys,
+          userMessage: userMsg,
+          maxTokens,
+          attachBrainSummary: true,
+          tickers: focusTickers,
+          // Stable, user-agnostic cache descriptor so every Pro/Elite user with
+          // the same filters shares one generated batch.
+          ideaParams: {
+            timeframe,                      // today | midterm | longterm
+            horizon: todayMode,             // quick | hours | fullDay
+            assetClass,                     // ALL | CRYPTO | EQUITY | COMMODITY | FOREX
+            marketType: marketTypeFilter,   // PERP | SPOT | BOTH
+            tradeCount,                     // 6 Elite / 4 Pro
+          },
+          // Elite-only: force a fresh re-roll, bypassing the shared cache.
+          forceFresh,
+        }),
+```
+
+**B4 — Elite-only “Re-roll fresh” button** (shows only for Elite, only after a batch exists). FIND:
+
+```jsx
+        {loading ? "QuantBrain Analyzing..." : `Generate Top ${tradeCount} Trade Ideas ✦`}
+      </button>
+
+      {error === "PRO_REQUIRED" && (
+```
+
+REPLACE:
+
+```jsx
+        {loading ? "QuantBrain Analyzing..." : `Generate Top ${tradeCount} Trade Ideas ✦`}
+      </button>
+
+      {isElite && trades && !loading && (
+        <button
+          data-testid="btn-reroll-trades"
+          onClick={() => runTradeIdeas(true)}
+          style={{
+            width: "100%", height: 38, marginBottom: 16,
+            background: "transparent",
+            border: "1px solid rgba(201,168,76,0.25)",
+            borderRadius: 10, cursor: "pointer",
+            color: "#c9a84c",
+            fontFamily: MONO, fontWeight: 700, fontSize: 11,
+            letterSpacing: "0.08em", transition: "all 0.2s",
+          }}
+        >
+          ↻ RE-ROLL FRESH (ELITE) — bypass shared cache
+        </button>
+      )}
+
+      {error === "PRO_REQUIRED" && (
+```
+
+**Acceptance (client):**
+
+- The request body carries `ideaParams` and `forceFresh`.
+- The normal “Generate” button sends `forceFresh: false`; only the Elite “Re-roll” button sends `true`.
+- The Re-roll button is invisible to Free and Pro (it’s behind `isElite`) and only appears once a batch is on screen.
+- Filters still work — changing any filter changes `ideaParams` → a different batch.
+
+-----
+
+## End-to-end check
+
+1. Two Elite devices, same filters, press “Generate” together → identical result (server log shows one hardener line; second is `coalesced`).
+1. On one Elite device tap “↻ Re-roll fresh” → it generates a new batch (`fresh: true`); the other device’s next normal press now matches the re-rolled batch (shared key was updated).
+1. Pro device: no Re-roll button; same-filter presses share the batch with other Pro users.
+1. Free device: still the “exclusive to Pro subscribers” card — no generation.
