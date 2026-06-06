@@ -1,0 +1,496 @@
+# CLVRQuantAI — AI Fixes (Replit-Ready Prompts)
+
+Work through these **in order**. Each is self-contained: paste the whole prompt into Replit AI, let it apply, verify acceptance criteria, then move to the next. Every prompt is additive or surgical — none of them changes the Free / Pro / Elite gates.
+
+> **GLOBAL GUARDRAIL — paste this line at the top of every Replit prompt:**
+> *“Do not change any subscription/tier gating. Free, Pro, and Elite access must behave exactly as it does now. Do not touch any `requireElite`, `getEffectiveTier`, `isPro`, `isElite`, daily-limit, or rate-limit logic except where this prompt explicitly says so.”*
+
+Order:
+
+1. P0 — Kronos honest headline (backend)
+1. P0/P1 — Kronos honest headline + horizon clarity (frontend)
+1. P2 — Kronos auth hole (logged-out bypass)
+1. P2 — `/api/ai/analyze` gate ordering (cost)
+1. P1 — Chart AI real indicators
+1. P3 — correctness nits (vol annualization, R:R wording, prompt cruft)
+
+-----
+
+## PROMPT 1 — Kronos honest headline (backend)
+
+**File:** `server/routes.ts` — inside `app.post("/api/kronos", ...)`
+
+**Problem:** the model emits `ensemble_signal` / `ensemble_confidence` and the bull/base/bear trajectories as separate fields, so the headline can contradict its own probability-weighted math (the “LONG 58%” on net-negative trajectories bug). We will NOT mutate `ensemble_signal` / `ensemble_confidence` — the hardener, edge policy, flip-cache and conviction-cap all read those, and they stay exactly as built. Instead we add reconciled **display** fields the UI renders.
+
+**FIND** this line (it appears once, near the end of the Kronos route):
+
+```ts
+      res.json(parsed);
+```
+
+**REPLACE** with:
+
+```ts
+      // ── Headline reconciliation (DISPLAY layer only) ──────────────────────
+      // The model writes ensemble_signal/ensemble_confidence and the
+      // bull/base/bear trajectories independently, so the headline can
+      // contradict its own probability-weighted math. We do NOT mutate
+      // ensemble_signal/ensemble_confidence (hardener, edge policy, flip-cache
+      // and conviction-cap all key off them — left exactly as built). We
+      // publish reconciled DISPLAY fields the UI shows instead.
+      try {
+        const tj = parsed.trajectories || {};
+        const leg = (x: any) => ({
+          p: Math.max(0, Number(x?.probability) || 0),
+          r: Number(x?.final_pct_change) || 0,
+        });
+        const legs = [leg(tj.bull), leg(tj.base), leg(tj.bear)];
+        const pSum = legs.reduce((a, l) => a + l.p, 0) || 1;            // normalize (model doesn't always sum to 100)
+        const ev   = legs.reduce((a, l) => a + (l.p / pSum) * l.r, 0);  // expected % move over the 5 candles
+        const pUp  = legs.filter(l => l.r > 0).reduce((a, l) => a + l.p, 0) / pSum;
+
+        parsed.trajectory_ev_pct = parseFloat(ev.toFixed(2));
+        parsed.trajectory_p_up   = Math.round(pUp * 100);
+
+        const headline = String(parsed.ensemble_signal || "NEUTRAL").toUpperCase();
+        const sideOf = (s: string) => /LONG/.test(s) ? "L" : /SHORT/.test(s) ? "S" : "N";
+        const evSide = ev >= 0.4 ? "L" : ev <= -0.4 ? "S" : "N";        // |EV| < 0.4% over 5 candles = no edge
+
+        let dispSignal = headline;
+        let dispConf   = Math.round(Number(parsed.ensemble_confidence) || 50);
+        let divergence: string | null = null;
+
+        if (sideOf(headline) === evSide && evSide !== "N") {
+          // Direction agrees with the math — never show more confidence than
+          // the probability mass behind that direction supports.
+          const mass = evSide === "L" ? pUp : (1 - pUp);
+          dispConf = Math.min(dispConf, Math.round(mass * 100));
+        } else if (evSide === "N" || sideOf(headline) === "N") {
+          // Math is flat (or headline already neutral) but they disagree →
+          // the honest call is NEUTRAL, not a directional bet.
+          if (sideOf(headline) !== "N") {
+            dispSignal = "NEUTRAL";
+            dispConf = 50;
+            divergence = `Headline ${headline} but trajectories are net-flat (EV ${ev.toFixed(2)}%, ${Math.round(pUp*100)}% up). Shown as NEUTRAL.`;
+          }
+        } else {
+          // Headline and math point opposite ways, both with conviction →
+          // trust the probability-weighted trajectories.
+          dispSignal = evSide === "L" ? "LONG" : "SHORT";
+          const mass = evSide === "L" ? pUp : (1 - pUp);
+          dispConf = Math.round(mass * 100);
+          divergence = `Headline ${headline} contradicted trajectory EV ${ev.toFixed(2)}% (${Math.round(pUp*100)}% up). Re-aligned to ${dispSignal}.`;
+        }
+
+        parsed.forecast_signal     = dispSignal;
+        parsed.forecast_confidence = Math.max(0, Math.min(100, dispConf));
+        if (divergence) {
+          parsed.signal_divergence = divergence;
+          console.log(`[kronos reconcile] ${parsed.asset || ticker} ${timeframe}: ${divergence}`);
+        }
+      } catch (e: any) {
+        console.warn("[kronos] headline reconcile failed (fail-open):", e?.message || e);
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
+      res.json(parsed);
+```
+
+**Acceptance criteria:**
+
+- Kronos responses now include `forecast_signal`, `forecast_confidence`, `trajectory_ev_pct`, `trajectory_p_up`, and `signal_divergence` (only when re-aligned).
+- `ensemble_signal` and `ensemble_confidence` in the JSON are **unchanged** from before.
+- Re-running the HYPE 1D case (BULL +12.13%/38, BASE −4.22%/38, BEAR −13.88%/24) returns `forecast_signal: "NEUTRAL"` and a `signal_divergence` note, because EV ≈ −0.33%.
+- No tier/gate code touched.
+
+-----
+
+## PROMPT 2 — Kronos honest headline + horizon clarity (frontend)
+
+**File:** `client/src/components/KronosPanel.jsx`
+
+**Goal:** render the reconciled headline, show the EV math, surface the divergence note, and add one line telling the user Kronos is a forecast (so it stops reading as “the app contradicts itself” vs Chart AI). All additive.
+
+**Edit A — derive reconciled values.** FIND:
+
+```jsx
+  const ensigCol = result ? (SIG_COLOR[result.ensemble_signal] || "#f59e0b") : "#f59e0b";
+```
+
+REPLACE:
+
+```jsx
+  const kSignal = result ? (result.forecast_signal || result.ensemble_signal) : null;
+  const kConf   = result ? (result.forecast_confidence ?? result.ensemble_confidence ?? 0) : 0;
+  const ensigCol = result ? (SIG_COLOR[kSignal] || "#f59e0b") : "#f59e0b";
+```
+
+**Edit B — use the reconciled signal label everywhere.** There are **two** occurrences of this exact expression (the header badge and the ensemble card). Replace BOTH:
+FIND (each):
+
+```jsx
+{SIG_LABEL[result.ensemble_signal] || result.ensemble_signal}
+```
+
+REPLACE (each):
+
+```jsx
+{SIG_LABEL[kSignal] || kSignal}
+```
+
+**Edit C — confidence bar + label, and add the EV line.** FIND:
+
+```jsx
+                    <div style={{
+                        height:"100%", width:`${result.ensemble_confidence || 0}%`,
+                        background:`linear-gradient(90deg,${ensigCol}60,${ensigCol})`,
+                        borderRadius:2, transition:"width 1s",
+                      }} />
+                    </div>
+                    <span style={{ fontSize:9, fontWeight:800, color:ensigCol, fontFamily:mono }}>
+                      {result.ensemble_confidence}%
+                    </span>
+                  </div>
+```
+
+REPLACE:
+
+```jsx
+                    <div style={{
+                        height:"100%", width:`${kConf || 0}%`,
+                        background:`linear-gradient(90deg,${ensigCol}60,${ensigCol})`,
+                        borderRadius:2, transition:"width 1s",
+                      }} />
+                    </div>
+                    <span style={{ fontSize:9, fontWeight:800, color:ensigCol, fontFamily:mono }}>
+                      {kConf}%
+                    </span>
+                  </div>
+                  {result.trajectory_ev_pct != null && (
+                    <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:0.5 }}>
+                      EV {result.trajectory_ev_pct >= 0 ? "+" : ""}{result.trajectory_ev_pct}% · {result.trajectory_p_up}% up over 5 candles
+                    </div>
+                  )}
+```
+
+**Edit D — divergence banner + “what Kronos is” caption.** FIND:
+
+```jsx
+            <>
+              <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+                {/* Ensemble signal */}
+```
+
+REPLACE:
+
+```jsx
+            <>
+              <div style={{ fontSize:7, color:"#6b7a99", fontFamily:mono, letterSpacing:0.5, marginBottom:8, lineHeight:1.5 }}>
+                Kronos is a 5-candle probabilistic forecast (mean-reversion aware). It can point the opposite way to a pure trend read like Chart AI — different tools, different horizons.
+              </div>
+              {result.signal_divergence && (
+                <div style={{
+                  background:"rgba(245,158,11,0.07)", border:"1px solid rgba(245,158,11,0.3)",
+                  color:"#f59e0b", padding:"7px 10px", borderRadius:6,
+                  fontFamily:mono, fontSize:8.5, lineHeight:1.5, marginBottom:10,
+                }}>
+                  ⚠ {result.signal_divergence}
+                </div>
+              )}
+              <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+                {/* Ensemble signal */}
+```
+
+**Edit E — feed the reconciled call to Trade Ideas cache.** FIND:
+
+```jsx
+            ensemble_signal: data.ensemble_signal,
+```
+
+REPLACE:
+
+```jsx
+            ensemble_signal: data.forecast_signal || data.ensemble_signal,
+```
+
+**Acceptance criteria:**
+
+- The big ENSEMBLE SIGNAL panel and the collapsed header badge both show the reconciled call (`forecast_signal`) and `forecast_confidence`.
+- An EV line (“EV −0.33% · 38% up over 5 candles”) shows under the confidence bar.
+- When re-aligned, an amber divergence note appears; when headline already matched the math, no note appears.
+- The grey caption about Kronos being a forecast always shows above the results.
+- Falls back gracefully to `ensemble_signal`/`ensemble_confidence` if the backend fields are missing (older cached responses).
+
+-----
+
+## PROMPT 3 — Kronos auth hole (logged-out bypass)
+
+**File:** `server/routes.ts` — top of `app.post("/api/kronos", ...)`
+
+**Problem:** the Elite gate is wrapped in `if (userId) { ... }`, so a request with **no session** skips the gate entirely and reaches the paid Anthropic call. We close that without changing tier behavior: logged-out requests are rejected; Free/Pro still get 403; Elite still gets through; we keep the existing fail-open on a transient DB error so a real Elite user is never locked out by a DB blip.
+
+**FIND:**
+
+```ts
+    // Tier check — Elite only
+    const userId = (req.session as any)?.userId;
+    if (userId) {
+      try {
+        const dbUser = await storage.getUser(userId);
+        if (dbUser) {
+          const tier = await getEffectiveTier(dbUser);
+          if (tier !== "elite") return res.status(403).json({ error: "Kronos Forecast Engine requires Elite tier." });
+        }
+      } catch { /* allow through if check fails */ }
+    }
+```
+
+**REPLACE:**
+
+```ts
+    // Tier check — Elite only. Logged-out requests are rejected (they can't be
+    // any tier). Free/Pro still receive 403; Elite passes. On a transient DB
+    // error we fail open ONLY for an authenticated session, so a real Elite
+    // user is never locked out by a momentary lookup failure.
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required to use Kronos." });
+    try {
+      const dbUser = await storage.getUser(userId);
+      if (dbUser) {
+        const tier = await getEffectiveTier(dbUser);
+        if (tier !== "elite") return res.status(403).json({ error: "Kronos Forecast Engine requires Elite tier." });
+      }
+    } catch { /* transient DB error: allow the authenticated request through */ }
+```
+
+**Acceptance criteria:**
+
+- Logged-out request to `/api/kronos` → 401, no Anthropic call.
+- Free/Pro user → 403 (unchanged).
+- Elite user → forecast runs (unchanged).
+- The KronosPanel only renders for `isElite` on the client (unchanged), so no UI regression.
+
+-----
+
+## PROMPT 4 — `/api/ai/analyze` gate ordering (cost)
+
+**File:** `server/routes.ts` — inside `app.post("/api/ai/analyze", ...)`
+
+**Problem:** the statistical-brain blocks, execution levels, unusual-activity, and the **vision chart PNG render** (which calls `fetchQuantCandles`) all run at the top of the handler, *before* the auth/tier/rate-limit check ~150 lines later. A logged-out or Free caller triggers all that upstream work before being rejected. The token spend is correctly behind the gate; the rest isn’t. We move the gate up. **The auth/tier/rate-limit logic itself is not changed — same 401/403/429 responses, just earlier.**
+
+**Step 1 — FIND** this existing block (the auth + rate-limit, currently sitting after all the context-building) and **CUT it** (remove it from its current location):
+
+```ts
+    // Auth check — AI is Pro-only
+    const userId = (req.session as any)?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Sign in required to use AI." });
+    }
+    const dbUser = await storage.getUser(userId);
+    if (!dbUser) {
+      return res.status(401).json({ error: "Sign in required to use AI." });
+    }
+    const effectiveTier = await getEffectiveTier(dbUser);
+    const isPro = effectiveTier === "pro" || effectiveTier === "elite";
+    if (!isPro) {
+      return res.status(403).json({ error: "AI Market Analyst is a Pro feature. Upgrade to Pro to unlock CLVR AI analysis." });
+    }
+
+    if (!checkAiRateLimit(userId, true)) {
+      return res.status(429).json({
+        error: "Rate limit: 60 AI requests/hour on Pro.",
+        cached: false,
+      });
+    }
+```
+
+**Step 2 — PASTE it back in** immediately after this line near the top of the handler:
+
+```ts
+    if (!userMessageRaw) return res.status(400).json({ error: "userMessage is required" });
+```
+
+so the gate now runs before any brain/vision/exec context is built.
+
+**Acceptance criteria:**
+
+- Auth/tier/rate-limit run before `buildPerformanceContext`, brain blocks, exec levels, unusual activity, and the vision render.
+- A Free user gets the same 403 as before, just without triggering upstream fetches.
+- Pro/Elite behavior unchanged; 60/hour rate limit unchanged.
+- No duplicate `userId` / `dbUser` declarations (the variables are only declared once now — if the move creates a redeclare error, keep the moved copy and delete the leftover).
+
+-----
+
+## PROMPT 5 — Chart AI real indicators
+
+**File:** `server/routes.ts` — inside `app.post("/api/chart-ai/analyze", ...)`
+
+**Problem:** Chart AI guesses RSI/MACD from pixels (“RSI not visible — inferred ~32–36”) even when the asset is known and we could compute the real value, like Kronos does. Same ticker → different RSI across tabs. We compute the real RSI(14)/ATR(14) when the asset is resolvable and feed it to the model. Fail-open: if candles aren’t available it behaves exactly as today. Elite gate via `requireElite` is untouched.
+
+**Step 1 — FIND** the end of the execution-context block (just before `// Build system prompt`):
+
+```ts
+          } catch (e: any) {
+              console.error("[chart-ai] exec levels inject failed:", e?.message);
+            }
+          }
+
+          const system = `You are an elite quantitative technical analyst for CLVRQuantAI.
+```
+
+**REPLACE** with (adds the indicators block in between):
+
+```ts
+          } catch (e: any) {
+              console.error("[chart-ai] exec levels inject failed:", e?.message);
+            }
+          }
+
+          // ── Server-computed indicators (when the asset is known) ───────────
+          // Chart AI otherwise estimates RSI/MACD from pixels. When we can
+          // resolve the asset to candle data, compute the real RSI(14)/ATR(14)
+          // so the reading matches Kronos / Quant for the same ticker.
+          let indicatorsBlock = "";
+          if (asset) {
+            try {
+              const aUp = asset.toUpperCase();
+              const aCls: string = ["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(aUp)
+                ? "equity"
+                : ["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(aUp)
+                ? "commodity" : "crypto";
+              const tfForHorizon = horizon === "scalp" ? "15m" : horizon === "intraday" ? "1h" : horizon === "swing" ? "4h" : "1d";
+              const cd = await fetchQuantCandles(aUp, aCls, tfForHorizon, 48);
+              if (cd && cd.length >= 20) {
+                const cl = cd.map((c: any) => Number(c.close ?? c.c)).filter((n: number) => n > 0);
+                const hi = cd.map((c: any) => Number(c.high ?? c.h));
+                const lo = cd.map((c: any) => Number(c.low ?? c.l));
+                const per = Math.min(14, cl.length - 1);
+                let g = 0, ls = 0;
+                for (let i = cl.length - per; i < cl.length; i++) { const d = cl[i] - cl[i-1]; if (d >= 0) g += d; else ls -= d; }
+                const ag = g / per, al = ls / per;
+                const rsiV = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+                const zone = rsiV >= 70 ? "OVERBOUGHT" : rsiV <= 30 ? "OVERSOLD" : rsiV >= 55 ? "BULLISH" : rsiV <= 45 ? "BEARISH" : "NEUTRAL";
+                let trs = 0;
+                for (let i = cl.length - per; i < cl.length; i++) {
+                  trs += Math.max(hi[i]-lo[i], Math.abs(hi[i]-cl[i-1]), Math.abs(lo[i]-cl[i-1]));
+                }
+                const atrV = trs / per;
+                const px = cl[cl.length - 1];
+                indicatorsBlock = `\n\n═══ SERVER-COMPUTED INDICATORS (${aUp}, ${tfForHorizon} candles — TRUST THESE OVER THE CHART) ═══\nRSI(14): ${rsiV.toFixed(1)} (${zone})\nATR(14): ${atrV.toFixed(6)} (${((atrV/px)*100).toFixed(2)}% of price)\nLatest close: ${px}\nUse these exact values for the "rsi" field and ATR-based stop sizing. Only infer indicators NOT listed here from price action.`;
+              }
+            } catch (e: any) {
+              console.error("[chart-ai] indicator compute failed (fail-open):", e?.message);
+            }
+          }
+
+          const system = `You are an elite quantitative technical analyst for CLVRQuantAI.
+```
+
+**Step 2 — inject the block into the prompt.** FIND:
+
+```ts
+- Current UTC time: ${nowIso}${cachedNewsBlock}${inAppNewsBlock}${execContextBlock}${execEligibleNote ? "\n\n" + execEligibleNote : ""}
+```
+
+REPLACE:
+
+```ts
+- Current UTC time: ${nowIso}${cachedNewsBlock}${inAppNewsBlock}${execContextBlock}${indicatorsBlock}${execEligibleNote ? "\n\n" + execEligibleNote : ""}
+```
+
+**Step 3 — tell the model to prefer real values.** FIND:
+
+```ts
+If an indicator is NOT visible on the chart, infer the likely state from price action alone — do not invent a reading.
+```
+
+REPLACE:
+
+```ts
+If a SERVER-COMPUTED INDICATORS block is present above, use those exact values (especially RSI) instead of estimating from the chart pixels. If an indicator is NOT visible on the chart AND not in that block, infer the likely state from price action alone — do not invent a reading.
+```
+
+**Acceptance criteria:**
+
+- When the user supplies an asset that resolves to candles, the Chart AI `indicators.rsi` field reports a concrete computed value, not “inferred from price action”.
+- The same ticker shows a consistent RSI in Chart AI and Kronos.
+- If candles aren’t available (unknown/odd asset), Chart AI behaves exactly as before.
+- `requireElite` and daily/monthly limits untouched.
+
+-----
+
+## PROMPT 6 — Correctness nits (bundle)
+
+**File:** `server/routes.ts` — inside `app.post("/api/kronos", ...)`
+
+**6a — Volatility annualization should scale with the timeframe.** Today it’s hardcoded to 252, which is only right for ~1D candles; on 15m/1h/4h it understates annualized vol. NOTE: this changes the displayed “annualized %” number for non-daily timeframes (expected and more correct).
+
+FIND:
+
+```ts
+      const histVolAnnualized = Math.sqrt(variance * 252) * 100;
+```
+
+REPLACE:
+
+```ts
+      const PERIODS_PER_YEAR: Record<string, number> = {
+        "15m": 35040, "1h": 8760, "4h": 2190,
+        "1d": cls === "crypto" ? 365 : 252,
+      };
+      const ppy = PERIODS_PER_YEAR[timeframe] || (cls === "crypto" ? 365 : 252);
+      const histVolAnnualized = Math.sqrt(variance * ppy) * 100;
+```
+
+**6b — Align the Kronos prompt’s R:R target to the enforced floor.** The route coerces any plan with R:R < 1.65 to NO_TRADE, but the prompt tells the model 1.5, so it sometimes produces plans that get thrown away. Bump the prompt target so the model aims above the floor. (This does not change any gate — the 1.65 defensive floor and 1.2 early sanity check stay.)
+
+FIND (appears twice in the Kronos system prompt — replace both):
+
+```ts
+R:R ≥ 1.5:1
+```
+
+REPLACE (both):
+
+```ts
+R:R ≥ 1.65:1
+```
+
+Also FIND:
+
+```ts
+TP1 at 1.5–2x ATR (R:R ≥ 1.5:1). TP2 at 2.5–4x ATR.
+```
+
+REPLACE:
+
+```ts
+TP1 at 1.65–2x ATR (R:R ≥ 1.65:1). TP2 at 2.5–4x ATR.
+```
+
+**6c — Remove the leftover “KRONOS OVERLAY” prompt cruft.** It describes a signal-gating contract (edge>72%, “self-mute 24H”, a `"Kronos: No qualifying setup"` text output) that doesn’t match the JSON forecast schema the route actually parses — it pulls the model in two directions.
+
+FIND and DELETE this entire block from the Kronos system prompt:
+
+```ts
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KRONOS OVERLAY: Only fire when ALL conditions met: edge>72%, vol NORMAL or HIGH, macro clear for full kill clock, OI confirms direction, 3+ factors score >70, R:R to TP1 >= 1.5:1. If any fail, output: "Kronos: No qualifying setup. Failed: [list]". Tag qualifying signals with "⚡ KRONOS — HIGH CONVICTION". If rolling win rate drops below 60% over 20 signals, self-mute 24H.
+```
+
+**Acceptance criteria:**
+
+- Kronos vol regime for 1h/4h reflects the higher period count (numbers will differ from before on non-daily TFs).
+- Model aims for ≥1.65 R:R, so fewer plans get coerced to NO_TRADE by the defensive floor.
+- The forecast JSON schema is the only contract in the prompt; no “Kronos: No qualifying setup” plain-text path remains.
+- No tier/limit logic touched.
+
+-----
+
+## Quick verification checklist after all six
+
+- [ ] Free user: AI tab still shows the upgrade card; `/api/ai/analyze` 403; no Kronos.
+- [ ] Pro user: Ask AI + Quant Scanner work; Kronos still locked (403).
+- [ ] Elite user: everything works, Kronos headline now matches its trajectories, EV line + (when relevant) divergence note visible.
+- [ ] Logged-out: `/api/kronos` and `/api/ai/analyze` both reject before any Anthropic call.
+- [ ] Chart AI on a known ticker reports a computed RSI; same value as Kronos for that ticker/TF.
+- [ ] All disclaimers and “AI analysis only / not financial advice” footers unchanged.
