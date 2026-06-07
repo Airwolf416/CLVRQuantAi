@@ -242,6 +242,12 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS concierge_bookings_user_idx ON concierge_bookings (user_id, created_at DESC)`);
+    // Additive: Google Calendar event id + Meet link + a finalize idempotency
+    // stamp. emails_sent_at guards against double calendar-create / double email
+    // on Stripe webhook retries (it is the single finalize gate).
+    await client.query(`ALTER TABLE concierge_bookings ADD COLUMN IF NOT EXISTS calendar_event_id TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE concierge_bookings ADD COLUMN IF NOT EXISTS meet_link TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE concierge_bookings ADD COLUMN IF NOT EXISTS emails_sent_at TIMESTAMPTZ`).catch(() => {});
 
     // ── referrals ────────────────────────────────────────────────────────────
     await client.query(`
