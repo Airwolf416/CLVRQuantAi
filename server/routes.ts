@@ -5212,7 +5212,10 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         pricing.mode = "checkout";
       }
 
-      // Paid path — Stripe hosted checkout. Falls to 503 when Stripe is off.
+      // Paid path — Stripe EMBEDDED checkout. The payment form renders INSIDE
+      // the concierge widget (no redirect to checkout.stripe.com); we return a
+      // clientSecret the frontend mounts with <EmbeddedCheckout/>. Falls to 503
+      // when Stripe is off.
       let stripe: any;
       try { stripe = await getUncachableStripeClient(); }
       catch { return res.status(503).json({ error: "Online payment isn't set up yet — please try again later." }); }
@@ -5227,6 +5230,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       const baseUrl = process.env.APP_URL
         || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "http://localhost:5000");
       const session = await stripe.checkout.sessions.create({
+        ui_mode: "embedded",
         mode: "payment",
         line_items: [{
           price_data: {
@@ -5236,14 +5240,13 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
           },
           quantity: 1,
         }],
-        success_url: `${baseUrl}/?booking=success`,
-        cancel_url: `${baseUrl}/?booking=cancelled`,
+        return_url: `${baseUrl}/?booking=success&session_id={CHECKOUT_SESSION_ID}`,
         ...(user.email ? { customer_email: user.email } : {}),
         metadata: { userId: String(user.id), bookingId: String(bookingId), kind: "concierge_session" },
       });
 
       try { await db.execute(dsql`UPDATE concierge_bookings SET stripe_session_id = ${session.id} WHERE id = ${bookingId}`); } catch {}
-      res.json({ mode: "checkout", url: session.url, bookingId });
+      res.json({ mode: "checkout", clientSecret: session.client_secret, sessionId: session.id, bookingId });
     } catch (e: any) {
       console.error("[concierge/book]", e?.message || e);
       res.status(500).json({ error: "Could not create booking. Please try again." });
