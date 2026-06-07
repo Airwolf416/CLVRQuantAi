@@ -20,7 +20,7 @@ import { userPromotedAssets, newsItems } from "@shared/schema";
 import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
-import { sendBookingEmails } from "./lib/bookingEmail";
+import { sendBookingEmails, finalizeBooking } from "./lib/bookingEmail";
 import { notifyAutoposter, getAutoposterStatus } from "./autoposterNotify";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
 import { computeRegimeGate } from "./lib/regimeGate";
@@ -5197,16 +5197,13 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         });
         if (booked) {
           // Fire-and-forget so the confirmation response isn't delayed by the
-          // two email sends. sendBookingEmails swallows its own errors.
-          sendBookingEmails({
-            bookingId: String(booked),
-            userName: (user as any).name || (user as any).username || user.email || "Trader",
-            userEmail: user.email || "",
-            tier: pricing.tier,
+          // calendar create + two email sends. finalizeBooking is idempotent and
+          // swallows its own errors (calendar is fail-open).
+          finalizeBooking(String(booked), {
             paid: false,
             priceDisplay: "Free (Elite)",
-            slotDate, slotTime, timezone,
-            meetLink: null,
+            fallbackName: (user as any).name || (user as any).username || user.email || "Trader",
+            fallbackEmail: user.email || "",
           }).catch((e: any) => console.error("[booking-email] free path:", e?.message));
           return res.json({ mode: "free_confirmed", bookingId: booked, message: "Your free session is confirmed." });
         }

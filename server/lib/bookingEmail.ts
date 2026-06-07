@@ -1,4 +1,5 @@
 import { getUncachableResendClient } from "../resendClient";
+import { getUncachableGoogleCalendarClient } from "../googleCalendar";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 
@@ -44,8 +45,10 @@ function formatWhen(b: BookingEmailInput): string {
 // rejected send, so failures must be read off the payload — and logs loudly.
 // Never throws: each send is independently guarded so one failure can't block
 // the other or the booking flow that called it.
-export async function sendBookingEmails(b: BookingEmailInput): Promise<void> {
+export async function sendBookingEmails(b: BookingEmailInput): Promise<{ adminOk: boolean; userOk: boolean }> {
   const when = formatWhen(b);
+  let adminOk = false;
+  let userOk = false;
 
   let resend: any, fromEmail: string;
   try {
@@ -54,7 +57,7 @@ export async function sendBookingEmails(b: BookingEmailInput): Promise<void> {
     fromEmail = c.fromEmail;
   } catch (e: any) {
     console.error(`[booking-email] Resend client unavailable (RESEND_API_KEY?): ${e?.message}`);
-    return;
+    return { adminOk, userOk };
   }
 
   const meetRow = b.meetLink
@@ -86,6 +89,7 @@ export async function sendBookingEmails(b: BookingEmailInput): Promise<void> {
     if ((resp as any)?.error) {
       console.error(`[booking-email] ADMIN send rejected:`, JSON.stringify((resp as any).error));
     } else {
+      adminOk = true;
       console.log(`[booking-email] admin notified for booking ${b.bookingId} (id=${(resp as any)?.data?.id})`);
     }
   } catch (e: any) {
@@ -95,7 +99,7 @@ export async function sendBookingEmails(b: BookingEmailInput): Promise<void> {
   // ── 2. User confirmation ──────────────────────────────────────────────
   if (!b.userEmail) {
     console.error(`[booking-email] no user email for booking ${b.bookingId} — skipping user confirmation`);
-    return;
+    return { adminOk, userOk };
   }
   try {
     const resp = await resend.emails.send({
@@ -117,28 +121,102 @@ export async function sendBookingEmails(b: BookingEmailInput): Promise<void> {
     if ((resp as any)?.error) {
       console.error(`[booking-email] USER send rejected (${b.userEmail}):`, JSON.stringify((resp as any).error));
     } else {
+      userOk = true;
       console.log(`[booking-email] user confirmed ${b.userEmail} for booking ${b.bookingId}`);
     }
   } catch (e: any) {
     console.error(`[booking-email] USER send threw: ${e?.message}`);
   }
+  return { adminOk, userOk };
 }
 
-// Called from the Stripe webhook on checkout.session.completed when
-// session.metadata.kind === "concierge_session". Loads the booking, wins a
-// single PENDING→confirmed transition (idempotent against Stripe retries),
-// then sends both booking emails. Never throws.
-export async function handlePaidConciergeBooking(session: any): Promise<void> {
-  const bookingId = session?.metadata?.bookingId;
-  if (!bookingId) {
-    console.error("[booking-email] concierge_session webhook missing bookingId metadata");
-    return;
-  }
+const ADMIN_CALENDAR = process.env.SUPPORT_CALENDAR_ID || "primary";
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+// Builds the {start,end} the Google event needs from the booking's separate
+// slot_date / slot_time / timezone fields. We pass naive wall-clock strings plus
+// the timeZone so Google interprets them in that zone (DST-safe); end = +30 min.
+function buildEventWindow(b: any): { startStr: string; endStr: string; tz: string } | null {
+  const date = String(b.slot_date || "");
+  const time = String(b.slot_time || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null;
+  const [y, mo, d] = date.split("-").map(Number);
+  const [h, mi] = time.split(":").map(Number);
+  const base = new Date(Date.UTC(y, mo - 1, d, h, mi));
+  const end = new Date(base.getTime() + 30 * 60000);
+  const startStr = `${date}T${time}:00`;
+  const endStr = `${end.getUTCFullYear()}-${pad2(end.getUTCMonth() + 1)}-${pad2(end.getUTCDate())}T${pad2(end.getUTCHours())}:${pad2(end.getUTCMinutes())}:00`;
+  return { startStr, endStr, tz: b.timezone || "America/Toronto" };
+}
+
+// Creates ONE 30-min Google Calendar event (with a Meet link) on the connected
+// support@ calendar, inviting the user. Idempotent at the booking level: if the
+// booking already has a calendar_event_id we reuse it. Fail-open: any error
+// (connector not connected, API failure) returns nulls so emails still send.
+async function createCalendarEvent(
+  b: any,
+  paid: boolean,
+  priceDisplay: string,
+): Promise<{ calendarEventId: string | null; meetLink: string | null }> {
+  if (b.calendar_event_id) {
+    return { calendarEventId: b.calendar_event_id, meetLink: b.meet_link || null };
+  }
+  const win = buildEventWindow(b);
+  if (!win) {
+    console.error(`[booking-cal] booking ${b.id} has invalid slot date/time — skipping event`);
+    return { calendarEventId: null, meetLink: null };
+  }
+  try {
+    const cal = await getUncachableGoogleCalendarClient();
+    const attendees = [b.user_email ? { email: b.user_email } : null].filter(Boolean) as { email: string }[];
+    const ev: any = await cal.events.insert({
+      calendarId: ADMIN_CALENDAR,
+      conferenceDataVersion: 1,
+      sendUpdates: "all",
+      requestBody: {
+        summary: `CLVRQuant 1-on-1 — ${b.user_name || "Trader"}`,
+        description:
+          `30-min platform walkthrough (educational — how to use the tools, not financial advice).\n` +
+          `Tier: ${b.tier || "—"} · ${paid ? "Paid " + priceDisplay : "Free (Elite)"}\nBooking ${b.id}`,
+        start: { dateTime: win.startStr, timeZone: win.tz },
+        end: { dateTime: win.endStr, timeZone: win.tz },
+        attendees,
+        conferenceData: {
+          createRequest: {
+            requestId: `clvr-${b.id}`,
+            conferenceSolutionKey: { type: "hangoutsMeet" },
+          },
+        },
+        reminders: { useDefault: true },
+      },
+    });
+    const meetLink: string | null =
+      ev?.data?.hangoutLink ||
+      ev?.data?.conferenceData?.entryPoints?.find((e: any) => e.entryPointType === "video")?.uri ||
+      null;
+    console.log(`[booking-cal] event ${ev?.data?.id} created for booking ${b.id}, meet=${meetLink || "none"}`);
+    return { calendarEventId: ev?.data?.id || null, meetLink };
+  } catch (e: any) {
+    console.error(`[booking-cal] calendar create failed for ${b.id} (connector connected?): ${e?.message}`);
+    return { calendarEventId: null, meetLink: null };
+  }
+}
+
+// Single idempotent finalize — called by BOTH the free Elite path and the paid
+// Stripe webhook. Wins an at-most-once finalize claim via emails_sent_at, then
+// creates the calendar event and sends both emails. Never throws.
+export async function finalizeBooking(
+  bookingId: string,
+  opts: { paid: boolean; priceDisplay: string; fallbackName?: string; fallbackEmail?: string },
+): Promise<void> {
   let booking: any = null;
   try {
     const r: any = await db.execute(sql`
       SELECT b.id, b.slot_date, b.slot_time, b.timezone, b.tier, b.price_usd, b.status,
+             b.calendar_event_id, b.meet_link, b.emails_sent_at,
              u.email AS user_email, u.name AS user_name
       FROM concierge_bookings b
       LEFT JOIN users u ON u.id = b.user_id
@@ -147,47 +225,113 @@ export async function handlePaidConciergeBooking(session: any): Promise<void> {
     const rows = Array.isArray(r) ? r : (r?.rows || []);
     booking = rows?.[0] || null;
   } catch (e: any) {
-    console.error(`[booking-email] failed to load booking ${bookingId}: ${e?.message}`);
+    console.error(`[booking] finalize: failed to load ${bookingId}: ${e?.message}`);
+    return;
   }
   if (!booking) {
-    console.error(`[booking-email] booking ${bookingId} not found — skipping`);
+    console.error(`[booking] finalize: ${bookingId} not found — skipping`);
     return;
   }
 
-  // Idempotent claim: only the first webhook delivery wins the transition and
-  // therefore sends the emails. Stripe retries (duplicate deliveries) no-op.
+  // At-most-once finalize claim. Only the call that flips emails_sent_at from
+  // NULL proceeds; concurrent calls / Stripe retries no-op. Claiming BEFORE the
+  // calendar+email work guarantees we never double-create or double-send.
   let won = false;
   try {
     const u: any = await db.execute(sql`
-      UPDATE concierge_bookings SET status = 'confirmed'
-      WHERE id = ${bookingId} AND status != 'confirmed'
+      UPDATE concierge_bookings SET emails_sent_at = NOW()
+      WHERE id = ${bookingId} AND emails_sent_at IS NULL
       RETURNING id`);
     const urows = Array.isArray(u) ? u : (u?.rows || []);
     won = urows.length > 0;
   } catch (e: any) {
-    console.error(`[booking-email] failed to confirm booking ${bookingId}: ${e?.message}`);
-    won = true; // fail-open: still send once rather than drop the confirmation
+    console.error(`[booking] finalize: claim failed for ${bookingId}: ${e?.message}`);
+    return; // do NOT fall open here — a failed claim could mean we'd double-send
   }
   if (!won) {
-    console.log(`[booking-email] booking ${bookingId} already confirmed — skipping duplicate emails`);
+    console.log(`[booking] finalize: ${bookingId} already finalized — skipping`);
     return;
   }
 
-  const amountCents = session.amount_total || 0;
-  const priceDisplay = amountCents
-    ? `$${(amountCents / 100).toFixed(2)}`
-    : (booking.price_usd ? `$${booking.price_usd}` : "Paid");
+  const userName = booking.user_name || opts.fallbackName || "Trader";
+  const userEmail = booking.user_email || opts.fallbackEmail || "";
 
-  await sendBookingEmails({
+  // Calendar event (fail-open). Persist its id + meet link for reference.
+  const { calendarEventId, meetLink } = await createCalendarEvent(
+    { ...booking, user_name: userName, user_email: userEmail },
+    opts.paid,
+    opts.priceDisplay,
+  );
+  if (calendarEventId || meetLink) {
+    try {
+      await db.execute(sql`
+        UPDATE concierge_bookings
+        SET calendar_event_id = ${calendarEventId}, meet_link = ${meetLink}
+        WHERE id = ${bookingId}`);
+    } catch (e: any) {
+      console.error(`[booking] finalize: failed to store calendar info for ${bookingId}: ${e?.message}`);
+    }
+  }
+
+  const { userOk } = await sendBookingEmails({
     bookingId: String(bookingId),
-    userName: session.customer_details?.name || booking.user_name || "Trader",
-    userEmail: booking.user_email || session.customer_details?.email || "",
+    userName,
+    userEmail,
     tier: booking.tier || "—",
-    paid: true,
-    priceDisplay,
+    paid: opts.paid,
+    priceDisplay: opts.priceDisplay,
     slotDate: booking.slot_date,
     slotTime: booking.slot_time,
     timezone: booking.timezone || "America/Toronto",
-    meetLink: null,
+    meetLink,
+  });
+
+  // The user confirmation is the core deliverable. If it failed to send, release
+  // the finalize claim so a later retry (e.g. a Stripe webhook re-delivery) can
+  // re-send it. Calendar is fail-open and intentionally does NOT gate this. We
+  // only release on a genuine email failure, so a successful run stays at-most-once.
+  if (!userOk && userEmail) {
+    try {
+      await db.execute(sql`
+        UPDATE concierge_bookings SET emails_sent_at = NULL
+        WHERE id = ${bookingId}`);
+      console.error(`[booking] finalize: user email failed for ${bookingId} — released claim for retry`);
+    } catch (e: any) {
+      console.error(`[booking] finalize: failed to release claim for ${bookingId}: ${e?.message}`);
+    }
+  }
+}
+
+// Called from the Stripe webhook on checkout.session.completed when
+// session.metadata.kind === "concierge_session". Wins a single PENDING→confirmed
+// transition (idempotent against Stripe retries), then runs the shared finalize
+// (calendar event + emails). Never throws.
+export async function handlePaidConciergeBooking(session: any): Promise<void> {
+  const bookingId = session?.metadata?.bookingId;
+  if (!bookingId) {
+    console.error("[booking-email] concierge_session webhook missing bookingId metadata");
+    return;
+  }
+
+  // Idempotent confirm: only the first delivery flips PENDING→confirmed, but we
+  // ALWAYS fall through to finalize. finalize is itself at-most-once via its
+  // emails_sent_at claim, so a Stripe re-delivery is a no-op when the first run
+  // succeeded — yet still gets a chance to re-send if the first run's email failed.
+  try {
+    await db.execute(sql`
+      UPDATE concierge_bookings SET status = 'confirmed'
+      WHERE id = ${bookingId} AND status != 'confirmed'`);
+  } catch (e: any) {
+    console.error(`[booking-email] failed to confirm booking ${bookingId}: ${e?.message}`);
+  }
+
+  const amountCents = session.amount_total || 0;
+  const priceDisplay = amountCents ? `$${(amountCents / 100).toFixed(2)}` : "Paid";
+
+  await finalizeBooking(String(bookingId), {
+    paid: true,
+    priceDisplay,
+    fallbackName: session.customer_details?.name,
+    fallbackEmail: session.customer_details?.email,
   });
 }

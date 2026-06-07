@@ -4,3 +4,4 @@
 - [IPO calendar data sources](fmp-earnings-data-tiers.md) — IPO calendar uses Nasdaq public API (primary) with FMP as best-effort fallback; FMP free tier 403s the IPO endpoint, Nasdaq IP-blocks Railway egress.
 - [Quant sigma units & notional cap](quant-sigma-units.md) — intraday sigma fallback must be scaled to DAILY before sizing's sqrt(365), or size balloons ~38x to 2x equity; MAX_NOTIONAL_FRACTION hard-caps it.
 - [Concierge booking webhook](concierge-booking-webhook.md) — paid bookings share the subscription checkout.session.completed handler; branch on metadata.kind or receipts mislabel; idempotent confirm vs Stripe retries.
+- [Booking email at-most-once](booking-email-idempotency.md) — stamp emails_sent_at as a claim but RELEASE it when the user email fails; paid webhook must always re-finalize, never early-return on confirmed.
