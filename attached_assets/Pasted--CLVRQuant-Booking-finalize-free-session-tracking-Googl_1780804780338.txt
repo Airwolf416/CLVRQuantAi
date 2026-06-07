@@ -1,0 +1,246 @@
+# CLVRQuant — Booking finalize: free-session tracking + Google Calendar/Meet + emails
+
+This completes the booking flow. It does three things:
+
+1. Tracks the Elite “1 free session / month” atomically (no double-claim race).
+1. On every confirmed booking, creates a 30-min event on the **[support@clvrquantai.com](mailto:support@clvrquantai.com)** Google Calendar with a **Google Meet link**, invites the user.
+1. Sends branded emails to **the user** and **[support@clvrquantai.com](mailto:support@clvrquantai.com)** with the Meet link.
+
+It plugs into the two prompts you already have: `create-intent` (free Elite path) and the `payment_intent.succeeded` webhook (paid path) both call `finalizeBooking()`, which is defined here.
+
+> Guardrail: *“Do not change tier eligibility, pricing, or the session definition. Price/eligibility is server-decided. Card data stays in Stripe. Calendar event must be created idempotently (no duplicates on webhook retries).”*
+
+**Prereqs:**
+
+- Package: `googleapis`.
+- Env (Railway prod + dev): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` (a refresh token for the [support@clvrquantai.com](mailto:support@clvrquantai.com) Google account, obtained once via an OAuth consent with scope `https://www.googleapis.com/auth/calendar` and offline access), and optionally `SUPPORT_CALENDAR_ID` (defaults to `support@clvrquantai.com`). `RESEND_API_KEY` already set.
+- Booking record fields used: `id, userId, userEmail, userName, tier, startISO, timezone, status, paid, calendarEventId, meetLink, emailsSentAt`. Add any missing.
+
+-----
+
+## PROMPT A — Elite free-session tracking (atomic, race-safe)
+
+**File:** storage layer + `server/routes.ts`.
+
+**A1 — migration:**
+
+```sql
+ALTER TABLE users ADD COLUMN IF NOT EXISTS elite_free_session_month TEXT;
+```
+
+**A2 — storage methods:**
+
+```ts
+async getEliteFreeSessionMonth(userId: string): Promise<string | null> {
+  const r = await pool.query(
+    "SELECT elite_free_session_month FROM users WHERE id = $1", [userId]
+  );
+  return r.rows[0]?.elite_free_session_month ?? null;
+}
+
+// Atomic claim: sets the month ONLY if it isn't already this month.
+// Returns true only for the call that actually claimed it — kills the
+// double-tap race where two requests both read "not used".
+async claimEliteFreeSession(userId: string, monthKey: string): Promise<boolean> {
+  const r = await pool.query(
+    `UPDATE users SET elite_free_session_month = $2
+      WHERE id = $1 AND (elite_free_session_month IS DISTINCT FROM $2)
+      RETURNING id`,
+    [userId, monthKey]
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+// Give the free session back if an Elite member cancels it before the session.
+async restoreEliteFreeSession(userId: string, monthKey: string): Promise<void> {
+  await pool.query(
+    `UPDATE users SET elite_free_session_month = NULL
+      WHERE id = $1 AND elite_free_session_month = $2`,
+    [userId, monthKey]
+  );
+}
+```
+
+**A3 — use the atomic claim in `/api/booking/create-intent`.** Replace the free-session block with:
+
+```ts
+let freeEligible = false;
+if (tier === "elite") {
+  freeEligible = await storage.claimEliteFreeSession(userId, monthKey); // atomically claims if available
+}
+
+if (freeEligible) {
+  await storage.confirmBooking(booking.id, { paid: false });
+  await finalizeBooking(booking.id, { paid: false, priceDisplay: "Free (Elite)" });
+  return res.json({ free: true, bookingId: booking.id });
+}
+```
+
+(Remove the separate `markEliteFreeSessionUsed` call — `claimEliteFreeSession` already wrote the month.)
+
+**A4 — cancellation restore (in the booking-cancel handler):** if the cancelled booking was a free Elite session, give it back:
+
+```ts
+if (booking.tier === "elite" && !booking.paid && booking.status !== "cancelled") {
+  const m = new Intl.DateTimeFormat("en-CA", { timeZone: booking.timezone || "America/Toronto", year:"numeric", month:"2-digit" })
+    .format(new Date(booking.startISO)).slice(0,7);
+  await storage.restoreEliteFreeSession(booking.userId, m);
+}
+```
+
+**Acceptance:** an Elite member can claim exactly one free session per Toronto month even under rapid double-taps; cancelling a free session before it happens restores that month’s allotment; a second same-month session correctly falls through to the $19 paid path.
+
+-----
+
+## PROMPT B — `finalizeBooking`: Google Calendar event + Meet link + emails
+
+**File:** `server/routes.ts` (or a `server/booking.ts` it imports). This is the single, idempotent finalize used by BOTH the free path and the webhook.
+
+```ts
+import { google } from "googleapis";
+import { getUncachableResendClient } from "./resendClient";
+
+const SUPPORT_EMAIL = "support@clvrquantai.com";
+const SUPPORT_CALENDAR_ID = process.env.SUPPORT_CALENDAR_ID || SUPPORT_EMAIL;
+
+function getGoogleCalendar() {
+  const oauth = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+  oauth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+  return google.calendar({ version: "v3", auth: oauth });
+}
+
+// Creates the event on support@'s calendar with a Meet link, invites the user.
+// Idempotent: same booking → same Google conference (requestId = booking id);
+// skips if the booking already has a calendarEventId.
+async function createCalendarEvent(booking: any, paid: boolean, priceDisplay: string): Promise<string | null> {
+  if (booking.calendarEventId) return booking.meetLink || null;
+  try {
+    const cal = getGoogleCalendar();
+    const start = new Date(booking.startISO);
+    const end = new Date(start.getTime() + 30 * 60000); // 30-min session
+    const tz = booking.timezone || "America/Toronto";
+
+    const ev = await cal.events.insert({
+      calendarId: SUPPORT_CALENDAR_ID,
+      conferenceDataVersion: 1,
+      sendUpdates: "all", // Google also emails the calendar invite to both parties
+      requestBody: {
+        summary: `CLVRQuant 1-on-1 — ${booking.userName}`,
+        description: `30-min platform walkthrough (educational — how to use the tools, not financial advice).\n`
+          + `Tier: ${booking.tier} · ${paid ? "Paid " + priceDisplay : "Free (Elite)"}\nBooking ${booking.id}`,
+        start: { dateTime: start.toISOString(), timeZone: tz },
+        end:   { dateTime: end.toISOString(),   timeZone: tz },
+        attendees: [{ email: booking.userEmail }, { email: SUPPORT_EMAIL }],
+        conferenceData: {
+          createRequest: { requestId: `clvr-${booking.id}`, conferenceSolutionKey: { type: "hangoutsMeet" } },
+        },
+        reminders: { useDefault: true },
+      },
+    });
+
+    const meetLink = ev.data.hangoutLink
+      || ev.data.conferenceData?.entryPoints?.find((e: any) => e.entryPointType === "video")?.uri
+      || null;
+
+    await storage.setBookingCalendar(booking.id, { calendarEventId: ev.data.id, meetLink });
+    console.log(`[booking] calendar event ${ev.data.id} created for booking ${booking.id}, meet=${meetLink}`);
+    return meetLink;
+  } catch (e: any) {
+    console.error(`[booking] calendar create failed for ${booking.id}: ${e?.message}`);
+    return null; // fail-open: still send emails (with "link to follow")
+  }
+}
+
+// Sends BOTH emails (admin → support@, user confirmation) with the Meet link,
+// checking Resend's error payload. Idempotent via emailsSentAt guard.
+async function sendBookingEmails(booking: any, paid: boolean, priceDisplay: string, meetLink: string | null): Promise<void> {
+  const tz = booking.timezone || "America/Toronto";
+  let when = booking.startISO;
+  try {
+    when = new Date(booking.startISO).toLocaleString("en-US", {
+      timeZone: tz, weekday: "short", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short",
+    });
+  } catch {}
+
+  let resend: any, fromEmail: string;
+  try { const c = await getUncachableResendClient(); resend = c.client; fromEmail = c.fromEmail; }
+  catch (e: any) { console.error(`[booking-email] Resend unavailable: ${e?.message}`); return; }
+
+  const meetRow = meetLink
+    ? `<p style="font-size:13px;color:#6b7fa8;line-height:1.8">Google Meet: <a href="${meetLink}" style="color:#c9a84c">${meetLink}</a></p>`
+    : `<p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your Google Meet link will arrive in the calendar invite shortly.</p>`;
+
+  // 1) Admin → support@
+  try {
+    const r = await resend.emails.send({
+      from: fromEmail, to: SUPPORT_EMAIL, replyTo: booking.userEmail,
+      subject: `New 1-on-1 booking — ${booking.userName} (${String(booking.tier).toUpperCase()})`,
+      text: `Booking ${booking.id}\nName: ${booking.userName}\nEmail: ${booking.userEmail}\nTier: ${booking.tier}\nPaid: ${paid ? "yes "+priceDisplay : "no (Free Elite)"}\nWhen: ${when}\nMeet: ${meetLink || "(in calendar invite)"}`,
+      html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:20px"><div style="font-family:Georgia,serif;font-size:28px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+        <div style="border-top:1px solid #141e35;padding-top:18px">
+          <p style="font-size:15px;color:#f0f4ff">New 1-on-1 booking</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.9"><strong style="color:#f0f4ff">Name:</strong> ${booking.userName}<br>
+          <strong style="color:#f0f4ff">Email:</strong> ${booking.userEmail}<br>
+          <strong style="color:#f0f4ff">Tier:</strong> ${booking.tier}<br>
+          <strong style="color:#f0f4ff">Paid:</strong> ${paid ? "Yes — "+priceDisplay : "No — Free (Elite)"}<br>
+          <strong style="color:#f0f4ff">When:</strong> ${when}</p>${meetRow}
+          <p style="font-size:11px;color:#4a5d80">Booking ID: ${booking.id}</p>
+        </div></div>`,
+    });
+    if (r?.error) console.error(`[booking-email] admin rejected:`, JSON.stringify(r.error));
+  } catch (e: any) { console.error(`[booking-email] admin threw: ${e?.message}`); }
+
+  // 2) User confirmation
+  try {
+    const r = await resend.emails.send({
+      from: fromEmail, to: booking.userEmail, replyTo: SUPPORT_EMAIL,
+      subject: `Your CLVRQuant 1-on-1 is booked — ${when}`,
+      text: `Hi ${booking.userName},\n\nYour 30-min platform walkthrough is confirmed for ${when}.\n${meetLink ? "Join: "+meetLink+"\n" : ""}\nEducational walkthrough of the platform, not financial advice.\nQuestions? support@clvrquantai.com\n\n© 2026 CLVRQuant`,
+      html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:20px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+        <div style="border-top:1px solid #141e35;padding-top:20px">
+          <p style="font-size:14px;color:#f0f4ff">Hi ${booking.userName},</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your 30-min platform walkthrough is <strong style="color:#e8c96d">confirmed</strong> for <strong style="color:#f0f4ff">${when}</strong>.</p>
+          ${meetRow}
+          <p style="font-size:12px;color:#6b7fa8;line-height:1.8">This is an educational walkthrough of the platform's tools — not financial advice.</p>
+          <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">Questions? <a href="mailto:support@clvrquantai.com" style="color:#4a5d80;text-decoration:none">support@clvrquantai.com</a></p>
+        </div></div>`,
+    });
+    if (r?.error) console.error(`[booking-email] user rejected (${booking.userEmail}):`, JSON.stringify(r.error));
+  } catch (e: any) { console.error(`[booking-email] user threw: ${e?.message}`); }
+}
+
+// Single idempotent finalize — called by the free path AND the webhook.
+export async function finalizeBooking(bookingId: string, opts: { paid: boolean; priceDisplay: string }): Promise<void> {
+  const booking = await storage.getBooking(bookingId);
+  if (!booking) { console.error(`[booking] finalize: ${bookingId} not found`); return; }
+  if (booking.emailsSentAt) return; // already finalized — webhook retry / double call
+
+  const meetLink = await createCalendarEvent(booking, opts.paid, opts.priceDisplay);
+  await sendBookingEmails({ ...booking, meetLink }, opts.paid, opts.priceDisplay, meetLink);
+  await storage.markBookingEmailsSent(bookingId); // sets emailsSentAt = now()
+}
+```
+
+**Storage helpers to add:** `setBookingCalendar(id, {calendarEventId, meetLink})`, `markBookingEmailsSent(id)`, plus the `getBooking`, `confirmBooking`, `createBooking`, `setBookingPaymentIntent` referenced earlier.
+
+**Acceptance:**
+
+- Confirming a booking (free or paid) creates ONE event on the support@ calendar with a Meet link and the user as attendee.
+- The user and support@ each receive a branded email containing the Meet link; Google also sends its calendar invite (`sendUpdates:"all"`).
+- Webhook retries / double calls do not create duplicate events or duplicate emails (guards: `calendarEventId`, `emailsSentAt`).
+- If Google Calendar fails, emails still send (with a “link to follow” line) and the error is logged — booking is never silently lost.
+
+-----
+
+## Setup checklist (one-time)
+
+1. `npm i googleapis`.
+1. Google Cloud: enable the **Google Calendar API**; create an OAuth client; run a one-time consent as **[support@clvrquantai.com](mailto:support@clvrquantai.com)** with scope `https://www.googleapis.com/auth/calendar` and `access_type=offline` to get a **refresh token**. Put `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` in Railway.
+1. Confirm the support@ account can create Meet links (standard for Google Workspace / Gmail).
+1. Test: book a free Elite session → check support@’s calendar for the event + Meet link, and both inboxes for the email.
