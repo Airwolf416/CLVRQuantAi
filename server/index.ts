@@ -735,6 +735,7 @@ function logDataSourceStatus() {
     "Anthropic Claude (sonnet-4-6)": has("ANTHROPIC_API_KEY") ? "live" : "DISABLED (no key)",
     "Stripe": has("STRIPE_SECRET_KEY") ? "live" : "DISABLED (no key)",
     "Resend (email)": has("RESEND_API_KEY") ? "live" : "DISABLED (no key)",
+    "Google Calendar (booking Meet links)": (has("GOOGLE_OAUTH_CLIENT_ID") && has("GOOGLE_OAUTH_CLIENT_SECRET") && has("GOOGLE_OAUTH_REFRESH_TOKEN")) ? "live (env OAuth)" : (has("REPLIT_CONNECTORS_HOSTNAME") ? "live (Replit connector)" : "DISABLED (no OAuth env vars)"),
     "PostgreSQL (Drizzle)": has("DATABASE_URL") ? "live" : "MISSING (DATABASE_URL not set)",
     "Phase 2A quant gate": process.env.PHASE2A_ENABLED === "1" ? "ENABLED" : "off (set PHASE2A_ENABLED=1 to flip)",
     "Phase 2A fail-closed": process.env.PHASE2A_FAIL_CLOSED === "1" ? "strict (drop on quant error)" : "fail-open (default)",

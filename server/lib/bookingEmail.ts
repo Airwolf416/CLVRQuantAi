@@ -200,7 +200,7 @@ async function createCalendarEvent(
     console.log(`[booking-cal] event ${ev?.data?.id} created for booking ${b.id}, meet=${meetLink || "none"}`);
     return { calendarEventId: ev?.data?.id || null, meetLink };
   } catch (e: any) {
-    console.error(`[booking-cal] calendar create failed for ${b.id} (connector connected?): ${e?.message}`);
+    console.error(`[booking-cal] calendar create failed for ${b.id} (Google auth configured?): ${e?.message}`);
     return { calendarEventId: null, meetLink: null };
   }
 }
