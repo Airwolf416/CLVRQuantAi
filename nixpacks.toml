@@ -3,13 +3,17 @@ nixPkgs = ["nodejs_20", "python311", "python311Packages.pip"]
 
 [phases.install]
 cmds = [
-  "NODE_ENV=development npm ci --include=dev",
+  "NODE_ENV=development npm ci --include=dev --production=false",
+  "echo '--- build tools after install ---' && (ls -la node_modules/.bin/ | grep -E 'tsx|vite|esbuild' || echo 'BUILD TOOLS MISSING AFTER INSTALL')",
   "python -m venv /opt/venv",
   ". /opt/venv/bin/activate && pip install --upgrade pip && pip install -r quant/requirements.txt",
 ]
 
 [phases.build]
-cmds = ["npm run build"]
+cmds = [
+  "(ls node_modules/.bin/tsx && echo 'tsx present at build start') || echo 'tsx MISSING at build start'",
+  "npm run build",
+]
 
 [start]
 cmd = "PATH=/opt/venv/bin:$PATH npm start"
