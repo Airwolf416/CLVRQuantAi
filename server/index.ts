@@ -124,6 +124,18 @@ app.post(
 
       // Step 2: Payment confirmation email for checkout.session.completed
       if (event.type === 'checkout.session.completed') {
+        const completedSession = event.data.object as any;
+        // Concierge 1-on-1 booking — route to booking emails and skip the
+        // subscription receipt below (which would mislabel a $19/$49 booking
+        // as a Pro/Elite plan and miss the admin notification).
+        if (completedSession?.metadata?.kind === 'concierge_session') {
+          try {
+            const { handlePaidConciergeBooking } = await import('./lib/bookingEmail');
+            await handlePaidConciergeBooking(completedSession);
+          } catch (bookErr: any) {
+            console.error('[booking-email] concierge webhook error (non-fatal):', bookErr?.message);
+          }
+        } else {
         try {
           const session = event.data.object as any;
           const toEmail = session.customer_details?.email;
@@ -249,6 +261,7 @@ app.post(
           }
         } catch (emailErr: any) {
           console.error('[stripe] Payment confirmation email error (non-fatal):', emailErr.message);
+        }
         }
       }
 

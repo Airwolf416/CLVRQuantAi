@@ -20,6 +20,7 @@ import { userPromotedAssets, newsItems } from "@shared/schema";
 import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { getUncachableResendClient } from "./resendClient";
+import { sendBookingEmails } from "./lib/bookingEmail";
 import { notifyAutoposter, getAutoposterStatus } from "./autoposterNotify";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
 import { computeRegimeGate } from "./lib/regimeGate";
@@ -5195,6 +5196,18 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
           return irows?.[0]?.id || null;
         });
         if (booked) {
+          // Fire-and-forget so the confirmation response isn't delayed by the
+          // two email sends. sendBookingEmails swallows its own errors.
+          sendBookingEmails({
+            bookingId: String(booked),
+            userName: (user as any).name || (user as any).username || user.email || "Trader",
+            userEmail: user.email || "",
+            tier: pricing.tier,
+            paid: false,
+            priceDisplay: "Free (Elite)",
+            slotDate, slotTime, timezone,
+            meetLink: null,
+          }).catch((e: any) => console.error("[booking-email] free path:", e?.message));
           return res.json({ mode: "free_confirmed", bookingId: booked, message: "Your free session is confirmed." });
         }
         // Allotment was just exhausted by a concurrent booking — re-price as paid.

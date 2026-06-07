@@ -162,6 +162,38 @@ def _df_from_ohlcv(ohlcv):
     return df
 
 
+def _infer_daily_sigma(df: pd.DataFrame) -> float:
+    """Per-bar return std scaled to a 1-DAY horizon using the ACTUAL bar
+    spacing read from the DatetimeIndex.
+
+    Fixes the prior fallback bug: when daily_returns are not supplied, the old
+    code used std() of 1-minute returns directly as `sigma_daily_dec`, which
+    sizing.py then annualized with sqrt(365). That mixed a per-minute sigma
+    with a per-day factor — understating sigma_ann by ~sqrt(1440) ≈ 38x,
+    inflating vol_scale + Kelly, and pushing suggested_size_usd to ~2x equity.
+
+    By inferring bars-per-day from the median index delta we scale the per-bar
+    std to a true daily sigma (sigma_bar * sqrt(bars_per_day)), so sizing.py's
+    sqrt(365) annualization is then dimensionally correct. Result clamped to a
+    sane crypto daily band [1e-4, 0.40]."""
+    rets = df["close"].pct_change().dropna()
+    if len(rets) < 2:
+        return 0.02
+    per_bar = float(rets.std() or 0.0)
+    if per_bar <= 0:
+        return 0.02
+    try:
+        deltas = (df.index[1:] - df.index[:-1]).total_seconds()
+        sec = float(pd.Series(deltas).median())
+    except Exception:
+        sec = 60.0
+    if not math.isfinite(sec) or sec <= 0:
+        sec = 60.0
+    bars_per_day = max(1.0, 86400.0 / sec)
+    daily = per_bar * math.sqrt(bars_per_day)
+    return float(min(max(daily, 1e-4), 0.40))
+
+
 @app.get("/quant/health")
 async def health():
     """Bulletproof health endpoint for Railway/k8s probes.
@@ -311,7 +343,7 @@ async def score(req: ScoreRequest):
 
     dr = pd.Series(req.daily_returns or [], dtype=float)
     req.ohlcv = ohlcv  # so downstream code uses fallback path
-    sigma_d = sigma_daily_decimal(req.symbol, dr) if len(dr) > 0 else float(df["close"].pct_change().std() or 0.02)
+    sigma_d = sigma_daily_decimal(req.symbol, dr) if len(dr) > 0 else _infer_daily_sigma(df)
 
     side = comp["side"] or "long"
     sltp = build_sl_tp(req.symbol, side, entry_ref, df, planned_rr=req.planned_rr)

@@ -1,0 +1,158 @@
+# CLVRQuant — Fix: booking emails not sending (admin + paid user)
+
+**Symptom:** when someone books a 1-on-1 via the concierge, no email reaches `support@clvrquantai.com`, and paid users get no confirmation.
+
+**Most likely causes (both in your codebase):**
+
+1. Email sends use silent `catch {}` and don’t inspect Resend’s `{ data, error }` return — Resend does NOT throw on a rejected send, so failures disappear with no log.
+1. Paid bookings go through Stripe Checkout, but your webhook is handled by a generic `getStripeSync().processWebhook()` with no `checkout.session.completed` hook — so nothing fires the booking emails *after payment confirms*.
+
+This does not change who can book or the pricing — it only fixes email delivery and observability.
+
+> Guardrail line: *“Do not change booking pricing, tier eligibility (Elite 1 free session/mo, Pro/others paid), slot rules, or the concierge [BOOK] flow. Only add/repair email delivery and logging.”*
+
+-----
+
+## PROMPT 1 — Add a robust booking-email helper (uses your existing Resend pattern)
+
+**File:** `server/routes.ts` (or wherever booking lives) — add this helper. It sends BOTH emails, inspects `resp.error`, and logs loudly. Matches your `getUncachableResendClient()` convention and dark-gold house style.
+
+```ts
+import { getUncachableResendClient } from "./resendClient";
+
+// Booking object — map your actual booking record fields to these.
+type BookingEmailInput = {
+  bookingId: string;
+  userName: string;
+  userEmail: string;
+  tier: string;                 // "elite" | "pro" | "free"/guest
+  paid: boolean;                // true if a Stripe payment was required
+  priceDisplay: string;         // e.g. "Free (Elite)" or "$49.00"
+  startISO: string;             // event start, ISO 8601
+  timezone?: string;            // default America/Toronto
+  meetLink?: string | null;     // Google Meet URL if created
+};
+
+async function sendBookingEmails(b: BookingEmailInput): Promise<void> {
+  const ADMIN = "support@clvrquantai.com";
+  const tz = b.timezone || "America/Toronto";
+  let when = b.startISO;
+  try {
+    when = new Date(b.startISO).toLocaleString("en-US", {
+      timeZone: tz, weekday: "short", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short",
+    });
+  } catch {}
+
+  let resend: any, fromEmail: string;
+  try {
+    const c = await getUncachableResendClient();
+    resend = c.client; fromEmail = c.fromEmail;
+  } catch (e: any) {
+    console.error(`[booking-email] Resend client unavailable (RESEND_API_KEY?): ${e?.message}`);
+    return;
+  }
+
+  const meetRow = b.meetLink
+    ? `<p style="font-size:13px;color:#6b7fa8;line-height:1.8">Google Meet: <a href="${b.meetLink}" style="color:#c9a84c">${b.meetLink}</a></p>`
+    : "";
+
+  // ── 1. Admin notification → support@ ──────────────────────────────────
+  try {
+    const resp = await resend.emails.send({
+      from: fromEmail,
+      to: ADMIN,
+      replyTo: b.userEmail,
+      subject: `New 1-on-1 booking — ${b.userName} (${b.tier.toUpperCase()})`,
+      text: `New booking ${b.bookingId}\nName: ${b.userName}\nEmail: ${b.userEmail}\nTier: ${b.tier}\nPaid: ${b.paid ? "yes" : "no"} (${b.priceDisplay})\nWhen: ${when}\nMeet: ${b.meetLink || "(pending)"}`,
+      html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:20px"><div style="font-family:Georgia,serif;font-size:28px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+        <div style="border-top:1px solid #141e35;padding-top:18px">
+          <p style="font-size:15px;color:#f0f4ff">New 1-on-1 booking</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.9">
+            <strong style="color:#f0f4ff">Name:</strong> ${b.userName}<br>
+            <strong style="color:#f0f4ff">Email:</strong> ${b.userEmail}<br>
+            <strong style="color:#f0f4ff">Tier:</strong> ${b.tier}<br>
+            <strong style="color:#f0f4ff">Paid:</strong> ${b.paid ? "Yes" : "No"} — ${b.priceDisplay}<br>
+            <strong style="color:#f0f4ff">When:</strong> ${when}
+          </p>${meetRow}
+          <p style="font-size:11px;color:#4a5d80">Booking ID: ${b.bookingId}</p>
+        </div></div>`,
+    });
+    if ((resp as any)?.error) {
+      console.error(`[booking-email] ADMIN send rejected:`, JSON.stringify((resp as any).error));
+    } else {
+      console.log(`[booking-email] admin notified for booking ${b.bookingId} (id=${(resp as any)?.data?.id})`);
+    }
+  } catch (e: any) {
+    console.error(`[booking-email] ADMIN send threw: ${e?.message}`);
+  }
+
+  // ── 2. User confirmation ──────────────────────────────────────────────
+  try {
+    const resp = await resend.emails.send({
+      from: fromEmail,
+      to: b.userEmail,
+      replyTo: ADMIN,
+      subject: `Your CLVRQuant 1-on-1 is booked — ${when}`,
+      text: `Hi ${b.userName},\n\nYour 1-on-1 platform walkthrough is confirmed for ${when} (${tz}).\n${b.meetLink ? `Join: ${b.meetLink}\n` : ""}\nThis session is educational only — a live walkthrough of the platform, not financial advice.\n\nQuestions? support@clvrquantai.com\n\n© 2026 CLVRQuant`,
+      html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:20px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
+        <div style="border-top:1px solid #141e35;padding-top:20px">
+          <p style="font-size:14px;color:#f0f4ff">Hi ${b.userName},</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your 1-on-1 platform walkthrough is <strong style="color:#e8c96d">confirmed</strong> for <strong style="color:#f0f4ff">${when}</strong>.</p>
+          ${meetRow}
+          <p style="font-size:12px;color:#6b7fa8;line-height:1.8">This session is educational only — a live walkthrough of the platform's tools, not financial advice.</p>
+          <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">Questions? <a href="mailto:support@clvrquantai.com" style="color:#4a5d80;text-decoration:none">support@clvrquantai.com</a></p>
+        </div></div>`,
+    });
+    if ((resp as any)?.error) {
+      console.error(`[booking-email] USER send rejected (${b.userEmail}):`, JSON.stringify((resp as any).error));
+    } else {
+      console.log(`[booking-email] user confirmed ${b.userEmail} for booking ${b.bookingId}`);
+    }
+  } catch (e: any) {
+    console.error(`[booking-email] USER send threw: ${e?.message}`);
+  }
+}
+```
+
+-----
+
+## PROMPT 2 — Wire it on the two paths, and fix the silent catches
+
+> Locate the booking flow. There are two completion paths:
+> 
+> **A. Free Elite session (no payment):** right after the booking record is created and the Google Calendar/Meet event is made, call `await sendBookingEmails({...})` with `paid:false`, `priceDisplay:"Free (Elite)"`, and the Meet link. Map the booking record’s fields into the helper’s input.
+> 
+> **B. Paid session (Stripe Checkout):** the email must fire AFTER payment confirms, not when the Checkout session is created. Two steps:
+> 
+> 1. When creating the Stripe Checkout session for a booking, attach the booking id in metadata: `metadata: { kind: "booking", booking_id: <id> }` (and `customer_email: userEmail`).
+> 1. Add a `checkout.session.completed` handler. If `getStripeSync().processWebhook()` doesn’t already expose one, add a custom branch in the webhook route: after `stripe.webhooks.constructEvent(...)`, if `event.type === "checkout.session.completed"` and `session.metadata?.kind === "booking"`, load the booking by `session.metadata.booking_id`, mark it paid/confirmed, then `await sendBookingEmails({... paid:true, priceDisplay: formatted amount_total ...})`. This is the step that’s currently missing — paid bookings never reach an email.
+> 
+> Also: search the booking code (and the booking creation path) for any `} catch {}` or `await resend.emails.send(...)` that does NOT inspect the return. Replace empty catches with `catch (e) { console.error("[booking-email] ...", e.message); }` and check `if (resp?.error) console.error(...)` after every send — Resend returns errors in the payload, it does not throw.
+
+**Acceptance:**
+
+- Booking a free Elite session sends an admin email to support@ AND a user confirmation; both log `[booking-email] ...`.
+- A paid booking sends both emails only after `checkout.session.completed` fires (verify in Stripe → Webhooks that the event is delivered and 200s).
+- Any Resend rejection is now logged with the error payload (no more silent failures).
+
+-----
+
+## PROMPT 3 — Quick diagnostics to confirm root cause first
+
+> Before/after the fix, verify:
+> 
+> 1. **Resend dashboard → Logs:** are there any booking sends at all? If none appear, the send code is never reached (wiring problem, Prompt 2A/2B). If they appear with an error, it’s a content/recipient problem.
+> 1. **`RESEND_FROM_EMAIL` / domain:** confirm the from-domain (`clvrquantai.com`) is verified in Resend (it is for the daily brief, so this is likely fine) and that `RESEND_API_KEY` is set in the Railway production environment, not just Replit dev.
+> 1. **Stripe → Webhooks:** confirm a production webhook endpoint is configured and `checkout.session.completed` events are being delivered with 200 responses. If the endpoint is only set for Replit dev (or `STRIPE_WEBHOOK_SECRET` is missing in prod), paid bookings never trigger server-side completion.
+> 1. Add a temporary admin route `GET /api/_test/booking-email` (guarded to your account) that calls `sendBookingEmails` with dummy data, so you can confirm delivery end-to-end without taking a payment.
+
+-----
+
+### Notes
+
+- `support@clvrquantai.com` as a recipient is fine — Resend can send to any address once the FROM domain is verified, which yours is (briefs work). The issue is almost certainly the missing webhook send (paid) and/or silent failures, not the address.
+- Keep `from: fromEmail` (your verified `hello@clvrquantai.com`) and `replyTo: support@` so replies route to you; sending *from* support@ would need that mailbox verified as a sender.
+- The booking emails are transactional (not marketing), so no unsubscribe footer is needed.

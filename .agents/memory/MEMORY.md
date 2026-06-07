@@ -2,3 +2,5 @@
 - [Signal expectancy diagnostics](signal-expectancy-diagnostics.md) — raw scanner signals net-negative (PF~0.74); conviction inverts above 50; conv30-50 + 2x + whitelist holds OOS at PF~1.41. NOW WIRED LIVE via empiricalFilters.ts (drop≠downweight, off-list soft, crypto-only, flag-gated).
 - [Finnhub earnings flow](finnhub-earnings.md) — earnings is Finnhub-only after FMP rip-out; go through the finnhubEarnings service; route filters cached calendar per watchlist (no global response cache); free tier is EPS-only.
 - [IPO calendar data sources](fmp-earnings-data-tiers.md) — IPO calendar uses Nasdaq public API (primary) with FMP as best-effort fallback; FMP free tier 403s the IPO endpoint, Nasdaq IP-blocks Railway egress.
+- [Quant sigma units & notional cap](quant-sigma-units.md) — intraday sigma fallback must be scaled to DAILY before sizing's sqrt(365), or size balloons ~38x to 2x equity; MAX_NOTIONAL_FRACTION hard-caps it.
+- [Concierge booking webhook](concierge-booking-webhook.md) — paid bookings share the subscription checkout.session.completed handler; branch on metadata.kind or receipts mislabel; idempotent confirm vs Stripe retries.
