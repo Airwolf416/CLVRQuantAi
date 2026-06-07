@@ -3,16 +3,19 @@ nixPkgs = ["nodejs_20", "python311", "python311Packages.pip"]
 
 [phases.install]
 cmds = [
-  "NODE_ENV=development npm ci --include=dev --production=false",
-  "echo '--- build tools after install ---' && (ls -la node_modules/.bin/ | grep -E 'tsx|vite|esbuild' || echo 'BUILD TOOLS MISSING AFTER INSTALL')",
   "python -m venv /opt/venv",
   ". /opt/venv/bin/activate && pip install --upgrade pip && pip install -r quant/requirements.txt",
 ]
 
+# Node deps + build run in a SINGLE RUN step so node_modules is guaranteed
+# present when `npm run build` executes. Splitting install/build into separate
+# layers let node_modules disappear between layers on Railway's builder.
+# Use `npm install` (not `npm ci`) because the build phase mounts a cache at
+# node_modules/.cache, and `npm ci` wipes node_modules wholesale which conflicts
+# with that mountpoint.
 [phases.build]
 cmds = [
-  "(ls node_modules/.bin/tsx && echo 'tsx present at build start') || echo 'tsx MISSING at build start'",
-  "npm run build",
+  "NODE_ENV=development npm install --include=dev --no-audit --no-fund && ls node_modules/.bin/tsx && npm run build",
 ]
 
 [start]
