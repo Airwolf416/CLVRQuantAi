@@ -10,8 +10,6 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo, createContext,
 import { useQuery } from "@tanstack/react-query";
 import { SiInstagram, SiTiktok } from "react-icons/si";
 import { Menu, X, LogOut, Languages, QrCode, ScanLine } from "lucide-react";
-import { loadStripe } from "@stripe/stripe-js";
-import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
 import ChartAITab from "./tabs/ChartAITab.jsx";
 import CheckoutPage from "./pages/Checkout.jsx";
 import PaymentSuccessPage from "./pages/PaymentSuccess.jsx";
@@ -3182,17 +3180,6 @@ function stripConciergeMd(text){
     .replace(/`/g,"");
 }
 
-// Lazily load Stripe.js once, using the publishable key from our backend.
-// Shared by the in-app concierge embedded checkout.
-let _conciergeStripePromise=null;
-function getConciergeStripe(){
-  if(_conciergeStripePromise) return _conciergeStripePromise;
-  _conciergeStripePromise=fetch("/api/stripe/publishable-key",{credentials:"include"})
-    .then(r=>r.json())
-    .then(d=>{ if(!d?.publishableKey) throw new Error("Missing Stripe publishable key"); return loadStripe(d.publishableKey); });
-  return _conciergeStripePromise;
-}
-
 function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const [open,setOpen]=useState(false);
   // Allow opening from outside (e.g. the burger menu "Ask Concierge" row) by
@@ -3213,9 +3200,6 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const [bMsg,setBMsg]=useState("");
   const [bConfirmed,setBConfirmed]=useState(false);
   const [bWorking,setBWorking]=useState(false);
-  // In-app embedded checkout (no redirect to checkout.stripe.com).
-  const [coSecret,setCoSecret]=useState(null);
-  const [coStripe,setCoStripe]=useState(null);
   const scrollRef=useRef(null);
 
   useEffect(()=>{
@@ -3223,7 +3207,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   },[messages,sending,open,booking]);
 
   const openBooking=async()=>{
-    setBooking(true); setBMsg(""); setBConfirmed(false); setCoSecret(null); setPLoading(true);
+    setBooking(true); setBMsg(""); setBConfirmed(false); setPLoading(true);
     if(!bDate){ const t=new Date(); t.setDate(t.getDate()+1); setBDate(t.toISOString().slice(0,10)); }
     try{
       const r=await fetch("/api/concierge/pricing",{credentials:"include"});
@@ -3272,12 +3256,10 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
       if(r.status===503){ setBMsg(d.error||"Online payment isn't set up yet — please try again later."); return; }
       if(!r.ok){ setBMsg(d.error||"Could not create booking. Please try again."); return; }
       if(d.mode==="checkout"&&d.clientSecret){
-        // In-app embedded checkout — mount Stripe's form inside this widget.
-        try{
-          const s=await getConciergeStripe();
-          setCoStripe(s);
-          setCoSecret(d.clientSecret);
-        }catch{ setBMsg("Could not load secure checkout. Please try again."); }
+        // Full-page in-app checkout — same experience as the subscription
+        // checkout. Stash the session secret, then navigate to /checkout.
+        try{ sessionStorage.setItem("concierge_checkout_secret", d.clientSecret); }catch{}
+        window.location.href="/checkout?kind=concierge";
         return;
       }
       if(d.mode==="free_confirmed"){ setBConfirmed(true); setBMsg(d.message||"Your free session is confirmed."); }
@@ -3350,23 +3332,15 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
         {/* Booking view */}
         {booking&&(
           <div data-testid="panel-concierge-booking" style={{display:"flex",flexDirection:"column",gap:12}}>
-            <button data-testid="button-concierge-back" onClick={()=>{ if(coSecret){ setCoSecret(null); setBMsg(""); } else { setBooking(false); } }}
-              style={{alignSelf:"flex-start",background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>{coSecret?"← Back":"← Back to chat"}</button>
-            <div style={{fontFamily:SERIF,fontWeight:700,fontSize:16,color:C.gold2}}>{coSecret?"Complete payment":"Book a 1-on-1 session"}</div>
+            <button data-testid="button-concierge-back" onClick={()=>setBooking(false)}
+              style={{alignSelf:"flex-start",background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>← Back to chat</button>
+            <div style={{fontFamily:SERIF,fontWeight:700,fontSize:16,color:C.gold2}}>Book a 1-on-1 session</div>
             <div style={{fontFamily:MONO,fontSize:11,color:C.muted2,lineHeight:1.5}}>
               A live 30-minute walkthrough of the platform — educational only, not financial advice.
             </div>
 
-            {coSecret&&coStripe&&(
-              <div data-testid="panel-concierge-checkout" style={{background:"#fff",borderRadius:8,overflow:"hidden"}}>
-                <EmbeddedCheckoutProvider stripe={coStripe} options={{clientSecret:coSecret}}>
-                  <EmbeddedCheckout />
-                </EmbeddedCheckoutProvider>
-              </div>
-            )}
-
-            {pLoading&&!coSecret&&<div style={{fontFamily:MONO,fontSize:11,color:C.muted}}>Loading pricing…</div>}
-            {pricing&&!bConfirmed&&!coSecret&&(
+            {pLoading&&<div style={{fontFamily:MONO,fontSize:11,color:C.muted}}>Loading pricing…</div>}
+            {pricing&&!bConfirmed&&(
               <>
                 <div style={{display:"flex",alignItems:"baseline",gap:8}}>
                   <span style={{fontFamily:SERIF,fontSize:26,fontWeight:900,color:C.gold3}} data-testid="text-concierge-price">{pricing.priceDisplay}</span>
@@ -4136,7 +4110,7 @@ function Dashboard({user,setUser,onShowAuth}){
       window.history.replaceState({},document.title,window.location.pathname);
     }
     if(status==="cancel"){setToast("Checkout cancelled");window.history.replaceState({},document.title,window.location.pathname);}
-    if(params.get("booking")==="success"){setToast("✦ Session booked — confirmation emailed.");window.history.replaceState({},document.title,window.location.pathname);}
+    if(params.get("booking")==="success"){setToast("✦ Session booked — confirmation emailed.");try{sessionStorage.removeItem("concierge_checkout_secret");}catch{}window.history.replaceState({},document.title,window.location.pathname);}
   },[]);
 
   useEffect(()=>{

@@ -17,6 +17,7 @@ function getStripePromise() {
 export default function CheckoutPage() {
   const urlParams = new URLSearchParams(window.location.search);
   const priceId = urlParams.get("priceId");
+  const isConcierge = urlParams.get("kind") === "concierge";
   const [stripe, setStripe] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const fetchedSecretRef = useRef(null);
@@ -29,6 +30,14 @@ export default function CheckoutPage() {
 
   const fetchClientSecret = useCallback(async () => {
     if (fetchedSecretRef.current) return fetchedSecretRef.current;
+    // Concierge booking: the session was already created by /api/concierge/book
+    // and its clientSecret stashed in sessionStorage just before navigating here.
+    if (isConcierge) {
+      const secret = sessionStorage.getItem("concierge_checkout_secret");
+      if (!secret) throw new Error("Your booking session expired — please start again from the concierge.");
+      fetchedSecretRef.current = secret;
+      return secret;
+    }
     const res = await fetch("/api/stripe/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -39,9 +48,9 @@ export default function CheckoutPage() {
     if (!res.ok || !data.clientSecret) throw new Error(data?.error || "Failed to create session");
     fetchedSecretRef.current = data.clientSecret;
     return data.clientSecret;
-  }, [priceId]);
+  }, [priceId, isConcierge]);
 
-  if (!priceId) {
+  if (!isConcierge && !priceId) {
     return (
       <div style={{ minHeight: "100vh", background: "#0a0e1a", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "ui-sans-serif, system-ui" }}>
         <div style={{ textAlign: "center", maxWidth: 420 }}>
@@ -72,7 +81,7 @@ export default function CheckoutPage() {
           <div style={{ color: "#9aa3b2", fontSize: 11, fontFamily: "ui-monospace, monospace", letterSpacing: "0.12em" }}>SECURE · STRIPE</div>
         </div>
         <h1 style={{ fontFamily: "ui-serif, Georgia, serif", color: "#fff", fontSize: 24, fontWeight: 800, textAlign: "center", margin: "0 0 22px 0" }}>
-          Complete your subscription
+          {isConcierge ? "Complete your booking" : "Complete your subscription"}
         </h1>
         <div id="checkout" style={{ borderRadius: 8, overflow: "hidden", background: "#fff", minHeight: 480 }}>
           {stripe ? (
