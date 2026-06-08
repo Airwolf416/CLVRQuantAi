@@ -531,11 +531,11 @@ function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
         ))}
         <button data-testid="preview-upgrade-pro-btn" onClick={()=>onSignUp("pro")}
           style={{width:"100%",marginTop:14,padding:"11px 0",borderRadius:3,background:"rgba(201,168,76,.15)",border:"1px solid rgba(201,168,76,.45)",color:C2.gold,fontFamily:MONO2,fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:"0.1em"}}>
-          UPGRADE TO PRO — FROM $29.99/mo →
+          UPGRADE TO PRO — FROM $29.99/mo CAD →
         </button>
         <button data-testid="preview-upgrade-elite-btn" onClick={()=>onSignUp("elite")}
           style={{width:"100%",marginTop:6,padding:"10px 0",borderRadius:3,background:"rgba(0,229,255,.06)",border:"1px solid rgba(0,229,255,.3)",color:"#00e5ff",fontFamily:MONO2,fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:"0.1em"}}>
-          ELITE — FULL ACCESS FROM $129/mo ⚡
+          ELITE — FULL ACCESS FROM $129/mo CAD ⚡
         </button>
       </div>
 
@@ -551,8 +551,8 @@ function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
 function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const plans=[
     {name:"Free",price:"$0",period:"forever",color:C2.muted2,borderColor:"#1c2b4a",features:["Live crypto, equities & forex prices","Macro calendar & event tracker","Market regime dashboard","Signals with 30-min delay (prices hidden)","Track record — aggregate stats only"]},
-    {name:"Pro",price:"$29.99",period:"/mo",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📰 Daily AI Morning Brief · 1 trade idea","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
-    {name:"Elite",price:"$129",period:"/mo",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","⚡ Hyperliquid perps integration","🔑 Direct founder access · all future features"]},
+    {name:"Pro",price:"$29.99",period:"/mo CAD",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📰 Daily AI Morning Brief · 1 trade idea","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
+    {name:"Elite",price:"$129",period:"/mo CAD",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","⚡ Hyperliquid perps integration","🔑 Direct founder access · all future features"]},
   ];
   return(
     <div style={{padding:"20px 4px 40px"}}>
@@ -646,7 +646,7 @@ function TabUpgradeGate({tab,tier,onUpgrade,C2,MONO2,SERIF2}){
         {isElite?"Upgrade to Elite ⚡":"Upgrade to Pro →"}
       </button>
       <div style={{fontFamily:MONO2,fontSize:9,color:C2.muted,marginTop:14,letterSpacing:"0.08em"}}>
-        {isElite?"FROM $129/mo · CANCEL ANYTIME":"FROM $29.99/mo · CANCEL ANYTIME"}
+        {isElite?"FROM $129/mo CAD · CANCEL ANYTIME":"FROM $29.99/mo CAD · CANCEL ANYTIME"}
       </div>
     </div>
   );
@@ -1907,7 +1907,7 @@ function TrackRecordTab({isPro,onUpgrade}){
               </div>
             ))}
           </div>
-          <button data-testid="btn-unlock-history" onClick={onUpgrade} style={{width:"100%",padding:"9px 0",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:4,cursor:"pointer"}}>Upgrade to Pro — from $29.99/mo →</button>
+          <button data-testid="btn-unlock-history" onClick={onUpgrade} style={{width:"100%",padding:"9px 0",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,background:"rgba(201,168,76,.12)",border:`1px solid rgba(201,168,76,.35)`,borderRadius:4,cursor:"pointer"}}>Upgrade to Pro — from $29.99/mo CAD →</button>
         </div>
       )}
       {history.length===0?(
@@ -5269,7 +5269,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               </div>
               {accessCodeMsg&&<div style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("✦")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
             </div>
-            <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:10}}>Cancel anytime · Secure checkout via Stripe · USD</div>
+            <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:10}}>Cancel anytime · Secure checkout via Stripe · CAD</div>
             <button onClick={()=>setShowUpgrade(false)} style={{marginTop:10,background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:9,cursor:"pointer",letterSpacing:"0.1em"}}>CLOSE</button>
           </div>
         </div>
@@ -5934,7 +5934,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                       Upgrade to see today's top trade ideas — entry, stops, targets, confidence, and edge.
                     </div>
                     <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowUpgrade && setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
-                      Upgrade to Pro — $29.99/mo
+                      Upgrade to Pro — $29.99/mo CAD
                     </button>
                   </div>
                 );
@@ -6234,7 +6234,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                       Upgrade to see today's top trade ideas — entry, stops, targets, confidence, and edge.
                     </div>
                     <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowUpgrade && setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
-                      Upgrade to Pro — $29.99/mo
+                      Upgrade to Pro — $29.99/mo CAD
                     </button>
                   </div>
                 );
@@ -6600,7 +6600,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               {[
                 "CLVRQuant is an AI-powered market-intelligence and education platform for active traders across crypto, equities, forex, and commodities. It is an information and education tool — not a trading-execution platform and not financial advice.",
                 "What's inside: QuantBrain multi-factor analysis, the Kronos Forecast Engine (Elite), Chart AI (Elite), Ask AI chat, AI Trade Ideas with a regime gate and Kelly-based sizing, AI Radar / Pulse for unusual activity, a macro pre-flight calendar, Social Intelligence, Earnings, SEC Insider Flow, My Basket (Elite), Morning Brief, customizable Alerts, and the Squawk Box.",
-                "Plans: Free, Pro ($29.99/mo), Elite ($129/mo). Built on a live data stack (Hyperliquid, Binance, Yahoo Finance and others) with Claude-powered analysis.",
+                "Plans: Free, Pro ($29.99/mo CAD), Elite ($129/mo CAD). Built on a live data stack (Hyperliquid, Binance, Yahoo Finance and others) with Claude-powered analysis.",
               ].map((p,i)=>(
                 <div key={i} style={{fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.8,marginBottom:10}}>{p}</div>
               ))}
@@ -6782,7 +6782,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
           {[
             {cat:"Plans & Features (Current)",color:C.gold2,items:[
-              {q:"What do Free, Pro, and Elite include?",a:"Free: live prices, the macro calendar, and basic market data — no AI signals. Pro ($29.99/mo): CLVR AI Trade Ideas (4 per run), the Quant Scanner, Ask AI chat, full signals, the sentiment feed, and custom alerts. Elite ($129/mo): everything in Pro plus 6 trade ideas, the Kronos Forecast Engine, Chart AI, My Basket, SEC Insider Flow, the Squawk Box, whale tracking, and one free 30-min 1-on-1 session each month."},
+              {q:"What do Free, Pro, and Elite include?",a:"Free: live prices, the macro calendar, and basic market data — no AI signals. Pro ($29.99/mo CAD): CLVR AI Trade Ideas (4 per run), the Quant Scanner, Ask AI chat, full signals, the sentiment feed, and custom alerts. Elite ($129/mo CAD): everything in Pro plus 6 trade ideas, the Kronos Forecast Engine, Chart AI, My Basket, SEC Insider Flow, the Squawk Box, whale tracking, and one free 30-min 1-on-1 session each month."},
               {q:"How do AI Trade Ideas work?",a:"Pick a timeframe (Today / Mid / Long), a horizon (Quick / Hours / Full Day), an asset class, and PERP / SPOT / BOTH, then tap Generate. Everyone using the same filters sees the same batch. Elite members can tap '↻ Re-roll fresh' for a brand-new set."},
               {q:"What is Kronos? (Elite)",a:"Kronos is a 5-candle BULL / BASE / BEAR forecast with an EV-aligned headline. It's a forecast (mean-reversion aware), so it can differ from a pure trend read like Chart AI — they look at different horizons."},
               {q:"What is Chart AI? (Elite)",a:"Upload a chart, pick a horizon, and get a structured read built on real server-computed RSI and ATR — not a guess from the image alone."},
@@ -6809,7 +6809,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             {cat:"Getting Started",color:C.blue,items:[
               {q:"What is CLVRQuant?",a:"CLVRQuant is a mobile-first AI-powered market intelligence dashboard. It aggregates live prices across crypto, equities, commodities, and forex — combined with AI analysis, macro event tracking, and real-time signals — all in one clean app."},
               {q:"How do I create an account?",a:"Tap the Account tab (⚙) in the navigation bar, then choose Sign Up. Enter your email and password. That's it — you're in. Free accounts get access to all core market data, signals, and the daily brief."},
-              {q:"What's the difference between Free, Pro, and Elite?",a:"Free: live prices, macro calendar, basic signals, 1 morning brief idea. Pro ($29.99/mo): CLVR AI Market Chat, 4 daily brief ideas, full signals, sentiment feed, and custom price alerts. Elite ($129/mo): everything in Pro plus the exclusive ⚡ AI Quant Engine (MasterBrain 12-factor analysis), SEC Insider Flow, My Basket Analysis, Squawk Box live signal announcer, whale tracking, and Hyperliquid perpetuals data. The Squawk Box, SEC Insider tab, and Basket Analysis are Elite-only — Pro users see a locked preview with an upgrade prompt. Tap your tier badge in the header to upgrade."},
+              {q:"What's the difference between Free, Pro, and Elite?",a:"Free: live prices, macro calendar, basic signals, 1 morning brief idea. Pro ($29.99/mo CAD): CLVR AI Market Chat, 4 daily brief ideas, full signals, sentiment feed, and custom price alerts. Elite ($129/mo CAD): everything in Pro plus the exclusive ⚡ AI Quant Engine (MasterBrain 12-factor analysis), SEC Insider Flow, My Basket Analysis, Squawk Box live signal announcer, whale tracking, and Hyperliquid perpetuals data. The Squawk Box, SEC Insider tab, and Basket Analysis are Elite-only — Pro users see a locked preview with an upgrade prompt. Tap your tier badge in the header to upgrade."},
               {q:"Can I use CLVRQuant on my phone?",a:"Yes — CLVRQuant is designed mobile-first. You can add it to your home screen as a PWA (Progressive Web App) for a native app experience. On iPhone, tap Share → Add to Home Screen. On Android, tap the browser menu → Install App."},
             ]},
             {cat:"Market Data & Signals",color:C.green,items:[
@@ -6838,7 +6838,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               {q:"What is the Squawk Box and who can use it?",a:"The Squawk Box (📣 in the header) is an Elite-only live signal announcer. When active, it uses your device's text-to-speech to call out new QuantBrain signals in real-time — hands-free market awareness while you work. Pro users see a locked 📣 icon with a 🔒 badge; tap it to upgrade. Enable SOUND first, then tap 📣 SQUAWK to go live."},
             ]},
             {cat:"Billing & Subscription",color:C.red,items:[
-              {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year (save $60). CLVR Elite is $129/month or $1,199/year (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
+              {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year, all in CAD (save $60). CLVR Elite is $129/month or $1,199/year, all in CAD (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
               {q:"How do I upgrade to Pro or Elite?",a:"Tap your tier badge in the top navigation bar (the one showing UPGRADE, PRO, or ELITE). Free users are taken directly to the plan selector. Pro users who tap their PRO badge are directed straight to the Elite upgrade. Elite users who tap their ELITE badge can view downgrade options. You can also go to Account → Upgrade. All payments are processed by Stripe."},
               {q:"How do I downgrade from Elite to Pro or Free?",a:"Tap your ELITE badge in the header — this opens the pricing modal where you can select Pro or Free. For billing changes mid-cycle, go to Account → Manage Subscription to access the Stripe billing portal where you can switch plans or cancel anytime."},
               {q:"Can I cancel my subscription?",a:"Yes, you can cancel anytime. Go to Account → Manage Subscription. Your Pro access continues until the end of your current billing period, then reverts to Free. No questions asked."},

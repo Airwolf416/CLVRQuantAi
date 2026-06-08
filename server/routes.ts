@@ -713,7 +713,7 @@ async function sendPromoReminder(u: any, daysOut: number) {
       ? `Your Elite access ends today.`
       : `Your Elite access expires on ${expiryDate} (${daysOut} day${daysOut===1?"":"s"} away).`;
     const cta = isSameDay
-      ? `Upgrade now to Pro ($29.99/mo) or Elite ($129/mo) to avoid losing access to AI signals, the Quant Engine, and the Squawk Box. After today, your account will revert to the Free tier.`
+      ? `Upgrade now to Pro ($29.99/mo CAD) or Elite ($129/mo CAD) to avoid losing access to AI signals, the Quant Engine, and the Squawk Box. After today, your account will revert to the Free tier.`
       : `To keep uninterrupted access to AI analysis, signals, the Quant Engine, and all premium features, subscribe before your code expires.`;
     await resend.emails.send({
       from: fromEmail, to: u.email,
@@ -5133,7 +5133,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     return {
       tier,
       priceUsd,
-      priceDisplay: priceUsd === 0 ? "Free" : `$${priceUsd}`,
+      priceDisplay: priceUsd === 0 ? "Free" : `$${priceUsd} CAD`,
       mode: priceUsd === 0 ? "free" : "checkout",
       eliteFreeRemaining,
       durationMin: 30,
@@ -5234,7 +5234,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         mode: "payment",
         line_items: [{
           price_data: {
-            currency: "usd",
+            currency: "cad",
             unit_amount: pricing.priceUsd * 100,
             product_data: { name: "CLVRQuant — 30-min 1-on-1 Platform Training (educational only)" },
           },
@@ -5294,7 +5294,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         : `A 30-minute 1-on-1 training session is ${pricing.priceDisplay} for your account. Tap Book above to choose a time.`;
       const CANNED: { match: RegExp; answer: string }[] = [
         { match: /(differ|compare|free.*pro|pro.*elite|which (plan|tier)|what.*plans?)/i,
-          answer: `Quick version of the three plans. Free gets you live prices, the macro calendar, basic signals and one morning brief idea. Pro at 29.99 a month adds the CLVR AI market chat, full signals, the sentiment feed and custom alerts. Elite at 129 a month unlocks everything, including the AI Quant Engine, SEC Insider Flow, Basket Analysis, the Squawk Box and whale tracking. Want me to go deeper on any one of them?` },
+          answer: `Quick version of the three plans. Free gets you live prices, the macro calendar, basic signals and one morning brief idea. Pro at 29.99 CAD a month adds the CLVR AI market chat, full signals, the sentiment feed and custom alerts. Elite at 129 CAD a month unlocks everything, including the AI Quant Engine, SEC Insider Flow, Basket Analysis, the Squawk Box and whale tracking. Want me to go deeper on any one of them?` },
         { match: /(book|session|1.?on.?1|one.?on.?one|training|call with|talk to|consult)/i,
           answer: `Happy to help you book. {BOOKING_LINE} The session is a live walkthrough of the platform, just education on how to use the tools, not financial advice.` },
         { match: /(pulse|unusual activity)/i,
@@ -5325,7 +5325,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       const system = `You are the CLVRQuant Concierge — a friendly, professional support assistant for the CLVRQuant platform (clvrquantai.com) ONLY.
 
 STRICT SCOPE — you may ONLY help with:
-1. Explaining CLVRQuant features and how to use them: QuantBrain AI signals, the AI Quant Engine (MasterBrain), Signals tab, AI Radar, Pulse (Unusual Activity), Earnings tab, Social Intelligence, Polymarket data, Morning Brief, Alerts, Squawk Box, SEC Insider Flow, Basket Analysis, the three plans (Free, Pro $29.99/mo, Elite $129/mo), and how to navigate the app.
+1. Explaining CLVRQuant features and how to use them: QuantBrain AI signals, the AI Quant Engine (MasterBrain), Signals tab, AI Radar, Pulse (Unusual Activity), Earnings tab, Social Intelligence, Polymarket data, Morning Brief, Alerts, Squawk Box, SEC Insider Flow, Basket Analysis, the three plans (Free, Pro $29.99/mo CAD, Elite $129/mo CAD), and how to navigate the app.
 2. Helping the user book a paid 30-min 1-on-1 platform training session.
 
 YOU MUST REFUSE, politely and briefly, anything outside this scope. This includes: general knowledge, current events, web lookups, math/homework, coding help, medical/legal/tax questions, SPECIFIC FINANCIAL OR TRADING ADVICE ("should I buy X?", price predictions, what to invest in), personal opinions, or anything unrelated to using CLVRQuant. For off-topic requests say: "I can only help with using the CLVRQuant platform and booking a training session. Is there something about the platform I can help with?"

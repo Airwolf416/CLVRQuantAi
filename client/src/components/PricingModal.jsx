@@ -340,7 +340,7 @@ export default function PricingModal({ isOpen, onClose, userTier = "free", onUpg
         {/* Footer */}
         <div style={{ textAlign: "center", padding: "16px 20px 8px" }}>
           <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, lineHeight: 2 }}>
-            Cancel anytime · Secure checkout via Stripe · All prices in USD
+            Cancel anytime · Secure checkout via Stripe · All prices in CAD
           </div>
           <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 2 }}>
             CLVRQuant is informational only — not financial advice.

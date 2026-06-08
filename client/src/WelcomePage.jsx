@@ -198,13 +198,13 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
               highlight: false, cta: "Start Free", action: "free", color: C.muted,
             },
             {
-              tier: "PRO", price: "$29.99", sub: "per month · save 17% yearly",
+              tier: "PRO", price: "$29.99", sub: "per month (CAD) · save 17% yearly",
               features: ["Real-time signals — zero delay", "CLVR AI Market Chat", "Price alerts & push notifications", "Signal history & PnL tracking", "Morning Brief · 4 ideas/day"],
               locked: [],
               highlight: true, cta: "Start Pro", action: "signup", color: C.gold,
             },
             {
-              tier: "ELITE", price: "$129", sub: "per month · save 23% yearly",
+              tier: "ELITE", price: "$129", sub: "per month (CAD) · save 23% yearly",
               features: ["Everything in Pro", "AI Quant Engine (12-factor)", "SEC Insider Flow & whale tracking", "Squawk Box live announcer", "Basket Analysis (3+ assets)", "Political Alpha correlation"],
               locked: [],
               highlight: false, cta: "Go Elite", action: "signup", color: "#00e5ff",

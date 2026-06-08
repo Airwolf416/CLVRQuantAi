@@ -289,14 +289,18 @@ app.post(
           let planInterval = amountFmt;
           let planColor = '#e8c96d';
           let billingCycle = '';
-          if (amountCents >= 19000 && amountCents < 22000) {
+          const recurringLine = (invoice.lines?.data || []).find((l: any) =>
+            l?.plan?.interval || l?.price?.recurring?.interval);
+          const isAnnual = (recurringLine?.plan?.interval
+            || recurringLine?.price?.recurring?.interval) === 'year';
+          if (isAnnual) {
             planName = 'Pro Plan — Annual';
-            planInterval = `$199.00 CAD/year`;
+            planInterval = `${amountFmt}/year`;
             planColor = '#00c787';
             billingCycle = 'Annual subscription — next renewal in 12 months';
-          } else if (amountCents >= 2500 && amountCents < 3500) {
+          } else {
             planName = 'Pro Plan — Monthly';
-            planInterval = `$29.00 CAD/month`;
+            planInterval = `${amountFmt}/month`;
             billingCycle = 'Monthly subscription — next renewal in 30 days';
           }
 

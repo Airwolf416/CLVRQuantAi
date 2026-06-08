@@ -154,7 +154,7 @@ export async function synthesizeWeeklyUpdateFromCommits(
   }
 
   const weekLabel = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: ET_TZ });
-  const prompt = `You are the product editor for CLVRQuantAI — a luxury mobile-first market intel dashboard for crypto / equities / commodities / forex traders. Tier: Free, Pro ($29.99/mo), Elite ($129/mo).
+  const prompt = `You are the product editor for CLVRQuantAI — a luxury mobile-first market intel dashboard for crypto / equities / commodities / forex traders. Tier: Free, Pro ($29.99/mo CAD), Elite ($129/mo CAD).
 
 Below are the raw git commit subjects from the past week (${weekLabel}). Distill them into a polished "What's New This Week" digest for paying subscribers. Drop pure-bug-fix / typo / test / refactor commits. Group related commits. Translate engineer-speak into trader-friendly value (focus on what the user can now SEE or DO).
 

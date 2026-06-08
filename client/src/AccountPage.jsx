@@ -13,8 +13,8 @@ const SANS  = "'Barlow', system-ui, sans-serif";
 
 const PLAN_INFO = {
   free:  { label: "Free",  color: C.muted2,  border: C.border,    price: "$0" },
-  pro:   { label: "Pro",   color: C.gold,    border: C.gold,      price: "$29.99/mo" },
-  elite: { label: "Elite", color: "#00e5ff", border: "#00a8cc",   price: "$129/mo" },
+  pro:   { label: "Pro",   color: C.gold,    border: C.gold,      price: "$29.99/mo CAD" },
+  elite: { label: "Elite", color: "#00e5ff", border: "#00a8cc",   price: "$129/mo CAD" },
 };
 
 function ConfirmModal({ title, message, warning, confirmLabel, confirmColor, onConfirm, onCancel, children }) {
