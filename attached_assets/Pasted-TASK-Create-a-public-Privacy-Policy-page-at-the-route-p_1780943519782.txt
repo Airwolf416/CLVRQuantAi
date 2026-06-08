@@ -1,0 +1,81 @@
+TASK: Create a public Privacy Policy page at the route /privacy for clvrquantai.com (React frontend, matching our existing stack and styling).
+
+CRITICAL REQUIREMENTS:
+- The page MUST be publicly accessible with NO authentication and NO tier gating. It must load for logged-out users, in incognito, and be directly reachable by typing the URL (no redirect to login). Google and search crawlers must be able to fetch it.
+- Add a "Privacy" link in the site footer pointing to /privacy (next to the existing "Terms" link).
+- Set page <title> to "Privacy Policy — CLVRQuant" and add a meta description: "CLVRQuant Privacy Policy — how we collect, use, and protect your data, including Google user data."
+- Do NOT alter any existing routes, auth, tier gating, or billing logic. Add only this page + the footer link.
+
+STYLING:
+- Identical look to the /terms page: dark background (#050709 / #080d18), gold accents (#e8c96d, #c9a84c), Georgia/serif headings, IBM Plex Mono eyebrow, centered max-width ~760px column, body text #c8d4ee, line-height ~1.8, numbered section headings, fully responsive / mobile-first.
+- Show "Last Updated: June 8, 2026" near the top.
+- Keep all [bracketed] placeholders exactly as written.
+
+RENDER THIS CONTENT EXACTLY:
+
+PRIVACY POLICY
+Last Updated: June 8, 2026
+
+1. Introduction
+This Privacy Policy explains how CLVRQuant / CLVRQuantAI ("CLVRQuant," "we," "us"), operated by [Legal Entity Name], 100 King St W, Toronto, ON, Canada, collects, uses, shares, and protects information when you use clvrquantai.com and related tools and services (the "Service"). By using the Service you agree to this Policy. If you do not agree, do not use the Service.
+
+2. Information We Collect
+- Account information: name, email address, and credentials you provide when registering.
+- Payment information: processed by our payment processor (Stripe). We receive limited billing details (such as subscription status and the last four digits of your card) but do NOT collect or store full card numbers.
+- Usage and content data: tools you use, settings, watchlists/baskets, prompts and queries you submit, and interactions with AI features.
+- Booking information: when you schedule a 1-on-1 session, the date, time, and time zone you select, and related scheduling details.
+- Device and log data: IP address, browser type, device identifiers, and access timestamps collected automatically.
+- Communications: messages you send to support@clvrquantai.com.
+
+3. Google User Data
+If you (or an administrator) connect Google services to enable scheduling features, we access Google data through Google APIs solely to provide those features. Specifically:
+- We use Google Calendar API access to create, update, and cancel calendar events for booked 1-on-1 sessions and to generate Google Meet links for those sessions.
+- We access only the data necessary to create and manage these scheduling events. We do not read your unrelated calendar content for any other purpose.
+- We retain Google-derived event data only as long as needed to manage the related booking, and we do not sell it or use it for advertising.
+You can revoke our access at any time via your Google Account permissions at https://myaccount.google.com/permissions.
+
+4. Limited Use Disclosure (Google API Services)
+CLVRQuant's use and transfer of information received from Google APIs will adhere to the Google API Services User Data Policy, including the Limited Use requirements. We use Google user data only to provide and improve the user-facing scheduling features described above; we do not transfer or sell it to third parties except as necessary to provide those features, to comply with applicable law, or as part of a merger or acquisition; we do not use it for advertising; and we do not allow humans to read it unless we have your consent, it is necessary for security or to comply with law, or the data has been aggregated and anonymized.
+
+5. How We Use Your Information
+We use information to: provide, operate, and maintain the Service; create and manage your account and subscriptions; process payments and bookings; generate AI-based analysis and educational outputs you request; communicate with you (transactional emails, support, service notices); monitor, secure, debug, and improve the Service; and comply with legal obligations.
+
+6. AI Processing
+Prompts and inputs you submit to AI features are processed by our AI provider (Anthropic) to generate responses. Do not submit sensitive personal information you do not want processed this way.
+
+7. Service Providers and Third Parties
+We share information with vendors who process it on our behalf, under contractual confidentiality and data-protection obligations, including: Stripe (payments), Resend (transactional email), Railway (hosting and database), Google (calendar/scheduling), and Anthropic (AI processing). Market data is sourced from third parties including Finnhub, Binance, Hyperliquid, CryptoPanic, and RapidAPI. We do not sell your personal information.
+
+8. Legal Disclosures
+We may disclose information if required by law, subpoena, or government request, or to protect the rights, safety, and security of CLVRQuant, our users, or the public, or in connection with a merger, acquisition, or sale of assets.
+
+9. Cookies and Tracking
+We use cookies and similar technologies for authentication, session management, security, and to remember preferences. You can control cookies through your browser settings, though some features may not function without them.
+
+10. Data Retention
+We retain personal information for as long as your account is active or as needed to provide the Service, comply with legal obligations, resolve disputes, and enforce agreements. We delete or anonymize data when it is no longer needed. [Insert specific retention periods if applicable.]
+
+11. Data Security
+We use reasonable administrative, technical, and physical safeguards to protect your information. No method of transmission or storage is completely secure, and we cannot guarantee absolute security.
+
+12. Your Rights and Choices
+Depending on your location (including under Canada's PIPEDA, the EU/UK GDPR, and the California CCPA/CPRA), you may have rights to access, correct, delete, export, or restrict processing of your personal information, and to withdraw consent. To exercise these rights, or to request account and data deletion, email support@clvrquantai.com. We will respond as required by applicable law.
+
+13. International Data Transfers
+Your information may be processed and stored in countries other than where you live, including the United States and Canada. Where required, we use appropriate safeguards for such transfers.
+
+14. Children's Privacy
+The Service is not intended for anyone under 18, and we do not knowingly collect personal information from minors. If you believe a minor has provided us data, contact us and we will delete it.
+
+15. Changes to This Policy
+We may update this Policy from time to time. Material changes will be posted here with a revised "Last Updated" date. Continued use after changes constitutes acceptance.
+
+16. Contact Us
+Questions or privacy requests: support@clvrquantai.com — CLVRQuant, 100 King St W, Toronto, ON, Canada.
+
+ACCEPTANCE CRITERIA:
+- /privacy loads with no login, in incognito, and via direct URL (no auth redirect).
+- "Privacy" link appears in the footer next to "Terms" and navigates to /privacy.
+- Content renders exactly as above with [bracketed] placeholders intact.
+- The Google User Data and Limited Use sections appear verbatim.
+- Matches brand styling, readable on mobile, no console errors. App builds and deploys on Railway.

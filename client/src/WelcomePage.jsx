@@ -970,7 +970,13 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
             </div>
           </div>
 
-          <div style={{ marginTop: 18, fontFamily: MONO, fontSize: 8, color: C.muted }}>© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</div>
+          <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 16, fontFamily: MONO, fontSize: 9, letterSpacing: "0.08em" }}>
+            <span data-testid="link-footer-terms" onClick={() => setShowLegal(true)} style={{ color: C.gold, cursor: "pointer" }}>Terms</span>
+            <span style={{ color: C.muted }}>·</span>
+            <a data-testid="link-footer-privacy" href="/privacy" style={{ color: C.gold, textDecoration: "none" }}>Privacy</a>
+          </div>
+
+          <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 8, color: C.muted }}>© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</div>
         </div>
       )}
 

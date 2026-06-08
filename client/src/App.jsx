@@ -13,6 +13,7 @@ import { Menu, X, LogOut, Languages, QrCode, ScanLine } from "lucide-react";
 import ChartAITab from "./tabs/ChartAITab.jsx";
 import CheckoutPage from "./pages/Checkout.jsx";
 import PaymentSuccessPage from "./pages/PaymentSuccess.jsx";
+import PrivacyPage from "./pages/Privacy.jsx";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
@@ -3413,6 +3414,7 @@ export default function App(){
   const _path = typeof window !== "undefined" ? window.location.pathname : "/";
   if (_path === "/checkout" || _path.startsWith("/checkout?")) return <CheckoutPage/>;
   if (_path === "/payment-success" || _path.startsWith("/payment-success?")) return <PaymentSuccessPage/>;
+  if (_path === "/privacy" || _path.startsWith("/privacy?")) return <PrivacyPage/>;
 
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
