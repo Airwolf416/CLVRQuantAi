@@ -18,6 +18,7 @@ export default function CheckoutPage() {
   const urlParams = new URLSearchParams(window.location.search);
   const priceId = urlParams.get("priceId");
   const isConcierge = urlParams.get("kind") === "concierge";
+  const bookingId = urlParams.get("bookingId");
   const [stripe, setStripe] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const fetchedSecretRef = useRef(null);
@@ -30,13 +31,21 @@ export default function CheckoutPage() {
 
   const fetchClientSecret = useCallback(async () => {
     if (fetchedSecretRef.current) return fetchedSecretRef.current;
-    // Concierge booking: the session was already created by /api/concierge/book
-    // and its clientSecret stashed in sessionStorage just before navigating here.
+    // Concierge booking: create the Stripe session on demand from the
+    // bookingId (mirrors the subscription flow), so a page refresh just
+    // recreates it instead of relying on a stashed secret.
     if (isConcierge) {
-      const secret = sessionStorage.getItem("concierge_checkout_secret");
-      if (!secret) throw new Error("Your booking session expired — please start again from the concierge.");
-      fetchedSecretRef.current = secret;
-      return secret;
+      if (!bookingId) throw new Error("Missing booking — please start again from the concierge.");
+      const res = await fetch("/api/concierge/checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ bookingId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.clientSecret) throw new Error(data?.error || "Failed to start checkout");
+      fetchedSecretRef.current = data.clientSecret;
+      return data.clientSecret;
     }
     const res = await fetch("/api/stripe/checkout", {
       method: "POST",
@@ -48,7 +57,7 @@ export default function CheckoutPage() {
     if (!res.ok || !data.clientSecret) throw new Error(data?.error || "Failed to create session");
     fetchedSecretRef.current = data.clientSecret;
     return data.clientSecret;
-  }, [priceId, isConcierge]);
+  }, [priceId, isConcierge, bookingId]);
 
   if (!isConcierge && !priceId) {
     return (

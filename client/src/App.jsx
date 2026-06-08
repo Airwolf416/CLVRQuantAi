@@ -3256,11 +3256,11 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
       const d=await r.json().catch(()=>({}));
       if(r.status===503){ setBMsg(d.error||"Online payment isn't set up yet — please try again later."); return; }
       if(!r.ok){ setBMsg(d.error||"Could not create booking. Please try again."); return; }
-      if(d.mode==="checkout"&&d.clientSecret){
+      if(d.mode==="checkout"&&d.bookingId){
         // Full-page in-app checkout — same experience as the subscription
-        // checkout. Stash the session secret, then navigate to /checkout.
-        try{ sessionStorage.setItem("concierge_checkout_secret", d.clientSecret); }catch{}
-        window.location.href="/checkout?kind=concierge";
+        // checkout. The Stripe session is created on the /checkout page itself
+        // (from this bookingId), so a refresh just recreates it.
+        window.location.href=`/checkout?kind=concierge&bookingId=${encodeURIComponent(d.bookingId)}`;
         return;
       }
       if(d.mode==="free_confirmed"){ setBConfirmed(true); setBMsg(d.message||"Your free session is confirmed."); }
@@ -4113,7 +4113,7 @@ function Dashboard({user,setUser,onShowAuth}){
       window.history.replaceState({},document.title,window.location.pathname);
     }
     if(status==="cancel"){setToast("Checkout cancelled");window.history.replaceState({},document.title,window.location.pathname);}
-    if(params.get("booking")==="success"){setToast("✦ Session booked — confirmation emailed.");try{sessionStorage.removeItem("concierge_checkout_secret");}catch{}window.history.replaceState({},document.title,window.location.pathname);}
+    if(params.get("booking")==="success"){setToast("✦ Session booked — confirmation emailed.");window.history.replaceState({},document.title,window.location.pathname);}
   },[]);
 
   useEffect(()=>{

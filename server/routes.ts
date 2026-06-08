@@ -5212,12 +5212,13 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         pricing.mode = "checkout";
       }
 
-      // Paid path — Stripe EMBEDDED checkout. The payment form renders INSIDE
-      // the concierge widget (no redirect to checkout.stripe.com); we return a
-      // clientSecret the frontend mounts with <EmbeddedCheckout/>. Falls to 503
-      // when Stripe is off.
-      let stripe: any;
-      try { stripe = await getUncachableStripeClient(); }
+      // Paid path — create the pending booking ONLY. The Stripe EMBEDDED
+      // checkout session is created lazily on the /checkout page (via
+      // POST /api/concierge/checkout-session) so the flow survives a page
+      // refresh and never relies on a stashed clientSecret — mirroring the
+      // subscription checkout. Verify Stripe is reachable up front so the
+      // user gets a clear error before being sent to the checkout page.
+      try { await getUncachableStripeClient(); }
       catch { return res.status(503).json({ error: "Online payment isn't set up yet — please try again later." }); }
 
       const r: any = await db.execute(dsql`
@@ -5227,6 +5228,63 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       const rows = Array.isArray(r) ? r : (r?.rows || []);
       const bookingId = rows?.[0]?.id;
 
+      res.json({ mode: "checkout", bookingId });
+    } catch (e: any) {
+      console.error("[concierge/book]", e?.message || e);
+      res.status(500).json({ error: "Could not create booking. Please try again." });
+    }
+  });
+
+  // POST /api/concierge/checkout-session — create (or reuse) the Stripe
+  // embedded checkout session for a pending concierge booking. Called by the
+  // /checkout page on demand, so a refresh just recreates the session instead
+  // of erroring with a lost clientSecret. Ownership + pending-status + price
+  // are all re-verified server-side; the price is recomputed from the booking
+  // row (never trusted from the client).
+  app.post("/api/concierge/checkout-session", async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      if (!userId) return res.status(401).json({ error: "Sign in to complete your booking." });
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Sign in to complete your booking." });
+
+      const bookingId = String(req.body?.bookingId || "").trim();
+      if (!bookingId) return res.status(400).json({ error: "Missing booking." });
+
+      const br: any = await db.execute(dsql`
+        SELECT id, user_id, price_usd, status, stripe_session_id
+        FROM concierge_bookings WHERE id = ${bookingId} LIMIT 1`);
+      const brows = Array.isArray(br) ? br : (br?.rows || []);
+      const booking = brows?.[0];
+      if (!booking || String(booking.user_id) !== String(user.id)) {
+        return res.status(404).json({ error: "Booking not found." });
+      }
+      if (booking.status !== "pending") {
+        return res.status(409).json({ error: "This booking is no longer awaiting payment." });
+      }
+      const priceUsd = Number(booking.price_usd || 0);
+      if (!(priceUsd > 0)) return res.status(400).json({ error: "This booking does not require payment." });
+
+      let stripe: any;
+      try { stripe = await getUncachableStripeClient(); }
+      catch { return res.status(503).json({ error: "Online payment isn't set up yet — please try again later." }); }
+
+      // Reuse an existing still-open session if one was already created, so a
+      // refresh doesn't orphan sessions; otherwise create a fresh one.
+      if (booking.stripe_session_id) {
+        try {
+          const existing = await stripe.checkout.sessions.retrieve(booking.stripe_session_id);
+          // Already paid (webhook not yet processed) — do NOT create another
+          // payable session, or the user could be charged twice.
+          if (existing?.payment_status === "paid" || existing?.status === "complete") {
+            return res.status(409).json({ error: "This booking is already paid — your confirmation is on its way." });
+          }
+          if (existing?.status === "open" && existing?.client_secret) {
+            return res.json({ clientSecret: existing.client_secret, sessionId: existing.id });
+          }
+        } catch { /* fall through to create a new session */ }
+      }
+
       const baseUrl = process.env.APP_URL
         || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "http://localhost:5000");
       const session = await stripe.checkout.sessions.create({
@@ -5235,7 +5293,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         line_items: [{
           price_data: {
             currency: "cad",
-            unit_amount: pricing.priceUsd * 100,
+            unit_amount: priceUsd * 100,
             product_data: { name: "CLVRQuant — 30-min 1-on-1 Platform Training (educational only)" },
           },
           quantity: 1,
@@ -5246,10 +5304,10 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       });
 
       try { await db.execute(dsql`UPDATE concierge_bookings SET stripe_session_id = ${session.id} WHERE id = ${bookingId}`); } catch {}
-      res.json({ mode: "checkout", clientSecret: session.client_secret, sessionId: session.id, bookingId });
+      res.json({ clientSecret: session.client_secret, sessionId: session.id });
     } catch (e: any) {
-      console.error("[concierge/book]", e?.message || e);
-      res.status(500).json({ error: "Could not create booking. Please try again." });
+      console.error("[concierge/checkout-session]", e?.message || e);
+      res.status(500).json({ error: "Could not start checkout. Please try again." });
     }
   });
 
