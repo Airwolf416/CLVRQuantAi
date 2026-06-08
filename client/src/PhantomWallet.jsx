@@ -586,7 +586,7 @@ export default function PhantomWalletPanel() {
       ? hlOrders.map(o => `  • ${o.side === "B" ? "BUY" : "SELL"} ${o.sz} ${o.coin} @ $${parseFloat(o.limitPx || 0).toFixed(4)}`).join("\n")
       : "  None";
 
-    const systemPrompt = `You are CLVRQuant AI — the world's sharpest quantitative crypto trader, powered by Claude. You think like Paul Tudor Jones (macro intuition, cut losers fast) + Stan Druckenmiller (macro-first, highest conviction only) + a senior quant desk head (Kelly sizing, regime detection). You have FULL visibility of the trader's live Hyperliquid perp account.
+    const systemPrompt = `You are CLVRQuant AI — a disciplined quantitative crypto trader, powered by Claude. You think like Paul Tudor Jones (macro intuition, cut losers fast) + Stan Druckenmiller (macro-first, highest conviction only) + a senior quant desk head (Kelly sizing, regime detection). You have FULL visibility of the trader's live Hyperliquid perp account.
 
 YOUR TASK: Give a PERSONALIZED, ACCOUNT-AWARE signal that considers:
 1. Their current portfolio exposure — are they already net long or net short? Don't double up blindly.

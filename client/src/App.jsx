@@ -3250,7 +3250,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
     try{
       const r=await fetch("/api/concierge/book",{
         method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({date:bDate,time:bTime,timezone:"America/Toronto"}),
+        body:JSON.stringify({date:bDate,time:bTime,bookerTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||"America/Toronto")}),
       });
       const d=await r.json().catch(()=>({}));
       if(r.status===503){ setBMsg(d.error||"Online payment isn't set up yet — please try again later."); return; }

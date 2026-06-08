@@ -5167,7 +5167,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
 
       const slotDate = String(req.body?.date || "").trim();
       const slotTime = String(req.body?.time || "").trim();
-      const timezone = String(req.body?.timezone || "America/Toronto").trim() || "America/Toronto";
+      const timezone = String(req.body?.bookerTz || req.body?.timezone || "America/Toronto").trim() || "America/Toronto";
       if (!/^\d{4}-\d{2}-\d{2}$/.test(slotDate) || !/^\d{2}:\d{2}$/.test(slotTime)) {
         return res.status(400).json({ error: "Please pick a valid date and time." });
       }

@@ -1,0 +1,48 @@
+TASK: Fix two bugs in the AI Concierge 1-on-1 booking flow:
+(A) confirmation emails never include a Google Meet link;
+(B) all times are treated as America/Toronto with no per-user conversion.
+Locate exact lines yourself. Make surgical changes only.
+
+GUARDRAILS — DO NOT modify:
+- Tier gating, the advisory-lock free-allotment re-check, or the "free_confirmed" path
+- Stripe amounts ($19 Pro/Elite, $49 otherwise), embedded checkout, or webhook routing (kind === 'concierge_session')
+- The never-throw guards around each Resend send
+- REUSE the existing authenticated Google Calendar client / OAuth refresh-token setup already used by finalizeBooking. Do NOT create new credentials or a new auth flow.
+
+CHANGE 1 — Add a Google Meet link to the calendar event (must apply to BOTH paths)
+In the module that currently inserts the calendar event, modify the events.insert call to request a Meet conference and capture the link. Make finalizeBooking (free path) AND handlePaidConciergeBooking (paid path) both use it. If the paid path doesn't currently create a calendar event, add the same call there.
+
+  async function createConciergeEvent({ calendar, startISO, endISO, tz, clientEmail, clientName, bookingId }) {
+    const res = await calendar.events.insert({
+      calendarId: "primary",
+      conferenceDataVersion: 1,        // REQUIRED — without this the Meet request is silently dropped
+      sendUpdates: "all",              // Google also emails the client a calendar invite
+      requestBody: {
+        summary: `CLVRQuant 1-on-1 — ${clientName}`,
+        start: { dateTime: startISO, timeZone: tz },
+        end:   { dateTime: endISO,   timeZone: tz },
+        attendees: [{ email: clientEmail }, { email: "support@clvrquantai.com" }],
+        conferenceData: { createRequest: { requestId: bookingId, conferenceSolutionKey: { type: "hangoutsMeet" } } },
+      },
+    });
+    return { meetLink: res.data.hangoutLink, eventId: res.data.id };
+  }
+
+CHANGE 2 — Thread meetLink into the emails
+Pass meetLink into sendBookingEmails(...) and render it in BOTH the admin and user templates. The user template already supports an optional Meet link — populate it. If meetLink is null/undefined, fall back to current behavior (no broken button).
+
+CHANGE 3 — Timezone correctness
+- Frontend: when POSTing to /api/concierge/book, include bookerTz = Intl.DateTimeFormat().resolvedOptions().timeZone.
+- /api/concierge/book handler: accept bookerTz (default "America/Toronto" if absent, for backward-compat). Interpret the submitted date + HH:MM in bookerTz, convert to a UTC instant, persist that UTC instant PLUS the bookerTz string on the booking row. If no tz column exists, add one via the project's migration method; if a migration isn't wanted now, store tz in an existing JSON/metadata field.
+- Calendar event: build start/end from the UTC instant with timeZone: bookerTz.
+- bookingEmail.ts: render the slot per recipient with:
+    new Date(startUTC).toLocaleString("en-US", { dateStyle: "full", timeStyle: "short", timeZone: RECIPIENT_TZ, timeZoneName: "short" })
+  Use bookerTz for the user email and "America/Toronto" for the admin email. Always include timeZoneName so EDT/CEST shows.
+
+NOTE: Meet-link creation requires the OAuth account (support@clvrquantai.com) to be a Google Workspace account with Meet enabled. If links are still empty after this change, verify that on the account — the code will be correct.
+
+ACCEPTANCE CRITERIA:
+- Both a free (Elite) booking and a paid booking produce a real meet.google.com link in both the admin and user emails.
+- The client receives a Google Calendar invite and the event carries a Meet link.
+- A Paris booker selecting 10:00 gets the correct instant; their email shows the time in their own tz with an abbreviation (e.g. "16:00 CEST"); the admin email shows the Toronto time.
+- No change to tier limits, Stripe amounts, free-allotment locking, or webhook routing. App builds and deploys on Railway.

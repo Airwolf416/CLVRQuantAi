@@ -40,13 +40,62 @@ function formatWhen(b: BookingEmailInput): string {
   return "(time to be confirmed)";
 }
 
+// Converts a wall-clock slot (YYYY-MM-DD + HH:MM) interpreted in `tz` to the
+// absolute UTC instant. No external date lib: we find the zone's UTC offset at
+// that instant via Intl and subtract it. Returns null on malformed input.
+function wallClockToUTC(dateStr: string, timeStr: string, tz: string): Date | null {
+  try {
+    const [y, mo, d] = dateStr.split("-").map(Number);
+    const [h, mi] = timeStr.split(":").map(Number);
+    if ([y, mo, d, h, mi].some((n) => Number.isNaN(n))) return null;
+    const targetWall = Date.UTC(y, mo - 1, d, h, mi);
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    const map: Record<string, string> = {};
+    for (const p of dtf.formatToParts(new Date(targetWall))) {
+      if (p.type !== "literal") map[p.type] = p.value;
+    }
+    let hh = Number(map.hour);
+    if (hh === 24) hh = 0; // some runtimes emit hour 24 for midnight
+    const asTzWall = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day), hh, Number(map.minute), Number(map.second));
+    return new Date(targetWall - (asTzWall - targetWall));
+  } catch {
+    return null;
+  }
+}
+
+// Renders a booking slot in `recipientTz`, always including the zone abbreviation
+// (e.g. "4:00 PM EDT" / "10:00 PM CEST"). The slot was stored as wall-clock in
+// the booker's own tz (b.timezone); we resolve it to a UTC instant, then format
+// per recipient. Falls back to the raw wall-clock+tz string if it can't resolve,
+// so emails never show a broken date.
+function renderSlot(b: BookingEmailInput, recipientTz: string): string {
+  if (b.slotDate && b.slotTime) {
+    const utc = wallClockToUTC(b.slotDate, b.slotTime, b.timezone || "America/Toronto");
+    if (utc) {
+      try {
+        return utc.toLocaleString("en-US", {
+          weekday: "long", year: "numeric", month: "long", day: "numeric",
+          hour: "numeric", minute: "2-digit",
+          timeZone: recipientTz, timeZoneName: "short",
+        });
+      } catch {}
+    }
+  }
+  return formatWhen(b);
+}
+
 // Sends BOTH the admin notification (→ support@) and the user confirmation.
 // Inspects Resend's { data, error } return — Resend does NOT throw on a
 // rejected send, so failures must be read off the payload — and logs loudly.
 // Never throws: each send is independently guarded so one failure can't block
 // the other or the booking flow that called it.
 export async function sendBookingEmails(b: BookingEmailInput): Promise<{ adminOk: boolean; userOk: boolean }> {
-  const when = formatWhen(b);
+  const whenUser = renderSlot(b, b.timezone || "America/Toronto");
+  const whenAdmin = renderSlot(b, "America/Toronto");
   let adminOk = false;
   let userOk = false;
 
@@ -71,7 +120,7 @@ export async function sendBookingEmails(b: BookingEmailInput): Promise<{ adminOk
       to: ADMIN,
       replyTo: b.userEmail || ADMIN,
       subject: `New 1-on-1 booking — ${b.userName} (${b.tier.toUpperCase()})`,
-      text: `New booking ${b.bookingId}\nName: ${b.userName}\nEmail: ${b.userEmail}\nTier: ${b.tier}\nPaid: ${b.paid ? "yes" : "no"} (${b.priceDisplay})\nWhen: ${when}\nMeet: ${b.meetLink || "(pending)"}`,
+      text: `New booking ${b.bookingId}\nName: ${b.userName}\nEmail: ${b.userEmail}\nTier: ${b.tier}\nPaid: ${b.paid ? "yes" : "no"} (${b.priceDisplay})\nWhen: ${whenAdmin}\nMeet: ${b.meetLink || "(pending)"}`,
       html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
         <div style="text-align:center;margin-bottom:20px"><div style="font-family:Georgia,serif;font-size:28px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
         <div style="border-top:1px solid #141e35;padding-top:18px">
@@ -81,7 +130,7 @@ export async function sendBookingEmails(b: BookingEmailInput): Promise<{ adminOk
             <strong style="color:#f0f4ff">Email:</strong> ${b.userEmail}<br>
             <strong style="color:#f0f4ff">Tier:</strong> ${b.tier}<br>
             <strong style="color:#f0f4ff">Paid:</strong> ${b.paid ? "Yes" : "No"} — ${b.priceDisplay}<br>
-            <strong style="color:#f0f4ff">When:</strong> ${when}
+            <strong style="color:#f0f4ff">When:</strong> ${whenAdmin}
           </p>${meetRow}
           <p style="font-size:11px;color:#4a5d80">Booking ID: ${b.bookingId}</p>
         </div></div>`,
@@ -106,13 +155,13 @@ export async function sendBookingEmails(b: BookingEmailInput): Promise<{ adminOk
       from: fromEmail,
       to: b.userEmail,
       replyTo: ADMIN,
-      subject: `Your CLVRQuant 1-on-1 is booked — ${when}`,
-      text: `Hi ${b.userName},\n\nYour 1-on-1 platform walkthrough is confirmed for ${when}.\n${b.meetLink ? `Join: ${b.meetLink}\n` : ""}\nThis session is educational only — a live walkthrough of the platform, not financial advice.\n\nQuestions? support@clvrquantai.com\n\n© 2026 CLVRQuant`,
+      subject: `Your CLVRQuant 1-on-1 is booked — ${whenUser}`,
+      text: `Hi ${b.userName},\n\nYour 1-on-1 platform walkthrough is confirmed for ${whenUser}.\n${b.meetLink ? `Join: ${b.meetLink}\n` : ""}\nThis session is educational only — a live walkthrough of the platform, not financial advice.\n\nQuestions? support@clvrquantai.com\n\n© 2026 CLVRQuant`,
       html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
         <div style="text-align:center;margin-bottom:20px"><div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div></div>
         <div style="border-top:1px solid #141e35;padding-top:20px">
           <p style="font-size:14px;color:#f0f4ff">Hi ${b.userName},</p>
-          <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your 1-on-1 platform walkthrough is <strong style="color:#e8c96d">confirmed</strong> for <strong style="color:#f0f4ff">${when}</strong>.</p>
+          <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Your 1-on-1 platform walkthrough is <strong style="color:#e8c96d">confirmed</strong> for <strong style="color:#f0f4ff">${whenUser}</strong>.</p>
           ${meetRow}
           <p style="font-size:12px;color:#6b7fa8;line-height:1.8">This session is educational only — a live walkthrough of the platform's tools, not financial advice.</p>
           <p style="font-size:11px;color:#4a5d80;text-align:center;margin-top:24px">Questions? <a href="mailto:support@clvrquantai.com" style="color:#4a5d80;text-decoration:none">support@clvrquantai.com</a></p>
