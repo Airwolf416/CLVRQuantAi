@@ -1,27 +1,39 @@
 [phases.setup]
 nixPkgs = ["nodejs_22", "python311", "python311Packages.pip"]
 
-[phases.install]
+# Python venv + quant deps in their own dedicated phase. Commands are
+# byte-for-byte the same as before — only isolated into a named phase. The
+# build phase dependsOn this so the venv is guaranteed present in the image;
+# the start command runs it via /opt/venv/bin.
+[phases.python]
+dependsOn = ["setup"]
 cmds = [
   "python -m venv /opt/venv",
   ". /opt/venv/bin/activate && pip install --upgrade pip && pip install -r quant/requirements.txt",
 ]
 
-# Node deps + build run in a SINGLE RUN step so node_modules is guaranteed
-# present when `npm run build` executes. Splitting install/build into separate
-# layers let node_modules disappear between layers on Railway's builder.
-# Use `npm install` (not `npm ci`) because the build phase mounts a cache at
-# node_modules/.cache, and `npm ci` wipes node_modules wholesale which conflicts
-# with that mountpoint.
-# `--legacy-peer-deps` lets the install proceed past peer-dependency
-# conflicts. We intentionally do NOT run `npm cache clean --force` — it forces
-# a full cold re-download + re-extract of the whole dependency tree every
-# build, spiking peak memory and OOM-killing the install on Railway's builder.
-# The build heap is capped via NODE_OPTIONS (scoped to the build only) so the
-# tsx/vite build has enough memory without touching runtime memory.
-[phases.build]
+# Node deps in a DEDICATED install phase so `npm install` no longer shares the
+# build step's memory window — the previous single-step install+build was
+# OOM-killed ("Exit handler never called!") on Railway's builder. Use
+# `npm install` (not `npm ci`) + `--legacy-peer-deps` to proceed past
+# peer-dependency conflicts. No `npm cache clean --force` (it forces a cold
+# re-extract that spikes peak memory). cacheDirectories warms the npm cache
+# across builds for less IO/memory.
+[phases.install]
+dependsOn = ["setup"]
+cacheDirectories = ["/root/.npm"]
 cmds = [
-  "npm install --include=dev --legacy-peer-deps --no-audit --no-fund && ls node_modules/.bin/tsx && NODE_OPTIONS=--max-old-space-size=4096 npm run build",
+  "npm install --include=dev --legacy-peer-deps --no-audit --no-fund",
+]
+
+# Build runs AFTER both the node install and the python venv. Heap is capped
+# via NODE_OPTIONS (scoped to the build only) so the tsx/vite build has enough
+# memory without touching runtime memory.
+[phases.build]
+dependsOn = ["install", "python"]
+cmds = [
+  "ls node_modules/.bin/tsx",
+  "NODE_OPTIONS=--max-old-space-size=4096 npm run build",
 ]
 
 [start]

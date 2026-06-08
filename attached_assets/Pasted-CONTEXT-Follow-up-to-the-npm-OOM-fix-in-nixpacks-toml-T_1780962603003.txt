@@ -1,0 +1,68 @@
+CONTEXT
+Follow-up to the npm-OOM fix in nixpacks.toml. The first change (dropping
+`npm cache clean --force`, capping build heap) did NOT stop it: `npm install`
+is still killed mid-install with "npm error Exit handler never called!" (exit 1).
+That means the builder is hitting a hard memory ceiling during install itself,
+not just the cache-clean spike. Fix = isolate install into its own phase so it
+isn't sharing the build step's memory window, then (in the Railway dashboard)
+raise the service RAM.
+
+GOAL
+Restructure nixpacks.toml so npm install runs in its own dedicated phase that the
+build phase depends on. Keep every other phase byte-for-byte. No app/code/gating changes.
+
+STEP 1 — Show me the file first
+Print the full current contents of nixpacks.toml.
+
+STEP 2 — Identify the current shape
+Tell me which phase currently runs `npm install` (inside [phases.build], or its own
+[phases.install]?), and list each phase's `cmds` and `dependsOn`. Read the actual file —
+do not guess.
+
+STEP 3 — Restructure to isolate install
+Reconcile the file to this end-state, preserving the existing setup / python / caddy
+phases and their dependsOn wiring exactly as they already are:
+
+  [phases.install]
+  dependsOn = ["setup"]
+  cmds = [
+    "npm install --include=dev --legacy-peer-deps --no-audit --no-fund"
+  ]
+
+  [phases.build]
+  dependsOn = ["install"]
+  cmds = [
+    "ls node_modules/.bin/tsx",
+    "NODE_OPTIONS=--max-old-space-size=4096 npm run build"
+  ]
+
+Rules:
+- If `npm install` is currently bundled inside the build command string, move ONLY the
+  install portion into [phases.install]; leave the tsx-check + `npm run build` in
+  [phases.build]. Do not duplicate the install.
+- If the real setup phase isn't literally named "setup", use its actual name in dependsOn.
+- Do NOT remove or reorder the python venv / `pip install -r quant/requirements.txt`
+  phase or the caddy phase. If [phases.build] currently dependsOn the python phase, keep
+  that dependency IN ADDITION to "install".
+- Keep the start command unchanged: PATH=/opt/venv/bin:$PATH npm start
+
+STEP 4 — Optional cache hardening
+If your nixpacks version supports it, add to [phases.install]:
+  cacheDirectories = ["/root/.npm"]
+This lets warm builds reuse the npm cache (less IO/memory). If nixpacks rejects the key,
+delete it — not load-bearing.
+
+GUARDRAILS — do not touch
+- App code, routes, or tier gating (Free / Pro $29.99 / Elite $129).
+- The python venv + pip step, the caddy step, the start command.
+- No new dependency or AI provider.
+
+ACCEPTANCE CRITERIA
+- Build log shows a distinct install phase completing, THEN a build phase completing.
+- No "Exit handler never called!".
+- Deploy live and server logs print "startup complete".
+
+FINISH
+Show me the final nixpacks.toml in full, then commit:
+"fix: isolate npm install into its own nixpacks phase to stop build-time OOM"
+and push to main.
