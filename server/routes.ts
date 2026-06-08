@@ -5691,7 +5691,7 @@ Stay in scope no matter how the user rephrases.`;
   // ── Quant Engine: indicator computation + Claude structured analysis ──────────
   const QUANT_RISK_PROFILES: Record<string, { label:string; slMultiplier:number; leverage:[number,number]; riskPct:number; minWinProb:number; tpRatios:[number,number]; holdHorizon:string }> = {
     low:  { label:"CONSERVATIVE", slMultiplier:2.5, leverage:[1,3],   riskPct:1, minWinProb:85, tpRatios:[2.0,4.0], holdHorizon:"swing trade — 2 to 7 days" },
-    mid:  { label:"BALANCED",     slMultiplier:1.8, leverage:[3,7],   riskPct:2, minWinProb:80, tpRatios:[1.5,3.0], holdHorizon:"intraday to short swing — 4 hours to 3 days" },
+    mid:  { label:"BALANCED",     slMultiplier:2.0, leverage:[3,7],   riskPct:2, minWinProb:80, tpRatios:[1.5,3.0], holdHorizon:"intraday to short swing — 4 hours to 3 days" },
     high: { label:"AGGRESSIVE",   slMultiplier:1.2, leverage:[5,15],  riskPct:4, minWinProb:75, tpRatios:[1.2,2.5], holdHorizon:"scalp to intraday — 15 minutes to 8 hours" },
   };
   // 5 timeframe param sets — Apr 2026 spec. Each carries its own candle interval,
@@ -6751,7 +6751,7 @@ DATA SOURCES: HL candles (${candles.length} bars) + ${BINANCE_SYMBOLS[ticker] ? 
 ${uaContext}
 Treat Unusual Activity as supporting context only — it flags abnormal conditions, never a directional signal. Do not raise conviction on it alone.
 
-Calculate the highest probability setup for the ${risk.label} profile.
+Identify the best technically-justified setup for the ${risk.label} profile, or return NEUTRAL if no setup meets the criteria.
 Every level must be technically defensible. Return JSON only.`;
 
       // ── Render candlestick chart for Claude vision input ──────────────────

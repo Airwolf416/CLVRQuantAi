@@ -266,7 +266,7 @@ Tasks:
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
         {[
-          { label: "WIN PROB", value: `${probability.toFixed(0)}%`, color: probability >= 60 ? C.green : probability <= 40 ? C.red : C.orange },
+          { label: "MODEL CONFIDENCE", value: `${probability.toFixed(0)}%`, color: probability >= 60 ? C.green : probability <= 40 ? C.red : C.orange },
           { label: "KELLY SIZE", value: `${kellyPct.toFixed(1)}%`, color: C.gold2 },
           { label: "REGIME", value: regime === "momentum" ? "MOM" : "MEAN REV", color: regime === "momentum" ? C.cyan : C.orange },
         ].map(m => (
@@ -511,7 +511,7 @@ Tasks:
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {[
                 { l: "Confluence", v: `${score > 0 ? "+" : ""}${score} / ${maxScore}`, c: score > 2 ? C.green : score < -2 ? C.red : C.muted2 },
-                { l: "Win Probability", v: `${probability.toFixed(0)}%`, c: probability > 60 ? C.green : probability < 40 ? C.red : C.orange },
+                { l: "MODEL CONFIDENCE", v: `${probability.toFixed(0)}%`, c: probability > 60 ? C.green : probability < 40 ? C.red : C.orange },
                 { l: "Kelly Size", v: `${kellyPct.toFixed(1)}%`, c: C.gold2 },
                 { l: "Regime", v: regime === "momentum" ? "Momentum" : "Mean Rev", c: C.cyan },
                 { l: "R/R", v: rr.toFixed(2) + ":1", c: rr >= 2 ? C.green : C.orange },
