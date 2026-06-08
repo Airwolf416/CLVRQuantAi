@@ -13,9 +13,11 @@ cmds = [
 # Use `npm install` (not `npm ci`) because the build phase mounts a cache at
 # node_modules/.cache, and `npm ci` wipes node_modules wholesale which conflicts
 # with that mountpoint.
+# `npm cache clean --force` clears any stale cache; `--legacy-peer-deps` lets
+# the install proceed past peer-dependency conflicts.
 [phases.build]
 cmds = [
-  "NODE_ENV=development npm install --include=dev --no-audit --no-fund && ls node_modules/.bin/tsx && npm run build",
+  "npm cache clean --force && NODE_ENV=development npm install --include=dev --legacy-peer-deps --no-audit --no-fund && ls node_modules/.bin/tsx && npm run build",
 ]
 
 [start]
