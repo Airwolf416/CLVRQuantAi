@@ -1,0 +1,52 @@
+CONTEXT
+Railway build fails in the build phase. pip install succeeds, then `npm install` is killed
+~72s in with: "npm error Exit handler never called!" (exit code 1). No ELIFECYCLE / gyp /
+network errors — the npm process is being OOM-killed during install. Root cause: the build
+command runs `npm cache clean --force` before install, forcing a full cold re-download +
+re-extract of the whole dependency tree every build, which spikes peak memory.
+
+GOAL
+Make npm install complete, let the build run, and let Railway deploy. Smallest change that
+removes the memory spike. Do NOT restructure unrelated config.
+
+STEP 1 — Show me the file first
+Print the full current contents of nixpacks.toml.
+
+STEP 2 — Edit the build command in nixpacks.toml
+Find the build-phase command that currently is (or contains) exactly:
+
+  npm cache clean --force && NODE_ENV=development npm install --include=dev --legacy-peer-deps --no-audit --no-fund && ls node_modules/.bin/tsx && npm run build
+
+Replace ONLY that string with:
+
+  npm install --include=dev --legacy-peer-deps --no-audit --no-fund && ls node_modules/.bin/tsx && NODE_OPTIONS=--max-old-space-size=4096 npm run build
+
+What changed and why:
+- Removed `npm cache clean --force &&`  → stops the forced cold re-extract spiking memory (this is the fix).
+- Removed `NODE_ENV=development `       → npm install includes devDependencies by default; tsx/vite/TypeScript still install. Avoids NODE_ENV side effects.
+- Added `NODE_OPTIONS=--max-old-space-size=4096 ` before `npm run build` → gives the tsx/vite build enough heap so it doesn't OOM once install is fixed. Scoped to the build command only, so runtime memory is untouched.
+
+STEP 3 — Lockfile
+Confirm package-lock.json exists and is committed. If it's missing, run `npm install` once in
+the Replit shell and commit the generated package-lock.json. A committed lockfile lets the
+build reuse cache and keeps installs deterministic and low-memory.
+
+GUARDRAILS — do not touch any of the following
+- The setup phase (nodejs_22 / python311 / pip).
+- The python venv + `pip install -r quant/requirements.txt` step.
+- Any caddy step.
+- The start command (PATH=/opt/venv/bin:$PATH npm start).
+- Any application code, routes, or subscription/tier gating (Free / Pro $29.99 / Elite $129).
+  No feature behavior changes.
+- Do not add any new dependency or AI provider.
+
+ACCEPTANCE CRITERIA
+- Build log shows `npm install` completing (no "Exit handler never called!").
+- Build log shows the tsx/vite build completing.
+- Deploy goes live and the server logs print "startup complete" (this — not the green
+  checkmark — is the real success signal).
+
+FINISH
+Show me the final diff of nixpacks.toml, then commit with message
+"fix: drop npm cache clean to stop OOM during build install; cap build heap"
+and push to main so Railway auto-deploys.

@@ -13,11 +13,15 @@ cmds = [
 # Use `npm install` (not `npm ci`) because the build phase mounts a cache at
 # node_modules/.cache, and `npm ci` wipes node_modules wholesale which conflicts
 # with that mountpoint.
-# `npm cache clean --force` clears any stale cache; `--legacy-peer-deps` lets
-# the install proceed past peer-dependency conflicts.
+# `--legacy-peer-deps` lets the install proceed past peer-dependency
+# conflicts. We intentionally do NOT run `npm cache clean --force` — it forces
+# a full cold re-download + re-extract of the whole dependency tree every
+# build, spiking peak memory and OOM-killing the install on Railway's builder.
+# The build heap is capped via NODE_OPTIONS (scoped to the build only) so the
+# tsx/vite build has enough memory without touching runtime memory.
 [phases.build]
 cmds = [
-  "npm cache clean --force && NODE_ENV=development npm install --include=dev --legacy-peer-deps --no-audit --no-fund && ls node_modules/.bin/tsx && npm run build",
+  "npm install --include=dev --legacy-peer-deps --no-audit --no-fund && ls node_modules/.bin/tsx && NODE_OPTIONS=--max-old-space-size=4096 npm run build",
 ]
 
 [start]
