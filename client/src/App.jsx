@@ -3627,6 +3627,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [liqSym,setLiqSym]=useState("BTC");
   const [notifPerm,setNotifPerm]=useState(()=>{try{return typeof Notification!=="undefined"?Notification.permission:"default";}catch(e){return"default";}});
   const [pushDisabled,setPushDisabled]=useState(()=>{try{return localStorage.getItem("clvr_push_disabled")==="1";}catch(e){return false;}});
+  const [inAppAlerts,setInAppAlerts]=useState(()=>{try{return localStorage.getItem("clvr_inapp_alerts")==="1";}catch(e){return false;}});
   const [soundEnabled,setSoundEnabled]=useState(()=>{try{return localStorage.getItem("clvr_sound")!=="off";}catch(e){return true;}});
   const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,volume:0,live:false,oiHistory:[],volHistory:[],fundHistory:[]}])));
   const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false}])));
@@ -4801,7 +4802,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
 
   const requestPush=async()=>{
     // ── Already granted + active → DISABLE ──────────────────────────────────
-    if(notifPerm==="granted"&&!pushDisabled){
+    if((notifPerm==="granted"||inAppAlerts)&&!pushDisabled){
       try{
         if(typeof navigator!=="undefined"&&navigator.serviceWorker){
           const swReg=await navigator.serviceWorker.ready;
@@ -4810,9 +4811,11 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         }
       }catch(e){}
       try{await fetch("/api/push/unsubscribe",{method:"POST",credentials:"include"});}catch(e){}
+      setInAppAlerts(false);
+      try{localStorage.removeItem("clvr_inapp_alerts");}catch(e){}
       setPushDisabled(true);
       try{localStorage.setItem("clvr_push_disabled","1");}catch(e){}
-      setToast("🔕 Push notifications disabled");
+      setToast("🔕 Alerts disabled");
       return;
     }
     // ── Granted but disabled → RE-ENABLE ────────────────────────────────────
@@ -4820,6 +4823,8 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
       // Always clear the disabled flag first — in-app alerts will work regardless
       setPushDisabled(false);
       try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
+      setInAppAlerts(true);
+      try{localStorage.setItem("clvr_inapp_alerts","1");}catch(e){}
       // Then attempt to re-subscribe to OS push (best effort — non-blocking)
       try{
         const swReg=await navigator.serviceWorker.ready;
@@ -4851,6 +4856,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     // Always turn ON in-app alerts (toasts + alert history) — works everywhere.
     setPushDisabled(false);
     try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
+    setInAppAlerts(true);
     try{localStorage.setItem("clvr_inapp_alerts","1");}catch(e){}
 
     if(!pushCapable){
@@ -4892,6 +4898,11 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
   const todayDate=new Date();
   const nextEvents=macroEvents.map(e=>{const timeStr=e.timeET||e.time||"12:00";const{h,m,offsetUTC}=parseTimeET(timeStr);const[y,mo,d]=e.date.split("-").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+offsetUTC,m,0));return{...e,timeET:timeStr,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs); // clockTick dependency: ${clockTick}
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
+
+  // Alerts are "active" when not paused AND the user has either granted OS push
+  // OR turned on in-app alerts. This makes the ENABLE button give persistent,
+  // visible feedback on devices where OS/lock-screen push isn't available.
+  const alertsActive = !pushDisabled && (notifPerm==="granted" || inAppAlerts);
 
   const isGuest=!!user?.guest;
   const isAdmin=!!user?.isAdmin;
@@ -5326,16 +5337,16 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
             ):null}
             {/* ── Alerts / Push ── */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-              <span style={{fontFamily:MONO,fontSize:6,color:isPro?(notifPerm==="granted"&&!pushDisabled?C.gold:C.red):C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>ALERTS</span>
+              <span style={{fontFamily:MONO,fontSize:6,color:isPro?(alertsActive?C.gold:C.red):C.muted,letterSpacing:"0.1em",textTransform:"uppercase",height:9,lineHeight:"9px",display:"block"}}>ALERTS</span>
               <div style={{position:"relative",display:"inline-flex"}}>
                 {isPro?(
                   <>
                     <button data-testid="btn-push-notif" onClick={requestPush}
-                      title={notifPerm==="granted"&&!pushDisabled?"Alerts ON — tap to pause":notifPerm==="granted"&&pushDisabled?"Alerts paused — tap to re-enable":"Tap to enable alerts"}
-                      style={{background:notifPerm==="granted"&&!pushDisabled?"none":notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:notifPerm==="granted"&&!pushDisabled?C.gold:notifPerm==="granted"&&pushDisabled?C.muted:C.red,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                      {notifPerm==="granted"&&!pushDisabled?"🔔":"🔕"}
+                      title={alertsActive?"Alerts ON — tap to pause":pushDisabled?"Alerts paused — tap to re-enable":"Tap to enable alerts"}
+                      style={{background:alertsActive?"none":pushDisabled?"rgba(201,168,76,.06)":"rgba(255,64,96,.06)",border:`1px solid ${alertsActive?C.gold:pushDisabled?"rgba(201,168,76,.3)":"rgba(255,64,96,.4)"}`,borderRadius:2,padding:"4px 7px",cursor:"pointer",fontFamily:MONO,fontSize:10,color:alertsActive?C.gold:pushDisabled?C.muted:C.red,height:26,width:32,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      {alertsActive?"🔔":"🔕"}
                     </button>
-                    {(notifPerm!=="granted"||pushDisabled)&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:`2px solid ${C.bg}`,boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
+                    {!alertsActive&&<div style={{position:"absolute",top:-4,right:-4,width:9,height:9,borderRadius:"50%",background:C.red,border:`2px solid ${C.bg}`,boxShadow:`0 0 6px ${C.red}`,animation:"pulse 1.5s ease-in-out infinite"}}/>}
                   </>
                 ):(
                   <button data-testid="btn-alerts-locked" onClick={()=>{setUpgradeDefaultTier(null);setShowPricingModal(true);}} title="Upgrade to Pro for real-time alerts"
@@ -5529,13 +5540,22 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
           </div>
           </>}
 
-          {(notifPerm!=="granted"||pushDisabled)&&<div data-testid="push-prompt" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+          {!alertsActive&&<div data-testid="push-prompt" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontFamily:MONO,fontSize:20,color:C.gold}}>{pushDisabled?"⏸":"!"}</span>
             <div style={{flex:1}}>
               <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>{pushDisabled?"ALERTS PAUSED":i18n.liveAlerts}</div>
-              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.5}}>{pushDisabled?"Push notifications are disabled. Tap ENABLE to re-activate alerts on your lock screen.":"Enable in-app alerts for macro events, volume spikes, funding flips, and price targets."}</div>
+              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.5}}>{pushDisabled?"Alerts are paused. Tap ENABLE to turn them back on.":"Enable in-app alerts for macro events, volume spikes, funding flips, and price targets."}</div>
             </div>
             <button data-testid="btn-enable-push" onClick={requestPush} style={{background:C.gold,border:"none",borderRadius:2,padding:"6px 14px",fontFamily:MONO,fontSize:9,color:C.bg,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>ENABLE</button>
+          </div>}
+
+          {alertsActive&&<div data-testid="alerts-active" style={{background:"rgba(201,168,76,.06)",border:`1px solid ${C.border}`,borderRadius:4,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontFamily:MONO,fontSize:20,color:C.gold}}>✓</span>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:3}}>ALERTS ON</div>
+              <div style={{fontFamily:SANS,fontSize:13,color:C.muted2,lineHeight:1.5}}>{notifPerm==="granted"?"You'll get macro events, volume spikes, funding flips, and price targets on your lock screen and in-app.":"In-app alerts are active. Add CLVRQuant to your Home Screen to also get lock-screen push."}</div>
+            </div>
+            <button data-testid="btn-disable-push" onClick={requestPush} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,padding:"6px 14px",fontFamily:MONO,fontSize:9,color:C.muted,fontWeight:700,letterSpacing:"0.1em",cursor:"pointer"}}>TURN OFF</button>
           </div>}
 
           {/* QR Scanner button — scan an access code */}
