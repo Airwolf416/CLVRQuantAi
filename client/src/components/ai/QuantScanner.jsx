@@ -202,36 +202,40 @@ export default function QuantScanner({ mode, isPro, isElite }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        <select data-testid="select-scan-tf" value={tf} onChange={e => setTf(e.target.value)} style={{ flex: 1, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
-          <optgroup label="Today">
-            <option value="quick">Quick (&lt;1h)</option>
-            <option value="hours">Hours (1–8h)</option>
-            <option value="fullday">Full Day (8–24h)</option>
-          </optgroup>
-          <option value="mid">Mid-Term (1–4 wks)</option>
-          <option value="long">Long-Term (1–3 mo)</option>
-        </select>
-        <select data-testid="select-scan-market" value={market} onChange={e => setMarket(e.target.value)} style={{ flex: 1, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
-          <option value="PERP">PERP</option>
-          <option value="SPOT">SPOT</option>
-          <option value="BOTH">BOTH</option>
-        </select>
-        <select data-testid="select-scan-risk" value={risk} onChange={e => setRisk(e.target.value)} style={{ flex: 1, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
-          <option value="low">Conservative</option>
-          <option value="mid">Balanced</option>
-          <option value="high">Aggressive</option>
-        </select>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <select data-testid="select-scan-tf" value={tf} onChange={e => setTf(e.target.value)} style={{ flex: 1, minWidth: 0, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
+            <optgroup label="Today">
+              <option value="quick">Quick (&lt;1h)</option>
+              <option value="hours">Hours (1–8h)</option>
+              <option value="fullday">Full Day (8–24h)</option>
+            </optgroup>
+            <option value="mid">Mid-Term (1–4 wks)</option>
+            <option value="long">Long-Term (1–3 mo)</option>
+          </select>
+          <select data-testid="select-scan-market" value={market} onChange={e => setMarket(e.target.value)} style={{ flex: 1, minWidth: 0, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
+            <option value="PERP">PERP</option>
+            <option value="SPOT">SPOT</option>
+            <option value="BOTH">BOTH</option>
+          </select>
+          <select data-testid="select-scan-risk" value={risk} onChange={e => setRisk(e.target.value)} style={{ flex: 1, minWidth: 0, background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 8, padding: "9px 10px", color: "#e0e0e0", fontFamily: MONO, fontSize: 10, outline: "none" }}>
+            <option value="low">Conservative</option>
+            <option value="mid">Balanced</option>
+            <option value="high">Aggressive</option>
+          </select>
+        </div>
         <button
           data-testid="btn-execute-scan"
           onClick={runScan}
           disabled={scanning || selected.length === 0}
           style={{
-            padding: "9px 18px", borderRadius: 8,
+            width: "100%", padding: "11px 18px", borderRadius: 8,
             background: scanning ? "rgba(201,168,76,0.04)" : "linear-gradient(135deg, rgba(201,168,76,0.15), rgba(201,168,76,0.08))",
             border: `1px solid ${scanning ? "rgba(201,168,76,0.1)" : "rgba(201,168,76,0.3)"}`,
             color: scanning ? "rgba(255,255,255,0.3)" : "#e8c96d",
-            fontFamily: MONO, fontSize: 10, fontWeight: 700, cursor: scanning ? "not-allowed" : "pointer",
+            fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
+            cursor: scanning || selected.length === 0 ? "not-allowed" : "pointer",
+            opacity: !scanning && selected.length === 0 ? 0.5 : 1,
           }}
         >
           {scanning ? "Scanning..." : "Execute →"}
