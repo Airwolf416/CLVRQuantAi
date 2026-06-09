@@ -1,0 +1,48 @@
+# ---------- Stage 1: build (Node) ----------
+FROM node:22-bookworm AS build
+WORKDIR /app
+
+# Install ALL deps (incl. dev) using the lockfile. This runs on GitHub
+# Actions (~16GB RAM), so the npm ci that OOM-killed Railway's builder
+# has plenty of memory here.
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev --legacy-peer-deps --no-audit --no-fund
+
+# Build client + server.
+COPY . .
+RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
+
+# Drop dev dependencies so we copy only production node_modules forward.
+RUN npm prune --omit=dev --legacy-peer-deps
+
+# ---------- Stage 2: runtime ----------
+FROM node:22-bookworm-slim AS runtime
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PYTHONUNBUFFERED=1
+
+# Python for the quant layer (venv lives at /opt/venv, matching the old start cmd).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv python3-pip \
+ && rm -rf /var/lib/apt/lists/*
+
+# Build the venv and install quant deps.
+COPY quant/requirements.txt ./quant/requirements.txt
+RUN python3 -m venv /opt/venv \
+ && . /opt/venv/bin/activate \
+ && pip install --upgrade pip \
+ && pip install -r quant/requirements.txt
+
+# Pruned production node_modules + compiled app from the build stage.
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+
+# App source needed at runtime (quant scripts, package.json, anything read at runtime).
+COPY . .
+
+# Put the venv on PATH so the server can invoke python the same way it did
+# under the old `PATH=/opt/venv/bin:$PATH npm start`.
+ENV PATH="/opt/venv/bin:$PATH"
+
+CMD ["node", "dist/index.cjs"]
