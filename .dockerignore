@@ -25,3 +25,11 @@ yarn-error.log*
 .env.production.local
 .git
 .vercel
+
+# Large non-essential files (reduce build context memory usage)
+clvrquant_full_code_export.txt
+attached_assets/
+.agents/
+*.md
+*.MOV
+*.mov
