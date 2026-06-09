@@ -9,6 +9,12 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # GitHub forces JavaScript actions off Node.js 20 starting June 16 2026 and
+  # removes the Node 20 runtime on Sept 16 2026. The Docker actions below do
+  # not yet ship Node24-native major releases, so opt them in explicitly.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -17,7 +23,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
