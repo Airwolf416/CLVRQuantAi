@@ -3,7 +3,12 @@ FROM node:22-bookworm AS build
 WORKDIR /app
 
 # Give Node a larger heap during install + build to avoid OOM on the CI runner.
-ENV NODE_OPTIONS="--max_old_space_size=4096"
+ENV NODE_OPTIONS="--max_old_space_size=8192"
+
+# The npm shipped with node:22-bookworm (10.9.x) intermittently dies at the end
+# of `npm install` with "Exit handler never called!" — a known npm-internal exit
+# handler bug. Pin a newer npm that fixes it before installing deps.
+RUN npm install -g npm@11.16.0
 
 # Install ALL deps (incl. dev). Using `npm install` (not `npm ci`) and the
 # larger Node heap set above to avoid the OOM the CI runner hit during install.
@@ -12,7 +17,7 @@ RUN npm install --include=dev --legacy-peer-deps --no-audit --no-fund
 
 # Build client + server.
 COPY . .
-RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
+RUN NODE_OPTIONS=--max-old-space-size=8192 npm run build
 
 # Drop dev dependencies so we copy only production node_modules forward.
 RUN npm prune --omit=dev --legacy-peer-deps
