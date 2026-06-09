@@ -11,6 +11,53 @@ const SERIF = "'Playfair Display', Georgia, serif";
 const MONO  = "'IBM Plex Mono', monospace";
 const SANS  = "'Barlow', system-ui, sans-serif";
 
+function SupportInbox(){
+  const [threads,setThreads]=useState([]);
+  const [active,setActive]=useState(null);
+  const [msgs,setMsgs]=useState([]);
+  const [reply,setReply]=useState("");
+  const [loading,setLoading]=useState(true);
+  const loadInbox=async()=>{ try{ const r=await fetch("/api/support/inbox",{credentials:"include"}); if(r.ok){ const d=await r.json(); setThreads(d.threads||[]); } }catch{} finally{ setLoading(false);} };
+  const openThread=async(id)=>{ setActive(id); try{ const r=await fetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); } }catch{} };
+  const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await fetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
+  useEffect(()=>{ loadInbox(); const i=setInterval(loadInbox,12000); return ()=>clearInterval(i); },[]);
+  useEffect(()=>{ if(!active) return; const i=setInterval(()=>openThread(active),12000); return ()=>clearInterval(i); },[active]);
+  return (
+    <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+      <div style={{flex:"1 1 260px",minWidth:240}}>
+        <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.1em",marginBottom:8}}>OPEN THREADS</div>
+        {loading?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Loading…</div>:
+         threads.length===0?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>No open threads.</div>:
+         threads.map(t=>(
+          <button key={t.id} onClick={()=>openThread(t.id)} style={{display:"block",width:"100%",textAlign:"left",background:active===t.id?"rgba(201,168,76,.08)":C.panel,border:`1px solid ${active===t.id?C.gold:C.border}`,borderRadius:6,padding:"10px 12px",marginBottom:8,cursor:"pointer"}}>
+            <div style={{fontFamily:SANS,fontSize:13,color:C.text}}>{t.user_name||t.user_email} {t.unread>0&&<span style={{background:C.gold,color:C.bg,borderRadius:999,fontSize:9,padding:"1px 6px",marginLeft:6,fontFamily:MONO}}>{t.unread}</span>}</div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>{t.user_tier} · {t.user_email}</div>
+          </button>
+        ))}
+      </div>
+      <div style={{flex:"2 1 360px",minWidth:300}}>
+        {!active?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Select a thread.</div>:(
+          <>
+            <div style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:6,padding:12,marginBottom:10}}>
+              {msgs.map((m,i)=>(
+                <div key={m.id||i} style={{marginBottom:10,textAlign:m.sender==="owner"?"right":"left"}}>
+                  {m.msg_type==="system"?
+                    <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,whiteSpace:"pre-wrap",background:C.panel,border:`1px dashed ${C.border2}`,borderRadius:6,padding:"8px 10px"}}>{m.body}</div>:
+                    <div style={{display:"inline-block",maxWidth:"85%",textAlign:"left",background:m.sender==="owner"?`linear-gradient(145deg, ${C.gold2}, ${C.gold})`:C.panel,color:m.sender==="owner"?C.bg:C.text,border:m.sender==="owner"?"none":`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px",fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{m.body}</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <textarea rows={2} value={reply} onChange={e=>setReply(e.target.value)} placeholder="Reply to the user…" style={{flex:1,resize:"none",background:C.panel,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13}}/>
+              <button onClick={sendReply} disabled={!reply.trim()} style={{background:!reply.trim()?C.border2:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,color:!reply.trim()?C.muted2:C.bg,border:"none",borderRadius:8,padding:"0 18px",fontFamily:MONO,fontSize:12,fontWeight:700,cursor:!reply.trim()?"default":"pointer"}}>Send</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const PLAN_INFO = {
   free:  { label: "Free",  color: C.muted2,  border: C.border,    price: "$0" },
   pro:   { label: "Pro",   color: C.gold,    border: C.gold,      price: "$29.99/mo CAD" },
@@ -2127,7 +2174,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   };
 
   const baseTabs = ["subscription", "referral", "emails", "billing", "legal"];
-  const tabs = acct?.isOwner ? [...baseTabs, "owner", "admin", "admin2"] : baseTabs;
+  const tabs = acct?.isOwner ? [...baseTabs, "owner", "support", "admin", "admin2"] : baseTabs;
 
   if (loading) {
     return (
@@ -2728,6 +2775,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       {tab === "admin" && acct.isOwner && <AdminTab C={C} MONO={MONO} SANS={SANS} SERIF={SERIF} />}
 
       {tab === "admin2" && acct.isOwner && <AdminTab2 C={C} MONO={MONO} SANS={SANS} SERIF={SERIF} />}
+
+      {tab === "support" && acct.isOwner && <SupportInbox />}
 
       {modal === "unsub_daily" && (
         <ConfirmModal
