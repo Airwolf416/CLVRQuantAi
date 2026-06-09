@@ -11,6 +11,7 @@ import { WebhookHandlers } from "./webhookHandlers";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
 import { startDailyBriefScheduler } from "./dailyBrief";
+import { startPositionEventScheduler } from "./positionEvents";
 import { startWeeklyUpdateScheduler } from "./weeklyUpdate";
 import { initializeDatabase } from "./initDb";
 import { startOutcomeResolver } from "./lib/outcomeResolver";
@@ -790,6 +791,7 @@ process.on("uncaughtException", (err) => {
   // Telegram autoposter calls (dailyBrief.ts ~942) remain disabled per
   // owner request; only the email side runs.
   startDailyBriefScheduler();
+  startPositionEventScheduler();
   startWeeklyUpdateScheduler();
   startOutcomeResolver();
   startChartAIResolver();

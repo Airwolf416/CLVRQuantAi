@@ -5141,6 +5141,119 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   }
 
   // GET /api/concierge/pricing — the resolved per-user session price.
+  // ── SUPPORT HANDOFF (Concierge → human) ─────────────────────────────────
+  const SUPPORT_OWNER_EMAIL = "MikeClaver@CLVRQuantAI.com";
+
+  // USER: escalate from Concierge — reuse open thread or create one, carry context
+  app.post("/api/support/escalate", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    const user = await storage.getUser(userId);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    try {
+      const t = await pool.query(`SELECT id FROM support_threads WHERE user_id=$1 AND status<>'closed' ORDER BY last_message_at DESC LIMIT 1`, [userId]);
+      let threadId = t.rows[0]?.id;
+      if (!threadId) {
+        const ins = await pool.query(`INSERT INTO support_threads (user_id, status, subject) VALUES ($1,'open',$2) RETURNING id`, [userId, "Concierge handoff"]);
+        threadId = ins.rows[0].id;
+      }
+      const msgs = Array.isArray(req.body?.messages) ? req.body.messages.slice(-6) : [];
+      if (msgs.length) {
+        const ctx = msgs.map((m: any) => `${m.role === "user" ? "User" : "Concierge"}: ${String(m.content || "").slice(0, 500)}`).join("\n");
+        await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'system',$2,'system')`, [threadId, `Escalated from Concierge.\n\n${ctx}`]);
+      }
+      await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      try {
+        const { client } = await getUncachableResendClient();
+        await client.emails.send({
+          from: "CLVRQuant <hello@clvrquantai.com>", to: SUPPORT_OWNER_EMAIL, replyTo: user.email || undefined,
+          subject: `🆘 Support escalation from ${user.email || (user as any).username || "a user"}`,
+          text: `${(user as any).name || (user as any).username || "A user"} (${user.email}) asked to talk to a human from the Concierge.\n\nOpen Account → Support to reply.\n${getAppUrl()}`,
+        });
+      } catch (e: any) { console.log("[support/escalate] email fail:", e.message); }
+      res.json({ threadId });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // USER: poll my open thread + messages
+  app.get("/api/support/thread", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    try {
+      const t = await pool.query(`SELECT * FROM support_threads WHERE user_id=$1 AND status<>'closed' ORDER BY last_message_at DESC LIMIT 1`, [userId]);
+      if (t.rows.length === 0) return res.json({ thread: null, messages: [] });
+      const thread = t.rows[0];
+      const m = await pool.query(`SELECT id, thread_id, sender, body, msg_type, meta, created_at FROM support_messages WHERE thread_id=$1 ORDER BY created_at ASC`, [thread.id]);
+      await pool.query(`UPDATE support_messages SET read_by_user=true WHERE thread_id=$1 AND sender='owner'`, [thread.id]);
+      res.json({ thread, messages: m.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // USER: send a message
+  app.post("/api/support/message", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    const body = String(req.body?.body || "").trim();
+    if (!body) return res.status(400).json({ error: "Empty message." });
+    try {
+      const t = await pool.query(`SELECT id FROM support_threads WHERE user_id=$1 AND status<>'closed' ORDER BY last_message_at DESC LIMIT 1`, [userId]);
+      let threadId = t.rows[0]?.id;
+      if (!threadId) { const ins = await pool.query(`INSERT INTO support_threads (user_id, status, subject) VALUES ($1,'open','Support') RETURNING id`, [userId]); threadId = ins.rows[0].id; }
+      const ins = await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'user',$2,'text') RETURNING id, thread_id, sender, body, msg_type, meta, created_at`, [threadId, body]);
+      await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      res.json({ message: ins.rows[0] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: inbox (open threads, newest first, with unread count)
+  app.get("/api/support/inbox", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    try {
+      const r = await pool.query(`
+        SELECT t.id, t.user_id, t.status, t.subject, t.last_message_at, t.created_at,
+               u.email AS user_email, u.name AS user_name, u.tier AS user_tier,
+               (SELECT COUNT(*) FROM support_messages m WHERE m.thread_id=t.id AND m.sender='user' AND m.read_by_owner=false)::int AS unread
+        FROM support_threads t JOIN users u ON u.id=t.user_id
+        WHERE t.status<>'closed' ORDER BY t.last_message_at DESC LIMIT 100`);
+      res.json({ threads: r.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: one thread + messages
+  app.get("/api/support/thread/:id", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      const t = await pool.query(`SELECT t.*, u.email AS user_email, u.name AS user_name, u.tier AS user_tier FROM support_threads t JOIN users u ON u.id=t.user_id WHERE t.id=$1`, [id]);
+      if (t.rows.length === 0) return res.status(404).json({ error: "Not found" });
+      const m = await pool.query(`SELECT id, thread_id, sender, body, msg_type, meta, created_at FROM support_messages WHERE thread_id=$1 ORDER BY created_at ASC`, [id]);
+      await pool.query(`UPDATE support_messages SET read_by_owner=true WHERE thread_id=$1 AND sender='user'`, [id]);
+      res.json({ thread: t.rows[0], messages: m.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: reply (also emails the user so async works when they're offline)
+  app.post("/api/support/reply", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const threadId = parseInt(req.body?.threadId, 10);
+    const body = String(req.body?.body || "").trim();
+    if (!threadId || !body) return res.status(400).json({ error: "threadId and body required." });
+    try {
+      const ins = await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'owner',$2,'text') RETURNING id, thread_id, sender, body, msg_type, meta, created_at`, [threadId, body]);
+      await pool.query(`UPDATE support_threads SET status='awaiting_user', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      try {
+        const u = await pool.query(`SELECT u.email, u.name FROM support_threads t JOIN users u ON u.id=t.user_id WHERE t.id=$1`, [threadId]);
+        const usr = u.rows[0];
+        if (usr?.email) {
+          const { client } = await getUncachableResendClient();
+          await client.emails.send({ from: "CLVRQuant <hello@clvrquantai.com>", to: usr.email, replyTo: SUPPORT_OWNER_EMAIL,
+            subject: "Reply from CLVRQuant support", text: `${body}\n\n— Mike, CLVRQuant\n\nReply in the Concierge chat at ${getAppUrl()}` });
+        }
+      } catch (e: any) { console.log("[support/reply] email fail:", e.message); }
+      res.json({ message: ins.rows[0] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/concierge/pricing", async (req, res) => {
     try {
       const userId = (req.session as any)?.userId;
@@ -5672,6 +5785,126 @@ Stay in scope no matter how the user rephrases.`;
 
   // Start EDGAR insider scan in background (non-blocking; takes ~60-90s to populate)
   startInsiderRefresh();
+
+  // ── POSITION MONITOR (Elite) ───────────────────────────────────────────
+  // Owner override matches the existing AI-endpoint pattern.
+  async function requireElitePosition(req: any, res: any) {
+    const userId = (req.session as any)?.userId;
+    if (!userId) { res.status(401).json({ error: "Sign in required." }); return null; }
+    const dbUser = await storage.getUser(userId);
+    if (!dbUser) { res.status(401).json({ error: "Sign in required." }); return null; }
+    const isElite = dbUser.tier === "elite" || dbUser.email === "mikeclaver@gmail.com";
+    if (!isElite) { res.status(403).json({ error: "Position Monitor is an Elite feature." }); return null; }
+    return { userId, dbUser };
+  }
+
+  // List open positions for the signed-in user
+  app.get("/api/positions", async (req, res) => {
+    const auth = await requireElitePosition(req, res); if (!auth) return;
+    try {
+      const r = await pool.query(
+        `SELECT * FROM user_positions WHERE user_id = $1 AND status = 'open' ORDER BY created_at DESC`,
+        [auth.userId]
+      );
+      res.json({ positions: r.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Create a position (with the user's OWN plan)
+  app.post("/api/positions", async (req, res) => {
+    const auth = await requireElitePosition(req, res); if (!auth) return;
+    try {
+      const { symbol, assetClass, side, entryPrice, sizeUsd, leverage, stopPrice, targetPrice, notes } = req.body || {};
+      if (!symbol) return res.status(400).json({ error: "symbol is required" });
+      const r = await pool.query(
+        `INSERT INTO user_positions
+           (user_id, symbol, asset_class, side, entry_price, size_usd, leverage, stop_price, target_price, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [auth.userId, String(symbol).toUpperCase().trim(),
+         assetClass || "equity", side || "long",
+         entryPrice ?? null, sizeUsd ?? null, leverage ?? 1,
+         stopPrice ?? null, targetPrice ?? null, notes ?? null]
+      );
+      res.json({ position: r.rows[0] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Update plan or close a position
+  app.patch("/api/positions/:id", async (req, res) => {
+    const auth = await requireElitePosition(req, res); if (!auth) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      const { entryPrice, sizeUsd, leverage, stopPrice, targetPrice, notes, status } = req.body || {};
+      const closedAt = status === "closed" ? "NOW()" : "closed_at";
+      const r = await pool.query(
+        `UPDATE user_positions SET
+           entry_price  = COALESCE($1, entry_price),
+           size_usd     = COALESCE($2, size_usd),
+           leverage     = COALESCE($3, leverage),
+           stop_price   = COALESCE($4, stop_price),
+           target_price = COALESCE($5, target_price),
+           notes        = COALESCE($6, notes),
+           status       = COALESCE($7, status),
+           closed_at    = ${closedAt},
+           updated_at   = NOW()
+         WHERE id = $8 AND user_id = $9 RETURNING *`,
+        [entryPrice ?? null, sizeUsd ?? null, leverage ?? null, stopPrice ?? null,
+         targetPrice ?? null, notes ?? null, status ?? null, id, auth.userId]
+      );
+      if (r.rows.length === 0) return res.status(404).json({ error: "Position not found" });
+      res.json({ position: r.rows[0] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // AI DECISION-SUPPORT for one position — NEVER directive.
+  app.post("/api/positions/:id/analyze", async (req, res) => {
+    const auth = await requireElitePosition(req, res); if (!auth) return;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "Anthropic API key not configured" });
+    try {
+      const id = parseInt(req.params.id, 10);
+      const pr = await pool.query(
+        `SELECT * FROM user_positions WHERE id = $1 AND user_id = $2 AND status = 'open'`,
+        [id, auth.userId]
+      );
+      if (pr.rows.length === 0) return res.status(404).json({ error: "Position not found" });
+      const p = pr.rows[0];
+      const currentPrice = req.body?.currentPrice ?? null; // client passes live price from /api/basket-prices
+
+      const system =
+        "You are the CLVRQuant Position Monitor — educational decision-support, NOT a financial advisor. " +
+        "ABSOLUTE RULES: Never tell the user to buy, sell, add, trim, hold, take profit, or cut a loss. " +
+        "Never say 'you should' or issue any directive. You DESCRIBE the situation against the trader's OWN " +
+        "stated plan (their entry, stop, target) and the relevant catalyst, then present a NEUTRAL menu of " +
+        "what traders in this setup typically weigh. The trader decides and acts. " +
+        "Reference the cold-state plan they precommitted to. Keep it tight, factual, no hype. " +
+        "Return ONLY valid JSON, no markdown, no backticks, shape: " +
+        '{"planDistance":"string","catalyst":"string","considerations":["string","string","string"],"neuroNudge":"string"}';
+
+      const userMsg =
+        `Position: ${p.side} ${p.symbol} (${p.asset_class}), ${p.leverage}x leverage.\n` +
+        `Trader's plan — entry: ${p.entry_price ?? "n/a"}, stop: ${p.stop_price ?? "n/a"}, target: ${p.target_price ?? "n/a"}, size: ${p.size_usd ?? "n/a"} USD.\n` +
+        `Current price: ${currentPrice ?? "unknown"}.\n` +
+        `Describe where price sits vs THEIR stop and target (plan-distance). ` +
+        `For crypto, note funding/liquidation-style context generically if leverage is high. ` +
+        `Give exactly 3 neutral considerations framed as "traders in this setup typically weigh…". ` +
+        `neuroNudge: one short cold-state reminder. Do not advise.`;
+
+      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": apiKey },
+        body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 700, system, messages: [{ role: "user", content: userMsg }] }),
+      });
+      if (!aiRes.ok) return res.status(502).json({ error: "AI unavailable" });
+      const data: any = await aiRes.json();
+      const raw = data.content?.[0]?.text || "{}";
+      let parsed: any; try { parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || "{}"); } catch { parsed = {}; }
+      res.json({
+        analysis: parsed,
+        disclaimer: "Educational support only — not financial advice. DYOR.",
+      });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
 
   app.get("/api/basket-prices", (_req, res) => {
     const cached = cache["basketPricesAll"];

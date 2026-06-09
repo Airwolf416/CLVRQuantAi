@@ -1,0 +1,331 @@
+TASK: Add a human-support layer to the Concierge. User taps "Talk to a human" →
+opens a support thread carrying the recent AI exchange → chats async (12s poll,
+feels live when you're online, email-backed when you're not). Owner reads/replies
+from an Account → Support inbox. Meeting requests come in Block 4.
+
+═══════════════════════════════════════════════════════════════════════════
+EDIT 1 of 4 — server/initDb.ts  (two tables)
+═══════════════════════════════════════════════════════════════════════════
+
+FIND (exact):
+    // ── webauthn_credentials ─────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS webauthn_credentials (
+
+REPLACE WITH (new blocks inserted ABOVE; webauthn block preserved after):
+    // ── support_threads ──────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS support_threads (
+        id              SERIAL PRIMARY KEY,
+        user_id         TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'open',
+        subject         TEXT,
+        last_message_at TIMESTAMP DEFAULT NOW(),
+        created_at      TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_support_threads_user ON support_threads (user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_support_threads_status ON support_threads (status, last_message_at)`);
+
+    // ── support_messages ─────────────────────────────────────────────────────
+    // sender: 'user' | 'owner' | 'ai' | 'system'   msg_type: 'text' | 'meeting_request' | 'system'
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS support_messages (
+        id             SERIAL PRIMARY KEY,
+        thread_id      INTEGER NOT NULL,
+        sender         TEXT NOT NULL,
+        body           TEXT NOT NULL,
+        msg_type       TEXT NOT NULL DEFAULT 'text',
+        meta           JSONB,
+        read_by_owner  BOOLEAN NOT NULL DEFAULT false,
+        read_by_user   BOOLEAN NOT NULL DEFAULT false,
+        created_at     TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_support_messages_thread ON support_messages (thread_id, created_at)`);
+
+    // ── webauthn_credentials ─────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS webauthn_credentials (
+
+═══════════════════════════════════════════════════════════════════════════
+EDIT 2 of 4 — server/routes.ts  (six endpoints)
+═══════════════════════════════════════════════════════════════════════════
+
+FIND (exact):
+  app.get("/api/concierge/pricing", async (req, res) => {
+
+INSERT the following block IMMEDIATELY ABOVE that line:
+
+  // ── SUPPORT HANDOFF (Concierge → human) ─────────────────────────────────
+  const SUPPORT_OWNER_EMAIL = "MikeClaver@CLVRQuantAI.com";
+
+  // USER: escalate from Concierge — reuse open thread or create one, carry context
+  app.post("/api/support/escalate", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    const user = await storage.getUser(userId);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    try {
+      const t = await pool.query(`SELECT id FROM support_threads WHERE user_id=$1 AND status<>'closed' ORDER BY last_message_at DESC LIMIT 1`, [userId]);
+      let threadId = t.rows[0]?.id;
+      if (!threadId) {
+        const ins = await pool.query(`INSERT INTO support_threads (user_id, status, subject) VALUES ($1,'open',$2) RETURNING id`, [userId, "Concierge handoff"]);
+        threadId = ins.rows[0].id;
+      }
+      const msgs = Array.isArray(req.body?.messages) ? req.body.messages.slice(-6) : [];
+      if (msgs.length) {
+        const ctx = msgs.map((m: any) => `${m.role === "user" ? "User" : "Concierge"}: ${String(m.content || "").slice(0, 500)}`).join("\n");
+        await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'system',$2,'system')`, [threadId, `Escalated from Concierge.\n\n${ctx}`]);
+      }
+      await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      try {
+        const { client } = await getUncachableResendClient();
+        await client.emails.send({
+          from: "CLVRQuant <hello@clvrquantai.com>", to: SUPPORT_OWNER_EMAIL, replyTo: user.email || undefined,
+          subject: `🆘 Support escalation from ${user.email || (user as any).username || "a user"}`,
+          text: `${(user as any).name || (user as any).username || "A user"} (${user.email}) asked to talk to a human from the Concierge.\n\nOpen Account → Support to reply.\n${getAppUrl()}`,
+        });
+      } catch (e: any) { console.log("[support/escalate] email fail:", e.message); }
+      res.json({ threadId });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // USER: poll my open thread + messages
+  app.get("/api/support/thread", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    try {
+      const t = await pool.query(`SELECT * FROM support_threads WHERE user_id=$1 AND status<>'closed' ORDER BY last_message_at DESC LIMIT 1`, [userId]);
+      if (t.rows.length === 0) return res.json({ thread: null, messages: [] });
+      const thread = t.rows[0];
+      const m = await pool.query(`SELECT id, thread_id, sender, body, msg_type, meta, created_at FROM support_messages WHERE thread_id=$1 ORDER BY created_at ASC`, [thread.id]);
+      await pool.query(`UPDATE support_messages SET read_by_user=true WHERE thread_id=$1 AND sender='owner'`, [thread.id]);
+      res.json({ thread, messages: m.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // USER: send a message
+  app.post("/api/support/message", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    const body = String(req.body?.body || "").trim();
+    if (!body) return res.status(400).json({ error: "Empty message." });
+    try {
+      const t = await pool.query(`SELECT id FROM support_threads WHERE user_id=$1 AND status<>'closed' ORDER BY last_message_at DESC LIMIT 1`, [userId]);
+      let threadId = t.rows[0]?.id;
+      if (!threadId) { const ins = await pool.query(`INSERT INTO support_threads (user_id, status, subject) VALUES ($1,'open','Support') RETURNING id`, [userId]); threadId = ins.rows[0].id; }
+      const ins = await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'user',$2,'text') RETURNING id, thread_id, sender, body, msg_type, meta, created_at`, [threadId, body]);
+      await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      res.json({ message: ins.rows[0] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: inbox (open threads, newest first, with unread count)
+  app.get("/api/support/inbox", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    try {
+      const r = await pool.query(`
+        SELECT t.id, t.user_id, t.status, t.subject, t.last_message_at, t.created_at,
+               u.email AS user_email, u.name AS user_name, u.tier AS user_tier,
+               (SELECT COUNT(*) FROM support_messages m WHERE m.thread_id=t.id AND m.sender='user' AND m.read_by_owner=false)::int AS unread
+        FROM support_threads t JOIN users u ON u.id=t.user_id
+        WHERE t.status<>'closed' ORDER BY t.last_message_at DESC LIMIT 100`);
+      res.json({ threads: r.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: one thread + messages
+  app.get("/api/support/thread/:id", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      const t = await pool.query(`SELECT t.*, u.email AS user_email, u.name AS user_name, u.tier AS user_tier FROM support_threads t JOIN users u ON u.id=t.user_id WHERE t.id=$1`, [id]);
+      if (t.rows.length === 0) return res.status(404).json({ error: "Not found" });
+      const m = await pool.query(`SELECT id, thread_id, sender, body, msg_type, meta, created_at FROM support_messages WHERE thread_id=$1 ORDER BY created_at ASC`, [id]);
+      await pool.query(`UPDATE support_messages SET read_by_owner=true WHERE thread_id=$1 AND sender='user'`, [id]);
+      res.json({ thread: t.rows[0], messages: m.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: reply (also emails the user so async works when they're offline)
+  app.post("/api/support/reply", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const threadId = parseInt(req.body?.threadId, 10);
+    const body = String(req.body?.body || "").trim();
+    if (!threadId || !body) return res.status(400).json({ error: "threadId and body required." });
+    try {
+      const ins = await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'owner',$2,'text') RETURNING id, thread_id, sender, body, msg_type, meta, created_at`, [threadId, body]);
+      await pool.query(`UPDATE support_threads SET status='awaiting_user', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      try {
+        const u = await pool.query(`SELECT u.email, u.name FROM support_threads t JOIN users u ON u.id=t.user_id WHERE t.id=$1`, [threadId]);
+        const usr = u.rows[0];
+        if (usr?.email) {
+          const { client } = await getUncachableResendClient();
+          await client.emails.send({ from: "CLVRQuant <hello@clvrquantai.com>", to: usr.email, replyTo: SUPPORT_OWNER_EMAIL,
+            subject: "Reply from CLVRQuant support", text: `${body}\n\n— Mike, CLVRQuant\n\nReply in the Concierge chat at ${getAppUrl()}` });
+        }
+      } catch (e: any) { console.log("[support/reply] email fail:", e.message); }
+      res.json({ message: ins.rows[0] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+═══════════════════════════════════════════════════════════════════════════
+EDIT 3 of 4 — client/src/App.jsx  (ConciergeWidget: escalation + human mode)
+═══════════════════════════════════════════════════════════════════════════
+
+3a. FIND (exact):  const scrollRef=useRef(null);
+    REPLACE WITH:
+  const scrollRef=useRef(null);
+  // ── Human handoff ──
+  const [humanMode,setHumanMode]=useState(false);
+  const [threadMsgs,setThreadMsgs]=useState([]);
+  const [hInput,setHInput]=useState("");
+  const [escalating,setEscalating]=useState(false);
+  const hPoll=useRef(null);
+
+3b. FIND (exact):  const SLOTS=[];
+    REPLACE WITH:
+  const loadThread=async()=>{
+    try{ const r=await fetch("/api/support/thread",{credentials:"include"});
+      if(r.ok){ const d=await r.json(); if(d.thread){ setThreadMsgs(d.messages||[]); } } }catch{}
+  };
+  const escalate=async()=>{
+    if(escalating) return; setEscalating(true);
+    try{
+      const r=await fetch("/api/support/escalate",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({messages:messages.filter(m=>m.role==="user"||m.role==="assistant").slice(-6)})});
+      if(r.ok){ setHumanMode(true); await loadThread(); }
+    }catch{} finally{ setEscalating(false); }
+  };
+  const sendHuman=async()=>{
+    const text=hInput.trim(); if(!text) return; setHInput("");
+    setThreadMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"user",body:text,msg_type:"text"}]);
+    try{ await fetch("/api/support/message",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({body:text})}); }catch{}
+    loadThread();
+  };
+  useEffect(()=>{
+    if(open&&humanMode){ loadThread(); hPoll.current=setInterval(loadThread,12000); }
+    return ()=>{ if(hPoll.current){ clearInterval(hPoll.current); hPoll.current=null; } };
+  },[open,humanMode]);
+  const SLOTS=[];
+
+3c. FIND (exact):  {!booking&&messages.map((m,i)=>(
+    REPLACE WITH:  {!booking&&!humanMode&&messages.map((m,i)=>(
+
+3d. FIND (exact):  {!booking&&sending&&(
+    REPLACE WITH:
+        {!booking&&!humanMode&&messages.length>1&&(
+          <button data-testid="button-concierge-human" onClick={escalate} disabled={escalating}
+            style={{alignSelf:"flex-start",background:"none",border:`1px solid ${C.border2}`,color:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.04em",padding:"6px 10px",borderRadius:8,cursor:"pointer"}}>
+            {escalating?"Connecting…":"Not helpful? Talk to a human →"}
+          </button>
+        )}
+        {!booking&&!humanMode&&sending&&(
+
+3e. FIND (exact):  {/* Booking view */}
+    REPLACE WITH:
+        {/* Human support view */}
+        {humanMode&&(
+          <div data-testid="panel-concierge-human" style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.06em",borderBottom:`1px solid ${C.border}`,paddingBottom:8}}>CONNECTED TO SUPPORT · we reply here + by email</div>
+            {threadMsgs.filter(m=>m.msg_type!=="system").map((m,i)=>(
+              <div key={m.id||i} style={{alignSelf:m.sender==="user"?"flex-end":"flex-start",maxWidth:"85%"}}>
+                <div style={{background:m.sender==="user"?`linear-gradient(145deg, ${C.gold2}, ${C.gold})`:C.panel,color:m.sender==="user"?C.navy:C.text,border:m.sender==="user"?"none":`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px",fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{m.body}</div>
+                {m.sender==="owner"&&<div style={{fontFamily:MONO,fontSize:8,color:C.gold2,marginTop:3}}>MIKE · CLVRQuant</div>}
+              </div>
+            ))}
+            <div style={{display:"flex",gap:8,marginTop:4}}>
+              <textarea rows={1} value={hInput} onChange={e=>setHInput(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendHuman(); } }}
+                placeholder="Message the team…"
+                style={{flex:1,resize:"none",background:C.navy,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13,lineHeight:1.4,maxHeight:90,outline:"none"}}/>
+              <button onClick={sendHuman} disabled={!hInput.trim()} style={{background:!hInput.trim()?C.border2:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,color:!hInput.trim()?C.muted2:C.navy,border:"none",borderRadius:8,padding:"10px 14px",fontFamily:MONO,fontSize:12,fontWeight:700,cursor:!hInput.trim()?"default":"pointer"}}>➤</button>
+            </div>
+            <button onClick={()=>setHumanMode(false)} style={{alignSelf:"flex-start",background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>← Back to Concierge</button>
+          </div>
+        )}
+        {/* Booking view */}
+
+3f. FIND (exact):  {!booking&&(
+    REPLACE WITH:  {!booking&&!humanMode&&(
+
+═══════════════════════════════════════════════════════════════════════════
+EDIT 4 of 4 — client/src/AccountPage.jsx  (owner Support inbox)
+═══════════════════════════════════════════════════════════════════════════
+
+4a. FIND (exact):  const SANS  = "'Barlow', system-ui, sans-serif";
+    REPLACE WITH:
+const SANS  = "'Barlow', system-ui, sans-serif";
+
+function SupportInbox(){
+  const [threads,setThreads]=useState([]);
+  const [active,setActive]=useState(null);
+  const [msgs,setMsgs]=useState([]);
+  const [reply,setReply]=useState("");
+  const [loading,setLoading]=useState(true);
+  const loadInbox=async()=>{ try{ const r=await fetch("/api/support/inbox",{credentials:"include"}); if(r.ok){ const d=await r.json(); setThreads(d.threads||[]); } }catch{} finally{ setLoading(false);} };
+  const openThread=async(id)=>{ setActive(id); try{ const r=await fetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); } }catch{} };
+  const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await fetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
+  useEffect(()=>{ loadInbox(); const i=setInterval(loadInbox,12000); return ()=>clearInterval(i); },[]);
+  useEffect(()=>{ if(!active) return; const i=setInterval(()=>openThread(active),12000); return ()=>clearInterval(i); },[active]);
+  return (
+    <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+      <div style={{flex:"1 1 260px",minWidth:240}}>
+        <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.1em",marginBottom:8}}>OPEN THREADS</div>
+        {loading?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Loading…</div>:
+         threads.length===0?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>No open threads.</div>:
+         threads.map(t=>(
+          <button key={t.id} onClick={()=>openThread(t.id)} style={{display:"block",width:"100%",textAlign:"left",background:active===t.id?"rgba(201,168,76,.08)":C.panel,border:`1px solid ${active===t.id?C.gold:C.border}`,borderRadius:6,padding:"10px 12px",marginBottom:8,cursor:"pointer"}}>
+            <div style={{fontFamily:SANS,fontSize:13,color:C.text}}>{t.user_name||t.user_email} {t.unread>0&&<span style={{background:C.gold,color:C.bg,borderRadius:999,fontSize:9,padding:"1px 6px",marginLeft:6,fontFamily:MONO}}>{t.unread}</span>}</div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>{t.user_tier} · {t.user_email}</div>
+          </button>
+        ))}
+      </div>
+      <div style={{flex:"2 1 360px",minWidth:300}}>
+        {!active?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Select a thread.</div>:(
+          <>
+            <div style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:6,padding:12,marginBottom:10}}>
+              {msgs.map((m,i)=>(
+                <div key={m.id||i} style={{marginBottom:10,textAlign:m.sender==="owner"?"right":"left"}}>
+                  {m.msg_type==="system"?
+                    <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,whiteSpace:"pre-wrap",background:C.panel,border:`1px dashed ${C.border2}`,borderRadius:6,padding:"8px 10px"}}>{m.body}</div>:
+                    <div style={{display:"inline-block",maxWidth:"85%",textAlign:"left",background:m.sender==="owner"?`linear-gradient(145deg, ${C.gold2}, ${C.gold})`:C.panel,color:m.sender==="owner"?C.bg:C.text,border:m.sender==="owner"?"none":`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px",fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{m.body}</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <textarea rows={2} value={reply} onChange={e=>setReply(e.target.value)} placeholder="Reply to the user…" style={{flex:1,resize:"none",background:C.panel,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13}}/>
+              <button onClick={sendReply} disabled={!reply.trim()} style={{background:!reply.trim()?C.border2:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,color:!reply.trim()?C.muted2:C.bg,border:"none",borderRadius:8,padding:"0 18px",fontFamily:MONO,fontSize:12,fontWeight:700,cursor:!reply.trim()?"default":"pointer"}}>Send</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+4b. FIND (exact):  const tabs = acct?.isOwner ? [...baseTabs, "owner", "admin", "admin2"] : baseTabs;
+    REPLACE WITH:
+  const tabs = acct?.isOwner ? [...baseTabs, "owner", "support", "admin", "admin2"] : baseTabs;
+
+4c. FIND (exact):      {tab === "admin2" && acct.isOwner && <AdminTab2 C={C} MONO={MONO} SANS={SANS} SERIF={SERIF} />}
+    REPLACE WITH:
+      {tab === "admin2" && acct.isOwner && <AdminTab2 C={C} MONO={MONO} SANS={SANS} SERIF={SERIF} />}
+
+      {tab === "support" && acct.isOwner && <SupportInbox />}
+
+ACCEPTANCE CRITERIA:
+- Logged-in user: Concierge shows "Not helpful? Talk to a human →" after the first exchange; tapping it opens the human view, carries the last AI exchange to the owner as a system note, and emails the owner.
+- User and owner messages round-trip; both sides poll every 12s; owner reply also emails the user.
+- Owner sees Account → SUPPORT tab with open threads, unread badges, and a reply box. Non-owners never see it (requireAdmin / acct.isOwner).
+- Build succeeds; "startup complete" in Railway logs.
+
+GUARDRAILS — DO NOT:
+- Do NOT alter the existing Concierge chat, booking flow, or message-limit logic.
+- Do NOT expose /api/support/inbox, /thread/:id, or /reply without requireAdmin.
+- Do NOT remove the system-context message on escalate (it's how you see what they asked the AI).
+- msg_type 'meeting_request' + meta JSONB are intentionally unused here — Block 4 fills them.
+
+COMMIT:
+git add -A && git commit -m "feat: Concierge human handoff — support threads, escalation, owner inbox (Block 3)" && git push

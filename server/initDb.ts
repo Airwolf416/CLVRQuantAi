@@ -277,6 +277,90 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
 
+    // ── support_threads ──────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS support_threads (
+        id              SERIAL PRIMARY KEY,
+        user_id         TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'open',
+        subject         TEXT,
+        last_message_at TIMESTAMP DEFAULT NOW(),
+        created_at      TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_support_threads_user ON support_threads (user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_support_threads_status ON support_threads (status, last_message_at)`);
+
+    // ── support_messages ─────────────────────────────────────────────────────
+    // sender: 'user' | 'owner' | 'ai' | 'system'   msg_type: 'text' | 'meeting_request' | 'system'
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS support_messages (
+        id             SERIAL PRIMARY KEY,
+        thread_id      INTEGER NOT NULL,
+        sender         TEXT NOT NULL,
+        body           TEXT NOT NULL,
+        msg_type       TEXT NOT NULL DEFAULT 'text',
+        meta           JSONB,
+        read_by_owner  BOOLEAN NOT NULL DEFAULT false,
+        read_by_user   BOOLEAN NOT NULL DEFAULT false,
+        created_at     TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_support_messages_thread ON support_messages (thread_id, created_at)`);
+
+    // ── user_positions — user's own open positions WITH their stated plan ────
+    // Compliance keystone: AI measures price vs the user's OWN entry/stop/target.
+    // The AI never invents targets — it reflects the trader's precommitment back.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_positions (
+        id            SERIAL PRIMARY KEY,
+        user_id       TEXT NOT NULL,
+        symbol        TEXT NOT NULL,
+        asset_class   TEXT NOT NULL DEFAULT 'equity',
+        side          TEXT NOT NULL DEFAULT 'long',
+        entry_price   NUMERIC,
+        size_usd      NUMERIC,
+        leverage      NUMERIC NOT NULL DEFAULT 1,
+        stop_price    NUMERIC,
+        target_price  NUMERIC,
+        status        TEXT NOT NULL DEFAULT 'open',
+        notes         TEXT,
+        opened_at     TIMESTAMP DEFAULT NOW(),
+        closed_at     TIMESTAMP,
+        created_at    TIMESTAMP DEFAULT NOW(),
+        updated_at    TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_positions_user ON user_positions (user_id, status)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_positions_symbol ON user_positions (symbol)
+    `);
+
+    // ── position_event_log — idempotent dedup for T-1 / T-0 notifications ────
+    // UNIQUE(position_id, event_date, phase) + ON CONFLICT DO NOTHING means a
+    // server restart can never double-send a given position/event/phase.
+    // phase: 't_minus_1' = 8:00 PM ET day before | 't_zero' = 7:00 AM ET day of
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS position_event_log (
+        id            SERIAL PRIMARY KEY,
+        user_id       TEXT NOT NULL,
+        position_id   INTEGER NOT NULL,
+        symbol        TEXT NOT NULL,
+        event_type    TEXT NOT NULL,
+        event_date    DATE NOT NULL,
+        phase         TEXT NOT NULL,
+        tier_at_send  TEXT NOT NULL,
+        channel       TEXT NOT NULL DEFAULT 'email',
+        sent_at       TIMESTAMP DEFAULT NOW(),
+        UNIQUE (position_id, event_date, phase)
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_position_event_log_user ON position_event_log (user_id)
+    `);
+
     // ── webauthn_credentials ─────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS webauthn_credentials (

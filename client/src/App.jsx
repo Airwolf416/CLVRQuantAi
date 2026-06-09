@@ -21,6 +21,7 @@ import QRScanner from "./QRScanner";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import InsiderTab from "./tabs/InsiderTab";
+import PositionMonitor from "./PositionMonitor";
 import KronosPanel from "./components/KronosPanel";
 import AIQuantTab from "./tabs/AITab";
 import PricingModal from "./components/PricingModal.jsx";
@@ -476,7 +477,7 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 // Tabs that require Pro (fully locked for free users)
 const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 // Tabs that require Elite (locked for both free AND pro users)
-const ELITE_TABS_GATE=["insider","basket","chartai","earnings","pulse"];
+const ELITE_TABS_GATE=["insider","basket","chartai","earnings","pulse","monitor"];
 
 function UnusualPulse({ data, C, MONO }) {
   const signals = data?.signals || [];
@@ -504,7 +505,7 @@ function UnusualPulse({ data, C, MONO }) {
 }
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",chartai:"Chart AI",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
+  const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",chartai:"Chart AI",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",monitor:"Position Monitor",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
   const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",chartai:"Upload any chart · AI returns direction, entry, SL & TP1/TP2/TP3 with live news context · 5 analyses/day",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
@@ -3202,6 +3203,12 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const [bConfirmed,setBConfirmed]=useState(false);
   const [bWorking,setBWorking]=useState(false);
   const scrollRef=useRef(null);
+  // ── Human handoff ──
+  const [humanMode,setHumanMode]=useState(false);
+  const [threadMsgs,setThreadMsgs]=useState([]);
+  const [hInput,setHInput]=useState("");
+  const [escalating,setEscalating]=useState(false);
+  const hPoll=useRef(null);
 
   useEffect(()=>{
     if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight;
@@ -3269,6 +3276,28 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
     finally{ setBWorking(false); }
   };
 
+  const loadThread=async()=>{
+    try{ const r=await fetch("/api/support/thread",{credentials:"include"});
+      if(r.ok){ const d=await r.json(); if(d.thread){ setThreadMsgs(d.messages||[]); } } }catch{}
+  };
+  const escalate=async()=>{
+    if(escalating) return; setEscalating(true);
+    try{
+      const r=await fetch("/api/support/escalate",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({messages:messages.filter(m=>m.role==="user"||m.role==="assistant").slice(-6)})});
+      if(r.ok){ setHumanMode(true); await loadThread(); }
+    }catch{} finally{ setEscalating(false); }
+  };
+  const sendHuman=async()=>{
+    const text=hInput.trim(); if(!text) return; setHInput("");
+    setThreadMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"user",body:text,msg_type:"text"}]);
+    try{ await fetch("/api/support/message",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({body:text})}); }catch{}
+    loadThread();
+  };
+  useEffect(()=>{
+    if(open&&humanMode){ loadThread(); hPoll.current=setInterval(loadThread,12000); }
+    return ()=>{ if(hPoll.current){ clearInterval(hPoll.current); hPoll.current=null; } };
+  },[open,humanMode]);
   const SLOTS=[];
   for(let h=9;h<=17;h++){ SLOTS.push(`${String(h).padStart(2,"0")}:00`); if(h<17) SLOTS.push(`${String(h).padStart(2,"0")}:30`); }
 
@@ -3316,7 +3345,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
 
       {/* Body */}
       <div ref={scrollRef} style={{flex:1,overflowY:"auto",padding:"14px",display:"flex",flexDirection:"column",gap:10}}>
-        {!booking&&messages.map((m,i)=>(
+        {!booking&&!humanMode&&messages.map((m,i)=>(
           <div key={i} data-testid={`msg-concierge-${m.role}-${i}`} style={{alignSelf:m.role==="user"?"flex-end":"flex-start",maxWidth:"85%"}}>
             <div style={{background:m.role==="user"?`linear-gradient(145deg, ${C.gold2}, ${C.gold})`:C.panel,
               color:m.role==="user"?C.navy:C.text,border:m.role==="user"?"none":`1px solid ${C.border}`,
@@ -3325,11 +3354,37 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
             </div>
           </div>
         ))}
-        {!booking&&sending&&(
+        {!booking&&!humanMode&&messages.length>1&&(
+          <button data-testid="button-concierge-human" onClick={escalate} disabled={escalating}
+            style={{alignSelf:"flex-start",background:"none",border:`1px solid ${C.border2}`,color:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.04em",padding:"6px 10px",borderRadius:8,cursor:"pointer"}}>
+            {escalating?"Connecting…":"Not helpful? Talk to a human →"}
+          </button>
+        )}
+        {!booking&&!humanMode&&sending&&(
           <div style={{alignSelf:"flex-start",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,
             padding:"9px 12px",fontFamily:MONO,fontSize:11,color:C.muted2}}>Concierge is typing…</div>
         )}
 
+        {/* Human support view */}
+        {humanMode&&(
+          <div data-testid="panel-concierge-human" style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.06em",borderBottom:`1px solid ${C.border}`,paddingBottom:8}}>CONNECTED TO SUPPORT · we reply here + by email</div>
+            {threadMsgs.filter(m=>m.msg_type!=="system").map((m,i)=>(
+              <div key={m.id||i} style={{alignSelf:m.sender==="user"?"flex-end":"flex-start",maxWidth:"85%"}}>
+                <div style={{background:m.sender==="user"?`linear-gradient(145deg, ${C.gold2}, ${C.gold})`:C.panel,color:m.sender==="user"?C.navy:C.text,border:m.sender==="user"?"none":`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px",fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{m.body}</div>
+                {m.sender==="owner"&&<div style={{fontFamily:MONO,fontSize:8,color:C.gold2,marginTop:3}}>MIKE · CLVRQuant</div>}
+              </div>
+            ))}
+            <div style={{display:"flex",gap:8,marginTop:4}}>
+              <textarea rows={1} value={hInput} onChange={e=>setHInput(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendHuman(); } }}
+                placeholder="Message the team…"
+                style={{flex:1,resize:"none",background:C.navy,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13,lineHeight:1.4,maxHeight:90,outline:"none"}}/>
+              <button onClick={sendHuman} disabled={!hInput.trim()} style={{background:!hInput.trim()?C.border2:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,color:!hInput.trim()?C.muted2:C.navy,border:"none",borderRadius:8,padding:"10px 14px",fontFamily:MONO,fontSize:12,fontWeight:700,cursor:!hInput.trim()?"default":"pointer"}}>➤</button>
+            </div>
+            <button onClick={()=>setHumanMode(false)} style={{alignSelf:"flex-start",background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>← Back to Concierge</button>
+          </div>
+        )}
         {/* Booking view */}
         {booking&&(
           <div data-testid="panel-concierge-booking" style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -3385,7 +3440,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
       </div>
 
       {/* Composer */}
-      {!booking&&(
+      {!booking&&!humanMode&&(
         <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 12px",background:C.panel}}>
           <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
             <textarea data-testid="input-concierge-message" rows={1} value={input} maxLength={1000} disabled={limit}
@@ -4918,6 +4973,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
     {k:"earnings",icon:"📅",label:"EARNINGS"},
     {k:"signals",icon:"⚡",label:i18n.signals},
     {k:"insider",icon:"🏛",label:"INSIDER"},
+    {k:"monitor",icon:"📊",label:"MONITOR"},
     {k:"pulse",icon:"💥",label:"PULSE"},
     {k:"alerts",icon:"🔔",label:i18n.alerts},
     {k:"wallet",icon:"👛",label:i18n.wallet},
@@ -6411,6 +6467,9 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         {tab==="candidates"&&isOwnerOnly&&<AdminCandidatesTab/>}
 
         {tab==="archetypes"&&isOwnerOnly&&<ArchetypeAdminPanel/>}
+
+        {/* ══ POSITION MONITOR ══ */}
+        {tab==="monitor"&&isElite&&<PositionMonitor C={C} MONO={MONO} SANS={SANS} SERIF={SERIF}/>}
 
         {/* ══ INSIDER ══ */}
         {tab==="insider"&&isElite&&<>
