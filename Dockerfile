@@ -2,11 +2,13 @@
 FROM node:22-bookworm AS build
 WORKDIR /app
 
-# Install ALL deps (incl. dev) using the lockfile. This runs on GitHub
-# Actions (~16GB RAM), so the npm ci that OOM-killed Railway's builder
-# has plenty of memory here.
+# Give Node a larger heap during install + build to avoid OOM on the CI runner.
+ENV NODE_OPTIONS="--max_old_space_size=4096"
+
+# Install ALL deps (incl. dev). Using `npm install` (not `npm ci`) and the
+# larger Node heap set above to avoid the OOM the CI runner hit during install.
 COPY package.json package-lock.json ./
-RUN npm ci --include=dev --legacy-peer-deps --no-audit --no-fund
+RUN npm install --include=dev --legacy-peer-deps --no-audit --no-fund
 
 # Build client + server.
 COPY . .
