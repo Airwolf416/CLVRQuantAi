@@ -23,7 +23,7 @@ cmds = [
 dependsOn = ["setup"]
 cacheDirectories = ["/root/.npm"]
 cmds = [
-  "npm install --include=dev --legacy-peer-deps --no-audit --no-fund",
+  "npm ci --include=dev --legacy-peer-deps",
 ]
 
 # Build runs AFTER both the node install and the python venv. Heap is capped
