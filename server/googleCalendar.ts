@@ -1,4 +1,4 @@
-import { google } from "googleapis";
+import { calendar, auth as googleAuth } from "@googleapis/calendar";
 
 // Google Calendar auth. Two paths, checked in this order:
 //
@@ -27,14 +27,14 @@ function hasOAuthEnvCreds(): boolean {
 // The OAuth2 client refreshes the short-lived access token on demand, so the
 // returned client is safe to use immediately on every call.
 function getEnvOAuthCalendarClient() {
-  const oauth2 = new google.auth.OAuth2(
+  const oauth2 = new googleAuth.OAuth2(
     process.env.GOOGLE_OAUTH_CLIENT_ID,
     process.env.GOOGLE_OAUTH_CLIENT_SECRET,
   );
   oauth2.setCredentials({
     refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN,
   });
-  return google.calendar({ version: "v3", auth: oauth2 });
+  return calendar({ version: "v3", auth: oauth2 });
 }
 
 // ── Replit connector fallback ───────────────────────────────────────────────
@@ -90,9 +90,9 @@ export async function getUncachableGoogleCalendarClient() {
     return getEnvOAuthCalendarClient();
   }
   const accessToken = await getConnectorAccessToken();
-  const oauth2 = new google.auth.OAuth2();
+  const oauth2 = new googleAuth.OAuth2();
   oauth2.setCredentials({ access_token: accessToken });
-  return google.calendar({ version: "v3", auth: oauth2 });
+  return calendar({ version: "v3", auth: oauth2 });
 }
 
 // True when EITHER auth path looks wired (used for light logging/UX).

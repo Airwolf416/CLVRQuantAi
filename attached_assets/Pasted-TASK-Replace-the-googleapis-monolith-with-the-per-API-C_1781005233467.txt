@@ -1,0 +1,42 @@
+TASK: Replace the googleapis monolith with the per-API Calendar package to cut npm ci memory and stop the Railway build OOM. Behavior must stay identical.
+
+CONTEXT
+- Build dies during `npm ci` (install phase) with `npm error Exit handler never called!` = OOM-killed. The dependency tree is too heavy for the builder.
+- `googleapis@^173` bundles a client for every Google API and is the single largest item in the tree. We only use Google Calendar (event creation + Meet links) with OAuth2 + refresh token.
+
+STEP 1 — Inventory (read-only, print before changing anything)
+- Search the whole repo for: `from "googleapis"`, `require("googleapis")`, and every `google.<something>(` call (e.g. google.calendar(, google.auth.OAuth2(, google.texttospeech(, google.drive().
+- Print each file path + the exact Google API surfaces used. Do not edit yet.
+
+STEP 2 — Migrate Calendar + OAuth
+- For Calendar + OAuth usage, change imports:
+  - Before: `import { google } from "googleapis";`
+  - After:  `import { calendar, auth as googleAuth } from "@googleapis/calendar";`
+- Update call sites, preserving every argument, scope, redirect URI, and the refresh-token logic byte-for-byte:
+  - `new google.auth.OAuth2(...)`  ->  `new googleAuth.OAuth2(...)`
+  - `google.calendar({ version: "v3", auth })`  ->  `calendar({ version: "v3", auth })`
+  - Leave `oauth2Client.setCredentials({ refresh_token: ... })`, `events.insert`, `conferenceData`/`conferenceDataVersion`, calendarId, etc. exactly as-is.
+
+STEP 3 — Any OTHER Google surface found in Step 1
+- For each additional API (e.g. texttospeech, drive, sheets): add the matching per-API package `@googleapis/<api>` and import its function the same way. 
+- If TTS or anything else comes from a NON-googleapis package (e.g. @google-cloud/...), LEAVE IT UNTOUCHED.
+- If ANY usage cannot be cleanly mapped to a per-API package, STOP and report it instead of guessing — do not remove googleapis in that case.
+
+STEP 4 — Remove the monolith + refresh the lockfile
+- Remove `"googleapis"` from package.json dependencies (only after every usage above is migrated).
+- Run `npm install` in Replit to regenerate package-lock.json against the new deps. `npm ci` on Railway installs from that lockfile, so it MUST be regenerated and committed.
+
+GUARDRAILS
+- No new AI provider. No Gemini.
+- Do NOT touch tier gating (Free/Pro/Elite) or any signal/quant code.
+- Do NOT change nixpacks.toml (the install/python/build phase structure stays), the .npmrc, the caddy step, the python venv/pip step, or the start command.
+
+ACCEPTANCE
+- `googleapis` no longer in package.json (or you reported exactly which surface blocked removal).
+- package.json + package-lock.json both updated and committed.
+- Booking flow unchanged: OAuth refresh-token auth, event creation, and Meet link generation behave identically.
+- `npm ci` completes on Railway without `Exit handler never called!`; build + deploy go live; server logs print "startup complete".
+
+COMMIT
+- Message: "perf(build): replace googleapis monolith with @googleapis/calendar to fix npm ci OOM"
+- Push to main.

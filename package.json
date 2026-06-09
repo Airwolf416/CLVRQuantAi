@@ -14,6 +14,7 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@googleapis/calendar": "^15.0.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@neondatabase/serverless": "^1.0.2",
@@ -70,7 +71,6 @@
     "express-rate-limit": "^8.3.2",
     "express-session": "^1.19.0",
     "framer-motion": "^11.13.1",
-    "googleapis": "^173.0.0",
     "handlebars": "^4.7.9",
     "helmet": "^8.1.0",
     "http-proxy-middleware": "^3.0.5",
