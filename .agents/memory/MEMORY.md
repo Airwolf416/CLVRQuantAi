@@ -7,3 +7,4 @@
 - [Booking email at-most-once](booking-email-idempotency.md) — stamp emails_sent_at as a claim but RELEASE it when the user email fails; paid webhook must always re-finalize, never early-return on confirmed.
 - [Railway vs Replit credentials](railway-vs-replit-credentials.md) — Replit-connector auths (incl. Google Calendar) do NOT work on Railway prod; need env-var path. Calendar uses OAuth refresh token; Stripe/Resend already env-native.
 - [Docker build in Replit dev](docker-build-in-replit-dev.md) — full `docker build` OOM-kills here (7.7GB, throttled); .cache/.pythonlibs bloat context. Verify via `docker build --check` + small-context partial build; defer full build to GitHub Actions.
+- [CI deploy npm exit-handler failure](ci-deploy-npm-exit-handler.md) — GHA "Build and Deploy" Docker build failed at `npm install` with "Exit handler never called!" (npm 10.9.x bug), NOT OOM; fix = pin `npm@11.16.0` in Dockerfile build stage.
