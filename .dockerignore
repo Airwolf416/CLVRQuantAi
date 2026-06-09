@@ -5,3 +5,4 @@ dist
 attached_assets
 exports
 *.log
+.env*
