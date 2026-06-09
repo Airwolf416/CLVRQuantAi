@@ -12,18 +12,22 @@ cmds = [
   ". /opt/venv/bin/activate && pip install --upgrade pip && pip install -r quant/requirements.txt",
 ]
 
-# Node deps in a DEDICATED install phase so `npm install` no longer shares the
-# build step's memory window — the previous single-step install+build was
-# OOM-killed ("Exit handler never called!") on Railway's builder. Use
-# `npm install` (not `npm ci`) + `--legacy-peer-deps` to proceed past
-# peer-dependency conflicts. No `npm cache clean --force` (it forces a cold
-# re-extract that spikes peak memory). cacheDirectories warms the npm cache
-# across builds for less IO/memory.
+# Node deps in a DEDICATED install phase so the install no longer shares the
+# build step's memory window. Use `npm ci` (not `npm install`): with this large
+# dependency tree (googleapis, @solana/web3.js, sharp, full Radix UI suite),
+# `npm install` re-resolves the whole tree and was OOM-killed mid-install
+# ("npm error Exit handler never called!") on Railway's builder. `npm ci`
+# installs deterministically from package-lock.json without the resolution pass,
+# cutting peak memory. `--legacy-peer-deps` still proceeds past peer-dependency
+# conflicts; `--include=dev` is required because NODE_ENV=production would
+# otherwise omit the devDependencies (tsx/vite/typescript) the build needs.
+# No `npm cache clean --force` (forces a cold re-extract that spikes peak
+# memory). cacheDirectories warms the npm cache across builds for less IO/memory.
 [phases.install]
 dependsOn = ["setup"]
 cacheDirectories = ["/root/.npm"]
 cmds = [
-  "npm install --include=dev --legacy-peer-deps --no-audit --no-fund",
+  "npm ci --include=dev --legacy-peer-deps --no-audit --no-fund",
 ]
 
 # Build runs AFTER both the node install and the python venv. Heap is capped
