@@ -4,7 +4,7 @@ hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["glibcLocales", "libxcrypt", "pkg-config", "postgresql", "unzip", "xsimd"]
+packages = ["glibcLocales", "libxcrypt", "pkg-config", "postgresql", "unzip", "xsimd", "gir-rs"]
 
 [[ports]]
 localPort = 5000
