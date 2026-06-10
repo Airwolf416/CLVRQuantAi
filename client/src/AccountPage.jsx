@@ -24,6 +24,9 @@ function SupportInbox(){
   const openThread=async(id)=>{ setActive(id); try{ const r=await fetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); } }catch{} };
   const selectThread=(id)=>{ stickRef.current=true; openThread(id); };
   const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); stickRef.current=true; setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await fetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
+  // Close = terminate the chat (keeps history, drops it from the active inbox). Delete = remove the whole conversation for good.
+  const closeThread=async()=>{ if(!active) return; if(!window.confirm("End this chat? It will close and leave the active inbox. The history is kept.")) return; try{ const r=await fetch(`/api/support/thread/${active}/close`,{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
+  const deleteThread=async()=>{ if(!active) return; if(!window.confirm("Delete this chat permanently? The whole conversation will be removed and cannot be undone.")) return; try{ const r=await fetch(`/api/support/thread/${active}`,{method:"DELETE",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not delete the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
   useEffect(()=>{ loadInbox(); const i=setInterval(loadInbox,12000); return ()=>clearInterval(i); },[]);
   useEffect(()=>{ if(!active) return; const i=setInterval(()=>openThread(active),12000); return ()=>clearInterval(i); },[active]);
   useEffect(()=>{ if(stickRef.current) requestAnimationFrame(scrollToBottom); },[msgs,active]);
@@ -43,6 +46,10 @@ function SupportInbox(){
       <div style={{flex:"2 1 360px",minWidth:300}}>
         {!active?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Select a thread.</div>:(
           <>
+            <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:8}}>
+              <button data-testid="button-support-close" onClick={closeThread} style={{background:"none",border:`1px solid ${C.border2}`,color:C.muted2,fontFamily:MONO,fontSize:10,letterSpacing:"0.04em",padding:"5px 10px",borderRadius:6,cursor:"pointer"}}>End chat</button>
+              <button data-testid="button-support-delete" onClick={deleteThread} style={{background:"none",border:"1px solid #b3422f",color:"#d9573f",fontFamily:MONO,fontSize:10,letterSpacing:"0.04em",padding:"5px 10px",borderRadius:6,cursor:"pointer"}}>Delete</button>
+            </div>
             <div ref={listRef} onScroll={()=>{ const el=listRef.current; if(el) stickRef.current=(el.scrollHeight-el.scrollTop-el.clientHeight)<80; }} style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:6,padding:12,marginBottom:10}}>
               {msgs.map((m,i)=>(
                 <div key={m.id||i} style={{marginBottom:10,textAlign:m.sender==="owner"?"right":"left"}}>

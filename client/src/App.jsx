@@ -3335,6 +3335,11 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
     try{ await fetch("/api/support/message",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({body:text})}); }catch{}
     loadThread();
   };
+  const endChat=async()=>{
+    if(!window.confirm("End this support chat? You can start a new one any time.")) return;
+    try{ const r=await fetch("/api/support/close",{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; }
+    setThreadMsgs([]); setHumanMode(false);
+  };
   useEffect(()=>{
     if(open&&humanMode){ loadThread(); hPoll.current=setInterval(loadThread,12000); }
     return ()=>{ if(hPoll.current){ clearInterval(hPoll.current); hPoll.current=null; } };
@@ -3423,7 +3428,10 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
                 style={{flex:1,resize:"none",background:C.navy,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13,lineHeight:1.4,maxHeight:90,outline:"none"}}/>
               <button onClick={sendHuman} disabled={!hInput.trim()} style={{background:!hInput.trim()?C.border2:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,color:!hInput.trim()?C.muted2:C.navy,border:"none",borderRadius:8,padding:"10px 14px",fontFamily:MONO,fontSize:12,fontWeight:700,cursor:!hInput.trim()?"default":"pointer"}}>➤</button>
             </div>
-            <button onClick={()=>setHumanMode(false)} style={{alignSelf:"flex-start",background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>← Back to Concierge</button>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:2}}>
+              <button onClick={()=>setHumanMode(false)} style={{background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>← Back to Concierge</button>
+              <button data-testid="button-support-end-chat" onClick={endChat} style={{background:"none",border:`1px solid ${C.border2}`,color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:"5px 9px",borderRadius:6}}>End chat</button>
+            </div>
           </div>
         )}
         {/* Booking view */}

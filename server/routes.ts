@@ -5217,6 +5217,17 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  // USER: end/terminate my own chat — marks the open thread closed so it drops
+  // out of the owner inbox. A later message just opens a fresh thread.
+  app.post("/api/support/close", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    try {
+      await pool.query(`UPDATE support_threads SET status='closed', last_message_at=NOW() WHERE user_id=$1 AND status<>'closed'`, [userId]);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // OWNER: inbox (open threads, newest first, with unread count)
   app.get("/api/support/inbox", async (req, res) => {
     const uid = await requireAdmin(req, res); if (!uid) return;
@@ -5283,6 +5294,39 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       } catch (e: any) { console.log("[support/reply] email fail:", e.message); }
       res.json({ message: ins.rows[0] });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: close/terminate a thread — keeps the full history but removes it from
+  // the active inbox (inbox already filters status<>'closed').
+  app.post("/api/support/thread/:id/close", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: "Bad thread id." });
+    try {
+      const r = await pool.query(`UPDATE support_threads SET status='closed' WHERE id=$1`, [id]);
+      if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: permanently delete a thread AND its messages (no FK cascade on
+  // support_messages.thread_id, so we remove children first inside a txn).
+  app.delete("/api/support/thread/:id", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: "Bad thread id." });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM support_messages WHERE thread_id=$1`, [id]);
+      const r = await client.query(`DELETE FROM support_threads WHERE id=$1`, [id]);
+      await client.query("COMMIT");
+      if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+      res.json({ ok: true });
+    } catch (e: any) {
+      try { await client.query("ROLLBACK"); } catch {}
+      res.status(500).json({ error: e.message });
+    } finally { client.release(); }
   });
 
   app.get("/api/concierge/pricing", async (req, res) => {
