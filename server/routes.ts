@@ -8199,38 +8199,15 @@ Every level must be technically defensible. Return JSON only.`;
       if (!uid) return res.status(401).json({ error: "Unauthorized" });
       const u = await storage.getUser(uid);
       if (!u || u.email !== "mikeclaver@gmail.com") return res.status(403).json({ error: "Forbidden" });
-      const mod = await import("./weeklyUpdate");
-      // Mirror generateWeeklyUpdateWithAI's input-building logic exactly so
-      // the preview matches what publish would actually produce. Never write to DB.
-      const pending = await (mod as any).getPendingUpdateLogEntries?.() || [];
-      const commits = (await (mod as any).getRecentCommitSubjects?.(7)) || [];
-      let inputs: string[] = [];
-      let source: "log" | "commits" | "both" | "none" = "none";
-      if (pending.length > 0 && commits.length > 0) {
-        source = "both";
-        inputs = [
-          ...pending.map((p: any) => `[LOG${p.emoji ? " " + p.emoji : ""}] ${p.headline}${p.detail ? " — " + p.detail : ""}`),
-          ...commits.map((c: string) => `[GIT] ${c}`),
-        ];
-      } else if (pending.length > 0) {
-        source = "log";
-        inputs = pending.map((p: any) => `${p.emoji ? p.emoji + " " : ""}${p.headline}${p.detail ? " — " + p.detail : ""}`);
-      } else if (commits.length > 0) {
-        source = "commits";
-        inputs = commits;
-      }
-      const digest = inputs.length > 0
-        ? await (mod as any).synthesizeWeeklyUpdateFromCommits?.(inputs)
-        : null;
-      res.json({
-        ok: true,
-        source,
-        pendingCount: pending.length,
-        pendingEntries: pending.map((p: any) => ({ headline: p.headline, emoji: p.emoji })),
-        commitCount: commits.length,
-        commits: commits.slice(0, 30),
-        digest,
-      });
+      const { buildWeeklyUpdatePreview } = await import("./weeklyUpdate");
+      // Runs the same pipeline as publish (commit fetch → filter → AI rewrite →
+      // compliance gate → rendered email) but writes NOTHING and sends NOTHING.
+      // Optional body.days overrides the lookback window (default mirrors publish).
+      const days = Number(req.body?.days);
+      const preview = await buildWeeklyUpdatePreview(
+        Number.isFinite(days) && days > 0 ? { sinceDays: days } : {},
+      );
+      res.json(preview);
     } catch (e: any) {
       console.error("weekly-update ai-preview error:", e);
       res.status(500).json({ error: e?.message || "Failed to preview" });

@@ -9,70 +9,150 @@ import { pool } from "./db";
 import { getUncachableResendClient } from "./resendClient";
 import type { WeeklyUpdate } from "@shared/schema";
 import { CLAUDE_MODEL } from "./config";
-import { execSync } from "child_process";
-import { getRecentCommitsViaApi } from "./githubClient";
+import { getCommitsViaOctokit } from "./githubClient";
 
 const ET_TZ = "America/New_York";
 
-// In production deployments there is no .git directory and no git binary, so
-// the local CLI returns nothing. Falling back to the GitHub REST API via the
-// Replit GitHub connector lets the digest still find commits in prod. The
-// repo can be overridden with GITHUB_REPO if it ever moves.
-const GITHUB_REPO = process.env.GITHUB_REPO || "Airwolf416/CLVRQuantAi";
+// Repo we read commits from for the digest. The GitHub API works identically
+// in dev and prod (unlike the old `git log` CLI, which is dead in Docker).
+// Both can be overridden by env if the repo/branch ever moves.
+const GITHUB_REPO = process.env.GITHUB_REPO || "Airwolf416/CLVRQuantAI";
+const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
 
-// Read git commit subjects from the last N days. Returns one subject per line,
-// de-duplicated, with checkpoint/auto-merge noise filtered out. Tries the
-// local git CLI first (fast, no network); if that fails or returns nothing,
-// falls back to the GitHub API so this works in production too.
-export async function getRecentCommitSubjects(days: number = 7): Promise<string[]> {
-  let raw = "";
-  let usedFallback = false;
+// Marketing + compliance constants for the subscriber-facing digest.
+const TAGLINE = "Institutional Intelligence. Personal Edge.";
+const COMPLIANCE_FOOTER = "Educational support only — not financial advice. DYOR.";
 
-  // 1) Local git CLI (works in dev / Replit workspace).
+// Commit subjects that are internal-only and must never reach subscriber copy.
+// Dropped BEFORE the AI sees them (defense in depth — the AI prompt also
+// filters, and a compliance gate scrubs the final output). Only conventional
+// internal TYPES (with a "(" or ":") and a tight keyword set match, so plain
+// feature subjects like "Add IPO calendar" pass through untouched.
+const INTERNAL_COMMIT_RE =
+  /^(checkpoint|wip|merge|revert|bump|release)\b|^(fix|chore|refactor|test|tests|ci|build|perf|style|docs|deps|security|sec)(\(|:)|\b(bug ?fix|hotfix|regression|typo|lint|eslint|dockerfile|workflow|backfill)\b/i;
+
+// Hard compliance violations that must never appear in published copy. Any
+// bullet that matches is dropped; headline/summary matches are flagged loudly.
+const COMPLIANCE_RULES: { re: RegExp; label: string }[] = [
+  { re: /\d+(\.\d+)?\s?%/, label: "percentage figure" },
+  { re: /\b\d+(\.\d+)?\s?x\b/i, label: "multiplier/return figure" },
+  { re: /win[\s-]?rate/i, label: "win-rate language" },
+  { re: /\b(guarantee[ds]?|proven|risk[\s-]?free|surefire|foolproof)\b/i, label: "performance guarantee" },
+  { re: /\b(highest|best|top)[\s-]?(performing|returns?|roi|profit)/i, label: "superlative performance claim" },
+  { re: /\b(buy|sell|long|short)\s+(now|today|this|these|the)\b/i, label: "trade recommendation" },
+];
+
+// Resolve the commit lookback window. Prefer "since the last published update"
+// so we never repeat items week to week; fall back to `fallbackDays` ago when
+// nothing has been published yet (or the lookup fails).
+export async function resolveCommitSince(fallbackDays: number = 7): Promise<Date> {
   try {
-    raw = execSync(
-      `git log --since="${days} days ago" --no-merges --pretty=format:"%s" -n 200`,
-      { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
-    );
-  } catch (e: any) {
-    console.log("[weekly-update] git log unavailable:", e?.message || e);
-  }
-
-  // 2) GitHub API fallback (production — no .git directory, no git binary).
-  if (!raw.trim()) {
-    try {
-      const commits = await getRecentCommitsViaApi(GITHUB_REPO, days);
-      raw = commits
-        .map((c) => (c.message || "").split("\n")[0].trim())
-        .filter(Boolean)
-        .join("\n");
-      usedFallback = true;
-      console.log(
-        `[weekly-update] used GitHub API fallback for ${GITHUB_REPO} — ${commits.length} commits in last ${days}d`
-      );
-    } catch (e: any) {
-      console.log("[weekly-update] GitHub API fallback failed:", e?.message || e);
-      return [];
+    const latest = await getLatestWeeklyUpdate();
+    if (latest?.createdAt) {
+      const d = new Date(latest.createdAt as any);
+      if (!isNaN(d.getTime())) return d;
     }
+  } catch {
+    // fall through to the day-based window
   }
+  return new Date(Date.now() - fallbackDays * 24 * 60 * 60 * 1000);
+}
 
+// Drop internal-only commit subjects (bug fixes, refactors, CI/build, etc.)
+// before the AI ever sees them. Manual log entries are NOT filtered here —
+// they're owner-curated and already user-facing.
+function filterPublicCommitSubjects(subjects: string[]): string[] {
+  return subjects.filter((s) => s && !INTERNAL_COMMIT_RE.test(s.trim()));
+}
+
+// Read commit subjects from GitHub since `since`. De-duplicated, internal-noise
+// filtered, capped at 60. Returns [] when the token is missing or the API fails
+// — getCommitsViaOctokit emits the loud "[weeklyUpdate] commit fallback
+// unavailable:" warning in that case, so the failure is never silent.
+export async function getRecentCommitSubjects(since: Date): Promise<string[]> {
+  const commits = await getCommitsViaOctokit(GITHUB_REPO, since, GITHUB_BRANCH);
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const line of raw.split("\n")) {
-    const s = line.trim();
+  for (const c of commits) {
+    const s = (c.message || "").split("\n")[0].trim();
     if (!s) continue;
-    if (/^(checkpoint|wip|chore: bump|merge)/i.test(s)) continue;
     const k = s.toLowerCase();
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(s);
-    if (out.length >= 60) break;
   }
-  if (!usedFallback) {
-    // Tag local-git results too so we can correlate the source in logs.
-    console.log(`[weekly-update] used local git CLI — ${out.length} unique subjects in last ${days}d`);
+  const filtered = filterPublicCommitSubjects(out).slice(0, 60);
+  console.log(
+    `[weekly-update] GitHub API: ${commits.length} commits since ${since.toISOString().slice(0, 10)} → ${out.length} unique, ${filtered.length} user-facing`,
+  );
+  return filtered;
+}
+
+// Build the AI input list from curated log entries (PRIMARY) + commit subjects
+// (FALLBACK). Manual entries always lead; commits only supplement.
+function buildDigestInputs(
+  pending: { headline: string; detail: string | null; emoji: string | null }[],
+  commits: string[],
+): { inputs: string[]; source: "log" | "commits" | "both" | "none" } {
+  if (pending.length > 0 && commits.length > 0) {
+    return {
+      source: "both",
+      inputs: [
+        ...pending.map((p) => `[LOG${p.emoji ? " " + p.emoji : ""}] ${p.headline}${p.detail ? " — " + p.detail : ""}`),
+        ...commits.map((c) => `[GIT] ${c}`),
+      ],
+    };
   }
-  return out;
+  if (pending.length > 0) {
+    return {
+      source: "log",
+      inputs: pending.map((p) => `${p.emoji ? p.emoji + " " : ""}${p.headline}${p.detail ? " — " + p.detail : ""}`),
+    };
+  }
+  if (commits.length > 0) {
+    return { source: "commits", inputs: commits };
+  }
+  return { source: "none", inputs: [] };
+}
+
+type DigestShape = {
+  version: string;
+  title: string;
+  summary: string;
+  items: { emoji: string; title: string; description: string }[];
+};
+
+// Defense-in-depth compliance gate. Drops any bullet containing a hard
+// violation (percentages, win-rate, guarantees, trade calls) and records a
+// flag. Headline/summary violations are flagged + logged loudly but kept (they
+// are rare given the prompt) so the owner can see and fix them in preview.
+export function enforceCompliance(digest: DigestShape): { digest: DigestShape; flags: string[] } {
+  const flags: string[] = [];
+  const check = (text: string): string | null => {
+    for (const rule of COMPLIANCE_RULES) {
+      if (rule.re.test(text || "")) return rule.label;
+    }
+    return null;
+  };
+
+  const headlineHit = check(digest.title);
+  if (headlineHit) flags.push(`headline: ${headlineHit}`);
+  const summaryHit = check(digest.summary);
+  if (summaryHit) flags.push(`summary: ${summaryHit}`);
+
+  const keptItems = digest.items.filter((it) => {
+    const hit = check(`${it.title} ${it.description}`);
+    if (hit) {
+      flags.push(`dropped bullet "${it.title}": ${hit}`);
+      return false;
+    }
+    return true;
+  });
+
+  if (flags.length > 0) {
+    console.warn(`[weeklyUpdate] compliance gate flagged ${flags.length} issue(s): ${flags.join("; ")}`);
+  }
+  return { digest: { ...digest, items: keptItems }, flags };
 }
 
 // Read curated update-log entries that haven't been shipped yet. These are
@@ -139,44 +219,57 @@ export async function sweepPendingLogEntries(updateId: number): Promise<number> 
   }
 }
 
-// Ask Claude to turn raw commit subjects into a polished WeeklyUpdate object.
+// Ask Claude to turn the raw change log into a compliant, subscriber-ready
+// "What's New" digest. Uses the existing Anthropic endpoint (no new provider).
 export async function synthesizeWeeklyUpdateFromCommits(
-  commits: string[]
-): Promise<{ title: string; summary: string; items: { emoji: string; title: string; description: string }[] } | null> {
+  inputs: string[],
+): Promise<DigestShape | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    console.log("[weekly-update] ANTHROPIC_API_KEY not set — cannot auto-generate");
+    console.warn("[weeklyUpdate] ANTHROPIC_API_KEY not set — cannot generate digest");
     return null;
   }
-  if (commits.length === 0) {
-    console.log("[weekly-update] no recent commits to summarize");
+  if (inputs.length === 0) {
+    console.log("[weekly-update] no inputs to summarize");
     return null;
   }
 
   const weekLabel = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: ET_TZ });
-  const prompt = `You are the product editor for CLVRQuantAI — a luxury mobile-first market intel dashboard for crypto / equities / commodities / forex traders. Tier: Free, Pro ($29.99/mo CAD), Elite ($129/mo CAD).
+  const prompt = `You are the product-marketing editor for CLVRQuantAI — a luxury, mobile-first market-intelligence dashboard for crypto, equities, commodities, and forex traders. Brand voice: confident, concise, terminal-clean. Tagline: "${TAGLINE}".
 
-Below are the raw git commit subjects from the past week (${weekLabel}). Distill them into a polished "What's New This Week" digest for paying subscribers. Drop pure-bug-fix / typo / test / refactor commits. Group related commits. Translate engineer-speak into trader-friendly value (focus on what the user can now SEE or DO).
+Turn the raw change log below (week of ${weekLabel}) into a subscriber-ready "What's New This Week" email. The audience is paying SUBSCRIBERS, not developers.
 
-Voice: confident, concise, premium. No marketing fluff. No emojis except in the leading "emoji" field of each item. Speak directly to the trader ("you can now…", "your dashboard now…").
+WRITE each kept item as a benefit-led feature note describing what the user can now SEE or DO. Example:
+  raw:  "add IPO rows to earnings radar endpoint"
+  good: "AI Earnings Radar now covers IPOs — spot scheduled listings before they price."
 
-Return ONLY valid JSON in this exact shape, no markdown fence:
+EXCLUDE entirely (never mention, even indirectly): internal refactors, bug fixes, error/crash fixes, security patches, build/CI/deploy/infra changes, schema/migration/database plumbing, tests, dependency bumps, and anything about position sizing, leverage math, or secrets/keys. Keep ONLY genuinely user-visible features and improvements.
+
+COMPLIANCE — NON-NEGOTIABLE. Applies to the headline, the summary, and EVERY bullet:
+- NO win-rate, accuracy, or hit-rate language.
+- NO return figures, profit figures, or percentages of any kind (no "%", no "Nx returns").
+- NO performance guarantees or superlatives ("guaranteed", "proven", "highest", "best-performing", "risk-free").
+- NO trade recommendations or calls to buy/sell/long/short anything.
+- Tone is strictly EDUCATIONAL — describe tools and information, never advice or outcomes.
+
+Return ONLY valid JSON (no markdown fence), exactly this shape:
 {
-  "title": "<short headline, max 8 words>",
-  "summary": "<2-sentence overview, max 240 chars>",
+  "version": "<short label, e.g. 'Week of ${weekLabel}'>",
+  "title": "<headline, max 8 words, benefit-led, compliance-safe>",
+  "summary": "<1-2 sentences, max 240 chars, compliance-safe>",
   "items": [
-    { "emoji": "<single emoji>", "title": "<short title, max 60 chars>", "description": "<1-3 sentence value-focused explainer, max 280 chars>" }
+    { "emoji": "<single emoji>", "title": "<short feature title, max 60 chars>", "description": "<1-2 sentence benefit, max 240 chars>" }
   ]
 }
 
 Rules:
-- 3 to 6 items. Pick only the most user-visible improvements.
-- If commits are mostly internal/refactor, return fewer items rather than padding.
-- If literally nothing user-visible shipped, return: {"title":"","summary":"","items":[]}
-- Suggested emojis: 📊 data, ⚡ performance, 🤖 AI, 🔔 alerts, 📓 journal, 🛡️ reliability, 💎 polish, 📣 squawk, 🪙 commodities, 📈 markets.
+- 3 to 7 items. Pick only the most user-visible improvements; group related changes.
+- If, after the exclusions above, nothing is genuinely user-visible, return exactly: {"version":"","title":"","summary":"","items":[]}
+- Never pad with filler to reach 3. Fewer real items beats invented ones.
+- Suggested emojis: 📊 data, ⚡ speed, 🤖 AI, 🔔 alerts, 📓 journal, 🛡️ reliability, 💎 polish, 🪙 commodities, 📈 markets, 🗓️ calendar.
 
-Commits:
-${commits.map((c) => "- " + c).join("\n")}`;
+Change log:
+${inputs.map((c) => "- " + c).join("\n")}`;
 
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -189,7 +282,7 @@ ${commits.map((c) => "- " + c).join("\n")}`;
       }),
     });
     if (!r.ok) {
-      console.log("[weekly-update] Claude error", r.status, (await r.text()).slice(0, 200));
+      console.warn("[weeklyUpdate] Claude error", r.status, (await r.text()).slice(0, 200));
       return null;
     }
     const data: any = await r.json();
@@ -202,49 +295,64 @@ ${commits.map((c) => "- " + c).join("\n")}`;
       console.log("[weekly-update] AI returned empty digest — nothing user-visible this week");
       return null;
     }
-    return parsed;
+    return {
+      version: String(parsed.version || ""),
+      title: String(parsed.title),
+      summary: String(parsed.summary || ""),
+      items: parsed.items.map((it: any) => ({
+        emoji: String(it.emoji || "✨"),
+        title: String(it.title || ""),
+        description: String(it.description || ""),
+      })),
+    };
   } catch (e: any) {
-    console.log("[weekly-update] synthesize error:", e?.message || e);
+    console.warn("[weeklyUpdate] synthesize error:", e?.message || e);
     return null;
   }
 }
 
 // Auto-generate this week's update via Claude, then insert it.
 // Source priority: curated update_log_entries (the owner's own log) FIRST,
-// falling back to git commit subjects. The buffer is the reliable source —
-// git history isn't always present in production deployments.
-// Returns the new update or null if nothing to ship.
+// GitHub commit subjects only as a fallback/supplement. Returns the new update,
+// or null (and a loud "nothing user-visible" log) when there's nothing to ship.
 export async function generateWeeklyUpdateWithAI(): Promise<WeeklyUpdate | null> {
   const pending = await getPendingUpdateLogEntries();
-  const commits = await getRecentCommitSubjects(7);
-  console.log(`[weekly-update] AI generation: ${pending.length} pending log entries + ${commits.length} commits from last 7d`);
+  const since = await resolveCommitSince(7);
+  const commits = await getRecentCommitSubjects(since);
+  console.log(`[weekly-update] AI generation: ${pending.length} pending log entries + ${commits.length} user-facing commits since ${since.toISOString().slice(0, 10)}`);
 
-  // Build the input the AI will distill. Prefer the curated buffer entries —
-  // they're already trader-friendly. Fall back to commit subjects only when
-  // the buffer is empty so we still have something to summarize.
-  let inputs: string[];
-  let source: "log" | "commits" | "both";
-  if (pending.length > 0 && commits.length > 0) {
-    source = "both";
-    inputs = [
-      ...pending.map((p) => `[LOG${p.emoji ? " " + p.emoji : ""}] ${p.headline}${p.detail ? " — " + p.detail : ""}`),
-      ...commits.map((c) => `[GIT] ${c}`),
-    ];
-  } else if (pending.length > 0) {
-    source = "log";
-    inputs = pending.map((p) => `${p.emoji ? p.emoji + " " : ""}${p.headline}${p.detail ? " — " + p.detail : ""}`);
-  } else if (commits.length > 0) {
-    source = "commits";
-    inputs = commits;
-  } else {
-    console.log("[weekly-update] no log entries AND no commits — nothing to summarize");
+  const { inputs, source } = buildDigestInputs(pending, commits);
+  if (inputs.length === 0) {
+    console.log("[weeklyUpdate] nothing user-visible this week — skipped.");
     return null;
   }
 
-  const digest = await synthesizeWeeklyUpdateFromCommits(inputs);
-  if (!digest) return null;
+  const raw = await synthesizeWeeklyUpdateFromCommits(inputs);
+  if (!raw) {
+    console.log("[weeklyUpdate] nothing user-visible this week — skipped.");
+    return null;
+  }
+
+  const { digest, flags } = enforceCompliance(raw);
+  if (digest.items.length === 0) {
+    console.log("[weeklyUpdate] nothing user-visible this week — skipped.");
+    return null;
+  }
+  // Headline/summary compliance is non-negotiable. Violating bullets are
+  // silently dropped above, but a non-compliant headline/summary cannot be
+  // auto-fixed — BLOCK the unattended publish rather than email it. The admin
+  // preview still renders it (flagged) so the owner can edit the log and re-run.
+  const headerFlags = flags.filter((f) => f.startsWith("headline:") || f.startsWith("summary:"));
+  if (headerFlags.length > 0) {
+    console.warn(`[weeklyUpdate] BLOCKED publish — non-compliant headline/summary: ${headerFlags.join("; ")}`);
+    return null;
+  }
+  if (flags.length > 0) {
+    console.warn(`[weeklyUpdate] published digest dropped ${flags.length} non-compliant bullet(s): ${flags.join("; ")}`);
+  }
+
   const created = await createWeeklyUpdate({
-    version: null,
+    version: digest.version || null,
     title: digest.title,
     summary: digest.summary,
     items: digest.items,
@@ -256,6 +364,74 @@ export async function generateWeeklyUpdateWithAI(): Promise<WeeklyUpdate | null>
   }
   console.log(`[weekly-update] AI-generated update id=${created.id} from ${source}: "${digest.title}" (${digest.items.length} items)`);
   return created;
+}
+
+// Read-only dry run of the FULL pipeline: resolve window → fetch commits →
+// filter → merge with the manual log → AI rewrite → compliance gate → render
+// the email. Writes NOTHING and sends NOTHING. Backs the admin "PREVIEW AI
+// DIGEST" button and the offline preview script. When `sinceDays` is given it
+// overrides the lookback window (the button mirrors publish by omitting it).
+export async function buildWeeklyUpdatePreview(
+  opts: { sinceDays?: number } = {},
+): Promise<{
+  ok: boolean;
+  source: "log" | "commits" | "both" | "none";
+  since: string;
+  pendingCount: number;
+  pendingEntries: { headline: string; emoji: string | null }[];
+  commitCount: number;
+  commits: string[];
+  digest: DigestShape | null;
+  complianceFlags: string[];
+  emailHtml: string | null;
+  skipped: boolean;
+  skipReason: string | null;
+}> {
+  const pending = await getPendingUpdateLogEntries();
+  const since = opts.sinceDays != null
+    ? new Date(Date.now() - opts.sinceDays * 24 * 60 * 60 * 1000)
+    : await resolveCommitSince(7);
+  const commits = await getRecentCommitSubjects(since);
+  const { inputs, source } = buildDigestInputs(pending, commits);
+
+  const base = {
+    ok: true,
+    source,
+    since: since.toISOString(),
+    pendingCount: pending.length,
+    pendingEntries: pending.map((p) => ({ headline: p.headline, emoji: p.emoji })),
+    commitCount: commits.length,
+    commits: commits.slice(0, 40),
+  };
+
+  if (inputs.length === 0) {
+    return { ...base, digest: null, complianceFlags: [], emailHtml: null, skipped: true, skipReason: "nothing user-visible this week" };
+  }
+
+  const raw = await synthesizeWeeklyUpdateFromCommits(inputs);
+  if (!raw) {
+    return { ...base, digest: null, complianceFlags: [], emailHtml: null, skipped: true, skipReason: "AI returned nothing user-visible" };
+  }
+
+  const { digest, flags } = enforceCompliance(raw);
+  if (digest.items.length === 0) {
+    return { ...base, digest: null, complianceFlags: flags, emailHtml: null, skipped: true, skipReason: "all items dropped by compliance gate" };
+  }
+
+  const previewRecord = {
+    id: 0,
+    version: digest.version || null,
+    title: digest.title,
+    summary: digest.summary,
+    items: digest.items as any,
+    emailSentAt: null,
+    emailRecipientCount: 0,
+    createdBy: "preview",
+    createdAt: new Date(),
+  } as WeeklyUpdate;
+  const emailHtml = renderWeeklyUpdateEmail(previewRecord, "preview@clvrquantai.com");
+
+  return { ...base, digest, complianceFlags: flags, emailHtml, skipped: false, skipReason: null };
 }
 
 function nowInET(): Date {
@@ -336,6 +512,8 @@ function renderWeeklyUpdateEmail(u: WeeklyUpdate, recipientEmail: string): strin
       <a href="https://clvrquantai.com" style="display:inline-block;font-family:monospace;font-size:11px;letter-spacing:.18em;color:#080d18;background:#e8c96d;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:700">OPEN CLVRQUANT →</a>
     </div>
     <div style="padding:14px 24px 22px;border-top:1px solid rgba(140,160,200,.1);text-align:center">
+      <div style="font-family:Georgia,serif;font-size:10px;color:#c9a84c;letter-spacing:.06em;margin-bottom:8px;font-style:italic">${TAGLINE}</div>
+      <div style="font-family:monospace;font-size:9px;color:#8a96b0;letter-spacing:.04em;margin-bottom:8px;line-height:1.5">${COMPLIANCE_FOOTER}</div>
       <div style="font-family:monospace;font-size:9px;color:#5a6a8a;letter-spacing:.1em;margin-bottom:6px">© 2026 CLVRQuant · Support@CLVRQuantAI.com</div>
       <a href="${unsub}" style="font-family:monospace;font-size:9px;color:#5a6a8a;text-decoration:underline">Unsubscribe</a>
     </div>
