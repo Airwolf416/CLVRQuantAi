@@ -31,5 +31,8 @@ trust the version pin over trying to reproduce.
 - The actual green confirmation only happens after the fix merges to `origin/main` and
   the workflow runs there.
 
-**If the npm pin proves insufficient:** lockfile is clean (lockfileVersion 3) so
-`npm install` → `npm ci` is a safe next iteration; or pin a different npm version.
+**Update (confirmed green):** the npm pin fixed the exit-handler crash, which then exposed
+a SECOND blocker — ~20 `"resolved"` URLs in package-lock.json pointed at Replit's internal
+mirror `package-firewall.replit.local` (ENOTFOUND on GHA). See
+[replit-mirror-urls-ci.md](replit-mirror-urls-ci.md). After rewriting those to
+`registry.npmjs.org`, Build and Deploy + Tests + Push on main all went green.

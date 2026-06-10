@@ -26,6 +26,12 @@ jobs:
           node-version: "22.12.0"
           cache: npm
 
+      # The npm bundled with Node 22.12.0 (10.9.x) intermittently dies at the
+      # end of installs with "Exit handler never called!" (a known npm bug).
+      # Pin a newer npm before installing, mirroring the Dockerfile fix.
+      - name: Pin npm
+        run: npm install -g npm@11.16.0
+
       - name: Install dependencies
         run: npm ci
 
