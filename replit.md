@@ -7,6 +7,7 @@ CLVRQuantAI is a luxury, mobile-first market intelligence dashboard for real-tim
 - **336-bar 1h lookback (14d × 24h)** is the canonical archetype-classifier window everywhere — `/api/quant`, `/api/ai/analyze`, `/api/kronos`. Anything shorter silently collapses the daily-ATR aggregate.
 - **Hourly cron + materialized views** (`archetype_stats`, `archetype_scorecard`) feed all per-archetype stats; the TS-direct fallback in `getArchetypeStats` only fires when the MV is empty or unreachable (cycle-safe).
 - **Funding + OI snapshots are plumbed once** via `microstructureSnapshot.ts` and consumed identically across endpoints — classifier MEAN_REV clauses evaluate independently so a NULL funding field never poisons OI/Bollinger evaluation.
+- **Support owner alerts (both channels):** every new client support message (`POST /api/support/message`) emails the owner at **Support@clvrquantai.com** (best-effort, never blocks the send) AND surfaces an owner-only in-app pill + toast driven by `GET /api/support/unread-count` (15s poll), which deep-links to Account → Support. The owner email constant (`SUPPORT_OWNER_EMAIL`) also governs `/escalate` (to) and `/reply` (replyTo). Escalation still fires its own one-time email.
 
 ## User Preferences
 - I prefer simple language.

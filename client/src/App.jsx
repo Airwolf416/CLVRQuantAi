@@ -3182,6 +3182,47 @@ function stripConciergeMd(text){
     .replace(/`/g,"");
 }
 
+// Owner-only: floating badge + toast pop-up alerting the owner to new client
+// support messages anywhere in the app. Polls a lightweight unread count every
+// 15s; seeds silently on first load so the existing backlog doesn't toast.
+function OwnerSupportAlert({ C, MONO, isMobile, onOpen, onNotify }){
+  const [unread,setUnread]=useState(0);
+  const lastSeen=useRef(0);
+  const seeded=useRef(false);
+  useEffect(()=>{
+    let alive=true;
+    const tick=async()=>{
+      try{
+        const r=await fetch("/api/support/unread-count",{credentials:"include"});
+        if(!r.ok) return;
+        const d=await r.json();
+        if(!alive) return;
+        const n=d.unread||0;
+        if(!seeded.current){ seeded.current=true; lastSeen.current=n; setUnread(n); return; }
+        if(n>lastSeen.current){
+          const who=d.latest?.user_name||d.latest?.user_email||"a client";
+          const snip=String(d.latest?.body||"").slice(0,60);
+          onNotify&&onNotify(`💬 New support message from ${who}${snip?`: ${snip}`:""}`);
+        }
+        lastSeen.current=n;
+        setUnread(n);
+      }catch{}
+    };
+    tick();
+    const id=setInterval(tick,15000);
+    return ()=>{ alive=false; clearInterval(id); };
+  },[]);
+  if(!unread) return null;
+  return (
+    <button data-testid="button-owner-support-alert" onClick={onOpen} aria-label="Open support inbox"
+      style={{position:"fixed",bottom:isMobile?96:24,left:18,zIndex:9100,display:"flex",alignItems:"center",gap:8,
+        padding:"10px 14px",borderRadius:999,background:C.gold,color:C.navy,border:`1px solid ${C.gold3}`,
+        boxShadow:"0 6px 22px rgba(0,0,0,0.45)",fontFamily:MONO,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+      💬 {unread} new support
+    </button>
+  );
+}
+
 function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const [open,setOpen]=useState(false);
   // Allow opening from outside (e.g. the burger menu "Ask Concierge" row) by
@@ -3825,6 +3866,8 @@ function Dashboard({user,setUser,onShowAuth}){
   const [drawerOpen,setDrawerOpen]=useState(false);
   // Bumped by the burger-menu "Ask Concierge" row to open the single ConciergeWidget.
   const [conciergeOpenSignal,setConciergeOpenSignal]=useState(0);
+  const [acctTabReq,setAcctTabReq]=useState(null);
+  useEffect(()=>{ if(tab!=="account" && acctTabReq!==null) setAcctTabReq(null); },[tab,acctTabReq]);
   useEffect(()=>{
     if(!drawerOpen) return;
     const onKey=(e)=>{ if(e.key==="Escape") setDrawerOpen(false); };
@@ -4990,6 +5033,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
   return(
     <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:isMobile?76:24,paddingTop:"env(safe-area-inset-top,0px)",paddingLeft:isMobile?0:sidebarW,maxWidth:isMobile?780:undefined,margin:isMobile?"0 auto":0,position:"relative"}}>
       {user&&!isPreview&&<ConciergeWidget user={user} C={C} isMobile={isMobile} MONO={MONO} SERIF={SERIF} openSignal={conciergeOpenSignal}/>}
+      {isOwnerOnly&&<OwnerSupportAlert C={C} MONO={MONO} isMobile={isMobile} onOpen={()=>{setAcctTabReq("support");setTab("account");}} onNotify={(m)=>setToast(m)}/>}
       {!isMobile&&<SideNav items={NAV} tab={tab} onTab={setTab} C={C} MONO={MONO} SERIF={SERIF} PRO_TABS_GATE2={PRO_TABS_GATE} isPro={isPro} isElite={isElite} isPreview={isPreview} upcomingCount={upcomingCount} isDark={isDark} toggleTheme={toggleTheme} wide={isDesktop}/>}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=IBM+Plex+Mono:wght@300;400;500;600&family=Barlow:wght@300;400;500;600;700&display=swap');
@@ -6933,7 +6977,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </>}
 
         {tab==="account"&&isPreview&&<PreviewPricingPage C2={C} MONO2={MONO} SERIF2={SERIF} onSignUp={()=>onShowAuth&&onShowAuth()} onSignIn={()=>onShowAuth&&onShowAuth()}/>}
-        {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell}/>}
+        {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell} requestedTab={acctTabReq}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · HYPERLIQUID · FMP · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT

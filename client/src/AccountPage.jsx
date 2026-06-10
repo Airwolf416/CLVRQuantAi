@@ -1969,8 +1969,9 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
   );
 }
 
-export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, onTestBell }) {
-  const [tab, setTab] = useState("subscription");
+export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, onTestBell, requestedTab }) {
+  const [tab, setTab] = useState(requestedTab || "subscription");
+  useEffect(() => { if (requestedTab) setTab(requestedTab); }, [requestedTab]);
   const [acct, setAcct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);

@@ -5142,7 +5142,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
 
   // GET /api/concierge/pricing — the resolved per-user session price.
   // ── SUPPORT HANDOFF (Concierge → human) ─────────────────────────────────
-  const SUPPORT_OWNER_EMAIL = "MikeClaver@CLVRQuantAI.com";
+  const SUPPORT_OWNER_EMAIL = "Support@clvrquantai.com";
 
   // USER: escalate from Concierge — reuse open thread or create one, carry context
   app.post("/api/support/escalate", async (req, res) => {
@@ -5193,6 +5193,8 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   app.post("/api/support/message", async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Sign in required." });
+    const user = await storage.getUser(userId);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
     const body = String(req.body?.body || "").trim();
     if (!body) return res.status(400).json({ error: "Empty message." });
     try {
@@ -5201,6 +5203,16 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       if (!threadId) { const ins = await pool.query(`INSERT INTO support_threads (user_id, status, subject) VALUES ($1,'open','Support') RETURNING id`, [userId]); threadId = ins.rows[0].id; }
       const ins = await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'user',$2,'text') RETURNING id, thread_id, sender, body, msg_type, meta, created_at`, [threadId, body]);
       await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      // Alert the owner on EVERY new client message (best-effort — never blocks the send).
+      try {
+        const { client } = await getUncachableResendClient();
+        const who = (user as any).name || (user as any).username || user.email || "A user";
+        await client.emails.send({
+          from: "CLVRQuant <hello@clvrquantai.com>", to: SUPPORT_OWNER_EMAIL, replyTo: user.email || undefined,
+          subject: `💬 New support message from ${user.email || who}`,
+          text: `${who} (${user.email || "no email"}) wrote:\n\n${body}\n\nReply: open Account → Support.\n${getAppUrl()}`,
+        });
+      } catch (e: any) { console.log("[support/message] email fail:", e.message); }
       res.json({ message: ins.rows[0] });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -5216,6 +5228,25 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         FROM support_threads t JOIN users u ON u.id=t.user_id
         WHERE t.status<>'closed' ORDER BY t.last_message_at DESC LIMIT 100`);
       res.json({ threads: r.rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // OWNER: lightweight unread badge/poll for the in-app alert
+  app.get("/api/support/unread-count", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    try {
+      const agg = await pool.query(`
+        SELECT COUNT(*)::int AS unread, COUNT(DISTINCT t.id)::int AS threads
+        FROM support_threads t JOIN support_messages m ON m.thread_id=t.id
+        WHERE t.status<>'closed' AND m.sender='user' AND m.read_by_owner=false`);
+      const latest = await pool.query(`
+        SELECT m.thread_id, m.body, m.created_at, u.email AS user_email, u.name AS user_name
+        FROM support_messages m
+        JOIN support_threads t ON t.id=m.thread_id
+        JOIN users u ON u.id=t.user_id
+        WHERE m.sender='user' AND m.read_by_owner=false AND t.status<>'closed'
+        ORDER BY m.created_at DESC LIMIT 1`);
+      res.json({ unread: agg.rows[0]?.unread || 0, threads: agg.rows[0]?.threads || 0, latest: latest.rows[0] || null });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
