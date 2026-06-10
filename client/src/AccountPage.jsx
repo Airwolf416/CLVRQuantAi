@@ -2273,8 +2273,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
 
       <div style={{ display:"flex", gap:4, marginBottom:18, flexWrap:"wrap" }}>
         {tabs.map(t => {
-          const isOwnerTab = t === "owner" || t === "admin" || t === "admin2";
-          const label = t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : t === "owner" ? "⚡ Owner" : t === "admin" ? "🛠 Admin" : "🔧 Maintenance";
+          const isOwnerTab = t === "owner" || t === "support" || t === "admin" || t === "admin2";
+          const label = t === "subscription" ? "Plan" : t === "referral" ? "Referral" : t === "emails" ? "Emails" : t === "billing" ? "Billing" : t === "legal" ? "Legal" : t === "owner" ? "⚡ Owner" : t === "support" ? "💬 Support" : t === "admin" ? "🛠 Admin" : "🔧 Maintenance";
           return (
           <button key={t} data-testid={`tab-${t}`} onClick={() => setTab(t)}
             style={{ background:tab === t ? (isOwnerTab ? C.purple : C.gold) : "transparent", border:`1px solid ${tab === t ? (isOwnerTab ? C.purple : C.gold) : C.border}`, color:tab === t ? C.bg : (isOwnerTab ? C.purple : C.muted2), borderRadius:4, padding:"6px 14px", cursor:"pointer", fontSize:10, fontWeight:tab === t ? 700 : 400, fontFamily:MONO, letterSpacing:"0.06em", textTransform:"uppercase" }}>
