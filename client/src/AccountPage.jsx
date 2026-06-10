@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const C = {
   bg:"#050709", panel:"#0c1220", border:"#141e35", border2:"#1c2b4a",
@@ -17,11 +17,16 @@ function SupportInbox(){
   const [msgs,setMsgs]=useState([]);
   const [reply,setReply]=useState("");
   const [loading,setLoading]=useState(true);
+  const listRef=useRef(null);
+  const stickRef=useRef(true); // keep pinned to the newest message (WhatsApp-style) unless the owner scrolls up to read history
+  const scrollToBottom=()=>{ const el=listRef.current; if(el) el.scrollTop=el.scrollHeight; };
   const loadInbox=async()=>{ try{ const r=await fetch("/api/support/inbox",{credentials:"include"}); if(r.ok){ const d=await r.json(); setThreads(d.threads||[]); } }catch{} finally{ setLoading(false);} };
   const openThread=async(id)=>{ setActive(id); try{ const r=await fetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); } }catch{} };
-  const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await fetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
+  const selectThread=(id)=>{ stickRef.current=true; openThread(id); };
+  const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); stickRef.current=true; setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await fetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
   useEffect(()=>{ loadInbox(); const i=setInterval(loadInbox,12000); return ()=>clearInterval(i); },[]);
   useEffect(()=>{ if(!active) return; const i=setInterval(()=>openThread(active),12000); return ()=>clearInterval(i); },[active]);
+  useEffect(()=>{ if(stickRef.current) requestAnimationFrame(scrollToBottom); },[msgs,active]);
   return (
     <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
       <div style={{flex:"1 1 260px",minWidth:240}}>
@@ -29,7 +34,7 @@ function SupportInbox(){
         {loading?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Loading…</div>:
          threads.length===0?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>No open threads.</div>:
          threads.map(t=>(
-          <button key={t.id} onClick={()=>openThread(t.id)} style={{display:"block",width:"100%",textAlign:"left",background:active===t.id?"rgba(201,168,76,.08)":C.panel,border:`1px solid ${active===t.id?C.gold:C.border}`,borderRadius:6,padding:"10px 12px",marginBottom:8,cursor:"pointer"}}>
+          <button key={t.id} onClick={()=>selectThread(t.id)} style={{display:"block",width:"100%",textAlign:"left",background:active===t.id?"rgba(201,168,76,.08)":C.panel,border:`1px solid ${active===t.id?C.gold:C.border}`,borderRadius:6,padding:"10px 12px",marginBottom:8,cursor:"pointer"}}>
             <div style={{fontFamily:SANS,fontSize:13,color:C.text}}>{t.user_name||t.user_email} {t.unread>0&&<span style={{background:C.gold,color:C.bg,borderRadius:999,fontSize:9,padding:"1px 6px",marginLeft:6,fontFamily:MONO}}>{t.unread}</span>}</div>
             <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:2}}>{t.user_tier} · {t.user_email}</div>
           </button>
@@ -38,7 +43,7 @@ function SupportInbox(){
       <div style={{flex:"2 1 360px",minWidth:300}}>
         {!active?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Select a thread.</div>:(
           <>
-            <div style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:6,padding:12,marginBottom:10}}>
+            <div ref={listRef} onScroll={()=>{ const el=listRef.current; if(el) stickRef.current=(el.scrollHeight-el.scrollTop-el.clientHeight)<80; }} style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:6,padding:12,marginBottom:10}}>
               {msgs.map((m,i)=>(
                 <div key={m.id||i} style={{marginBottom:10,textAlign:m.sender==="owner"?"right":"left"}}>
                   {m.msg_type==="system"?
