@@ -1,0 +1,34 @@
+TASK: Fix "[outcomeResolver] shadow tick failed: column \"inverted_tp1\" does not exist". Root cause: the signal-log table predates the inverted/shadow columns, and CREATE TABLE IF NOT EXISTS cannot add columns to an existing table. Fix by reconciling the live schema via idempotent startup ALTERs in initDb. No data loss, no destructive ops.
+
+STEP 1 — Inventory (read-only, print before editing)
+- Locate the outcomeResolver (the worker logging "[outcomeResolver] shadow tick").
+- Identify the exact table its failing query targets (do not assume the name — read it from the query).
+- List EVERY column that file (and anything else writing/reading that table, e.g. the signal insert pipeline) SELECTs, INSERTs, or UPDATEs — not just inverted_tp1. Postgres only reports the first missing column, so the full set must be reconciled in one pass.
+- Print the table's current CREATE TABLE statement from server/initDb.ts (or wherever it now lives).
+- Print the diff: columns used in code vs columns in the CREATE statement.
+
+STEP 2 — Reconcile schema (in this codebase's existing pattern)
+- In initDb.ts, immediately AFTER that table's CREATE TABLE IF NOT EXISTS block, add one statement per missing column:
+    ALTER TABLE <table> ADD COLUMN IF NOT EXISTS <col> <TYPE>;
+- Derive each column's TYPE from how the code writes/reads it (price levels -> DOUBLE PRECISION or NUMERIC, hit-flags -> BOOLEAN, timestamps -> TIMESTAMP, text -> TEXT). Do NOT guess: if a column's type is ambiguous from code, STOP and report it instead of inventing.
+- New columns must be nullable or have safe defaults — existing rows must remain valid.
+- Also update the CREATE TABLE statement itself AND shared/schema.ts (if this table is defined there) so all three (CREATE, ALTERs, Drizzle schema) agree exactly.
+
+STEP 3 — Verify locally
+- Run the database init against the dev DATABASE_URL (boot the server or call initializeDatabase once).
+- Confirm via information_schema that every column from Step 1 now exists with the intended type.
+- Trigger or simulate ONE resolver tick and confirm it completes with no "does not exist" error.
+
+GUARDRAILS
+- Idempotent only: IF NOT EXISTS on every new statement. No DROP, no ALTER COLUMN TYPE, no UPDATE/backfill of existing rows.
+- Do not change resolver logic, signal gating, tier gating, the Dockerfile, or the GitHub Actions workflow.
+- Do not touch any other table.
+
+ACCEPTANCE
+- Step 1 diff printed; every code-referenced column now exists in initDb (CREATE + ALTERs) and shared/schema.ts.
+- Local resolver tick runs clean.
+- Existing rows untouched.
+
+COMMIT
+- Message: "fix(db): add missing inverted/shadow outcome columns via idempotent startup ALTERs"
+- Push to main.

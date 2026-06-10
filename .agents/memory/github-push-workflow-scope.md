@@ -26,9 +26,15 @@ main, but they can only reach GitHub through a workflow-capable credential.
   shell does (after the secret is added + a workflow restart).
 - The main-agent environment blocks git ref-updating operations (an explicit
   `git fetch` / ref write fails with a `.lock` / "destructive git operations are
-  not allowed" error). The `git push` itself still succeeds; only the local
-  `origin/main` tracking ref may stay stale afterward. Verify success from the
-  push output (`old..new main -> main`) and/or the GitHub Actions API, not from
-  the local `origin/main` pointer.
+  not allowed" error). A direct `git push` can ONLY succeed when local is a clean
+  fast-forward of the REAL remote; then only the local `origin/main` tracking ref
+  may stay stale afterward — verify from push output (`old..new main -> main`) or
+  the GitHub API, not the local pointer.
+- When histories have DIVERGED, a direct push is impossible from the main agent.
+  Detect it: the local `origin/main` tracking ref is stale, so fetch the true
+  remote HEAD via the GitHub API and test `git merge-base --is-ancestor
+  <realRemoteSha> HEAD` — if NOT an ancestor, local and remote diverged. Pushing
+  then needs a MERGE commit first, and merge/commit are blocked in the main agent.
+  So the reconcile+merge+push MUST run as a Project Task; there is no shortcut.
 - Pushing to `main` triggers prod deploy (Railway via GitHub Actions Build and
   Deploy) + the Tests workflow.

@@ -843,10 +843,31 @@ export async function initializeDatabase(): Promise<void> {
 
     // Ensure columns referenced by the backfill exist — use SAVEPOINTs so
     // any failure does not abort the outer transaction.
+    // Reconcile EVERY column the code (resolver SELECT/UPDATE, backfill INSERT,
+    // signalLogger INSERT, routes reporting) reads or writes. Databases created
+    // before the tp1_price→inverted_tp1 rename are missing the inverted_*
+    // columns; CREATE TABLE IF NOT EXISTS cannot add them, so the shadow
+    // resolver errored with `column "inverted_tp1" does not exist`. Postgres
+    // only reports the FIRST missing column, so all columns are reconciled in
+    // one pass here. Types match the CREATE statement and shared/schema.ts
+    // exactly. Every statement is idempotent (ADD COLUMN IF NOT EXISTS), adds
+    // nullable/defaulted columns only, and never touches existing row data.
     await client.query('SAVEPOINT pre_shadow_cols');
     try {
-      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS original_direction TEXT`);
-      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS inverted_direction TEXT`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS source_signal_id   INTEGER`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS token              VARCHAR(20)`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS original_direction  TEXT`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS inverted_direction  TEXT`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS entry_price         DECIMAL(20,8)`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS inverted_tp1        DECIMAL(20,8)`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS inverted_tp2        DECIMAL(20,8)`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS inverted_tp3        DECIMAL(20,8)`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS inverted_sl         DECIMAL(20,8)`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS kill_clock_expires  TIMESTAMP`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS outcome             VARCHAR(20) NOT NULL DEFAULT 'PENDING'`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS pnl_pct             DECIMAL(10,4)`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS resolved_at         TIMESTAMP`);
+      await client.query(`ALTER TABLE signal_shadow_inversions ADD COLUMN IF NOT EXISTS created_at          TIMESTAMP DEFAULT NOW()`);
       await client.query('RELEASE SAVEPOINT pre_shadow_cols');
     } catch (e: any) {
       await client.query('ROLLBACK TO SAVEPOINT pre_shadow_cols');
