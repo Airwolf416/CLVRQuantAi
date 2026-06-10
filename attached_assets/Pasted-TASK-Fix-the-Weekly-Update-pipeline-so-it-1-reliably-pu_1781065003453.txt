@@ -1,0 +1,43 @@
+TASK: Fix the Weekly Update pipeline so it (1) reliably pulls the week's changes automatically and (2) turns them into a subscriber-ready, compliance-safe marketing email. Currently the improvement log is empty (it's manual) and the git-commit fallback is broken in production.
+
+STEP 1 — Inventory (read-only, print before editing)
+- Locate the weekly update generator (the code behind "GENERATE & PUBLISH NOW" and the Saturday 10:00 AM ET job).
+- Print: how it currently sources changes — does it shell out to `git log`, use @octokit/rest, or read only the improvement_log table?
+- Print: how the Saturday job is scheduled, and what happens when the log is empty AND the fallback fails (does it silently skip? That's why June 6 produced nothing).
+- Print: where the IMPROVEMENT_MIRROR_SECRET endpoint fits, if anywhere.
+
+STEP 2 — Make commit sourcing work in the Docker image
+- The running container has NO .git directory (excluded by .dockerignore) — any `git log` shell-out is permanently dead. Replace the commit source with the GitHub API via the existing @octokit/rest dependency:
+  - Repo: Airwolf416/CLVRQuantAI, branch main.
+  - Auth: new env var GITHUB_COMMITS_TOKEN (I will add it in Railway + Replit secrets).
+  - Fetch commits since the last published update's timestamp (fall back to last 7 days).
+  - If the token is missing or the API call fails, log a LOUD warning ("[weeklyUpdate] commit fallback unavailable: <reason>") — never fail silently.
+
+STEP 3 — AI rewrite layer (marketing quality + compliance)
+- Before publishing/emailing, pass {manual log entries (primary) + fetched commits (fallback)} through the existing Anthropic client with a system prompt that enforces ALL of the following:
+  - Audience: subscribers, not developers. Rewrite each item as a benefit-led feature note ("AI Earnings Radar now covers IPOs — see scheduled listings before they price").
+  - EXCLUDE from public copy: internal refactors, bug fixes, security patches, build/CI/deploy changes, anything mentioning bugs, errors, sizing, leverage math, or secrets. Only user-visible features and improvements.
+  - COMPLIANCE (non-negotiable, applies to headline, summary, and every bullet): no win-rate language, no return figures or percentages, no "guaranteed/proven/highest" performance claims, no trade recommendations. Tone is educational. Email footer must include: "Educational support only — not financial advice. DYOR."
+  - Brand voice: confident, concise, terminal-clean. Tagline available: "Institutional Intelligence. Personal Edge."
+  - Output: a version string, headline, 1–2 sentence summary, and 3–7 bullets — matching the fields the manual override form already uses.
+- If, after filtering, there are ZERO user-visible items for the week: skip publishing and emailing entirely and log "[weeklyUpdate] nothing user-visible this week — skipped." Subscribers must never receive an empty or filler email.
+
+STEP 4 — Verify with a dry run (no sending)
+- Add or use a preview path (the existing "PREVIEW AI DIGEST" should hit it) that runs the FULL pipeline — commit fetch -> filter -> AI rewrite — and prints the rendered email body WITHOUT posting to the About page or emailing anyone.
+- Run it once against the last 14 days of commits and print the result so I can review the copy.
+
+GUARDRAILS
+- Do not send any email or publish any update during this task. Dry run only.
+- Do not modify the Dockerfile, .dockerignore, GitHub Actions workflow, tier gating, or signal/quant code.
+- Manual log entries always take priority over commits when both exist. The manual override form keeps working unchanged.
+- No new AI provider — use the existing Anthropic client only.
+
+ACCEPTANCE
+- Step 1 findings printed.
+- Commit sourcing works via GitHub API with GITHUB_COMMITS_TOKEN; loud warning when unavailable.
+- Dry-run preview prints a compliant, subscriber-ready email built from the last 14 days of real commits.
+- Empty weeks skip cleanly. Nothing was actually sent or published.
+
+COMMIT
+- Message: "feat(updates): GitHub API commit sourcing + AI marketing rewrite with compliance guardrails for weekly update"
+- Push to main.
