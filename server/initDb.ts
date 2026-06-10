@@ -290,6 +290,12 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_support_threads_user ON support_threads (user_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_support_threads_status ON support_threads (status, last_message_at)`);
+    // Additive columns: owner_notified_at gates the single "a client reached out"
+    // email (one per conversation episode; reset to NULL on close). The *_typing_at
+    // timestamps power the live "is typing…" indicator (freshness-windowed on read).
+    await client.query(`ALTER TABLE support_threads ADD COLUMN IF NOT EXISTS owner_notified_at TIMESTAMP`);
+    await client.query(`ALTER TABLE support_threads ADD COLUMN IF NOT EXISTS user_typing_at TIMESTAMP`);
+    await client.query(`ALTER TABLE support_threads ADD COLUMN IF NOT EXISTS owner_typing_at TIMESTAMP`);
 
     // ── support_messages ─────────────────────────────────────────────────────
     // sender: 'user' | 'owner' | 'ai' | 'system'   msg_type: 'text' | 'meeting_request' | 'system'

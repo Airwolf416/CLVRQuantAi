@@ -5163,14 +5163,25 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'system',$2,'system')`, [threadId, `Escalated from Concierge.\n\n${ctx}`]);
       }
       await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW() WHERE id=$1`, [threadId]);
-      try {
-        const { client } = await getUncachableResendClient();
-        await client.emails.send({
-          from: "CLVRQuant <hello@clvrquantai.com>", to: SUPPORT_OWNER_EMAIL, replyTo: user.email || undefined,
-          subject: `🆘 Support escalation from ${user.email || (user as any).username || "a user"}`,
-          text: `${(user as any).name || (user as any).username || "A user"} (${user.email}) asked to talk to a human from the Concierge.\n\nOpen Account → Support to reply.\n${getAppUrl()}`,
-        });
-      } catch (e: any) { console.log("[support/escalate] email fail:", e.message); }
+      // Notify the owner only ONCE per conversation episode. Atomically CLAIM the
+      // notification slot (NULL→NOW in one statement) so two rapid reach-outs can't
+      // double-email; owner_notified_at is reset to NULL on close so a fresh
+      // reach-out re-notifies. If the send fails we RELEASE the claim back to NULL
+      // so the next message retries instead of permanently suppressing the email.
+      const claim = await pool.query(`UPDATE support_threads SET owner_notified_at=NOW() WHERE id=$1 AND owner_notified_at IS NULL RETURNING id`, [threadId]);
+      if (claim.rowCount) {
+        try {
+          const { client } = await getUncachableResendClient();
+          await client.emails.send({
+            from: "CLVRQuant <hello@clvrquantai.com>", to: SUPPORT_OWNER_EMAIL, replyTo: user.email || undefined,
+            subject: `🆘 Support escalation from ${user.email || (user as any).username || "a user"}`,
+            text: `${(user as any).name || (user as any).username || "A user"} (${user.email}) asked to talk to a human from the Concierge.\n\nOpen Account → Support to reply.\n${getAppUrl()}`,
+          });
+        } catch (e: any) {
+          console.log("[support/escalate] email fail:", e.message);
+          await pool.query(`UPDATE support_threads SET owner_notified_at=NULL WHERE id=$1`, [threadId]);
+        }
+      }
       res.json({ threadId });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -5180,12 +5191,17 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Sign in required." });
     try {
-      const t = await pool.query(`SELECT * FROM support_threads WHERE user_id=$1 AND status<>'closed' ORDER BY last_message_at DESC LIMIT 1`, [userId]);
-      if (t.rows.length === 0) return res.json({ thread: null, messages: [] });
+      // Return the latest thread even when it's closed, so the user sees the
+      // "chat ended" state instead of the conversation silently vanishing. A
+      // fresh escalate/message creates a newer thread that becomes the latest.
+      const t = await pool.query(`SELECT * FROM support_threads WHERE user_id=$1 ORDER BY last_message_at DESC LIMIT 1`, [userId]);
+      if (t.rows.length === 0) return res.json({ thread: null, messages: [], closed: false, ownerTyping: false });
       const thread = t.rows[0];
+      const closed = thread.status === "closed";
       const m = await pool.query(`SELECT id, thread_id, sender, body, msg_type, meta, created_at FROM support_messages WHERE thread_id=$1 ORDER BY created_at ASC`, [thread.id]);
-      await pool.query(`UPDATE support_messages SET read_by_user=true WHERE thread_id=$1 AND sender='owner'`, [thread.id]);
-      res.json({ thread, messages: m.rows });
+      if (!closed) await pool.query(`UPDATE support_messages SET read_by_user=true WHERE thread_id=$1 AND sender='owner'`, [thread.id]);
+      const ownerTyping = !closed && !!thread.owner_typing_at && (Date.now() - new Date(thread.owner_typing_at).getTime() < 6000);
+      res.json({ thread, messages: m.rows, closed, ownerTyping });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
@@ -5202,18 +5218,39 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       let threadId = t.rows[0]?.id;
       if (!threadId) { const ins = await pool.query(`INSERT INTO support_threads (user_id, status, subject) VALUES ($1,'open','Support') RETURNING id`, [userId]); threadId = ins.rows[0].id; }
       const ins = await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'user',$2,'text') RETURNING id, thread_id, sender, body, msg_type, meta, created_at`, [threadId, body]);
-      await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW() WHERE id=$1`, [threadId]);
-      // Alert the owner on EVERY new client message (best-effort — never blocks the send).
-      try {
-        const { client } = await getUncachableResendClient();
-        const who = (user as any).name || (user as any).username || user.email || "A user";
-        await client.emails.send({
-          from: "CLVRQuant <hello@clvrquantai.com>", to: SUPPORT_OWNER_EMAIL, replyTo: user.email || undefined,
-          subject: `💬 New support message from ${user.email || who}`,
-          text: `${who} (${user.email || "no email"}) wrote:\n\n${body}\n\nReply: open Account → Support.\n${getAppUrl()}`,
-        });
-      } catch (e: any) { console.log("[support/message] email fail:", e.message); }
+      // Sending a message clears my "typing" heartbeat so the owner's indicator drops instantly.
+      await pool.query(`UPDATE support_threads SET status='open', last_message_at=NOW(), user_typing_at=NULL WHERE id=$1`, [threadId]);
+      // Email the owner only on the FIRST contact of a conversation episode — not on
+      // every message. Atomically CLAIM the notification slot (NULL→NOW) so the
+      // SELECT-then-send window can't double-email two rapid messages; RELEASE the
+      // claim on send failure so the next message retries.
+      const claim = await pool.query(`UPDATE support_threads SET owner_notified_at=NOW() WHERE id=$1 AND owner_notified_at IS NULL RETURNING id`, [threadId]);
+      if (claim.rowCount) {
+        try {
+          const { client } = await getUncachableResendClient();
+          const who = (user as any).name || (user as any).username || user.email || "A user";
+          await client.emails.send({
+            from: "CLVRQuant <hello@clvrquantai.com>", to: SUPPORT_OWNER_EMAIL, replyTo: user.email || undefined,
+            subject: `💬 New support message from ${user.email || who}`,
+            text: `${who} (${user.email || "no email"}) wrote:\n\n${body}\n\nReply: open Account → Support.\n${getAppUrl()}`,
+          });
+        } catch (e: any) {
+          console.log("[support/message] email fail:", e.message);
+          await pool.query(`UPDATE support_threads SET owner_notified_at=NULL WHERE id=$1`, [threadId]);
+        }
+      }
       res.json({ message: ins.rows[0] });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // USER: "I'm typing" heartbeat — powers the owner-side live indicator. Cheap
+  // single-row UPDATE; the read side applies a freshness window so it self-heals.
+  app.post("/api/support/typing", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required." });
+    try {
+      await pool.query(`UPDATE support_threads SET user_typing_at=NOW() WHERE user_id=$1 AND status<>'closed'`, [userId]);
+      res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
@@ -5223,7 +5260,13 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Sign in required." });
     try {
-      await pool.query(`UPDATE support_threads SET status='closed', last_message_at=NOW() WHERE user_id=$1 AND status<>'closed'`, [userId]);
+      // Drop a visible "ended" marker into each open thread so BOTH parties see
+      // it, then close + clear owner_notified_at so the next reach-out re-notifies.
+      const open = await pool.query(`SELECT id FROM support_threads WHERE user_id=$1 AND status<>'closed'`, [userId]);
+      for (const row of open.rows) {
+        await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'system',$2,'system')`, [row.id, "This chat has been ended by the client."]);
+      }
+      await pool.query(`UPDATE support_threads SET status='closed', last_message_at=NOW(), owner_notified_at=NULL WHERE user_id=$1 AND status<>'closed'`, [userId]);
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
@@ -5270,7 +5313,9 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       if (t.rows.length === 0) return res.status(404).json({ error: "Not found" });
       const m = await pool.query(`SELECT id, thread_id, sender, body, msg_type, meta, created_at FROM support_messages WHERE thread_id=$1 ORDER BY created_at ASC`, [id]);
       await pool.query(`UPDATE support_messages SET read_by_owner=true WHERE thread_id=$1 AND sender='user'`, [id]);
-      res.json({ thread: t.rows[0], messages: m.rows });
+      const thr = t.rows[0];
+      const userTyping = thr.status !== "closed" && !!thr.user_typing_at && (Date.now() - new Date(thr.user_typing_at).getTime() < 6000);
+      res.json({ thread: thr, messages: m.rows, userTyping });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
@@ -5282,7 +5327,8 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     if (!threadId || !body) return res.status(400).json({ error: "threadId and body required." });
     try {
       const ins = await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'owner',$2,'text') RETURNING id, thread_id, sender, body, msg_type, meta, created_at`, [threadId, body]);
-      await pool.query(`UPDATE support_threads SET status='awaiting_user', last_message_at=NOW() WHERE id=$1`, [threadId]);
+      // Replying clears the owner "typing" heartbeat so the user's indicator drops instantly.
+      await pool.query(`UPDATE support_threads SET status='awaiting_user', last_message_at=NOW(), owner_typing_at=NULL WHERE id=$1`, [threadId]);
       try {
         const u = await pool.query(`SELECT u.email, u.name FROM support_threads t JOIN users u ON u.id=t.user_id WHERE t.id=$1`, [threadId]);
         const usr = u.rows[0];
@@ -5296,6 +5342,17 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  // OWNER: "I'm typing" heartbeat for a thread — powers the user-side indicator.
+  app.post("/api/support/thread/:id/typing", async (req, res) => {
+    const uid = await requireAdmin(req, res); if (!uid) return;
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: "Bad thread id." });
+    try {
+      await pool.query(`UPDATE support_threads SET owner_typing_at=NOW() WHERE id=$1`, [id]);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // OWNER: close/terminate a thread — keeps the full history but removes it from
   // the active inbox (inbox already filters status<>'closed').
   app.post("/api/support/thread/:id/close", async (req, res) => {
@@ -5303,8 +5360,16 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: "Bad thread id." });
     try {
-      const r = await pool.query(`UPDATE support_threads SET status='closed' WHERE id=$1`, [id]);
-      if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+      const existed = await pool.query(`SELECT status FROM support_threads WHERE id=$1`, [id]);
+      if (existed.rowCount === 0) return res.status(404).json({ error: "Not found" });
+      // Only act on a still-open thread so re-closing can't stack duplicate markers.
+      // Drop a visible "ended" marker so BOTH parties see the chat was closed, bump
+      // last_message_at so the user's latest-thread poll surfaces it, and clear
+      // owner_notified_at so a later reach-out re-notifies.
+      if (existed.rows[0].status !== "closed") {
+        await pool.query(`INSERT INTO support_messages (thread_id, sender, body, msg_type) VALUES ($1,'system',$2,'system')`, [id, "This chat has been ended by support."]);
+        await pool.query(`UPDATE support_threads SET status='closed', last_message_at=NOW(), owner_notified_at=NULL WHERE id=$1`, [id]);
+      }
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
