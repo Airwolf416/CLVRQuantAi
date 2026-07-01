@@ -34,3 +34,12 @@ no data loss.
 
 **How to apply:** this is the standard response to "push it" — diff local vs remote, push the
 delta via the API, verify with `git ls-remote`.
+
+**Safety guard when merge-base is uncomputable:** sometimes the local repo doesn't even have the
+remote head object (`git cat-file -t <remote-sha>` → "Not a valid object name"), so you cannot
+diff local↔remote at all (steps 1–2 fail). Fallback: before overwriting each file, GET its remote
+content (`contents/<path>?ref=main`) and confirm the returned blob sha is known locally
+(`git cat-file -e <sha>^{blob}`). Known ⇒ the remote's version is an ancestor of yours (safe to
+overwrite). Unknown ⇒ remote has a foreign change → ABORT rather than clobber. This is
+content-addressed, so a matching blob sha proves the exact file version already lives in local
+history regardless of which commit reaches it.
