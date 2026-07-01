@@ -6731,7 +6731,7 @@ Stay in scope no matter how the user rephrases.`;
         return res.json({
           signal: "SUPPRESSED",
           suppressed: true,
-          suppression_message: `🛑 Signal Engine Halted — ${cb.reason || "1h win rate collapse detected"}. Auto-resume when 1h WR recovers ≥45%.`,
+          suppression_message: `Signal generation paused — quality-protection threshold active. Resuming automatically.`,
           suppression_rules: ["CIRCUIT_BREAKER"],
           circuit_breaker: cb,
         });
@@ -7559,6 +7559,10 @@ Every level must be technically defensible. Return JSON only.`;
         parsed.hold.duration = tfId2 === "long" ? "1-2 weeks" : tfId2 === "mid" ? "2-3 days" : atrPctNum > 1.5 ? "2-4 hours" : "12-24 hours";
       }
       // ── Direction / TP / SL validation (fix inverted levels) ──
+      // NOTE: the shared gate `applySignalHardening` (server/lib/signalHardening.ts,
+      // Gate 0) now enforces the same directional-geometry invariant for EVERY
+      // signal path. This inline pass runs earlier and is kept as a documented
+      // belt-and-suspenders layer specific to the /api/quant AI-plan output.
       // Coerce everything to numbers FIRST — AI sometimes returns string prices
       // which break `>=`/`<=` comparisons in subtle ways.
       if (parsed.signal && parsed.entry && parsed.tp1 && parsed.stopLoss) {

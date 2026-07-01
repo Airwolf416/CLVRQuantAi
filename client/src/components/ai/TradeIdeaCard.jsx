@@ -269,7 +269,7 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
         </div>
         {reviewFlag && (
           <div
-            title="Raw model conviction was ≥50, where historical win-rate falls to ~20%. Displayed value capped at 49 until the conviction model is recalibrated."
+            title="Raw model confidence was ≥50; the displayed value is capped at 49 while the confidence model is being recalibrated."
             data-testid={`chip-review-${trade.asset || "card"}`}
             style={{
               marginTop: 6, display: "inline-block",

@@ -1,0 +1,50 @@
+# CLVRQuant — Platform Improvement Log
+
+_Market intelligence & education platform · decision-support only · not financial advice_
+_Prepared: July 1, 2026_
+
+> **Before sending:** every item below is **prepared and being deployed today** —
+> mark an item "Completed" only after its change is live in production. Send after
+> you deploy.
+
+---
+
+## Signal engine reliability
+**Restored continuous idea generation.** Corrected a fault in the engine's safety
+circuit breaker that could keep it in a paused state longer than intended, which
+was suppressing new trade ideas for extended periods. The breaker now releases
+automatically after a bounded cooldown, so the engine resumes on its own without
+manual intervention.
+_Status: fix prepared — deploying today._
+
+## Signal integrity
+**Directional consistency safeguard.** Added a server-side check so that every
+trade idea's entry, stop, and targets are always consistent with its stated
+direction (long vs short). If a proposal's levels don't line up with its
+direction, the system now automatically corrects the geometry before the idea is
+shown — eliminating cases where a short idea could display long-style targets.
+_Status: fix prepared — deploying today._
+
+## Transparency & framing
+**Standardized how analysis is described.** Model outputs are now presented
+consistently as **model-confidence scoring** within a decision-support framework.
+Unsubstantiated performance representations have been removed from marketing and
+in-app surfaces, and educational-use and risk disclosures remain prominent
+throughout.
+_Status: in progress._
+
+---
+
+## How ideas are produced (reference — unchanged)
+Ideas are generated with multi-factor scoring (market structure, momentum,
+funding and open-interest signals, and macro alignment) and pass through
+server-side risk controls — volatility-based stops, liquidity checks,
+friction-adjusted risk/reward, and macro protection — before anything is
+displayed. All content is for informational and educational purposes only; users
+are solely responsible for their own trading decisions.
+
+---
+
+_This log intentionally contains no win-rate or performance-guarantee claims.
+CLVRQuant does not provide financial advice. Trading involves substantial risk of
+loss._
