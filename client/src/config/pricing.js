@@ -12,7 +12,7 @@ export const TIERS = {
       { label: "Live crypto, equities & forex prices",      locked: false },
       { label: "Macro Calendar & market regime",            locked: false },
       { label: "Signals delayed 30 min — direction only",  locked: false },
-      { label: "Track record — aggregate stats only",       locked: false },
+      { label: "Signal history log",       locked: false },
       { label: "Real-time signals — entry, SL & TP",       locked: true,  note: "Pro" },
       { label: "AI confidence breakdown per signal",        locked: true,  note: "Pro" },
       { label: "Signal history, PnL & full AI reasoning",  locked: true,  note: "Pro" },

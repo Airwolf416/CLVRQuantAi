@@ -39,7 +39,7 @@ export interface HardeningInput {
 }
 
 export interface HardeningAdjustment {
-  type:    "atr_widened" | "size_reduced" | "liquidity_shifted" | "conviction_penalty";
+  type:    "atr_widened" | "size_reduced" | "liquidity_shifted" | "conviction_penalty" | "direction_repair";
   detail:  string;
   before?: number;
   after?:  number;
@@ -263,10 +263,9 @@ export function applyBrainLimits(
 export function applySignalHardening(input: HardeningInput): HardeningResult {
   const adjustments: HardeningAdjustment[] = [];
   let stopLoss   = input.stopLoss;
+  let tp1        = input.tp1;
+  let tp2        = input.tp2;
   let conviction = input.conviction;
-  const sizeMultiplier = 1;
-
-  const atr = calcATR14(input.candles);
 
   // Helper to consistently log + return REJECT with the proposal context so
   // the admin tuning dashboard sees the entry/SL/TP that would have shipped.
@@ -276,35 +275,90 @@ export function applySignalHardening(input: HardeningInput): HardeningResult {
     return { action: "REJECT", reason, detail, adjustments };
   };
 
+  // ── Gate 0: Directional geometry coherence (REPAIR, runs before all others) ─
+  // Every downstream gate measures distance with Math.abs(), so a level on the
+  // WRONG side of entry for the trade's `direction` (e.g. a SHORT whose target
+  // sits ABOVE entry) still yields a healthy positive R:R and would slip
+  // straight through. Enforce the invariant here and mirror any offending level
+  // across entry so entry / stop / targets are always coherent with direction.
+  // MODE="repair" fixes in place (matches the /api/quant inline behaviour and
+  // keeps signal throughput up); MODE="reject" would drop-and-log instead.
+  const MODE: "repair" | "reject" = "repair";
+  {
+    const { entry, direction } = input;
+    const slDist = Math.abs(entry - stopLoss) || entry * 0.01;
+    const R1 = 1.5, R2 = 2.5;   // default TP R-multiples when a target must be rebuilt
+    const hasTp2 = Number.isFinite(tp2) && tp2 > 0;
+    const geomBad =
+      Number.isFinite(entry) && Number.isFinite(stopLoss) && Number.isFinite(tp1) &&
+      (direction === "LONG"
+        ? (stopLoss >= entry || tp1 <= entry || (hasTp2 && tp2 <= entry))
+        : (stopLoss <= entry || tp1 >= entry || (hasTp2 && tp2 >= entry)));
+    if (geomBad) {
+      if (MODE === "reject") {
+        return reject(
+          "DIRECTION_GEOMETRY_MISMATCH",
+          `${direction} levels inverted vs entry (entry=${entry}, sl=${stopLoss}, tp1=${tp1}${hasTp2 ? `, tp2=${tp2}` : ""})`,
+        );
+      }
+      const fixes: string[] = [];
+      if (direction === "LONG") {
+        if (stopLoss >= entry)      { const b = stopLoss; stopLoss = entry - slDist;     fixes.push(`SL ${b}→${stopLoss.toFixed(6)}`); }
+        if (tp1 <= entry)           { const b = tp1;      tp1 = entry + slDist * R1;      fixes.push(`TP1 ${b}→${tp1.toFixed(6)}`); }
+        if (hasTp2 && tp2 <= entry) { const b = tp2;      tp2 = entry + slDist * R2;      fixes.push(`TP2 ${b}→${tp2.toFixed(6)}`); }
+      } else {
+        if (stopLoss <= entry)      { const b = stopLoss; stopLoss = entry + slDist;     fixes.push(`SL ${b}→${stopLoss.toFixed(6)}`); }
+        if (tp1 >= entry)           { const b = tp1;      tp1 = entry - slDist * R1;      fixes.push(`TP1 ${b}→${tp1.toFixed(6)}`); }
+        if (hasTp2 && tp2 >= entry) { const b = tp2;      tp2 = entry - slDist * R2;      fixes.push(`TP2 ${b}→${tp2.toFixed(6)}`); }
+      }
+      // A partial repair can leave the ladder non-monotonic (a rebuilt TP1 landing
+      // beyond an already-valid but nearby TP2, or vice-versa). Keep TP2 strictly
+      // beyond TP1 in the trade direction so R-multiples stay coherent downstream.
+      if (hasTp2) {
+        if (direction === "LONG"  && tp2 <= tp1) { const b = tp2; tp2 = tp1 + slDist; fixes.push(`TP2(order) ${b}→${tp2.toFixed(6)}`); }
+        if (direction === "SHORT" && tp2 >= tp1) { const b = tp2; tp2 = tp1 - slDist; fixes.push(`TP2(order) ${b}→${tp2.toFixed(6)}`); }
+      }
+      if (fixes.length) {
+        const detail = `Direction geometry repair (${direction}): ${fixes.join("; ")}`;
+        adjustments.push({ type: "direction_repair", detail });
+        console.warn(`[hardening] ${input.token} ${direction}: inverted levels auto-corrected — ${fixes.join("; ")}`);
+      }
+    }
+  }
+
+  // Every downstream gate + the returned signal use the geometry-repaired levels.
+  const gi: HardeningInput = { ...input, stopLoss, tp1, tp2 };
+  const atr = calcATR14(gi.candles);
+
   // 1) ATR
-  const r1 = gate_atr(input, atr, adjustments);
+  const r1 = gate_atr(gi, atr, adjustments);
   if ("reject" in r1) return reject(r1.reject.reason, r1.reject.detail);
   stopLoss = r1.stopLoss;
   let resultSizeMul = r1.sizeMultiplier;
 
   // 2) Microstructure
-  const r2 = gate_microstructure(input, conviction, adjustments);
+  const r2 = gate_microstructure(gi, conviction, adjustments);
   if ("reject" in r2) return reject(r2.reject.reason, r2.reject.detail);
   conviction = r2.conviction;
 
   // 3) Liquidity
-  const r3 = gate_liquidity(input, stopLoss, adjustments);
+  const r3 = gate_liquidity(gi, stopLoss, adjustments);
   if ("reject" in r3) return reject(r3.reject.reason, r3.reject.detail);
   stopLoss = r3.stopLoss;
 
   // 4) Funding / OI
-  const r4 = gate_funding_oi(input);
+  const r4 = gate_funding_oi(gi);
   if (r4) return reject(r4.reject.reason, r4.reject.detail);
 
   // 5) Friction-adjusted R:R (use the post-liquidity SL)
-  const r5 = gate_friction({ ...input, stopLoss }, stopLoss);
+  const r5 = gate_friction({ ...gi, stopLoss }, stopLoss);
   if (r5) return reject(r5.reject.reason, r5.reject.detail);
 
   const action = adjustments.length > 0 ? "ADJUST" : "ACCEPT";
-  const rrAfterFriction = computeFrictionRR({ entry: input.entry, stopLoss, tp: input.tp1, fundingRate: input.fundingRate, expectedHoldHrs: input.expectedHoldHrs, holdHorizon: input.holdHorizon });
+  const rrAfterFriction = computeFrictionRR({ entry: gi.entry, stopLoss, tp: tp1, fundingRate: gi.fundingRate, expectedHoldHrs: gi.expectedHoldHrs, holdHorizon: gi.holdHorizon });
   return {
     action,
-    signal: { entry: input.entry, stopLoss, tp1: input.tp1, tp2: input.tp2, conviction, sizeMultiplier: resultSizeMul, rrAfterFriction: +rrAfterFriction.toFixed(2) },
+    signal: { entry: input.entry, stopLoss, tp1, tp2, conviction, sizeMultiplier: resultSizeMul, rrAfterFriction: +rrAfterFriction.toFixed(2) },
     adjustments,
   };
 }

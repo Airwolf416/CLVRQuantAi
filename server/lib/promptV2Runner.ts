@@ -226,6 +226,12 @@ export async function runSignalGenV2(input: SignalGenPromptInput, apiKey: string
         // Apply adjustments back onto the plan so the caller sees hardened levels.
         if (plan.invalidation) plan.invalidation.stop_price = hard.signal.stopLoss;
         if (plan.stopLoss) plan.stopLoss.price = hard.signal.stopLoss;
+        // Gate 0 can mirror an inverted TP across entry — the repaired targets must
+        // reach the card too, so mirror them back onto every alias the plan reads from.
+        if (plan.targets?.[0]) plan.targets[0].price = hard.signal.tp1;
+        if (plan.targets?.[1]) plan.targets[1].price = hard.signal.tp2;
+        if (plan.tp1) plan.tp1.price = hard.signal.tp1;
+        if (plan.tp2) plan.tp2.price = hard.signal.tp2;
         plan.confidence = hard.signal.conviction;
         plan.hardening = { action: hard.action, sizeMultiplier: hard.signal.sizeMultiplier, rrAfterFriction: hard.signal.rrAfterFriction, adjustments: hard.adjustments };
       }

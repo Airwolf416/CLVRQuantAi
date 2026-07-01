@@ -82,16 +82,6 @@ function Particles({ C }) {
 
 function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
   const [step, setStep] = useState(0);
-  // Live performance highlights for the Track Record slide (null on error).
-  const [perf, setPerf] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/performance-highlights")
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (alive) setPerf(d); })
-      .catch(() => { if (alive) setPerf(null); });
-    return () => { alive = false; };
-  }, []);
   const TOTAL = 5;
   const STEPS = [
     {
@@ -103,7 +93,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
           {[
             { icon: "⚡", t: "Live Signals", d: "Real-time quant signals with confidence scoring" },
             { icon: "🤖", t: "CLVR AI", d: "Claude-powered market analyst at your fingertips" },
-            { icon: "📈", t: "Track Record", d: "Transparent signal history with verified outcomes" },
+            { icon: "📈", t: "Transparent Method", d: "See the reasoning and risk levels behind every idea" },
             { icon: "📅", t: "Macro Calendar", d: "Fed meetings, CPI, earnings — never miss a catalyst" },
           ].map(({ icon, t, d }) => (
             <div key={t} style={{ background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 10px" }}>
@@ -128,7 +118,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <span style={{ fontFamily: MONO, fontSize: 9, background: "rgba(0,199,135,.15)", color: "#00c787", border: "1px solid rgba(0,199,135,.3)", borderRadius: 3, padding: "3px 8px" }}>LONG</span>
-              <span style={{ fontFamily: MONO, fontSize: 9, background: "rgba(201,168,76,.15)", color: C.gold, border: `1px solid rgba(201,168,76,.3)`, borderRadius: 3, padding: "3px 8px" }}>82%</span>
+              <span style={{ fontFamily: MONO, fontSize: 9, background: "rgba(201,168,76,.15)", color: C.gold, border: `1px solid rgba(201,168,76,.3)`, borderRadius: 3, padding: "3px 8px" }}>CONF 82%</span>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
@@ -164,38 +154,29 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
       ),
     },
     {
-      icon: "📈", label: "TRACK RECORD",
-      title: "Fully Transparent Track Record",
-      sub: "Live outcomes from our published signal log — updated automatically.",
+      icon: "📈", label: "METHOD",
+      title: "How the Engine Thinks",
+      sub: "Every idea is scored for model confidence and shown with its full rationale and risk parameters — for your own research.",
       content: (
         <div style={{ marginTop: 20 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {[
-              [perf && perf.overallWinRate != null && perf.sampleSize >= 30 ? `${perf.overallWinRate}%` : "—", "WIN RATE*"],
-              [perf && perf.sampleSize > 0 ? String(perf.sampleSize) : "—", "RESOLVED SIGNALS"],
-              [perf && perf.windowDays != null ? `${perf.windowDays}D` : "—", "WINDOW"],
-            ].map(([v, l]) => (
-              <div key={l} style={{ background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 8px", textAlign: "center" }}>
-                <div style={{ fontFamily: MONO, fontSize: 20, fontWeight: 700, color: C.gold, lineHeight: 1 }}>{v}</div>
-                <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 4, letterSpacing: "0.1em" }}>{l}</div>
+              ["🧮", "Multi-factor scoring", "Market structure, momentum, funding/OI and macro alignment combine into one model-confidence score."],
+              ["📐", "Risk parameters on every idea", "Entry, stop-loss and targets are shown up front so you can size and judge each setup yourself."],
+              ["📖", "Full rationale, always", "Each idea carries the reasoning behind it — no black box, and no performance promises."],
+            ].map(([icon, t, d]) => (
+              <div key={t} style={{ display: "flex", gap: 10, alignItems: "flex-start", background: isDark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 18, lineHeight: 1 }}>{icon}</div>
+                <div>
+                  <div style={{ fontFamily: MONO, fontSize: 10, color: C.gold, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 3 }}>{t}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{d}</div>
+                </div>
               </div>
             ))}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginBottom: 14, letterSpacing: "0.06em", lineHeight: 1.5 }}>
-            *Resolved signals, last 30 days. Past results do not predict future outcomes.
+          <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 14, letterSpacing: "0.06em", lineHeight: 1.5 }}>
+            For informational and educational purposes only — not financial advice.
           </div>
-          {perf && Array.isArray(perf.topCombos) && perf.topCombos.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {perf.topCombos.map(({ token, direction, winRate, n }) => (
-                <div key={token+direction} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: isDark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px" }}>
-                  <span style={{ fontFamily: MONO, fontSize: 10, color: C.text, fontWeight: 700 }}>{token}</span>
-                  <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>{direction}</span>
-                  <span style={{ fontFamily: MONO, fontSize: 9, color: "#00c787", fontWeight: 700 }}>{winRate}%</span>
-                  <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, fontWeight: 700 }}>n={n}</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       ),
     },

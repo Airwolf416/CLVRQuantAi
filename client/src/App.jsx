@@ -403,7 +403,7 @@ function AdvancedFactorBreakdown({breakdown,C:_C}){
     {key:"newsSentiment",    label:"NEWS SENTIMENT",       color:"#06b6d4",  desc:"CryptoPanic live market sentiment"},
     {key:"fundamentals",     label:"FUNDAMENTALS",         color:"#c9a84c",  desc:"Open Interest · Funding Rate"},
     {key:"patternRecognition",label:"PATTERN RECOGNITION", color:"#f97316",  desc:"Chart patterns (flags, H&S, double tops)"},
-    {key:"backtesting",      label:"BACK TESTING",         color:"#22c55e",  desc:"Historical win rate for similar setups"},
+    {key:"backtesting",      label:"BACK TESTING",         color:"#22c55e",  desc:"Historical behavior of similar setups (illustrative, not predictive)"},
   ];
   const total=breakdown.total||0;
   return(
@@ -506,7 +506,7 @@ function UnusualPulse({ data, C, MONO }) {
 
 function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",chartai:"Chart AI",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",monitor:"Position Monitor",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
-  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",chartai:"Upload any chart · AI returns direction, entry, SL & TP1/TP2/TP3 with live news context · 5 analyses/day",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · win rate · R:R analysis (Elite)"};
+  const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",chartai:"Upload any chart · AI returns direction, entry, SL & TP1/TP2/TP3 with live news context · 5 analyses/day",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · R:R analysis (Elite)"};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
       {/* Icon + heading */}
@@ -551,7 +551,7 @@ function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
 
 function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
   const plans=[
-    {name:"Free",price:"$0",period:"forever",color:C2.muted2,borderColor:"#1c2b4a",features:["Live crypto, equities & forex prices","Macro calendar & event tracker","Market regime dashboard","Signals with 30-min delay (prices hidden)","Track record — aggregate stats only"]},
+    {name:"Free",price:"$0",period:"forever",color:C2.muted2,borderColor:"#1c2b4a",features:["Live crypto, equities & forex prices","Macro calendar & event tracker","Market regime dashboard","Signals with 30-min delay (prices hidden)","Signal history log"]},
     {name:"Pro",price:"$29.99",period:"/mo CAD",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📰 Daily AI Morning Brief · 1 trade idea","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
     {name:"Elite",price:"$129",period:"/mo CAD",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","⚡ Hyperliquid perps integration","🔑 Direct founder access · all future features"]},
   ];
@@ -2895,7 +2895,7 @@ function SignalStatusBanner(){
           </div>
           <div style={{fontFamily:SERIF,fontSize:12,color:C.muted2,lineHeight:1.5}}>
             {halted
-              ? <>1-hour win rate dropped to <b style={{color:"#ff6b6b"}}>{cb.rolling?.winRate!=null?(cb.rolling.winRate*100).toFixed(1):"?"}%</b> over {cb.rolling?.n||0} signals. New signals are paused. Auto-resume when 1h WR recovers ≥45%.</>
+              ? <>Signal generation is paused — a quality-protection threshold is active. New ideas will resume automatically.</>
               : <>Adaptive engine has paused these underperforming setups (Wilson 90% lower bound &lt; 30% over 10+ signals). They will be re-evaluated automatically as new outcomes resolve.</>
             }
           </div>
@@ -2905,7 +2905,7 @@ function SignalStatusBanner(){
       {!halted&&suppCount>0&&suppCount<=12&&(
         <div style={{marginTop:8,display:"flex",gap:6,flexWrap:"wrap"}}>
           {(s.suppressed_pairs||[]).map((p,i)=>(
-            <span key={i} style={{fontFamily:MONO,fontSize:8,color:"#ffae42",background:"rgba(255,170,60,.08)",border:`1px solid rgba(255,170,60,.25)`,borderRadius:3,padding:"3px 7px",letterSpacing:"0.06em"}}>{p.token} {p.direction} · {p.winRate||"?"}%</span>
+            <span key={i} style={{fontFamily:MONO,fontSize:8,color:"#ffae42",background:"rgba(255,170,60,.08)",border:`1px solid rgba(255,170,60,.25)`,borderRadius:3,padding:"3px 7px",letterSpacing:"0.06em"}}>{p.token} {p.direction}</span>
           ))}
         </div>
       )}
@@ -6479,7 +6479,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
                 {dot:"#06b6d4",label:"News Sentiment",sub:"CryptoPanic live signals (15pts)"},
                 {dot:"#c9a84c",label:"Fundamentals",sub:"Open Interest · Funding Rate (20pts)"},
                 {dot:"#f97316",label:"Pattern Recognition",sub:"Chart patterns H&S, flags (10pts)"},
-                {dot:"#22c55e",label:"Back Testing",sub:"Historical win rate for setup (10pts)"},
+                {dot:"#22c55e",label:"Back Testing",sub:"Historical behavior of setup (10pts)"},
               ].map(({dot,label,sub})=>(
                 <div key={label} style={{display:"flex",alignItems:"flex-start",gap:6,marginBottom:3}}>
                   <div style={{width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0,marginTop:3}}/>
@@ -6928,7 +6928,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
               {q:"What is the Share Card on closed trades?",a:"On any closed trade tap '📤 Share Card' to generate a luxury navy/gold PNG showing the asset, R-multiple, and your P&L. Share it to X, Instagram, or Discord with one tap, or download the PNG."},
               {q:"What changed in the Squawk Box?",a:"(Elite) The 📣 button now shows a pulsing green LIVE dot when active so you can confirm at a glance it's listening. High-conviction signals are now spoken with urgent priority — louder, faster, and they cut to the front of the speech queue."},
               {q:"What are the new Today timeframes?",a:"In the signals view, the Today filter now splits into Quick (<1h), Hours (1–8h), and Full Day so you can see only setups that fit your trading window. Tap the sub-filter chips above the signal list."},
-              {q:"How does the new Adaptive Learning work?",a:"The engine recalculates win-rate thresholds every 30 minutes (was 4 hours). Any setup with under 25% historical win rate over 10+ signals is automatically suppressed. Per-asset signals are also capped per hour to prevent noise."},
+              {q:"How does the new Adaptive Learning work?",a:"The engine recalculates its quality thresholds every 30 minutes (was 4 hours). Any setup with weak historical performance over 10+ signals is automatically suppressed. Per-asset signals are also capped per hour to prevent noise."},
               {q:"Where do I see leverage and hold time on signals?",a:"Every signal card now displays the suggested leverage (1x–10x based on conviction) and the expected hold time prominently — no need to dig into details to plan size and timing."},
               {q:"Why did my Morning Brief change?",a:"The commentary is now a tighter 4-block summary (BTC, FX Majors, Gold, Oil) so it generates faster and lands more reliably. The reply-to address is also now no-reply@clvrquantai.com — for support, write to Support@CLVRQuantAI.com (still in the email body)."},
             ]},

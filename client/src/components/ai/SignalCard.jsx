@@ -133,11 +133,15 @@ export default function SignalCard({ ticker, result, rank, mode }) {
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <div style={{ flex: 1, height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+            <span style={{ fontSize: 8, fontWeight: 700, color: "#8b9bb4", fontFamily: MONO, letterSpacing: "0.08em" }}>MODEL CONFIDENCE</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: cColor, fontFamily: MONO }}>{winProb}%</span>
+          </div>
+          <div style={{ height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${winProb}%`, background: `linear-gradient(90deg, ${cColor}80, ${cColor})`, borderRadius: 3, transition: "width 1.2s ease" }} />
           </div>
-          <span style={{ fontSize: 10, fontWeight: 700, color: cColor, fontFamily: MONO }}>{winProb}%</span>
+          <div style={{ fontSize: 8, color: "#6b7280", fontFamily: MONO, marginTop: 3, lineHeight: 1.4 }}>Model confidence score — not a prediction of profit.</div>
         </div>
       </div>
 

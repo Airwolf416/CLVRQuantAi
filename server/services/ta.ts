@@ -303,7 +303,7 @@ export function getBacktestWinRate(dir: string, patterns: string[], session: str
     if (BACKTEST_WIN_RATES[k]) { winRate = BACKTEST_WIN_RATES[k]; break; }
   }
   if (!winRate) winRate = BACKTEST_WIN_RATES[`${dir}_DEFAULT_${session}`] || (dir === "LONG" ? 0.54 : 0.53);
-  const label = `${Math.round(winRate * 100)}% hist. win rate`;
+  const label = `${Math.round(winRate * 100)}% historical setup context`;
   const pts = winRate >= 0.65 ? 10 : winRate >= 0.60 ? 7 : winRate >= 0.55 ? 5 : 2;
   return { winRate: +winRate.toFixed(2), label, pts };
 }

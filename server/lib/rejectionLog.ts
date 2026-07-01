@@ -17,6 +17,7 @@ export type RejectionReason =
   | "SHORTS_CROWDED"
   | "LONGS_CROWDED"
   | "RR_TOO_LOW_AFTER_FRICTION"
+  | "DIRECTION_GEOMETRY_MISMATCH"
   // ── Statistical Brain (empirical limits from resolved trade history) ──────
   | "BRAIN_SUPPRESSED_COMBO"
   | "TP_BEYOND_BRAIN_LIMIT"
