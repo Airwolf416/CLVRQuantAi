@@ -14,3 +14,4 @@
 - [CI deploy npm exit-handler failure](ci-deploy-npm-exit-handler.md) — GHA "Build and Deploy" Docker build failed at `npm install` with "Exit handler never called!" (npm 10.9.x bug), NOT OOM; fix = pin `npm@11.16.0` in Dockerfile build stage.
 - [Replit lockfile mirror URLs break CI](replit-mirror-urls-ci.md) — Replit bakes `package-firewall.replit.local` "resolved" URLs into package-lock.json; ENOTFOUND on GHA/Docker; rewrite host → registry.npmjs.org (integrity unchanged); also pin npm in any `npm ci` workflow.
 - [initDb column reconciliation](initdb-column-reconcile.md) — schema.ts column adds/renames don't migrate live DBs; mirror each with an idempotent `ADD COLUMN IF NOT EXISTS` in initDb.
+- [applySignalHardening caller propagation](signal-hardening-caller-propagation.md) — shared gate RETURNS levels (doesn't mutate); all 3 callers must echo back any newly-mutated field or it's silently dropped.

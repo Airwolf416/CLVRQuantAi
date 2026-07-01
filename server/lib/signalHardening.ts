@@ -311,6 +311,13 @@ export function applySignalHardening(input: HardeningInput): HardeningResult {
         if (tp1 >= entry)           { const b = tp1;      tp1 = entry - slDist * R1;      fixes.push(`TP1 ${b}→${tp1.toFixed(6)}`); }
         if (hasTp2 && tp2 >= entry) { const b = tp2;      tp2 = entry - slDist * R2;      fixes.push(`TP2 ${b}→${tp2.toFixed(6)}`); }
       }
+      // A partial repair can leave the ladder non-monotonic (a rebuilt TP1 landing
+      // beyond an already-valid but nearby TP2, or vice-versa). Keep TP2 strictly
+      // beyond TP1 in the trade direction so R-multiples stay coherent downstream.
+      if (hasTp2) {
+        if (direction === "LONG"  && tp2 <= tp1) { const b = tp2; tp2 = tp1 + slDist; fixes.push(`TP2(order) ${b}→${tp2.toFixed(6)}`); }
+        if (direction === "SHORT" && tp2 >= tp1) { const b = tp2; tp2 = tp1 - slDist; fixes.push(`TP2(order) ${b}→${tp2.toFixed(6)}`); }
+      }
       if (fixes.length) {
         const detail = `Direction geometry repair (${direction}): ${fixes.join("; ")}`;
         adjustments.push({ type: "direction_repair", detail });
