@@ -1,0 +1,27 @@
+TASK: Compliance fix in client/src/WelcomePage.jsx. Do NOT touch tier gating logic, quant engine internals, or any server files except as noted. Three changes:
+
+1. REPLACE the hardcoded fake stats. Find this exact line:
+{[["73%", "WIN RATE"], ["142", "SIGNALS"], ["4.2×", "AVG R:R"]].map(([v, l]) => (
+
+Replace the static array with live data from GET /api/performance-highlights (response shape: { windowDays, sampleSize, overallWinRate, topCombos: [{token, direction, winRate, n}], lastUpdated }). Add a useEffect at the top of the component that fetches this endpoint once on mount into state `perf` (null on error). Render:
+- ["overallWinRate%" or "—" if null or sampleSize < 30, "WIN RATE*"]
+- [String(sampleSize) or "—", "RESOLVED SIGNALS"]
+- [String(windowDays) + "D", "WINDOW"]
+Below the grid add a caption in the existing muted mono style:
+*Resolved signals, last 30 days. Past results do not predict future outcomes.
+
+2. REPLACE the fabricated example trades. Find the array starting:
+{ sym: "ETH", dir: "LONG", res: "WIN", pct: "+18.4%" },
+Delete the entire static 3-row trade list and its .map render. Replace with a render of perf.topCombos (token, direction, winRate%, n) using the same row styling, shown only when topCombos.length > 0; otherwise render nothing. Change the section sub line "See every signal — wins, losses, and outcomes verified." to "Live outcomes from our published signal log — updated automatically."
+
+3. REWRITE the demo AI brief. Find this exact sentence:
+A hold there targets $105K by Friday if CPI prints soft.
+Replace the full demo answer paragraph (starting "BTC faces a critical week") with:
+BTC enters the week with FOMC minutes Wednesday and CPI Friday as the key catalysts. Positioning data shows risk appetite building, with the $96K area as the level traders are watching. The daily brief maps scenarios on both sides of each data print — so you plan around the calendar instead of reacting to it.
+
+4. FIX the legal text contradiction. In the LEGAL constant, find:
+It does not provide financial advice, investment recommendations, or trading signals.
+Replace with:
+It does not provide individualized financial advice or investment recommendations. All AI-generated trade ideas, signals, and analysis are educational decision-support content only.
+
+ACCEPTANCE: No hardcoded performance numbers remain anywhere in WelcomePage.jsx. Page renders cleanly when the API returns sampleSize 0 (shows "—", hides combo rows). No price targets or dated predictions in marketing copy. Then commit and push: "compliance: replace fabricated welcome-page track record with live performance-highlights data"

@@ -84,3 +84,9 @@ id = "oj2Cr9g2YZJf96BcPtHQO"
 uri = "file://.local/exports/quant-ai-signals-source.zip"
 type = "unspecified"
 title = "Quant AI Signals — Full Source Code (41 files)"
+
+[[outputs]]
+id = "KOd-E56TzJrYH_cg98kEm"
+uri = "file://exports/clvrquantai-full-source-2026-06-10.zip"
+type = "unspecified"
+title = "CLVRQuantAI — Full Website Source (143 MB, 682 files)"

@@ -3249,11 +3249,14 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const [threadMsgs,setThreadMsgs]=useState([]);
   const [hInput,setHInput]=useState("");
   const [escalating,setEscalating]=useState(false);
+  const [ended,setEnded]=useState(false);            // owner/client ended the human chat
+  const [ownerTyping,setOwnerTyping]=useState(false);
+  const typingPing=useRef(0);                          // throttle "typing" heartbeats
   const hPoll=useRef(null);
 
   useEffect(()=>{
     if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight;
-  },[messages,sending,open,booking]);
+  },[messages,sending,open,booking,threadMsgs,ownerTyping,ended]);
 
   const openBooking=async()=>{
     setBooking(true); setBMsg(""); setBConfirmed(false); setPLoading(true);
@@ -3319,8 +3322,10 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
 
   const loadThread=async()=>{
     try{ const r=await fetch("/api/support/thread",{credentials:"include"});
-      if(r.ok){ const d=await r.json(); if(d.thread){ setThreadMsgs(d.messages||[]); } } }catch{}
+      if(r.ok){ const d=await r.json(); if(d.thread){ setThreadMsgs(d.messages||[]); setEnded(!!d.closed); setOwnerTyping(!!d.ownerTyping); } } }catch{}
   };
+  // Throttled (~1 per 2.5s) so the owner sees "client is typing…" without spamming.
+  const pingTyping=()=>{ const now=Date.now(); if(now-typingPing.current<2500) return; typingPing.current=now; fetch("/api/support/typing",{method:"POST",credentials:"include"}).catch(()=>{}); };
   const escalate=async()=>{
     if(escalating) return; setEscalating(true);
     try{
@@ -3338,10 +3343,10 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const endChat=async()=>{
     if(!window.confirm("End this support chat? You can start a new one any time.")) return;
     try{ const r=await fetch("/api/support/close",{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; }
-    setThreadMsgs([]); setHumanMode(false);
+    setThreadMsgs([]); setHumanMode(false); setEnded(false); setOwnerTyping(false);
   };
   useEffect(()=>{
-    if(open&&humanMode){ loadThread(); hPoll.current=setInterval(loadThread,12000); }
+    if(open&&humanMode){ loadThread(); hPoll.current=setInterval(loadThread,3000); }
     return ()=>{ if(hPoll.current){ clearInterval(hPoll.current); hPoll.current=null; } };
   },[open,humanMode]);
   const SLOTS=[];
@@ -3421,8 +3426,17 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
                 {m.sender==="owner"&&<div style={{fontFamily:MONO,fontSize:8,color:C.gold2,marginTop:3}}>MIKE · CLVRQuant</div>}
               </div>
             ))}
+            {ownerTyping&&!ended&&(
+              <div data-testid="text-support-typing" style={{alignSelf:"flex-start",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px",fontFamily:MONO,fontSize:11,color:C.muted2}}>Support is typing…</div>
+            )}
+            {ended?(
+              <div data-testid="notice-chat-ended" style={{display:"flex",flexDirection:"column",gap:8,marginTop:4}}>
+                <div style={{textAlign:"center",fontFamily:MONO,fontSize:11,color:C.muted2,background:C.panel,border:`1px dashed ${C.border2}`,borderRadius:8,padding:"10px 12px"}}>This chat has ended.</div>
+                <button data-testid="button-support-newchat" onClick={()=>{ setEnded(false); setThreadMsgs([]); setOwnerTyping(false); setHumanMode(false); }} style={{alignSelf:"center",background:"none",border:`1px solid ${C.border2}`,color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:"7px 12px",borderRadius:8}}>Start a new chat</button>
+              </div>
+            ):(<>
             <div style={{display:"flex",gap:8,marginTop:4}}>
-              <textarea rows={1} value={hInput} onChange={e=>setHInput(e.target.value)}
+              <textarea rows={1} value={hInput} onChange={e=>{ setHInput(e.target.value); pingTyping(); }}
                 onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendHuman(); } }}
                 placeholder="Message the team…"
                 style={{flex:1,resize:"none",background:C.navy,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13,lineHeight:1.4,maxHeight:90,outline:"none"}}/>
@@ -3432,6 +3446,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
               <button onClick={()=>setHumanMode(false)} style={{background:"none",border:"none",color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:0}}>← Back to Concierge</button>
               <button data-testid="button-support-end-chat" onClick={endChat} style={{background:"none",border:`1px solid ${C.border2}`,color:C.muted2,fontFamily:MONO,fontSize:10,cursor:"pointer",padding:"5px 9px",borderRadius:6}}>End chat</button>
             </div>
+            </>)}
           </div>
         )}
         {/* Booking view */}

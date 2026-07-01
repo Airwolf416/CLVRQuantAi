@@ -1,0 +1,13 @@
+TASK: Two files. Do NOT touch tier gating, rate limits, the aiCache/aiInFlight coalescing logic, or quant engine internals.
+
+SERVER (server/routes.ts, POST /api/ai/analyze): Add an opt-in streaming path. After all existing auth, tier, and rate-limit checks pass, read const wantsStream = req.body.stream === true. If wantsStream:
+1. SKIP the aiCache lookup and aiInFlight coalescing entirely for this request (chat prompts are per-user and effectively never cache-hit; Trade Ideas/Quant never send stream:true so their caching is untouched).
+2. Call https://api.anthropic.com/v1/messages with the same model/system/messages the non-streaming path builds (including IMMUTABLE_AI_RULES and validated history), adding "stream": true to the request body.
+3. Set response headers: Content-Type: text/event-stream, Cache-Control: no-cache, Connection: keep-alive, X-Accel-Buffering: no. Flush headers immediately.
+4. Pipe Anthropic's SSE through: for each content_block_delta event, write `data: ${JSON.stringify({ delta: text })}\n\n` and flush. On message_stop or upstream end, write `data: ${JSON.stringify({ done: true })}\n\n` and res.end(). On upstream error, write `data: ${JSON.stringify({ error: "stream failed" })}\n\n` then end — never throw after headers are sent.
+5. Handle client disconnect: on req "close", abort the upstream fetch via AbortController.
+If wantsStream is false or absent, behavior is byte-for-byte identical to today.
+
+CLIENT (client/src/components/ai/AIChat.jsx): In sendMessage, add stream: true to the /api/ai/analyze body. Replace the await res.json() handling with a reader loop: if the response Content-Type is text/event-stream, append an empty assistant message to state, then read res.body via getReader()/TextDecoder, parse "data: " lines, and on each { delta } update the LAST assistant message's content by appending the delta (functional setMessages, immutable update). On { done: true } stop; on { error } append "⚠️ stream interrupted — please retry." Keep the existing non-stream JSON branch as fallback if Content-Type is application/json (so 401/403/429/503 error handling from Block 4/5 still works — those return JSON before streaming starts). The Block 5 AbortController must also cancel the reader loop. Auto-scroll on each delta using the existing scrollRef effect.
+
+ACCEPTANCE: Chat responses render progressively within ~1s of send. Trade Ideas and QuantBrain (non-streaming callers) behave identically to before, including cache hits. STOP mid-stream cleanly aborts both directions. Tier/auth/rate-limit rejections still show the correct messages. Commit and push: "feat: SSE streaming for AI chat with cache-path preservation"

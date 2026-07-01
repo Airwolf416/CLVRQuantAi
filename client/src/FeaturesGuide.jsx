@@ -106,7 +106,7 @@ const SECTIONS = [
       "Kelly Criterion position sizing — mathematically optimal bet sizing based on edge",
       "Full Kelly, Half Kelly, Quarter Kelly, and Fixed 1% position size recommendations",
       "Regime detection — identifies momentum vs mean reversion markets",
-      "Win probability estimation using Bayesian scoring",
+      "Model confidence scoring using Bayesian analysis",
       "Expected value calculator per trade",
       "Trade setup builder with entry/target/stop/R:R calculation",
       "AI Analyst mode — sends all signal data to CLVR AI for structured trade ideas with cross-asset reasoning",

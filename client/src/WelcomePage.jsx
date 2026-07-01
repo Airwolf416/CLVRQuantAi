@@ -38,7 +38,7 @@ function uint8ToB64(arr) {
   return btoa(String.fromCharCode(...arr)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide financial advice, investment recommendations, or trading signals. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.\n\nAI DISCLOSURE: CLVR AI uses the Claude API by Anthropic to power its AI analysis engine.`;
+const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide individualized financial advice or investment recommendations. All AI-generated trade ideas, signals, and analysis are educational decision-support content only. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.\n\nAI DISCLOSURE: CLVR AI uses the Claude API by Anthropic to power its AI analysis engine.`;
 
 const DARK_C = {
   bg: "#050709", panel: "#0c1220", border: "#141e35", border2: "#1c2b4a",
@@ -82,6 +82,16 @@ function Particles({ C }) {
 
 function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
   const [step, setStep] = useState(0);
+  // Live performance highlights for the Track Record slide (null on error).
+  const [perf, setPerf] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/performance-highlights")
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (alive) setPerf(d); })
+      .catch(() => { if (alive) setPerf(null); });
+    return () => { alive = false; };
+  }, []);
   const TOTAL = 5;
   const STEPS = [
     {
@@ -147,7 +157,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
           </div>
           <div style={{ background: "rgba(201,168,76,.06)", border: "1px solid rgba(201,168,76,.2)", borderRadius: 8, padding: "10px 14px", fontFamily: SANS, fontSize: 12, color: C.text, lineHeight: 1.7 }}>
             <span style={{ fontFamily: MONO, fontSize: 9, color: C.gold, display: "block", marginBottom: 4 }}>✦ CLVR AI</span>
-            BTC faces a critical week with FOMC minutes Wednesday. Risk-on positioning has been building — watch the $96K support as the key level. A hold there targets $105K by Friday if CPI prints soft.
+            BTC enters the week with FOMC minutes Wednesday and CPI Friday as the key catalysts. Positioning data shows risk appetite building, with the $96K area as the level traders are watching. The daily brief maps scenarios on both sides of each data print — so you plan around the calendar instead of reacting to it.
           </div>
           <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, textAlign: "center", letterSpacing: "0.1em" }}>POWERED BY CLAUDE · PRO & ELITE ONLY</div>
         </div>
@@ -156,31 +166,36 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
     {
       icon: "📈", label: "TRACK RECORD",
       title: "Fully Transparent Track Record",
-      sub: "See every signal — wins, losses, and outcomes verified.",
+      sub: "Live outcomes from our published signal log — updated automatically.",
       content: (
         <div style={{ marginTop: 20 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
-            {[["73%", "WIN RATE"], ["142", "SIGNALS"], ["4.2×", "AVG R:R"]].map(([v, l]) => (
+            {[
+              [perf && perf.overallWinRate != null && perf.sampleSize >= 30 ? `${perf.overallWinRate}%` : "—", "WIN RATE*"],
+              [perf && perf.sampleSize > 0 ? String(perf.sampleSize) : "—", "RESOLVED SIGNALS"],
+              [perf && perf.windowDays != null ? `${perf.windowDays}D` : "—", "WINDOW"],
+            ].map(([v, l]) => (
               <div key={l} style={{ background: isDark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.04)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 8px", textAlign: "center" }}>
                 <div style={{ fontFamily: MONO, fontSize: 20, fontWeight: 700, color: C.gold, lineHeight: 1 }}>{v}</div>
                 <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 4, letterSpacing: "0.1em" }}>{l}</div>
               </div>
             ))}
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {[
-              { sym: "ETH", dir: "LONG", res: "WIN", pct: "+18.4%" },
-              { sym: "BTC", dir: "SHORT", res: "WIN", pct: "+12.1%" },
-              { sym: "SOL", dir: "LONG", res: "LOSS", pct: "-4.2%" },
-            ].map(({ sym, dir, res, pct }) => (
-              <div key={sym+dir} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: isDark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px" }}>
-                <span style={{ fontFamily: MONO, fontSize: 10, color: C.text, fontWeight: 700 }}>{sym}</span>
-                <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>{dir}</span>
-                <span style={{ fontFamily: MONO, fontSize: 9, color: res === "WIN" ? "#00c787" : "#ff4060", fontWeight: 700 }}>{res}</span>
-                <span style={{ fontFamily: MONO, fontSize: 10, color: res === "WIN" ? "#00c787" : "#ff4060", fontWeight: 700 }}>{pct}</span>
-              </div>
-            ))}
+          <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginBottom: 14, letterSpacing: "0.06em", lineHeight: 1.5 }}>
+            *Resolved signals, last 30 days. Past results do not predict future outcomes.
           </div>
+          {perf && Array.isArray(perf.topCombos) && perf.topCombos.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {perf.topCombos.map(({ token, direction, winRate, n }) => (
+                <div key={token+direction} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: isDark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px" }}>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: C.text, fontWeight: 700 }}>{token}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>{direction}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 9, color: "#00c787", fontWeight: 700 }}>{winRate}%</span>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, fontWeight: 700 }}>n={n}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ),
     },

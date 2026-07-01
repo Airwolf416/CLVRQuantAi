@@ -17,21 +17,27 @@ function SupportInbox(){
   const [msgs,setMsgs]=useState([]);
   const [reply,setReply]=useState("");
   const [loading,setLoading]=useState(true);
+  const [userTyping,setUserTyping]=useState(false);
+  const typingPing=useRef(0);
+  const isMobile=typeof window!=="undefined"&&window.innerWidth<768;
   const listRef=useRef(null);
   const stickRef=useRef(true); // keep pinned to the newest message (WhatsApp-style) unless the owner scrolls up to read history
   const scrollToBottom=()=>{ const el=listRef.current; if(el) el.scrollTop=el.scrollHeight; };
   const loadInbox=async()=>{ try{ const r=await fetch("/api/support/inbox",{credentials:"include"}); if(r.ok){ const d=await r.json(); setThreads(d.threads||[]); } }catch{} finally{ setLoading(false);} };
-  const openThread=async(id)=>{ setActive(id); try{ const r=await fetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); } }catch{} };
+  const openThread=async(id)=>{ setActive(id); try{ const r=await fetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); setUserTyping(!!d.userTyping); } }catch{} };
+  // Throttled (~1 per 2.5s) so the client sees "support is typing…" without spamming.
+  const pingTyping=()=>{ const now=Date.now(); if(!active||now-typingPing.current<2500) return; typingPing.current=now; fetch(`/api/support/thread/${active}/typing`,{method:"POST",credentials:"include"}).catch(()=>{}); };
   const selectThread=(id)=>{ stickRef.current=true; openThread(id); };
   const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); stickRef.current=true; setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await fetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
   // Close = terminate the chat (keeps history, drops it from the active inbox). Delete = remove the whole conversation for good.
   const closeThread=async()=>{ if(!active) return; if(!window.confirm("End this chat? It will close and leave the active inbox. The history is kept.")) return; try{ const r=await fetch(`/api/support/thread/${active}/close`,{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
   const deleteThread=async()=>{ if(!active) return; if(!window.confirm("Delete this chat permanently? The whole conversation will be removed and cannot be undone.")) return; try{ const r=await fetch(`/api/support/thread/${active}`,{method:"DELETE",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not delete the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
   useEffect(()=>{ loadInbox(); const i=setInterval(loadInbox,12000); return ()=>clearInterval(i); },[]);
-  useEffect(()=>{ if(!active) return; const i=setInterval(()=>openThread(active),12000); return ()=>clearInterval(i); },[active]);
-  useEffect(()=>{ if(stickRef.current) requestAnimationFrame(scrollToBottom); },[msgs,active]);
+  useEffect(()=>{ if(!active) return; const i=setInterval(()=>openThread(active),3000); return ()=>clearInterval(i); },[active]);
+  useEffect(()=>{ if(stickRef.current) requestAnimationFrame(scrollToBottom); },[msgs,active,userTyping]);
   return (
-    <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+    // paddingRight keeps the conversation clear of the floating Concierge "C" button (fixed bottom-right).
+    <div style={{display:"flex",gap:14,flexWrap:"wrap",paddingRight:isMobile?56:88}}>
       <div style={{flex:"1 1 260px",minWidth:240}}>
         <div style={{fontFamily:MONO,fontSize:10,color:C.muted2,letterSpacing:"0.1em",marginBottom:8}}>OPEN THREADS</div>
         {loading?<div style={{fontFamily:MONO,fontSize:12,color:C.muted2}}>Loading…</div>:
@@ -59,8 +65,9 @@ function SupportInbox(){
                 </div>
               ))}
             </div>
+            {userTyping&&<div data-testid="text-client-typing" style={{fontFamily:MONO,fontSize:10,color:C.muted2,margin:"0 0 6px 2px"}}>Client is typing…</div>}
             <div style={{display:"flex",gap:8}}>
-              <textarea rows={2} value={reply} onChange={e=>setReply(e.target.value)} placeholder="Reply to the user…" style={{flex:1,resize:"none",background:C.panel,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13}}/>
+              <textarea rows={2} value={reply} onChange={e=>{ setReply(e.target.value); pingTyping(); }} placeholder="Reply to the user…" style={{flex:1,resize:"none",background:C.panel,color:C.text,border:`1px solid ${C.border2}`,borderRadius:8,padding:"9px 11px",fontFamily:SANS,fontSize:13}}/>
               <button onClick={sendReply} disabled={!reply.trim()} style={{background:!reply.trim()?C.border2:`linear-gradient(145deg, ${C.gold2}, ${C.gold})`,color:!reply.trim()?C.muted2:C.bg,border:"none",borderRadius:8,padding:"0 18px",fontFamily:MONO,fontSize:12,fontWeight:700,cursor:!reply.trim()?"default":"pointer"}}>Send</button>
             </div>
           </>

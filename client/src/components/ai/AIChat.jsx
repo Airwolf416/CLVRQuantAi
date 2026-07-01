@@ -132,6 +132,7 @@ export default function AIChat({
   const [dailyCount, setDailyCount] = useState(0);
   const [marketTypeFilter, setMarketTypeFilter] = useState("BOTH");
   const scrollRef = useRef(null);
+  const abortRef = useRef(null);
 
   const dailyLimit = isElite ? 999 : 30;
   const atLimit = dailyCount >= dailyLimit;
@@ -151,16 +152,24 @@ export default function AIChat({
   const sendMessage = async () => {
     if (!input.trim() || loading || atLimit) return;
     const userMsg = input.trim();
+    // Capture prior turns BEFORE appending the new user message so the just-
+    // typed turn isn't duplicated. Last 8 turns, content clamped to 4000.
+    const history = messages.slice(-8).map(m => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
     setInput("");
     setMessages(prev => [...prev, { role: "user", content: userMsg }]);
     setLoading(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
-      let preflight = null;
-      try {
-        const pRes = await fetch("/api/macro/preflight", { credentials: "include" });
-        if (pRes.ok) preflight = await pRes.json();
-      } catch {}
+      // Independent pre-fetches run concurrently; each resolves to null on
+      // failure so one never blocks or fails the other.
+      const [preflight, eligibleMap] = await Promise.all([
+        fetch("/api/macro/preflight", { credentials: "include" })
+          .then(r => (r.ok ? r.json() : null))
+          .catch(() => null),
+        getEligibleExecutionSymbols().catch(() => null),
+      ]);
 
       // Same filter pattern as TopTradeIdeas — PERP/SPOT drops the wrong-
       // section data so the AI can't reach for a spot price (e.g. Yahoo's
@@ -187,7 +196,6 @@ export default function AIChat({
       // wasted requests for noise tokens (AND/VS/etc.) or crypto mentions.
       let execContext = "";
       try {
-        const eligibleMap = await getEligibleExecutionSymbols();
         const eligibleSet = new Set([
           ...(eligibleMap?.equity || []),
           ...(eligibleMap?.fx || []),
@@ -198,17 +206,18 @@ export default function AIChat({
             eligibleSet.has(t)
           )
         )).slice(0, 3);
-        const blocks = [];
-        for (const sym of mentions) {
+        // Fetch all eligible symbols concurrently; Promise.all preserves the
+        // original `mentions` order, and filter(Boolean) drops the misses.
+        const settled = await Promise.all(mentions.map(async (sym) => {
           try {
             const r = await fetch(`/api/execution_levels/${sym}`, { credentials: "include" });
-            if (!r.ok) continue;
+            if (!r.ok) return null;
             const lvl = await r.json();
             const dec = lvl.current_price < 10 ? 4 : 2;
             const f = (n) => Number(n).toFixed(dec);
             const rangePos = lvl.in_or_range ? "inside" : (lvl.current_price > lvl.orh ? "above" : "below");
             const ts = new Date(lvl.current_ts).toISOString().slice(11, 16) + " UTC";
-            blocks.push(
+            return (
               `EXECUTION CONTEXT (${lvl.symbol}, ${ts}):\n` +
               `- Session VWAP: $${f(lvl.vwap)} (price ${lvl.price_vs_vwap_pct >= 0 ? "+" : ""}${lvl.price_vs_vwap_pct}% away)\n` +
               `- VWAP bands: $${f(lvl.vwap_lower_1sd)} / $${f(lvl.vwap_upper_1sd)}\n` +
@@ -216,8 +225,9 @@ export default function AIChat({
               `- Current price: $${f(lvl.current_price)} (${rangePos} opening range)\n` +
               `- ORB status: ${lvl.orb_status}`
             );
-          } catch {}
-        }
+          } catch { return null; }
+        }));
+        const blocks = settled.filter(Boolean);
         if (blocks.length) execContext = blocks.join("\n\n");
       } catch {}
 
@@ -280,7 +290,8 @@ WRITING DISCIPLINE — applies to every signal, thesis, and prose answer:
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system: sys, userMessage: userMsg }),
+        body: JSON.stringify({ system: sys, userMessage: userMsg, history }),
+        signal: controller.signal,
       });
 
       const data = await res.json();
@@ -298,9 +309,21 @@ WRITING DISCIPLINE — applies to every signal, thesis, and prose answer:
         setDailyCount(c => c + 1);
       }
     } catch (e) {
-      setMessages(prev => [...prev, { role: "assistant", content: `Error: ${e.message}` }]);
+      // Aborts are handled by stopGeneration (which already appended the
+      // cancellation notice) — never render them as an error.
+      if (e.name !== "AbortError") {
+        setMessages(prev => [...prev, { role: "assistant", content: `Error: ${e.message}` }]);
+      }
+    } finally {
+      abortRef.current = null;
     }
     setLoading(false);
+  };
+
+  const stopGeneration = () => {
+    if (abortRef.current) abortRef.current.abort();
+    setLoading(false);
+    setMessages(prev => [...prev, { role: "assistant", content: "— response cancelled —" }]);
   };
 
   const handleChip = (sym) => {
@@ -406,6 +429,21 @@ WRITING DISCIPLINE — applies to every signal, thesis, and prose answer:
             fontFamily: MONO, fontSize: 11, outline: "none",
           }}
         />
+        {loading && (
+          <button
+            data-testid="btn-stop-ai"
+            onClick={stopGeneration}
+            style={{
+              padding: "11px 16px", borderRadius: 8,
+              background: "rgba(201,168,76,0.06)",
+              border: "1px solid rgba(201,168,76,0.3)",
+              color: "#e8c96d", fontFamily: MONO, fontWeight: 700, fontSize: 10,
+              letterSpacing: "0.1em", cursor: "pointer",
+            }}
+          >
+            STOP
+          </button>
+        )}
         <button
           data-testid="btn-send-ai"
           onClick={sendMessage}
