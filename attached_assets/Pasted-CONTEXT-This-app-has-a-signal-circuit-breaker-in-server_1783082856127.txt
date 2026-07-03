@@ -1,0 +1,123 @@
+CONTEXT
+This app has a signal circuit breaker in server/lib/circuitBreaker.ts and an AI
+Trade Ideas generation route (search server/routes.ts for "Generate Top" /
+"trade ideas" / promptV2Runner). Two defects:
+
+DEFECT 1 — Circuit breaker deadlock: checkCircuitBreaker() only auto-resumes
+when the 1-HOUR rolling window has n >= MIN_SAMPLE (20) resolved signals AND
+winRate >= RESUME_THRESHOLD. But when the breaker halts emission, no new
+signals enter the window, so within an hour n drains to 0 and the resume
+condition becomes permanently unreachable until process restart.
+
+DEFECT 2 — Misleading empty state: when the Trade Ideas run returns zero
+ideas, the client shows a generic "Macro conditions or regime prevented signal
+generation" message even when macro is CLEAR and the true cause is the
+circuit breaker or quality-gate rejections.
+
+FIRST: Open server/lib/circuitBreaker.ts. If it already contains a probation
+level or a resume path based on "last N resolved outcomes" (not time-window),
+Defect 1 is already fixed — skip PART A and do only PART B and PART C.
+
+════════ PART A — circuitBreaker.ts: reachable resume path ════════
+
+1. Add constants near the existing thresholds:
+   const PROBATION_AFTER_MS = 60 * 60 * 1000;   // 1h halted → probation
+   const RESUME_SAMPLE = 20;                     // last-N resolved outcomes
+   const PROBATION_RETRIP_MIN = 10;              // min sample to re-trip
+
+2. Add a second win-rate computation that is NOT time-window bound:
+   async function computeLastNWinRate(n: number) — query aiSignalLog for the
+   most recent `n` rows where outcome != "PENDING", ordered createdAt DESC,
+   and return { n: rows.length, wins, winRate } using the same WIN_OUTCOMES
+   set. This sample cannot drain to zero when emission halts.
+
+3. In checkCircuitBreaker(), replace the resume branch (the block that runs
+   when state.active is true) with this logic, preserving the existing
+   manual-override precedence exactly as it is:
+
+   a. If state.level === 2 AND trippedAt is older than PROBATION_AFTER_MS:
+      drop to PROBATION — state.level = 1; keep state.active = true; set
+      state.reason = "PROBATION: limited emission to rebuild outcome sample";
+      log "[CircuitBreaker] ⚠️ PROBATION — emission re-enabled at reduced rate".
+      (isHalted() checks level >= 2, so level 1 allows emission again. Do NOT
+      change isHalted().)
+
+   b. If state.level === 1 (probation):
+      - const lastN = await computeLastNWinRate(RESUME_SAMPLE)
+      - If lastN.n >= RESUME_SAMPLE && lastN.winRate >= RESUME_THRESHOLD:
+        full resume (active=false, level=0, clear reason/trippedAt) with the
+        existing AUTO-RESUME log line.
+      - Else if the 1h rolling window has n >= PROBATION_RETRIP_MIN &&
+        winRate !== null && winRate < HALT_THRESHOLD: re-trip to level 2,
+        update trippedAt to now, reason explaining probation re-trip.
+      - Else: stay in probation.
+
+   c. Keep the existing trip logic for the not-active case unchanged.
+
+4. During probation (level 1), cap emission rate: export a helper
+   isProbation(): boolean { return state.active && state.level === 1; }
+   In the AI signal generation path(s) that currently call isHalted(), when
+   isProbation() is true, allow generation but tag the run so downstream
+   logging records source context (no user-facing "probation" label needed).
+
+════════ PART B — server: structured empty_reason on Trade Ideas ════════
+
+Locate the Trade Ideas generation route (the one powering "Generate Top 6
+Trade Ideas" — search for promptV2Runner or the trade-ideas endpoint in
+server/routes.ts). Wherever it returns zero ideas to the client, attach a
+structured field instead of (or alongside) any generic message:
+
+  empty_reason: {
+    type: "CIRCUIT_BREAKER" | "MACRO_RISK_OFF" | "ALL_REJECTED" | "NO_CANDIDATES",
+    detail: string,          // human-readable one-liner
+    evaluated: number,       // candidates considered this run
+    top_rejections: string[] // up to 3 most common rejection reasons this run
+  }
+
+Determine type in this priority order:
+  1. If isHalted() or isProbation() blocked/limited the run → "CIRCUIT_BREAKER"
+     with detail from getCircuitState().reason.
+  2. Else if isMacroRiskOff() blocked candidates → "MACRO_RISK_OFF" with the
+     BTC % change detail.
+  3. Else if candidates were evaluated but all rejected by hardening/conviction
+     gates → "ALL_REJECTED", populate evaluated count and top_rejections from
+     this run's logRejection calls (tally in-memory during the run; do not
+     add a DB query).
+  4. Else → "NO_CANDIDATES".
+
+Do NOT weaken, bypass, or remove any gate, cap, or suppression logic to force
+ideas through. The fix is honest reporting, not lower standards.
+
+════════ PART C — client/src/App.jsx: reason-aware empty state ════════
+
+Find the Trade Ideas empty-state card (search for "NO HIGH-CONVICTION SETUPS"
+or "Macro conditions or regime prevented signal generation"). Replace the
+hardcoded message with copy driven by empty_reason.type:
+
+  CIRCUIT_BREAKER: headline "SIGNAL ENGINE IN PROTECTIVE PAUSE" — body:
+  "Recent outcome quality triggered an automatic pause. The engine is
+  rebuilding its sample and will resume automatically. This protects you
+  from low-quality setups."
+
+  MACRO_RISK_OFF: headline "MACRO RISK-OFF — LONGS PAUSED" — body: include
+  the BTC move detail from empty_reason.detail.
+
+  ALL_REJECTED: headline "NO SETUPS MET QUALITY GATES" — body:
+  "{evaluated} candidates were evaluated this run; none met the quality
+  thresholds." Render top_rejections as small chips if present.
+
+  NO_CANDIDATES (and fallback when empty_reason is missing): keep a neutral
+  "No qualifying setups right now. Try a different horizon or asset class."
+
+All copy must stay educational/decision-support voice. No win-rate numbers,
+no performance claims, no "try again for better signals" phrasing.
+
+════════ VERIFY ════════
+1. npm run build (or tsc) passes with no new type errors.
+2. Simulate: manually halt via the admin endpoint, confirm isHalted() true;
+   fast-forward logic check — with trippedAt backdated > 1h, next
+   checkCircuitBreaker() call moves state to level 1 probation.
+3. Confirm a Trade Ideas run during level-2 halt returns
+   empty_reason.type === "CIRCUIT_BREAKER".
+4. Confirm no gate/suppression logic was removed or weakened anywhere.
+Report a summary of every file touched and every branch changed.
