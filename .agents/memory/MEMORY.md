@@ -14,5 +14,7 @@
 - [CI deploy npm exit-handler failure](ci-deploy-npm-exit-handler.md) — GHA "Build and Deploy" Docker build failed at `npm install` with "Exit handler never called!" (npm 10.9.x bug), NOT OOM; fix = pin `npm@11.16.0` in Dockerfile build stage.
 - [Replit lockfile mirror URLs break CI](replit-mirror-urls-ci.md) — Replit bakes `package-firewall.replit.local` "resolved" URLs into package-lock.json; ENOTFOUND on GHA/Docker; rewrite host → registry.npmjs.org (integrity unchanged); also pin npm in any `npm ci` workflow.
 - [initDb column reconciliation](initdb-column-reconcile.md) — schema.ts column adds/renames don't migrate live DBs; mirror each with an idempotent `ADD COLUMN IF NOT EXISTS` in initDb.
+- [Guard before persist](guard-before-persist.md) — response-level repair guards still leak via DB rows persisted earlier in the handler; guard must sit above ALL sinks + read-time repair for legacy rows.
 - [Curl-testing auth-gated routes](curl-auth-testing.md) — Secure session cookie is dropped over plain-http curl; use the signin bearer token; in-memory rate limiters reset on workflow restart.
 - [applySignalHardening caller propagation](signal-hardening-caller-propagation.md) — shared gate RETURNS levels (doesn't mutate); all 3 callers must echo back any newly-mutated field or it's silently dropped.
+- [NEUTRAL badge fabrication](neutral-badge-fabrication.md) — when server guards are verified clean but users still see bad cards, audit the UI's attribute derivation; binary `isLong ? LONG : SHORT` painted NEUTRAL as SHORT.
