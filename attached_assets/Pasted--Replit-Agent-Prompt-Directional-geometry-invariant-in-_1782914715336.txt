@@ -1,0 +1,82 @@
+# Replit Agent Prompt — Directional geometry invariant in the shared signal gate (REPAIR mode)
+
+## Mode: REPAIR
+When a trade idea's levels don't match its direction, the system auto-corrects
+the geometry (mirrors the offending stop/target across entry) instead of dropping
+the idea. This matches the existing `/api/quant` inline behavior and keeps signal
+frequency up. (To switch to drop-and-log instead, set `MODE = "reject"` in the
+added code.)
+
+---
+
+## Context for the agent (verify against current code — line numbers may have drifted)
+`server/lib/signalHardening.ts` exports `applySignalHardening(input)`, the shared
+gate the signal-generation paths call. It validates ATR, microstructure,
+liquidity, funding/OI, and friction-adjusted R:R — but **every distance uses
+`Math.abs(...)`**, so it cannot detect a target or stop on the wrong side of entry
+for the trade's direction. A SHORT with a target *above* entry (long-shaped)
+produces a healthy positive R:R and passes straight through.
+
+The only place currently catching this is an inline block in the `/api/quant`
+handler in `server/routes.ts` (it logs `"AI returned inverted levels — auto-corrected"`
+and mirrors levels using a `ratios` array). The Trade Ideas / signalGen path
+(`server/lib/promptV2Runner.ts` → `applySignalHardening`, which passes the target
+through unchanged) and the Morning Brief path (`server/dailyBrief.ts`) have **no**
+such check. Goal: enforce the invariant once in the shared gate so every path
+inherits it.
+
+## Task
+1. **`server/lib/signalHardening.ts`** — add a directional-coherence REPAIR step as
+   the **first gate** inside `applySignalHardening`, before the ATR gate, using
+   `input.direction`, `input.entry`, `input.stopLoss`, `input.tp1`, and
+   `input.tp2` (only if present/finite). Add `const MODE: "repair" | "reject" = "repair";`.
+   - Compute `const slDist = Math.abs(entry - stopLoss) || entry * 0.01;`
+   - Valid **LONG**: `stopLoss < entry` AND `tp1 > entry` (and `tp2 > entry` if present).
+   - Valid **SHORT**: `stopLoss > entry` AND `tp1 < entry` (and `tp2 < entry` if present).
+   - **Repair (MODE === "repair"):** for any level on the wrong side, mirror it to
+     the correct side of entry using a default R-multiple — reuse the platform's
+     existing default TP ratios if available (the `ratios` array the `/api/quant`
+     inline repair uses); otherwise default tp1 = 1.5R, tp2 = 2.5R:
+       - LONG: if `stopLoss >= entry` → `stopLoss = entry - slDist`; if `tp1 <= entry` → `tp1 = entry + slDist * R1`; if `tp2 != null && tp2 <= entry` → `tp2 = entry + slDist * R2`.
+       - SHORT: if `stopLoss <= entry` → `stopLoss = entry + slDist`; if `tp1 >= entry` → `tp1 = entry - slDist * R1`; if `tp2 != null && tp2 >= entry` → `tp2 = entry - slDist * R2`.
+     Only correct levels that are actually on the wrong side; leave already-valid
+     levels untouched (do not trust a wrong-side distance to preserve an R-multiple).
+     Push an adjustment note `{ type: "direction_repair", detail: <what was corrected> }`
+     into the adjustments array, and `console.warn` a one-line log.
+   - **CRITICAL:** the repaired `stopLoss`, `tp1`, and `tp2` must flow through the
+     rest of the pipeline AND appear in the returned `signal` object — the function
+     currently returns `input.tp1`/`input.tp2` verbatim, so update it to return the
+     repaired values, not the originals.
+   - (If `MODE === "reject"`: call the existing `reject("DIRECTION_GEOMETRY_MISMATCH", <detail>)`
+     helper already defined in the function instead of repairing.)
+2. **`server/lib/rejectionLog.ts`** — add `"DIRECTION_GEOMETRY_MISMATCH"` to the
+   `RejectionReason` union (used only if MODE is ever set to reject).
+3. **`server/routes.ts`** — the `/api/quant` inline repair block is now redundant
+   with the shared gate on any path that calls `applySignalHardening`. Do **not**
+   delete it blindly. Confirm whether that handler routes through
+   `applySignalHardening`; if so, either leave the inline block as a documented
+   belt-and-suspenders layer or remove it and note the removal. State in the PR
+   which paths are now covered by the shared invariant.
+
+Output the exact code you add/change for review. Do not modify files beyond these three.
+
+## Acceptance criteria
+- A SHORT whose target is above entry is auto-corrected so targets sit below entry
+  and stop sits above entry — on **every** path (`promptV2Runner`, `dailyBrief`, `/api/quant`).
+- A LONG whose target is below entry (or stop above entry) is likewise corrected.
+- Corrected levels appear in the returned signal object and on the rendered card,
+  and each correction is logged.
+- Already-valid cards are unchanged; no change to R:R, ATR, microstructure,
+  liquidity, or funding logic.
+
+## Commit message
+```
+fix(signal-gate): directional geometry repair in shared hardening
+
+applySignalHardening validated R:R magnitude with abs distances but never that
+entry/stop/targets sit on the correct side for LONG vs SHORT, so an inverted
+card (e.g. SHORT with targets above entry) shipped on every path except an inline
+repair in /api/quant. Enforce+repair the invariant once in the shared gate so
+signalGen (Trade Ideas) and the Morning Brief inherit it, and return the repaired
+levels so the card reflects the correction.
+```

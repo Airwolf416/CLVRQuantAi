@@ -15,6 +15,7 @@ import { notifyAutoposter } from "./autoposterNotify";
 void notifyAutoposter;
 import { computeRegimeGate } from "./lib/regimeGate";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
+import { enforceGeometry } from "./lib/geometryGuard";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -668,6 +669,40 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
     };
   }
 
+  // ── FINAL GEOMETRY GUARD (shared) — repair wrong-side levels on Claude's
+  // trade plans BEFORE tiered selection, email render, and Telegram post.
+  // Repair-only: mirrors wrong-side SL/TP legs around entry so the plan
+  // matches its stated direction. Never flips direction, never drops a
+  // trade. Per-trade fail-open.
+  try {
+    const guardBriefTrade = (t: any) => {
+      if (!t || !t.asset) return;
+      try {
+        const dirU = String(t.dir || t.direction || "").toUpperCase();
+        const dir = dirU.includes("SHORT") ? "SHORT" : dirU.includes("LONG") ? "LONG" : null;
+        const num = (v: any) => parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
+        const e = num(t.entry), sl = num(t.stop), t1 = num(t.tp1), t2 = num(t.tp2);
+        if (!dir || !Number.isFinite(e) || e <= 0 || !Number.isFinite(sl) || !Number.isFinite(t1)) return;
+        const g = enforceGeometry(
+          { direction: dir, entry: e, stopLoss: sl, tp1: t1, tp2: Number.isFinite(t2) ? t2 : null },
+          { symbol: String(t.asset), source: "ai_signal" },
+        );
+        if (!g.corrected) return;
+        // Write back as plain numeric strings (same shape the email/telegram
+        // renderers and pushClaudeTrade parse).
+        const fmt = (n: number) => n >= 1000 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(6);
+        t.stop = fmt(g.stopLoss);
+        t.tp1 = fmt(g.tp1);
+        if (g.tp2 != null && t.tp2 != null) t.tp2 = fmt(g.tp2);
+        t.geometry_auto_corrected = true;
+      } catch { /* per-trade fail-open — ship the original levels */ }
+    };
+    guardBriefTrade(briefJson.topTrade);
+    for (const t of (briefJson.additionalTrades || [])) guardBriefTrade(t);
+  } catch (e: any) {
+    console.warn("[daily-brief] geometry guard failed (non-fatal):", e?.message || e);
+  }
+
   // Sweep expired-promo users to free BEFORE we query subscribers, so anyone
   // whose promo lapsed since yesterday's send gets the free version of the
   // brief today instead of stale Pro/Elite content.
@@ -967,7 +1002,6 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       tp1:            t.tp1.toString(),
       tp2:            t.tp2.toString(),
       rrDisplay:      t.riskReward.toFixed(2),
-      winRateDisplay: `${Math.round(t.winRate30d * 100)}% (n=${t.sampleSize})`,
       thesis:         t.thesis,
       sessionFlag:    t.sessionFlag,
     }));

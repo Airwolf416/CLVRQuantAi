@@ -39,7 +39,9 @@ export default function SignalCard({ ticker, result, rank, mode }) {
   const tp1 = result.tp1?.price;
   const tp2 = result.tp2?.price;
   const sl = result.stopLoss?.price;
-  const rr = result.rr || (entry && tp1 && sl ? Math.abs(tp1 - entry) / Math.abs(entry - sl) : null);
+  // Trust the server's directional R:R (geometry guard) — never recompute
+  // client-side from prices. rr === null means "not displayable" → "—".
+  const rr = typeof result.rr === "number" && Number.isFinite(result.rr) ? result.rr : null;
   const leverage = result.leverage?.recommended || result.leverage?.max || result.leverage?.min || "—";
   const duration = result.hold?.duration || result.hold || "—";
 
@@ -115,6 +117,20 @@ export default function SignalCard({ ticker, result, rank, mode }) {
                 </span>
               );
             })()}
+            {(result.geometry_auto_corrected || result.corrected) && (
+              <span
+                data-testid={`badge-geometry-${ticker}`}
+                title="Stop/target levels were automatically aligned to match the trade direction"
+                style={{
+                  fontSize: 8, fontWeight: 700, color: "rgba(255,255,255,0.45)",
+                  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: 4, padding: "2px 6px",
+                  fontFamily: MONO, letterSpacing: "0.06em",
+                }}
+              >
+                LEVELS AUTO-ALIGNED
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{
@@ -190,7 +206,7 @@ export default function SignalCard({ ticker, result, rank, mode }) {
         </div>
         <div style={{ padding: "8px", borderRight: "1px solid rgba(255,255,255,0.04)", textAlign: "center" }}>
           <div style={{ fontSize: 7, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginBottom: 3 }}>R:R</div>
-          <div style={{ fontSize: 14, fontWeight: 800, color: rr >= 2 ? "#22c55e" : rr >= 1.5 ? "#f59e0b" : "#ef4444", fontFamily: MONO }}>{rr ? `${rr.toFixed ? rr.toFixed(1) : rr}:1` : "—"}</div>
+          <div data-testid={`text-rr-${ticker}`} style={{ fontSize: 14, fontWeight: 800, color: rr == null ? "rgba(255,255,255,0.45)" : rr >= 2 ? "#22c55e" : rr >= 1.5 ? "#f59e0b" : "#ef4444", fontFamily: MONO }}>{rr != null ? `${rr.toFixed(1)}:1` : "—"}</div>
           {result.rrAfterFriction !== undefined && result.rrAfterFriction !== null && (
             <div title="R:R after slippage + funding cost" style={{ fontSize: 8, color: "rgba(255,255,255,0.45)", fontFamily: MONO, marginTop: 2 }}>
               net {Number(result.rrAfterFriction).toFixed(2)}:1

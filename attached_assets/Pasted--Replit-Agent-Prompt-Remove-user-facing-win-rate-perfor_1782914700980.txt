@@ -1,0 +1,69 @@
+# Replit Agent Prompt — Remove user-facing win-rate / performance claims (compliance)
+
+> **Scope rule (read first):** Remove or relabel only **customer-facing performance
+> representations**. Do **NOT** touch the internal win-rate math that powers risk
+> controls (circuit breaker, adaptive suppression, Statistical Brain, AI prompt
+> gating). Those never display a claim to users; removing them breaks the engine.
+> A hard **DO-NOT-TOUCH** list is at the bottom — respect it.
+
+---
+
+## PRIORITY 0 — WelcomePage fabricated "track record" (highest risk)
+File: `client/src/WelcomePage.jsx`
+
+This currently shows **invented** stats presented as *verified* performance. Remove entirely.
+
+- Remove the stat trio: `[["73%", "WIN RATE"], ["142", "SIGNALS"], ["4.2×", "AVG R:R"]]`
+  and its rendered block.
+- Remove the fabricated example trades block (the array with `{ sym: "ETH", dir: "LONG", res: "WIN", pct: "+18.4%" }`, `BTC SHORT WIN +12.1%`, `SOL LONG LOSS -4.2%`) and its list rendering.
+- Change the section `title: "Fully Transparent Track Record"` and
+  `sub: "See every signal — wins, losses, and outcomes verified."` to
+  **methodology/education framing with no performance numbers**, e.g.
+  title `"How the Engine Thinks"`, sub `"Every idea is scored for model confidence and shown with its full rationale and risk parameters — for your own research."`
+- In the onboarding cards, change `{ icon: "📈", t: "Track Record", d: "Transparent signal history with verified outcomes" }` to remove the "verified outcomes" performance claim, e.g. `{ icon: "📈", t: "Transparent Method", d: "See the reasoning and risk levels behind every idea" }`.
+- The illustrative sample-signal badge showing `82%` — relabel its surrounding context to read as an illustrative **model-confidence** score, or remove the number.
+
+## PRIORITY 1 — In-app performance displays
+- **Track Record tab** (`client/src/App.jsx`, the `TRACK RECORD TAB` section ~line 1231 and its blurb/label): remove any **aggregate win-rate** headline metric. If a signal history is retained, present it as an educational log of past ideas + outcomes with the standard no-guarantee disclaimer, and NO aggregate win-rate stat. **(Confirm final treatment with counsel — flagged.)**
+- **Per-signal confidence** (`client/src/components/ai/SignalCard.jsx`): the displayed `win_probability` value (`const winProb = result.win_probability || ...`) must be labeled **"Model Confidence"** in the UI (not "win probability"/"win rate"), with microcopy near it: *"Model confidence score — not a prediction of profit."* Keep the number and bar; only the framing changes. `TradeIdeaCard.jsx` already uses "conviction" framing — verify it shows no win-rate wording.
+- **Tab blurbs / pricing copy** (`client/src/App.jsx` ~line 509 and 554; `client/src/config/pricing.js`): reword feature descriptions that say "win rate" or sell "Track record — aggregate stats only". Journal blurb → "trade journaling & R:R analysis". Pricing feature → "Signal history log" (a feature name, not a performance promise).
+
+## PRIORITY 2 — Email + backtest labels
+- **Daily brief template** (`server/templates/daily_brief.hbs`): remove the line `📊 30d win rate: {{winRateDisplay}}` and reword `"Ranked by 30-day historical win rate, R:R, and macro alignment — not narrative."` → `"Ranked by model confidence, R:R, and macro alignment — not narrative."` Leave "Track Record" feature references only if counsel approves; otherwise rename to "Signal History".
+- **Backtest label** (`server/services/ta.ts` ~line 306, `` `${Math.round(winRate*100)}% hist. win rate` ``) and the BACK TESTING tab description (`client/src/App.jsx` ~line 406, "Historical win rate for similar setups"): reframe so the phrase reads as historical/illustrative context, not a forward performance claim — e.g. label `"historical setup context"` and description `"Historical behavior of similar setups (illustrative, not predictive)"`. Keep the underlying computation.
+- **User-facing circuit-breaker message** (`server/routes.ts` ~line 6734): reword the message shown to users — `"🛑 Signal Engine Halted — 1h win rate collapse detected. Auto-resume when 1h WR recovers ≥45%."` → `"Signal generation paused — quality-protection threshold active. Resuming automatically."` The internal `reason` string used for logs can stay as-is.
+
+## Acceptance criteria
+- No customer-facing surface (WelcomePage, in-app tabs, signal/idea cards, emails) displays the words "win rate" or "win probability", any aggregate win-rate percentage, or any fabricated/example performance figures.
+- Per-signal score renders as "Model Confidence" with a non-guarantee disclaimer.
+- All risk-control behavior is byte-for-byte unchanged (see DO-NOT-TOUCH).
+- App builds; no broken references from removed WelcomePage arrays.
+
+## Commit message
+```
+compliance: remove user-facing win-rate/performance claims; reframe as model confidence
+
+Strip fabricated WelcomePage "track record" stats and example trades, remove
+aggregate win-rate displays from the app/email/backtest surfaces, and relabel the
+per-signal score as "Model Confidence" with a no-guarantee disclaimer. Internal
+win-rate risk logic (circuit breaker, adaptive suppression, Statistical Brain,
+prompt gating) is unchanged.
+```
+
+---
+
+## DO NOT TOUCH (internal risk logic — not customer-facing claims)
+Changing any of these breaks signal gating and/or the circuit breaker:
+- `server/lib/circuitBreaker.ts` — win-rate halt/resume logic (keep entirely).
+- `server/lib/statisticalBrain.ts` — 60-day / Wilson-LB win-rate edge gating.
+- `server/lib/performanceContext.ts` — win-rate context injected into AI prompts.
+- `server/lib/adaptiveThresholds.ts` / `winRate30d` suppression + `/api/signal-status` internals.
+- `server/lib/regimeGate.ts` comments and gating.
+- `server/routes.ts` — the internal `win_probability < X% → NEUTRAL` gate and the
+  model's `win_probability` JSON field (keep the field & threshold; only the *display label* changes, handled above).
+- Admin-only views (`client/src/components/admin/ArchetypeAdminPanel.jsx`, admin
+  track-record routes) — internal tooling for the owner, not customer-facing.
+
+_Not legal advice. This reduces obvious performance-representation risk; have
+counsel confirm the final copy, especially the Track Record tab and whether any
+signal history may be shown._
