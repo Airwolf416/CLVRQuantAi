@@ -470,6 +470,7 @@ export async function initializeDatabase(): Promise<void> {
     // `column "scope" does not exist`. Additive + idempotent.
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS scope VARCHAR(16) NOT NULL DEFAULT 'global'`).catch(() => {});
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS target_user_id VARCHAR(64)`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS news_context JSONB`).catch(() => {});
 
     // ── Module 2 (Setup Taxonomy + Per-Setup Stats): additive columns +
     // tables. Same forbidden-file constraints as Module 1 — shared/schema.ts
