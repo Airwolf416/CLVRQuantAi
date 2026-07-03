@@ -8,7 +8,7 @@ import { logSignal } from "./lib/signalLogger";
 import { buildPerformanceContext, invalidatePerformanceContextCache } from "./lib/performanceContext";
 import { getPromptV2Mode, getShadowLog } from "./prompts/shared";
 import { getThresholdFor, recalculateThresholds } from "./lib/adaptiveThresholds";
-import { getCircuitState, isHalted, manualHalt, manualResume, checkCircuitBreaker, isMacroRiskOff } from "./lib/circuitBreaker";
+import { getCircuitState, isHalted, isProbation, manualHalt, manualResume, checkCircuitBreaker, isMacroRiskOff } from "./lib/circuitBreaker";
 import { logRejection, getRecentRejections, getRejectionStats } from "./lib/rejectionLog";
 import { isInCooldown, COOLDOWN_WINDOW_MINUTES } from "./lib/cooldown";
 import { isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
@@ -941,6 +941,11 @@ async function detectMoves() {
       detail: `L${cb.level} ${cb.reason || "halted"}`,
     });
     return;
+  }
+  // Level-1 probation: emission allowed (isHalted() is false) — tag the run so
+  // downstream logs record it ran under a rebuilding outcome sample.
+  if (isProbation()) {
+    console.log("[detectMoves] running under circuit-breaker PROBATION (level 1) — rebuilding outcome sample");
   }
 
   for (const sym of CRYPTO_SYMS) {
@@ -6736,6 +6741,10 @@ Stay in scope no matter how the user rephrases.`;
           circuit_breaker: cb,
         });
       }
+      // Level-1 probation: generation allowed — tag the run for downstream logs.
+      if (isProbation()) {
+        console.log(`[ai_signal] ${ticker} generated under circuit-breaker PROBATION (level 1) — rebuilding outcome sample`);
+      }
 
       // ── Run Signal Suppression Rules BEFORE calling AI ────────────────────────
       const suppression = checkSignalSuppressionRules({
@@ -8043,7 +8052,7 @@ Every level must be technically defensible. Return JSON only.`;
       }
 
       // Unified gate audit log — one line per signal attempt summarising every gate
-      console.log(`[SIGNAL GATE] ${ticker} ${parsed.signal || "NONE"} — adaptL.suppressed=${!!adaptLong?.suppressed}, adaptS.suppressed=${!!adaptShort?.suppressed}, cdL=${cdLong.inCooldown ? cdLong.minutesLeft + "m" : "ok"}, cdS=${cdShort.inCooldown ? cdShort.minutesLeft + "m" : "ok"}, macroHalt=${macroRisk.halted}, circuit=${isHalted()}`);
+      console.log(`[SIGNAL GATE] ${ticker} ${parsed.signal || "NONE"} — adaptL.suppressed=${!!adaptLong?.suppressed}, adaptS.suppressed=${!!adaptShort?.suppressed}, cdL=${cdLong.inCooldown ? cdLong.minutesLeft + "m" : "ok"}, cdS=${cdShort.inCooldown ? cdShort.minutesLeft + "m" : "ok"}, macroHalt=${macroRisk.halted}, circuit=${isHalted()}, probation=${isProbation()}`);
       // Remove tp3 if AI hallucinated it when conditions not met
       if (!(adjScore >= 85 && oiM > 100)) delete parsed.tp3;
       if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
@@ -8734,7 +8743,7 @@ Every level must be technically defensible. Return JSON only.`;
   async function hardenTradeIdeas(
     cards: IdeaCard[],
     apiKey: string,
-  ): Promise<{ cards: IdeaCard[]; inCount: number; dropped: number; vetoed: number; regenerated: number }> {
+  ): Promise<{ cards: IdeaCard[]; inCount: number; dropped: number; vetoed: number; regenerated: number; rejectionTally: Record<string, number> }> {
     const { hardenSignal } = await import("./lib/signalHardening");
     const { getOiChangePct } = await import("./lib/signalHardening");
     const { getBrainFor, applyEdgePolicy, mirrorPrice } = await import("./lib/statisticalBrain");
@@ -8772,6 +8781,14 @@ Every level must be technically defensible. Return JSON only.`;
 
     const inCount = cards.length;
     let dropped = 0, vetoed = 0, regenerated = 0;
+    // In-memory tally of why cards were dropped THIS run — powers the
+    // structured empty_reason.top_rejections when zero ideas survive. Never
+    // queried from DB; purely run-scoped.
+    const rejectionTally: Record<string, number> = {};
+    const tallyReject = (reason: string) => {
+      const key = reason.replace(/^VETO:\s*/i, "").trim() || "unspecified gate";
+      rejectionTally[key] = (rejectionTally[key] || 0) + 1;
+    };
 
     const out: IdeaCard[] = [];
     await Promise.all(cards.map(async (card, idx) => {
@@ -8796,6 +8813,7 @@ Every level must be technically defensible. Return JSON only.`;
         const edge = await applyEdgePolicy(symbol, llmDirection, rawConvPct);
         if (edge.action === "SUPPRESS") {
           vetoed++; dropped++;
+          tallyReject("edge policy: no demonstrated edge");
           console.log(`[edge-policy] ${symbol} ${llmDirection} SUPPRESSED: ${edge.reason}`);
           return;
         }
@@ -8825,6 +8843,7 @@ Every level must be technically defensible. Return JSON only.`;
         if (cls === "crypto" &&
             isConvictionTailToxic(card.conviction, edge.brainVerdict, convictionTailSuppressEnabled())) {
           vetoed++; dropped++;
+          tallyReject("conviction-tail filter");
           console.log(`[empirical-filter] ${symbol} ${llmDirection} SUPPRESSED: raw conviction ${rawConvPct} >= 50 (inverted tail)`);
           return;
         }
@@ -8872,6 +8891,7 @@ Every level must be technically defensible. Return JSON only.`;
         if (!h.accept) {
           vetoed++;
           dropped++;
+          tallyReject(h.reasonsRejected?.[0] || "hardening gate");
           return; // drop card
         }
 
@@ -8946,7 +8966,7 @@ Every level must be technically defensible. Return JSON only.`;
                   },
                   classificationDiagnostics: cardArchetypeDiagnostics ?? null,
                 }).catch(() => {});
-                if (hot) { vetoed++; dropped++; return; }
+                if (hot) { vetoed++; dropped++; tallyReject("no recognized setup archetype"); return; }
               } catch { /* shadow log is best-effort */ }
             }
             if (cardArchetype && cardArchetype !== "UNCLASSIFIED") {
@@ -9017,7 +9037,9 @@ Every level must be technically defensible. Return JSON only.`;
               } catch { /* best-effort */ }
               if (hot) {
                 cardTrendFilter.enforced = true;
-                vetoed++; dropped++; return;
+                vetoed++; dropped++;
+                tallyReject("counter-trend filter");
+                return;
               }
             }
           }
@@ -9192,19 +9214,68 @@ Every level must be technically defensible. Return JSON only.`;
       if (!Number.isFinite(e) || !Number.isFinite(sl) || !Number.isFinite(t1) || Math.abs(e - sl) <= 0) {
         // Can't validate R:R — drop rather than ship a malformed card.
         postFloorDropped++;
+        tallyReject("malformed levels — cannot validate R:R");
         console.warn(`[hardenTradeIdeas DEFENSE] dropping ${c?.asset || "?"} ${c?.direction || "?"} — cannot compute R:R (e=${e} sl=${sl} tp1=${t1})`);
         continue;
       }
       const rr = Math.abs(t1 - e) / Math.abs(e - sl);
       if (rr < MIN_DISPLAYED_RR) {
         postFloorDropped++;
+        tallyReject(`R:R below ${MIN_DISPLAYED_RR} display floor`);
         console.warn(`[hardenTradeIdeas DEFENSE] dropping ${c?.asset || "?"} ${c?.direction || "?"} — R:R ${rr.toFixed(2)} < ${MIN_DISPLAYED_RR} (hardener likely fail-open: entry=${e} sl=${sl} tp1=${t1} hardenerApplied=${!!c?.hardener?.applied})`);
         continue;
       }
       safeCards.push(c);
     }
     if (postFloorDropped > 0) dropped += postFloorDropped;
-    return { cards: safeCards, inCount, dropped, vetoed, regenerated };
+    return { cards: safeCards, inCount, dropped, vetoed, regenerated, rejectionTally };
+  }
+
+  // ── Structured empty_reason for Trade Ideas (honest reporting only — no
+  //    gate is weakened or bypassed). Priority: circuit breaker → macro
+  //    risk-off → all candidates rejected → no candidates at all.
+  async function buildTradeIdeasEmptyReason(
+    evaluated: number,
+    rejectionTally: Record<string, number>,
+  ): Promise<{ type: string; detail: string; evaluated: number; top_rejections: string[] }> {
+    const top_rejections = Object.entries(rejectionTally)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([reason]) => reason);
+    if (isHalted() || isProbation()) {
+      const cb = getCircuitState();
+      return {
+        type: "CIRCUIT_BREAKER",
+        detail: cb.reason || "Signal engine paused for quality protection",
+        evaluated,
+        top_rejections,
+      };
+    }
+    try {
+      const macro = await isMacroRiskOff();
+      if (macro.halted) {
+        return {
+          type: "MACRO_RISK_OFF",
+          detail: macro.reason || (typeof macro.pctChange === "number" ? `Macro risk-off: BTC ${macro.pctChange.toFixed(2)}% in 4h` : "Macro risk-off: BTC flush detected"),
+          evaluated,
+          top_rejections,
+        };
+      }
+    } catch { /* fail-open — fall through to candidate-based reasons */ }
+    if (evaluated > 0) {
+      return {
+        type: "ALL_REJECTED",
+        detail: `${evaluated} candidates evaluated; none met the quality thresholds`,
+        evaluated,
+        top_rejections,
+      };
+    }
+    return {
+      type: "NO_CANDIDATES",
+      detail: "No qualifying setups this run",
+      evaluated,
+      top_rejections,
+    };
   }
 
   // In-flight map for single-flight coalescing of identical concurrent
@@ -9644,14 +9715,25 @@ Every level must be technically defensible. Return JSON only.`;
         const looksJson = trimmed.startsWith("{") && trimmed.includes('"trades"');
         if (looksJson) {
           const parsed: any = JSON.parse(trimmed);
-          if (parsed && Array.isArray(parsed.trades) && parsed.trades.length > 0) {
-            const hardened = await hardenTradeIdeas(parsed.trades, apiKey);
-            parsed.trades = hardened.cards;
+          if (parsed && Array.isArray(parsed.trades)) {
+            const evaluated = parsed.trades.length;
+            let runTally: Record<string, number> = {};
+            if (evaluated > 0) {
+              const hardened = await hardenTradeIdeas(parsed.trades, apiKey);
+              parsed.trades = hardened.cards;
+              runTally = hardened.rejectionTally;
+              console.log(
+                `[ai/analyze] hardener: in=${hardened.inCount} out=${hardened.cards.length} ` +
+                `(dropped=${hardened.dropped} vetoed=${hardened.vetoed} regen=${hardened.regenerated})`,
+              );
+            }
+            // ── Structured empty_reason — honest reporting when zero ideas
+            // survive. No gate is weakened; we only explain WHY it's empty.
+            if (parsed.trades.length === 0) {
+              parsed.empty_reason = await buildTradeIdeasEmptyReason(evaluated, runTally);
+              console.log(`[ai/analyze] empty run — reason=${parsed.empty_reason.type} evaluated=${evaluated} top=${parsed.empty_reason.top_rejections.join(" | ") || "none"}`);
+            }
             text = JSON.stringify(parsed);
-            console.log(
-              `[ai/analyze] hardener: in=${hardened.inCount} out=${hardened.cards.length} ` +
-              `(dropped=${hardened.dropped} vetoed=${hardened.vetoed} regen=${hardened.regenerated})`,
-            );
           }
         }
       } catch (e: any) {
