@@ -127,12 +127,21 @@ export default function QuantScanner({ mode, isPro, isElite }) {
     setResults(collected);
   };
 
-  const hasValidSignal = (r) => r.result && r.result.signal !== "SUPPRESSED" && r.result.signal && r.result.entry?.price;
+  // A tradeable card needs an EXPLICIT LONG or SHORT direction. NEUTRAL (and
+  // any other non-directional signal) carries reference levels but no trade —
+  // rendering it through SignalCard fabricated a "↓ SHORT" badge over
+  // long-shaped levels. Those now land in the neutral bucket below.
+  const dirOf = (r) => {
+    const s = String(r.result?.signal || "").toUpperCase();
+    return s.includes("SHORT") ? "SHORT" : s.includes("LONG") ? "LONG" : null;
+  };
+  const hasValidSignal = (r) => r.result && r.result.signal !== "SUPPRESSED" && dirOf(r) && r.result.entry?.price;
   const qualifying = results.filter(r => hasValidSignal(r) && (r.result.rr == null || r.result.rr >= 1.3))
     .sort((a, b) => (b.result.win_probability || 0) - (a.result.win_probability || 0));
   const belowThreshold = results.filter(r => hasValidSignal(r) && r.result.rr != null && r.result.rr < 1.3)
     .sort((a, b) => (b.result.rr || 0) - (a.result.rr || 0));
   const suppressed = results.filter(r => r.result && r.result.signal === "SUPPRESSED");
+  const neutral = results.filter(r => r.result && r.result.signal !== "SUPPRESSED" && !dirOf(r));
   const errors = results.filter(r => r.error);
   const hasDone = results.length > 0 && !scanning;
 
@@ -252,7 +261,7 @@ export default function QuantScanner({ mode, isPro, isElite }) {
       )}
 
       {hasDone && (
-        <ScanSummary scanned={results.length} found={qualifying.length} suppressed={suppressed.length} errors={errors.length} regime={regime} />
+        <ScanSummary scanned={results.length} found={qualifying.length} suppressed={suppressed.length} errors={errors.length} neutral={neutral.length} regime={regime} />
       )}
 
       {qualifying.length > 0 && (
@@ -276,6 +285,18 @@ export default function QuantScanner({ mode, isPro, isElite }) {
         </div>
       )}
 
+      {neutral.length > 0 && hasDone && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO, letterSpacing: "0.08em", marginBottom: 6 }}>NEUTRAL — NO DIRECTIONAL EDGE</div>
+          {neutral.map(r => (
+            <div key={r.ticker} data-testid={`neutral-signal-${r.ticker}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#e0e0e0", fontFamily: MONO }}>{r.ticker}</span>
+              <span style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", fontFamily: MONO }}>No long/short edge on this timeframe — no trade card issued.</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {suppressed.length > 0 && hasDone && (
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO, letterSpacing: "0.08em", marginBottom: 6 }}>SUPPRESSED</div>
@@ -283,7 +304,7 @@ export default function QuantScanner({ mode, isPro, isElite }) {
         </div>
       )}
 
-      {hasDone && qualifying.length === 0 && belowThreshold.length === 0 && suppressed.length === 0 && (
+      {hasDone && qualifying.length === 0 && belowThreshold.length === 0 && suppressed.length === 0 && neutral.length === 0 && (
         <div style={{ textAlign: "center", padding: "32px 16px", background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10 }}>
           <div style={{ fontSize: 28, marginBottom: 8 }}>⛔</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", fontFamily: MONO }}>NO SETUPS FOUND</div>

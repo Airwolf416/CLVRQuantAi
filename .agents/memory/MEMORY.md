@@ -17,3 +17,4 @@
 - [Guard before persist](guard-before-persist.md) — response-level repair guards still leak via DB rows persisted earlier in the handler; guard must sit above ALL sinks + read-time repair for legacy rows.
 - [Curl-testing auth-gated routes](curl-auth-testing.md) — Secure session cookie is dropped over plain-http curl; use the signin bearer token; in-memory rate limiters reset on workflow restart.
 - [applySignalHardening caller propagation](signal-hardening-caller-propagation.md) — shared gate RETURNS levels (doesn't mutate); all 3 callers must echo back any newly-mutated field or it's silently dropped.
+- [NEUTRAL badge fabrication](neutral-badge-fabrication.md) — when server guards are verified clean but users still see bad cards, audit the UI's attribute derivation; binary `isLong ? LONG : SHORT` painted NEUTRAL as SHORT.

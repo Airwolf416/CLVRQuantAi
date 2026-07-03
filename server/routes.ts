@@ -8255,8 +8255,20 @@ Every level must be technically defensible. Return JSON only.`;
       // rr fallback — SKIPPED when the geometry guard just ran a correction:
       // the guard's rr is directional and intentionally null for unmirrorable
       // legs; overwriting that null with absolute Math.abs math would violate
-      // the "never absolute R:R" convention.
-      if (!parsed.rr && !parsed.geometry_auto_corrected && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
+      // the "never absolute R:R" convention. Also DIRECTIONAL-ONLY: a NEUTRAL
+      // result must not get an absolute-math rr — that fake rr (≥1.3) was
+      // promoting NEUTRAL cards into the scanner's "qualifying" bucket where
+      // the client rendered them as SHORT trade cards with long-side levels.
+      const _sigForRR = String(parsed.signal || "").toUpperCase();
+      const _isDirectional = _sigForRR.includes("LONG") || _sigForRR.includes("SHORT");
+      if (!_isDirectional) {
+        // Non-directional (NEUTRAL) results must never ship an R:R at all —
+        // not even one the LLM supplied via tp1.rr_ratio. R:R is meaningless
+        // without a direction and a fake value promoted NEUTRAL into the
+        // scanner's qualifying bucket.
+        parsed.rr = null;
+      }
+      if (!parsed.rr && !parsed.geometry_auto_corrected && _isDirectional && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
         const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
         const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);
         parsed.rr = rAmt > 0.000001 ? rwAmt / rAmt : 0;
