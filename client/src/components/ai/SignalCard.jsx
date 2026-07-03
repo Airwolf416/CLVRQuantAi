@@ -27,7 +27,14 @@ export default function SignalCard({ ticker, result, rank, mode }) {
 
   if (!result || result.signal === "SUPPRESSED") return null;
 
-  const isLong = result.signal?.includes("LONG");
+  // Direction comes ONLY from an explicit LONG/SHORT in the signal string.
+  // Anything else (NEUTRAL, etc.) must never render as a trade card — the old
+  // `isLong ? LONG : SHORT` fallback painted NEUTRAL results as "↓ SHORT"
+  // while their levels were long-shaped, which looked like inverted geometry.
+  const sigU = String(result.signal || "").toUpperCase();
+  const direction = sigU.includes("SHORT") ? "SHORT" : sigU.includes("LONG") ? "LONG" : null;
+  if (!direction) return null;
+  const isLong = direction === "LONG";
   const borderColor = result.kronos ? "#c9a84c" : isLong ? "#22c55e" : "#ef4444";
   const dirColor = isLong ? "#22c55e" : "#ef4444";
 

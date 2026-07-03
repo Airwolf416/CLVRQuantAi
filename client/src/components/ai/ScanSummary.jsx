@@ -1,6 +1,6 @@
 const MONO = "'IBM Plex Mono', monospace";
 
-export default function ScanSummary({ scanned, found, suppressed, errors, regime }) {
+export default function ScanSummary({ scanned, found, suppressed, errors, neutral = 0, regime }) {
   const crashProb = Math.round((100 - (regime?.score || 50)) * 0.8);
   const crashColor = crashProb > 60 ? "#ff4444" : crashProb > 30 ? "#ff8c00" : "#22c55e";
 
@@ -19,6 +19,11 @@ export default function ScanSummary({ scanned, found, suppressed, errors, regime
           </div>
         ))}
       </div>
+      {neutral > 0 && (
+        <div data-testid="text-neutral-count" style={{ fontSize: 8, color: "rgba(255,255,255,0.4)", fontFamily: MONO, marginTop: 8 }}>
+          ◈ {neutral} asset{neutral > 1 ? "s" : ""} neutral — no directional edge, no trade card
+        </div>
+      )}
       {suppressed > 0 && (
         <div style={{ fontSize: 8, color: "#ff8c00", fontFamily: MONO, marginTop: 8 }}>
           🛑 {suppressed} signal{suppressed > 1 ? "s" : ""} suppressed by risk rules
