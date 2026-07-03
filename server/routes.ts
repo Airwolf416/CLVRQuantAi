@@ -3570,6 +3570,37 @@ export async function registerRoutes(
       console.error("[signal-history] fetch failed:", e.message);
       return res.json({ signals: [], isPaidUser, isDelayed: false });
     }
+    // ── Display-time geometry repair (same pattern as /api/signals/feed) ──
+    // signals-table rows written before the scanner emission guard (or by any
+    // legacy writer) can carry wrong-side SL/TP for their direction badge.
+    // Repair for display only — stored rows untouched; silent so polling
+    // doesn't spam telemetry. Fails open per row.
+    records = records.map((r: any) => {
+      try {
+        const dir = r.direction === "LONG" || r.direction === "SHORT" ? r.direction : null;
+        const entry = Number(r.entry);
+        const sl = Number(r.stopLoss);
+        const tp1 = Number(r.tp1);
+        if (!dir || !Number.isFinite(entry) || entry <= 0 || !Number.isFinite(sl) || !Number.isFinite(tp1)) return r;
+        const g = enforceGeometry({
+          direction: dir,
+          entry,
+          stopLoss: sl,
+          tp1,
+        }, { symbol: r.token || "?", source: "auto_scanner", silent: true });
+        if (!g.corrected) return r;
+        return {
+          ...r,
+          stopLoss: String(g.stopLoss),
+          tp1: String(g.tp1),
+          stopPct: (Math.abs(entry - g.stopLoss) / entry * 100).toFixed(1),
+          tp1Pct: (Math.abs(g.tp1 - entry) / entry * 100).toFixed(1),
+          geometry_auto_corrected: true,
+        };
+      } catch {
+        return r; // fail open per-row
+      }
+    });
     if (isPaidUser) {
       return res.json({ signals: records, isPaidUser: true, isDelayed: false });
     }
