@@ -31,6 +31,10 @@ export type GeometryResult = GeometryLevels & {
 export type GeometryMeta = {
   symbol?: string;
   source?: "auto_scanner" | "ai_signal" | "manual";
+  // Read-time display repairs (e.g. /api/signals/feed re-serving stored rows)
+  // set silent=true so a historical bad row doesn't re-log telemetry on every
+  // poll. Emission-time repairs leave it unset.
+  silent?: boolean;
 };
 
 export function enforceGeometry(input: GeometryLevels, meta?: GeometryMeta): GeometryResult {
@@ -93,7 +97,7 @@ export function enforceGeometry(input: GeometryLevels, meta?: GeometryMeta): Geo
   }
 
   const corrected = correctedLegs.length > 0;
-  if (corrected) {
+  if (corrected && !meta?.silent) {
     const symbol = meta?.symbol || "?";
     console.warn(`[GeometryGuard] ${symbol} ${direction}: mirrored ${correctedLegs.join(",")} to match badge`);
     try {

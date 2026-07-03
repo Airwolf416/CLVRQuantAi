@@ -1583,6 +1583,44 @@ async function detectMoves() {
       continue;
     }
 
+    // ── FINAL GEOMETRY GUARD (auto-scanner emission) ─────────────────────
+    // Levels above are constructed directionally, but this is the LAST gate
+    // before the signal reaches liveSignals (/api/signals), the DB persist,
+    // and ai_signal_log — same shared guard as every other emission point.
+    // Fails open on any error.
+    try {
+      const gDir: "LONG" | "SHORT" =
+        signal.dir === "LONG" || signal.dir === "SHORT"
+          ? signal.dir
+          : (String(signal.dir || "").includes("LONG") ? "LONG" : "SHORT");
+      const g = enforceGeometry({
+        direction: gDir,
+        entry: Number(signal.entry),
+        stopLoss: Number(signal.stopLoss),
+        tp1: Number(signal.tp1),
+        tp2: Number.isFinite(Number(signal.tp2)) ? Number(signal.tp2) : null,
+      }, { symbol: sym, source: "auto_scanner" });
+      if (g.corrected) {
+        const ep = g.entry;
+        signal.stopLoss = g.stopLoss;
+        signal.tp1 = g.tp1;
+        if (g.tp2 != null) { signal.tp2 = g.tp2; signal.target = g.tp2; }
+        signal.stopPct = (Math.abs(ep - g.stopLoss) / ep * 100).toFixed(1);
+        signal.tp1Pct = (Math.abs(g.tp1 - ep) / ep * 100).toFixed(1);
+        if (g.tp2 != null) signal.tp2Pct = (Math.abs(g.tp2 - ep) / ep * 100).toFixed(1);
+        // DIRECTIONAL R:R off the repaired levels (no Math.abs) — matches
+        // the guard's convention everywhere else.
+        const dd = gDir === "LONG" ? ep - g.stopLoss : g.stopLoss - ep;
+        if (dd > 0) {
+          signal.rr1 = ((gDir === "LONG" ? g.tp1 - ep : ep - g.tp1) / dd).toFixed(1);
+          if (g.tp2 != null) signal.rr2 = ((gDir === "LONG" ? g.tp2 - ep : ep - g.tp2) / dd).toFixed(1);
+        }
+        (signal as any).geometry_auto_corrected = true;
+      }
+    } catch (geoErr: any) {
+      console.warn(`[SCANNER] ${sym} geometry guard failed (non-fatal):`, (geoErr as Error)?.message || geoErr);
+    }
+
     liveSignals.unshift(signal);
     // ── AUTOPOSTER DISABLED ──────────────────────────────────────────────
     // The live auto-scanner used to fire the Telegram autoposter on every
@@ -2312,7 +2350,41 @@ export async function registerRoutes(
         ? or(eq(aiSignalLog.scope, "global"), and(eq(aiSignalLog.scope, "promoted"), eq(aiSignalLog.targetUserId, userId)))
         : eq(aiSignalLog.scope, "global");
       const rows = await db.select().from(aiSignalLog).where(visible).orderBy(desc(aiSignalLog.createdAt)).limit(limit);
-      res.json({ count: rows.length, signals: rows });
+      // ── Display-time geometry repair ──────────────────────────────────────
+      // Rows persisted BEFORE the geometry guard moved ahead of the DB write
+      // (plus any legacy rows) can carry wrong-side SL/TP for their direction
+      // badge. Repair them here at read time — display only, the stored row is
+      // untouched. silent=true so historical bad rows don't re-log telemetry
+      // on every poll.
+      const signals = rows.map((r: any) => {
+        try {
+          const dir = r.direction === "LONG" || r.direction === "SHORT" ? r.direction : null;
+          const entry = Number(r.entryPrice);
+          const sl = Number(r.stopLoss);
+          const tp1 = Number(r.tp1Price);
+          if (!dir || !Number.isFinite(entry) || entry <= 0 || !Number.isFinite(sl) || !Number.isFinite(tp1)) return r;
+          const g = enforceGeometry({
+            direction: dir,
+            entry,
+            stopLoss: sl,
+            tp1,
+            tp2: r.tp2Price != null ? Number(r.tp2Price) : null,
+            tp3: r.tp3Price != null ? Number(r.tp3Price) : null,
+          }, { symbol: r.token || "?", source: "ai_signal", silent: true });
+          if (!g.corrected) return r;
+          return {
+            ...r,
+            stopLoss: String(g.stopLoss),
+            tp1Price: String(g.tp1),
+            tp2Price: g.tp2 != null ? String(g.tp2) : r.tp2Price,
+            tp3Price: g.tp3 != null ? String(g.tp3) : r.tp3Price,
+            geometry_auto_corrected: true,
+          };
+        } catch {
+          return r; // fail open per-row — never block the feed
+        }
+      });
+      res.json({ count: signals.length, signals });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "failed" });
     }
@@ -8092,7 +8164,68 @@ Every level must be technically defensible. Return JSON only.`;
       console.log(`[SIGNAL GATE] ${ticker} ${parsed.signal || "NONE"} — adaptL.suppressed=${!!adaptLong?.suppressed}, adaptS.suppressed=${!!adaptShort?.suppressed}, cdL=${cdLong.inCooldown ? cdLong.minutesLeft + "m" : "ok"}, cdS=${cdShort.inCooldown ? cdShort.minutesLeft + "m" : "ok"}, macroHalt=${macroRisk.halted}, circuit=${isHalted()}, probation=${isProbation()}`);
       // Remove tp3 if AI hallucinated it when conditions not met
       if (!(adjScore >= 85 && oiM > 100)) delete parsed.tp3;
-      if (!parsed.rr && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
+      // ── FINAL GEOMETRY GUARD (shared) ─────────────────────────────────────
+      // Last line of defense: if any upstream path (LLM, archetype flip,
+      // hardener, brain INVERT) ended up with a direction badge whose
+      // SL/TP geometry contradicts it (e.g. SHORT with SL<entry & TP>entry),
+      // mirror prices around entry so the card matches the action the user
+      // would take. The mirror logic lives in server/lib/geometryGuard.ts —
+      // the SAME implementation runs at every emission point (this endpoint
+      // also feeds the scanner "Execute" loop and the below-threshold
+      // transparency cards). MUST run BEFORE the ai_signal_log persist below
+      // so the stored row (which feeds /api/signals/feed, the outcome
+      // resolver, and every stats surface) carries the SAME repaired levels
+      // the user sees — persisting pre-repair levels is how a SHORT card
+      // with long-side geometry leaked into the feed. Fails open on any error.
+      try {
+        if (parsed?.signal && parsed.entry?.price && parsed.stopLoss?.price && parsed.tp1?.price) {
+          const sigU = String(parsed.signal).toUpperCase();
+          const dir = sigU.includes("SHORT") ? "SHORT" : sigU.includes("LONG") ? "LONG" : null;
+          if (dir) {
+            const g = enforceGeometry({
+              direction: dir,
+              entry: Number(parsed.entry.price),
+              stopLoss: Number(parsed.stopLoss.price),
+              tp1: Number(parsed.tp1.price),
+              tp2: parsed.tp2?.price != null ? Number(parsed.tp2.price) : null,
+              tp3: parsed.tp3?.price != null ? Number(parsed.tp3.price) : null,
+            }, { symbol: ticker, source: "ai_signal" });
+            if (g.corrected) {
+              const ep = g.entry;
+              parsed.stopLoss.price = g.stopLoss;
+              parsed.tp1.price = g.tp1;
+              if (parsed.tp2?.price != null && g.tp2 != null) parsed.tp2.price = g.tp2;
+              if (parsed.tp3?.price != null && g.tp3 != null) parsed.tp3.price = g.tp3;
+              // Recompute displayed metrics from the repaired levels.
+              // Per-leg R:R uses the DIRECTIONAL stop distance — same sign
+              // convention as the guard's headline rr (no Math.abs).
+              const dd = dir === "LONG" ? ep - g.stopLoss : g.stopLoss - ep;
+              const legRR = (tp: number): number | null =>
+                dd > 0 ? parseFloat(((dir === "LONG" ? tp - ep : ep - tp) / dd).toFixed(2)) : null;
+              parsed.tp1.gain_pct = g.tpGainPct ?? parsed.tp1.gain_pct;
+              parsed.tp1.rr_ratio = g.rr;
+              if (parsed.tp2?.price != null) {
+                parsed.tp2.gain_pct = parseFloat((Math.abs(Number(parsed.tp2.price) - ep) / ep * 100).toFixed(2));
+                parsed.tp2.rr_ratio = legRR(Number(parsed.tp2.price));
+              }
+              if (parsed.tp3?.price != null) {
+                parsed.tp3.gain_pct = parseFloat((Math.abs(Number(parsed.tp3.price) - ep) / ep * 100).toFixed(2));
+                parsed.tp3.rr_ratio = legRR(Number(parsed.tp3.price));
+              }
+              parsed.stopLoss.distance_pct = g.slDistancePct ?? parsed.stopLoss.distance_pct;
+              parsed.rr = g.rr; // directional headline R:R — null when geometry stays invalid
+              parsed.geometry_auto_corrected = true;
+            }
+          }
+        }
+      } catch (geoErr: any) {
+        console.warn("[Quant] geometry guard failed (non-fatal):", geoErr?.message || geoErr);
+      }
+      // rr fallback — SKIPPED when the geometry guard just ran a correction:
+      // the guard's rr is directional and intentionally null for unmirrorable
+      // legs; overwriting that null with absolute Math.abs math would violate
+      // the "never absolute R:R" convention.
+      if (!parsed.rr && !parsed.geometry_auto_corrected && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
         const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
         const rwAmt = Math.abs(parsed.tp1.price - parsed.entry.price);
         parsed.rr = rAmt > 0.000001 ? rwAmt / rAmt : 0;
@@ -8184,60 +8317,8 @@ Every level must be technically defensible. Return JSON only.`;
           })(),
         }).catch(() => {});
       }
-      // ── FINAL GEOMETRY GUARD (shared) ─────────────────────────────────────
-      // Last line of defense: if any upstream path (LLM, archetype flip,
-      // hardener, brain INVERT) ended up with a direction badge whose
-      // SL/TP geometry contradicts it (e.g. SHORT with SL<entry & TP>entry),
-      // mirror prices around entry so the card matches the action the user
-      // would take. The mirror logic lives in server/lib/geometryGuard.ts —
-      // the SAME implementation runs at every emission point (this endpoint
-      // also feeds the scanner "Execute" loop and the below-threshold
-      // transparency cards). Runs AFTER every mutation in the pipeline so it
-      // catches anything that slipped through. Fails open on any error.
-      try {
-        if (parsed?.signal && parsed.entry?.price && parsed.stopLoss?.price && parsed.tp1?.price) {
-          const sigU = String(parsed.signal).toUpperCase();
-          const dir = sigU.includes("SHORT") ? "SHORT" : sigU.includes("LONG") ? "LONG" : null;
-          if (dir) {
-            const g = enforceGeometry({
-              direction: dir,
-              entry: Number(parsed.entry.price),
-              stopLoss: Number(parsed.stopLoss.price),
-              tp1: Number(parsed.tp1.price),
-              tp2: parsed.tp2?.price != null ? Number(parsed.tp2.price) : null,
-              tp3: parsed.tp3?.price != null ? Number(parsed.tp3.price) : null,
-            }, { symbol: ticker, source: "ai_signal" });
-            if (g.corrected) {
-              const ep = g.entry;
-              parsed.stopLoss.price = g.stopLoss;
-              parsed.tp1.price = g.tp1;
-              if (parsed.tp2?.price != null && g.tp2 != null) parsed.tp2.price = g.tp2;
-              if (parsed.tp3?.price != null && g.tp3 != null) parsed.tp3.price = g.tp3;
-              // Recompute displayed metrics from the repaired levels.
-              // Per-leg R:R uses the DIRECTIONAL stop distance — same sign
-              // convention as the guard's headline rr (no Math.abs).
-              const dd = dir === "LONG" ? ep - g.stopLoss : g.stopLoss - ep;
-              const legRR = (tp: number): number | null =>
-                dd > 0 ? parseFloat(((dir === "LONG" ? tp - ep : ep - tp) / dd).toFixed(2)) : null;
-              parsed.tp1.gain_pct = g.tpGainPct ?? parsed.tp1.gain_pct;
-              parsed.tp1.rr_ratio = g.rr;
-              if (parsed.tp2?.price != null) {
-                parsed.tp2.gain_pct = parseFloat((Math.abs(Number(parsed.tp2.price) - ep) / ep * 100).toFixed(2));
-                parsed.tp2.rr_ratio = legRR(Number(parsed.tp2.price));
-              }
-              if (parsed.tp3?.price != null) {
-                parsed.tp3.gain_pct = parseFloat((Math.abs(Number(parsed.tp3.price) - ep) / ep * 100).toFixed(2));
-                parsed.tp3.rr_ratio = legRR(Number(parsed.tp3.price));
-              }
-              parsed.stopLoss.distance_pct = g.slDistancePct ?? parsed.stopLoss.distance_pct;
-              parsed.rr = g.rr; // directional headline R:R — null when geometry stays invalid
-              parsed.geometry_auto_corrected = true;
-            }
-          }
-        }
-      } catch (geoErr: any) {
-        console.warn("[Quant] geometry guard failed (non-fatal):", geoErr?.message || geoErr);
-      }
+      // Geometry guard already ran ABOVE (before the ai_signal_log persist)
+      // so the stored row and this response carry identical repaired levels.
       res.json(parsed);
     } catch (err: any) {
       console.error("[Quant Engine]", err);
@@ -8726,16 +8807,43 @@ Every level must be technically defensible. Return JSON only.`;
         const direction = dirRaw.includes("LONG") ? "LONG" : dirRaw.includes("SHORT") ? "SHORT" : null;
         const entry = t.entryPrice ?? t.entry ?? t.entry_price;
         if (!token || !direction || entry == null) continue;
+        // Geometry guard before persist — client-supplied levels must never
+        // land in ai_signal_log with wrong-side SL/TP for their direction
+        // badge (the row feeds /api/signals/feed + the outcome resolver).
+        // Fails open on any error.
+        let gSl = t.stopLoss ?? t.sl ?? t.stop_loss ?? null;
+        let gTp1 = t.tp1 ?? t.tp1Price ?? null;
+        let gTp2 = t.tp2 ?? t.tp2Price ?? null;
+        let gTp3 = t.tp3 ?? t.tp3Price ?? null;
+        try {
+          const eN = Number(entry), slN = Number(gSl), tp1N = Number(gTp1);
+          if (Number.isFinite(eN) && eN > 0 && Number.isFinite(slN) && Number.isFinite(tp1N)) {
+            const g = enforceGeometry({
+              direction,
+              entry: eN,
+              stopLoss: slN,
+              tp1: tp1N,
+              tp2: gTp2 != null && Number.isFinite(Number(gTp2)) ? Number(gTp2) : null,
+              tp3: gTp3 != null && Number.isFinite(Number(gTp3)) ? Number(gTp3) : null,
+            }, { symbol: token, source: "ai_signal" });
+            if (g.corrected) {
+              gSl = g.stopLoss;
+              gTp1 = g.tp1;
+              if (gTp2 != null && g.tp2 != null) gTp2 = g.tp2;
+              if (gTp3 != null && g.tp3 != null) gTp3 = g.tp3;
+            }
+          }
+        } catch { /* fail open — persist original levels */ }
         const id = await logSignal({
           source: "trade_ideas",
           token,
           direction,
           tradeType: t.tradeType || t.trade_type || null,
           entryPrice: entry,
-          tp1Price: t.tp1 ?? t.tp1Price ?? null,
-          tp2Price: t.tp2 ?? t.tp2Price ?? null,
-          tp3Price: t.tp3 ?? t.tp3Price ?? null,
-          stopLoss: t.stopLoss ?? t.sl ?? t.stop_loss ?? null,
+          tp1Price: gTp1,
+          tp2Price: gTp2,
+          tp3Price: gTp3,
+          stopLoss: gSl,
           leverage: t.leverage ? String(t.leverage) : null,
           conviction: typeof t.conviction === "number" ? t.conviction : null,
           edgeScore: t.edge || t.edgeScore || null,
