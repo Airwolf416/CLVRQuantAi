@@ -463,6 +463,14 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS archetype TEXT`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_archetype ON ai_signal_log (token, direction, archetype, created_at DESC) WHERE archetype IS NOT NULL AND outcome IS NOT NULL AND outcome <> 'PENDING'`).catch(() => {});
 
+    // ── Visibility scope columns (mirror of shared/schema.ts scope/targetUserId).
+    // These were added to the Drizzle schema but never reconciled here, so live
+    // DBs (Railway prod) lacked them and EVERY full-row select from
+    // ai_signal_log — including GET /api/signals/feed — failed with
+    // `column "scope" does not exist`. Additive + idempotent.
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS scope VARCHAR(16) NOT NULL DEFAULT 'global'`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS target_user_id VARCHAR(64)`).catch(() => {});
+
     // ── Module 2 (Setup Taxonomy + Per-Setup Stats): additive columns +
     // tables. Same forbidden-file constraints as Module 1 — shared/schema.ts
     // intentionally NOT touched; raw SQL CREATE/ALTER IF NOT EXISTS is the
