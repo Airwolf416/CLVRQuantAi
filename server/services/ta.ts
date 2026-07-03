@@ -2,8 +2,6 @@
 // All indicator calculations, pattern recognition, and scoring logic.
 // Pure functions — no side effects, no external imports beyond config.
 
-import { BACKTEST_WIN_RATES } from "../config/assets";
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface PricePoint { price: number; ts: number }
@@ -21,7 +19,7 @@ export interface PatternResult {
     double_bottom?: boolean;
   };
 }
-export interface BacktestResult { winRate: number; label: string; pts: number }
+export interface SetupStructureResult { label: string; pts: number }
 
 // ── RSI (Relative Strength Index) ────────────────────────────────────────────
 
@@ -294,18 +292,23 @@ export function detectPatterns(candles: Candle[]): PatternResult {
   };
 }
 
-// ── Backtest Win Rate Lookup ──────────────────────────────────────────────────
+// ── Setup Structure Quality ───────────────────────────────────────────────────
+// Scores pattern clarity + session-liquidity fit of the CURRENT setup
+// (max 10 pts). Purely descriptive — no historical win-rate or probability
+// claims. Replaces the removed fabricated backtest-win-rate lookup; same max
+// points so the total score scale is unchanged.
 
-export function getBacktestWinRate(dir: string, patterns: string[], session: string): BacktestResult {
-  let winRate = 0;
-  for (const p of patterns) {
-    const k = `${dir}_${p}_${session}`;
-    if (BACKTEST_WIN_RATES[k]) { winRate = BACKTEST_WIN_RATES[k]; break; }
-  }
-  if (!winRate) winRate = BACKTEST_WIN_RATES[`${dir}_DEFAULT_${session}`] || (dir === "LONG" ? 0.54 : 0.53);
-  const label = `${Math.round(winRate * 100)}% historical setup context`;
-  const pts = winRate >= 0.65 ? 10 : winRate >= 0.60 ? 7 : winRate >= 0.55 ? 5 : 2;
-  return { winRate: +winRate.toFixed(2), label, pts };
+export function getSetupStructureQuality(dir: string, patterns: string[], session: string): SetupStructureResult {
+  const bullAligned = ["pattern_bull_flag", "pattern_double_bottom"];
+  const bearAligned = ["pattern_head_shoulders", "pattern_bear_flag", "pattern_double_top"];
+  const aligned = patterns.find(p => (dir === "LONG" ? bullAligned : bearAligned).includes(p));
+  const highLiquidity = session === "NY" || session === "LONDON";
+  const sessionLabel = session === "NY" ? "NY session" : session === "LONDON" ? "London session" : session === "ASIAN" ? "Asian session" : "off-peak session";
+  const patternName = aligned ? aligned.replace("pattern_", "").replace(/_/g, " ") : "";
+  if (aligned && highLiquidity) return { pts: 10, label: `Setup structure: strong (${sessionLabel} ${patternName})` };
+  if (aligned) return { pts: 7, label: `Setup structure: moderate (${sessionLabel} ${patternName}, thinner liquidity)` };
+  if (patterns.length > 0) return { pts: 5, label: `Setup structure: mixed (pattern not aligned with ${dir} direction)` };
+  return { pts: 2, label: `Setup structure: weak (no clear pattern, ${sessionLabel})` };
 }
 
 // ── EMA (Exponential Moving Average) ─────────────────────────────────────────

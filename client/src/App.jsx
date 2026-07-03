@@ -403,7 +403,7 @@ function AdvancedFactorBreakdown({breakdown,C:_C}){
     {key:"newsSentiment",    label:"NEWS SENTIMENT",       color:"#06b6d4",  desc:"CryptoPanic live market sentiment"},
     {key:"fundamentals",     label:"FUNDAMENTALS",         color:"#c9a84c",  desc:"Open Interest · Funding Rate"},
     {key:"patternRecognition",label:"PATTERN RECOGNITION", color:"#f97316",  desc:"Chart patterns (flags, H&S, double tops)"},
-    {key:"backtesting",      label:"BACK TESTING",         color:"#22c55e",  desc:"Historical behavior of similar setups (illustrative, not predictive)"},
+    {key:"setupStructure",   label:"SETUP STRUCTURE",      color:"#22c55e",  desc:"Pattern clarity and session-liquidity fit of the current setup"},
   ];
   const total=breakdown.total||0;
   return(
@@ -4367,9 +4367,8 @@ function Dashboard({user,setUser,onShowAuth}){
   const askMacroAI=async(evt)=>{
     setMacroAiEvent(evt);setMacroAiResp(null);setMacroAiLoading(true);
     try{
-      const sys=`You are QuantBrain, an elite quantitative market intelligence analyst for CLVRQuant. Provide concise, data-driven analysis of economic releases. Focus on: 1) What the data means for markets, 2) Which assets are most affected, 3) How this changes the macro picture, 4) What to watch next. Be precise and use numbers.`;
       const msg=`Analyze this economic release:\n\nEvent: ${evt.name}\nCountry/Region: ${evt.region||evt.country}\nForecast: ${evt.forecast} ${evt.unit||""}\nPrevious: ${evt.previous||evt.current} ${evt.unit||""}\nActual: ${evt.actual||"Not yet released"} ${evt.unit||""}\nImpact Level: ${evt.impact}\nToday: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}\n\n${evt.actual?`The actual came in ${parseFloat(evt.actual)>parseFloat(evt.forecast)?"ABOVE":"BELOW"} expectations.`:"This event has not yet been released."}\n\nWhat does this mean for markets? Which assets move? What's the macro implication? What should I watch next?`;
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:msg})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({feature:"macroAI",userMessage:msg})});
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403)setMacroAiResp("✦ PRO FEATURE — Upgrade to Pro to unlock AI-powered macro analysis.");
@@ -4512,7 +4511,7 @@ Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT 
         const res = await fetch("/api/ai/analyze", {
           method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userMessage: prompt, maxTokens: 6000, skipTools: true, enableWebSearch: true }),
+          body: JSON.stringify({ feature: "morningBrief", userMessage: prompt, maxTokens: 6000, skipTools: true, enableWebSearch: true }),
         });
         let data = {};
         try { data = await res.json(); } catch {}
@@ -4607,48 +4606,7 @@ Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT 
         }
       }
     }catch{}
-    const sys=`You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
-
-RULES — apply to EVERY output:
-
-1. TRADE TYPE: Classify as SCALP (1-4H hold), DAY TRADE (4-24H), SWING (1-7D), or POSITION (1-4W). Default to DAY TRADE if unclear.
-
-2. VOLATILITY REGIME: Compare current ATR to 20-period avg ATR on the trade type's reference timeframe.
-   HIGH (ATR>1.5x avg): compress TP 30%, widen SL 20%, reduce size 25%.
-   NORMAL (0.7-1.5x): standard params.
-   LOW (ATR<0.7x): skip or reduce size 50%.
-
-3. ATR-SCALED TP/SL — reference timeframes: SCALP=ATR(1H), DAY=ATR(4H), SWING=ATR(1D), POSITION=ATR(1W).
-   TP1=0.5x ATR (50% position), TP2=1x ATR (30%), TP3=1.5x ATR (20% trailing).
-   SL: SCALP=0.3-0.5x ATR, DAY=0.5-0.75x ATR, SWING=0.75-1x ATR, POSITION=1-1.5x ATR.
-   Minimum R:R to TP1 must be 1.2:1 or reject the signal.
-
-4. KILL CLOCK: SCALP=2-4H, DAY=12-24H, SWING=48-72H, POSITION=5-7D. If no TP1 progress at 50% of kill clock, flag momentum decay.
-
-5. MACRO GATE: Block signals within 2H of FOMC/CPI/NFP/BOJ/ECB/BOE. Dampen 20% within 4H of PPI/GDP/retail sales/Fed speakers.
-
-6. OI OVERLAY (when available): OI rising+price rising=bullish, OI rising+price falling=bearish, OI falling+price rising=squeeze (fragile), OI falling+price falling=liquidation (avoid longs). Funding >+0.03% reduces long edge, <-0.03% reduces short edge.
-
-7. EDGE LABELING: Always state "OI-verified", "estimated", or "no OI" after the edge score. Never claim backtest win rates without data.
-
-8. POST-TP1: Move SL to breakeven. After TP2: trail SL at 0.5x ATR. Kill clock expiry with no TP1: close at market.
-
-OUTPUT FORMAT for signals:
-[EMOJI] [ASSET]/USDT [DIRECTION] — [TRADE TYPE]
-Vol Regime: [🔴/🟡/🟢] [HIGH/NORMAL/LOW]
-Entry: [price] | TP1: [price] (50%) | TP2: [price] (30%) | TP3: [price] (20% trail) | SL: [price]
-R:R: [X:1] to TP1 | Edge: [X]% ([source]) | Kill: [X]H | Leverage: [X]x
-Thesis: [1-2 sentences] | Invalidation: [price/condition] | Post-TP1: SL→BE, trail TP3 at 0.5x ATR
-
-OUTPUT FORMAT for analysis:
-📊 [ASSET] — [TIMEFRAME] | Vol: [regime] | Bias: [LONG/SHORT/NEUTRAL]
-Support: [S1], [S2] | Resistance: [R1], [R2]
-Structure: [2-3 lines] | Flow: [OI/funding] | Macro: [upcoming events]
-Playbook: IF [condition] → [action] (provide 2-3 scenarios)
-
-SELF-AUDIT before every output: Trade type? Vol regime? Macro checked? ATR-scaled TP×3? Kill clock? R:R to TP1? OI applied? Post-TP1 plan?
-
-TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
+    const context=`TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | Current ET time: ${nowET}
 [Data fetched: ${nowISO}]
 
 ━━━ SECTION A — HYPERLIQUID PERP DATA [LIVE STREAMING — <1s latency] ━━━
@@ -4664,39 +4622,9 @@ CRYPTO spot (CoinGecko): ${cryptoSnap}
 EQUITIES (Yahoo/FMP): ${stockSnap}
 COMMODITIES: ${metalSnap}
 FOREX (Yahoo/FMP — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap}${storeModeSnap}${regimeSnap}${liqHeatSnap}
-${macroAiSnap}${polySnap}${twAiContext||""}${conflictSnap}${insiderSnap}
-
-⚡ DATA USAGE PROTOCOL — FOLLOW STRICTLY:
-→ PERP/futures question → use SECTION A (HL mark price + funding + OI are definitive)
-→ SPOT question → use SECTION B first, SECTION C as confirmation
-→ EQUITY/COMMODITY → HL synthetic perps in SECTION A for futures; SECTION C for cash/spot
-→ FOREX → SECTION C only (no HL forex perpetuals)
-→ If SECTION A and SECTION C differ by >0.5% → flag the basis difference, trust SECTION A
-→ "n/a" or missing HL data → state data unavailable; use SECTION C with "est" caveat
-
-ANALYSIS STEPS (run mentally before every output):
-1. DATA FRESHNESS: Flag any "n/a" as UNVERIFIED. 2. MACRO CHECK: HIGH-impact within 6h→⚠️ IMMINENT, within 48h→cap lev 2x. 3. STOP/TF CONSISTENCY: Scalp 1-1.5%/10x, Day 1.5-3%/5x, Swing 4-7%/3x. 4. RESISTANCE MAP: ID levels between entry and TP1. 5. FLAGS: Required — list all active flags or "CLEAN". 6. QUIET DAY FILTER: No macro within 8h→filter FX/Gold/stocks (crypto always OK). 7. TP VALIDATION: move needed = TP% ÷ leverage, compare to asset's daily range.
-
-End every signal with:
-━━━ CLVR SIGNAL ━━━
-🔥/⚡/⚠️/❌ TIER [1/2/3/NO TRADE] | [ASSET] [LONG/SHORT]
-Entry: $X | SL: $X (-X%) | TP1: $X (+X%) R:R X:1 | TP2: $X (+X%)
-Leverage: Xx | Conviction: X% | Kelly: X% | Edge: [1 sentence]
-Flags: [list or CLEAN] | Audit: Prices [FRESH/STALE] | Macro [CLEAR/RISK]
-
-WRITING DISCIPLINE — every signal, thesis, and prose answer:
-- BANNED SUPERLATIVES: no "largest / biggest / highest / most / standout / exceptional / unprecedented / leading / best-in-class" without ranked-comparison data. Prefer "elevated / notable / positive".
-- REGIME CONSISTENCY: regime labels you cite MUST match the snapshot's regime context (user sees the same banner).
-- SAMPLE-SIZE HONESTY: <30 resolved trades for a (token, direction) combo → write "small sample (n=X)"; never "statistically significant".
-- FUNDING CALIBRATION: |funding| < 0.01%/8h is "near-flat", not "trending" or "momentum confirmation".
-- OI SCOPE: OI figures are per-symbol; no cross-asset "highest of any" claims.
-- CHASE DISCLOSURE: LONG after >+4% 24h move (or SHORT after <-4%) is a late entry / chase — disclose it.
-- NUMBER MATCHING: prose numbers must match the structured fields exactly.
-
-⚠️ AI analysis only. Always apply your own judgment and risk management.
-Be decisive, specific, and numerical. Use exact live prices. Never force a signal.`;
+${macroAiSnap}${polySnap}${twAiContext||""}${conflictSnap}${insiderSnap}`;
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({system:sys,userMessage:aiInput})});
+      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({feature:"askAI",context,userMessage:aiInput})});
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Market Analyst is exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• CLVR AI analysis — powered by Claude Sonnet 4\n• Top 4 trade ideas with Entry / Stop / TP1 / TP2\n• Confidence levels & Kelly sizing\n• Cross-asset intelligence\n\nTap UPGRADE in the top bar.");
@@ -4745,29 +4673,14 @@ Be decisive, specific, and numerical. Use exact live prices. Never force a signa
     const newsSnap=newsFeed.length>0?`\nNEWS: ${newsFeed.filter(n=>!n.political).slice(0,5).map(n=>`[${n.source}] ${n.title.substring(0,60)}`).join(" | ")}`:"";
     const macroSnap2=macroEvents.length>0?`\nMACRO: ${macroEvents.slice(0,10).map(e=>`${e.date} ${e.timeET||e.time||""} ET ${e.region||e.country}: ${e.name} Impact:${e.impact}`).join(" | ")}`:"";
     const tfLabel=aiTimeframe==="midterm"?"MID-TERM (1-4 week)":aiTimeframe==="longterm"?"LONG-TERM (1-3 month)":"INTRADAY/SWING";
-    const sys=`You are CLVRQuantAI's Trade Idea Generator. You MUST return exactly 4 trade ideas as a JSON object. No markdown. No prose. Only valid JSON.
-
-RULES:
-- Return EXACTLY 4 trades, ranked by conviction score (highest first)
-- Cover diverse assets (mix of crypto, equity, FX, commodity — don't repeat asset classes unless one class dominates)
-- Apply ATR-scaled TP/SL: TP1=0.5x ATR(4H) at 50%, TP2=1x ATR at 30%, TP3=1.5x ATR at 20% trailing
-- Vol regime: compare ATR to 20-period avg. HIGH(>1.5x): compress TP 30%, widen SL 20%. LOW(<0.7x): skip asset.
-- Macro gate: block if high-impact event within 2H, note upcoming events
-- Minimum R:R to TP1: 1.2:1
-- Kill clock: SCALP 2-4H, DAY 12-24H, SWING 48-72H
-- If fewer than 4 qualify, relax threshold to 50% edge but flag as LOW CONVICTION
-- Label edge: "OI-verified" if live OI, "estimated" if inferred, "no OI" if unavailable
-- Timeframe focus: ${tfLabel}
+    const context=`TIMEFRAME FOCUS: ${tfLabel}
 
 TODAY: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} | ET: ${nowET2}
 
 PERPS [LIVE]: ${hlCryptoPerpSnap2}${hlEquityPerpSnap2?` | EQ: ${hlEquityPerpSnap2}`:""}${hlMetalPerpSnap2?` | CMD: ${hlMetalPerpSnap2}`:""}
 SPOT: ${hlSpotSnap2}
 DELAYED: CRYPTO: ${cryptoSnap} | EQ: ${stockSnap} | CMD: ${metalSnap} | FX: ${fxSnap}${sigSnap}${newsSnap}${macroSnap2}
-CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%
-
-RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
-{"generated":"ISO-DATE","regime":{"score":63,"label":"RISK-ON","bias":"Mean-Reversion"},"macroStatus":{"clear":true,"nextEvent":"FOMC Williams 08:35 ET Apr 16","notes":"No blocks active"},"volRegime":"HIGH","trades":[{"rank":1,"asset":"INJ/USDT","direction":"LONG","tradeType":"DAY TRADE","entry":3.29,"sl":3.07,"tp1":{"price":3.58,"pct":50,"rr":"1.3:1"},"tp2":{"price":3.82,"pct":30,"rr":"2.4:1"},"tp3":{"price":4.10,"pct":20,"trailing":true},"leverage":"3x","killClock":"24H","conviction":72,"edge":"72%","edgeSource":"estimated","thesis":"Short thesis here.","invalidation":"Break below $3.07 with volume","flags":["Small OI","HIGH vol"],"scores":{"trend":75,"momentum":80,"structure":68,"oi":65,"volume":55,"macro":70},"postTp1":"SL to breakeven at $3.29"}]}`;
+CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob: ${prob.toFixed(1)}% | Kelly: ${kellyPct.toFixed(1)}%`;
     const userMsg=`Generate ${tfLabel} TOP 4 TRADE IDEAS. Return ONLY valid JSON matching the structure in your instructions. No markdown, no text before or after. Use live prices provided.`;
     // 90s client-side timeout: Claude with 4096 max_tokens can take 45-70s,
     // and Safari aborts fetches with the cryptic "Load failed" after ~60s on
@@ -4779,7 +4692,7 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         method:"POST",
         credentials:"include",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({system:sys,userMessage:userMsg,maxTokens:4096}),
+        body:JSON.stringify({feature:"tradeIdeasLegacy",context,userMessage:userMsg,maxTokens:4096}),
         signal: ctrl.signal,
       });
       clearTimeout(timeoutId);

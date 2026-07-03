@@ -423,7 +423,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const handleSignUp = async () => {
     if (!form.name.trim()) return setError("Please enter your name.");
     if (!form.email.includes("@")) return setError("Please enter a valid email.");
-    if (form.password.length < 6) return setError("Password must be at least 6 characters.");
+    if (form.password.length < 8) return setError("Password must be at least 8 characters.");
     if (form.password !== form.confirm) return setError("Passwords do not match.");
     if (!form.agreeTerms) return setError("You must agree to the terms to continue.");
     setLoading(true);
@@ -501,7 +501,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   };
 
   const handleResetPassword = async () => {
-    if (!newPassword || newPassword.length < 6) return setError("Password must be at least 6 characters.");
+    if (!newPassword || newPassword.length < 8) return setError("Password must be at least 8 characters.");
     if (newPassword !== newPasswordConfirm) return setError("Passwords do not match.");
     setLoading(true);
     setError("");

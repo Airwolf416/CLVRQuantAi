@@ -967,7 +967,6 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       tp1:            t.tp1.toString(),
       tp2:            t.tp2.toString(),
       rrDisplay:      t.riskReward.toFixed(2),
-      winRateDisplay: `${Math.round(t.winRate30d * 100)}% (n=${t.sampleSize})`,
       thesis:         t.thesis,
       sessionFlag:    t.sessionFlag,
     }));

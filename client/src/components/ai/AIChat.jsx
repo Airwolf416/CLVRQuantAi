@@ -231,66 +231,26 @@ export default function AIChat({
         if (blocks.length) execContext = blocks.join("\n\n");
       } catch {}
 
-      const execContextRule = execContext
-        ? `When the EXECUTION CONTEXT block is present, reference VWAP and opening range levels in your tape-read. If absent, do not mention these levels — the asset is not eligible for intraday session structure analysis.`
-        : `Do NOT mention VWAP or opening range levels in this response — no execution context was supplied for the assets in question.`;
-
-      const marketTypeRule = marketTypeFilter === "PERP"
-        ? `MARKET TYPE FILTER: PERP ONLY. Recommend ONLY perpetual futures / leveraged setups. Use ONLY the Section A perp prices supplied below for entry/SL/TP — no spot prices are provided. If an asset is not in Section A it has no Hyperliquid perp; do NOT suggest it. Include leverage. Tight SL. Reference funding/OI/liquidation in thesis.`
-        : marketTypeFilter === "SPOT"
-        ? `MARKET TYPE FILTER: SPOT ONLY. Recommend ONLY spot / cash trades. Use ONLY the Section B/C spot prices supplied below — no perp prices are provided. If an asset is not in Section B or C, do NOT suggest it. NO leverage — set leverage 1x. Wider SL acceptable. Reference accumulation/DCA logic.`
-        : `MARKET TYPE FILTER: BOTH. Mix of PERP and SPOT — label every recommendation as PERP or SPOT and use the price from the matching section (PERP→A, SPOT→B/C, never mix). PERP: leverage + funding/OI rationale. SPOT: 1x, accumulation logic.`;
-
-      // If the user asks about an asset that's been intentionally filtered out
-      // (no pump/dump signal, or wrong section for the active marketType),
-      // don't guess — say so plainly. This prevents the AI from inventing
-      // prices for assets the snapshot deliberately omitted.
-      const outOfUniverseRule = `OUT-OF-UNIVERSE QUESTIONS: If the user asks about an asset that is NOT present in the snapshot sections below, do NOT invent a price or setup. Say plainly: "[ASSET] is not in the current data feed — it's either filtered out by the active market-type filter (${marketTypeFilter}) or has no pump/dump movement right now. Switch the market-type filter or wait for a signal." Then offer to discuss assets that ARE in the snapshot.`;
-
-      const sys = `You are CLVRQuantAI's AI Analyst for leveraged perp futures across crypto, FX, commodities, and equities. Be direct, data-driven, no fluff.
-
-${marketTypeRule}
-
-${outOfUniverseRule}
+      // Server-side system prompt (feature:"aiChat") holds all STATIC
+      // instructions (role, market-type rules, execution-context rule,
+      // output format, writing discipline). The client sends ONLY dynamic
+      // data via `context`: the selected market-type filter, macro pre-flight
+      // rows, execution-context VWAP/OR blocks, the date/time, and the live
+      // market-data sections.
+      const context = `MARKET TYPE FILTER: ${marketTypeFilter}
 
 MANDATORY STEP 1 — MACRO PRE-FLIGHT:
 ${macroCtx || "No macro data. Proceed with CAUTION."}
 
-${execContext ? execContext + "\n\n" : ""}EXECUTION CONTEXT RULE: ${execContextRule}
+${execContext ? execContext + "\n\n" : ""}TODAY: ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} | ET: ${snap.nowET}
 
-RULES:
-1. TRADE TYPE: Classify as SCALP (1-4H), DAY TRADE (4-24H), SWING (1-7D), or POSITION (1-4W).
-2. VOL REGIME: Compare ATR to 20-period avg. HIGH(>1.5x): compress TP 30%, widen SL 20%. LOW(<0.7x): skip or reduce 50%.
-3. ATR-SCALED TP/SL. Min R:R to TP1: 1.2:1.
-4. KILL CLOCK: SCALP=2-4H, DAY=12-24H, SWING=48-72H.
-5. MACRO GATE: Block within 2H of FOMC/CPI/NFP. Dampen 20% within 4H of PPI/GDP.
-6. OI OVERLAY when available. 7. EDGE LABELING. 8. POST-TP1: SL to breakeven.
-
-OUTPUT FORMAT for signals:
-[EMOJI] [ASSET]/USDT [DIRECTION] — [TRADE TYPE]
-Vol Regime: [🔴/🟡/🟢] | Entry: [price] | TP1-3 | SL | R:R | Edge | Kill | Leverage
-Thesis | Invalidation | Post-TP1 plan
-
-TODAY: ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} | ET: ${snap.nowET}
-
-${snap.sections}
-
-WRITING DISCIPLINE — applies to every signal, thesis, and prose answer:
-- BANNED SUPERLATIVES: do not use "largest / biggest / highest / most / standout / exceptional / unprecedented / leading / best-in-class" without ranked-comparison data in the snapshot. Prefer "elevated / notable / positive".
-- REGIME CONSISTENCY: any regime label you cite must match what the snapshot's regime context says — the user sees the same UI banner.
-- SAMPLE-SIZE HONESTY: when a Statistical Brain block shows fewer than 30 resolved trades for the (token, direction) combo, write "small sample (n=X)" and never call it "statistically significant".
-- FUNDING CALIBRATION: |funding| < 0.01%/8h is "near-flat" — not "trending", not "momentum confirmation".
-- OI SCOPE: open-interest figures refer to that one symbol; never say "highest of any asset" without a ranked comparison.
-- CHASE DISCLOSURE: a LONG entry after >+4% 24h move (or SHORT after <-4%) is a late entry / chase — say so, do not call it a "fresh breakout".
-- NUMBER MATCHING: any price/%/RR/leverage in prose must match the structured fields exactly.
-
-⚠️ AI analysis only. Always apply your own judgment and risk management.`;
+${snap.sections}`;
 
       const res = await fetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system: sys, userMessage: userMsg, history }),
+        body: JSON.stringify({ feature: "aiChat", context, userMessage: userMsg, history }),
         signal: controller.signal,
       });
 

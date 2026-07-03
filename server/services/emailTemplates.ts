@@ -71,7 +71,6 @@ export interface TieredTradeIdea {
   tp1:            string;
   tp2:            string;
   rrDisplay:      string;          // e.g. "2.4"
-  winRateDisplay: string;          // e.g. "58% (n=44)"
   thesis?:        string;
   sessionFlag?:   string;
 }
@@ -193,7 +192,6 @@ export function renderDailyBriefEmail(
         tp1:            String(t.tp1 ?? "—"),
         tp2:            String(t.tp2 ?? "—"),
         rrDisplay:      rr,
-        winRateDisplay: t.winRateDisplay || "—",
         thesis:         t.edge || t.thesis || "",
         sessionFlag:    t.sessionFlag,
       };

@@ -182,17 +182,6 @@ export const FOREX_BASE: Record<string, number> = {
 
 export const BASKET_PRICE_TTL = 5 * 60 * 1000;
 
-export const BACKTEST_WIN_RATES: Record<string, number> = {
-  "LONG_pattern_bull_flag_NY": 0.68,     "LONG_pattern_double_bottom_NY": 0.66,
-  "LONG_pattern_bull_flag_LONDON": 0.65, "LONG_pattern_double_bottom_LONDON": 0.62,
-  "LONG_pattern_bull_flag_ASIAN": 0.57,  "LONG_pattern_double_bottom_ASIAN": 0.55,
-  "SHORT_pattern_head_shoulders_NY": 0.67,"SHORT_pattern_double_top_NY": 0.65,
-  "SHORT_pattern_bear_flag_NY": 0.64,    "SHORT_pattern_head_shoulders_LONDON": 0.63,
-  "SHORT_pattern_double_top_LONDON": 0.61,"SHORT_pattern_bear_flag_LONDON": 0.60,
-  "LONG_DEFAULT_NY": 0.57,   "LONG_DEFAULT_LONDON": 0.55,   "LONG_DEFAULT_ASIAN": 0.52,
-  "SHORT_DEFAULT_NY": 0.56,  "SHORT_DEFAULT_LONDON": 0.54,  "SHORT_DEFAULT_ASIAN": 0.51,
-};
-
 // AGGRESSIVE thresholds — raised across all sessions to cut signal noise.
 // Required: ≥1.2% move, ≥2.0x volume, ≥$5M OI for any signal to qualify.
 // STRICTER thresholds (v2 Apr 2026): require ≥1.5% move + ≥2.0× volume across all sessions

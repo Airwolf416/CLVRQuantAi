@@ -1,5 +1,5 @@
 - [Binance server-side geo-block in dev](binance-server-geo-block.md) — Binance REST 451 / CCXT 403 server-side in Replit dev but fine on Railway prod; server-side Binance features only activate in prod.
-- [Signal expectancy diagnostics](signal-expectancy-diagnostics.md) — raw scanner signals net-negative (PF~0.74); conviction inverts above 50; conv30-50 + 2x + whitelist holds OOS at PF~1.41. NOW WIRED LIVE via empiricalFilters.ts (drop≠downweight, off-list soft, crypto-only, flag-gated).
+- [Signal expectancy diagnostics](signal-expectancy-diagnostics.md) — raw scanner signals are net-negative and conviction inverts above 50; the live empirical-filter rules live in the topic file.
 - [Finnhub earnings flow](finnhub-earnings.md) — earnings is Finnhub-only after FMP rip-out; go through the finnhubEarnings service; route filters cached calendar per watchlist (no global response cache); free tier is EPS-only.
 - [IPO calendar data sources](fmp-earnings-data-tiers.md) — IPO calendar uses Nasdaq public API (primary) with FMP as best-effort fallback; FMP free tier 403s the IPO endpoint, Nasdaq IP-blocks Railway egress.
 - [Quant sigma units & notional cap](quant-sigma-units.md) — intraday sigma fallback must be scaled to DAILY before sizing's sqrt(365), or size balloons ~38x to 2x equity; MAX_NOTIONAL_FRACTION hard-caps it.
@@ -14,4 +14,5 @@
 - [CI deploy npm exit-handler failure](ci-deploy-npm-exit-handler.md) — GHA "Build and Deploy" Docker build failed at `npm install` with "Exit handler never called!" (npm 10.9.x bug), NOT OOM; fix = pin `npm@11.16.0` in Dockerfile build stage.
 - [Replit lockfile mirror URLs break CI](replit-mirror-urls-ci.md) — Replit bakes `package-firewall.replit.local` "resolved" URLs into package-lock.json; ENOTFOUND on GHA/Docker; rewrite host → registry.npmjs.org (integrity unchanged); also pin npm in any `npm ci` workflow.
 - [initDb column reconciliation](initdb-column-reconcile.md) — schema.ts column adds/renames don't migrate live DBs; mirror each with an idempotent `ADD COLUMN IF NOT EXISTS` in initDb.
+- [Curl-testing auth-gated routes](curl-auth-testing.md) — Secure session cookie is dropped over plain-http curl; use the signin bearer token; in-memory rate limiters reset on workflow restart.
 - [applySignalHardening caller propagation](signal-hardening-caller-propagation.md) — shared gate RETURNS levels (doesn't mutate); all 3 callers must echo back any newly-mutated field or it's silently dropped.
