@@ -502,13 +502,44 @@ RESPOND WITH THIS EXACT JSON STRUCTURE — nothing else:
         </div>
       )}
 
-      {trades && tradesList.length === 0 && !loading && (
-        <div style={{ textAlign: "center", padding: "32px 16px", background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10 }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>⛔</div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", fontFamily: MONO, marginBottom: 6 }}>NO HIGH-CONVICTION SETUPS</div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", fontFamily: SANS }}>Macro conditions or regime prevented signal generation. Try again later.</div>
-        </div>
-      )}
+      {trades && tradesList.length === 0 && !loading && (() => {
+        // Reason-aware empty state driven by the server's structured
+        // empty_reason. Falls back to a neutral message when absent.
+        const er = trades.empty_reason || null;
+        const type = er?.type;
+        let icon = "⛔";
+        let headline = "NO QUALIFYING SETUPS";
+        let body = "No qualifying setups right now. Try a different horizon or asset class.";
+        let chips = null;
+        if (type === "CIRCUIT_BREAKER") {
+          icon = "🛡️";
+          headline = "SIGNAL ENGINE IN PROTECTIVE PAUSE";
+          body = "Recent outcome quality triggered an automatic pause. The engine is rebuilding its sample and will resume automatically. This protects you from low-quality setups.";
+        } else if (type === "MACRO_RISK_OFF") {
+          icon = "🌊";
+          headline = "MACRO RISK-OFF — LONGS PAUSED";
+          body = er?.detail || "Broad risk-off conditions detected. Long setups are paused until the macro tape stabilizes.";
+        } else if (type === "ALL_REJECTED") {
+          icon = "🧪";
+          headline = "NO SETUPS MET QUALITY GATES";
+          body = `${er?.evaluated ?? 0} candidates were evaluated this run; none met the quality thresholds.`;
+          chips = Array.isArray(er?.top_rejections) && er.top_rejections.length > 0 ? er.top_rejections : null;
+        }
+        return (
+          <div data-testid="card-empty-trade-ideas" style={{ textAlign: "center", padding: "32px 16px", background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10 }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+            <div data-testid="text-empty-headline" style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", fontFamily: MONO, marginBottom: 6 }}>{headline}</div>
+            <div data-testid="text-empty-body" style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", fontFamily: SANS }}>{body}</div>
+            {chips && (
+              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 6, marginTop: 10 }}>
+                {chips.map((r, i) => (
+                  <span key={i} data-testid={`chip-rejection-${i}`} style={{ fontSize: 9, fontFamily: MONO, color: "rgba(255,255,255,0.55)", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: "3px 8px" }}>{r}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
