@@ -239,5 +239,39 @@ export async function runSignalGenV2(input: SignalGenPromptInput, apiKey: string
       console.warn(`[PROMPT_V2 hardening] ${input.token} fail-open:`, e?.message || e);
     }
   }
+
+  // ── FINAL GEOMETRY GUARD (shared) — LAST step before the plan leaves ─────
+  // Repair-only: mirror wrong-side SL/TP legs around entry so the published
+  // plan matches its direction. Writes back to every alias the card reads
+  // from (targets[0/1], tp1/tp2, invalidation/stopLoss). Fails open.
+  try {
+    if (plan && (plan.direction === "LONG" || plan.direction === "SHORT")) {
+      const { enforceGeometry } = await import("./geometryGuard");
+      const gEntry = Number(plan?.entry?.zone?.[0] ?? plan?.entry?.price ?? NaN);
+      const gSl = Number(plan?.invalidation?.stop_price ?? plan?.stopLoss?.price ?? NaN);
+      const gTp1 = Number(plan?.targets?.[0]?.price ?? plan?.tp1?.price ?? NaN);
+      const gTp2raw = plan?.targets?.[1]?.price ?? plan?.tp2?.price;
+      if (Number.isFinite(gEntry) && gEntry > 0 && Number.isFinite(gSl) && Number.isFinite(gTp1)) {
+        const g = enforceGeometry({
+          direction: plan.direction, entry: gEntry, stopLoss: gSl, tp1: gTp1,
+          tp2: gTp2raw != null && Number.isFinite(Number(gTp2raw)) ? Number(gTp2raw) : null,
+        }, { symbol: input.token, source: "ai_signal" });
+        if (g.corrected) {
+          if (plan.invalidation) plan.invalidation.stop_price = g.stopLoss;
+          if (plan.stopLoss) plan.stopLoss.price = g.stopLoss;
+          if (plan.targets?.[0]) plan.targets[0].price = g.tp1;
+          if (plan.tp1) plan.tp1.price = g.tp1;
+          if (g.tp2 != null) {
+            if (plan.targets?.[1]) plan.targets[1].price = g.tp2;
+            if (plan.tp2) plan.tp2.price = g.tp2;
+          }
+          plan.geometry_auto_corrected = true;
+        }
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[PROMPT_V2 geometry guard] ${input.token} fail-open:`, e?.message || e);
+  }
+
   return { plan, precomputedKelly };
 }

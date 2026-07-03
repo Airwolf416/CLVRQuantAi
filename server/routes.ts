@@ -11,6 +11,7 @@ import { SERVER_SYSTEM_PROMPTS, DEFAULT_ANALYST_SYSTEM_PROMPT } from "./prompts/
 import { getThresholdFor, recalculateThresholds } from "./lib/adaptiveThresholds";
 import { getCircuitState, isHalted, isProbation, manualHalt, manualResume, checkCircuitBreaker, isMacroRiskOff } from "./lib/circuitBreaker";
 import { logRejection, getRecentRejections, getRejectionStats } from "./lib/rejectionLog";
+import { enforceGeometry } from "./lib/geometryGuard";
 import { isInCooldown, COOLDOWN_WINDOW_MINUTES } from "./lib/cooldown";
 import { isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
 import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
@@ -8183,69 +8184,54 @@ Every level must be technically defensible. Return JSON only.`;
           })(),
         }).catch(() => {});
       }
-      // ── FINAL GEOMETRY GUARD ──────────────────────────────────────────────
+      // ── FINAL GEOMETRY GUARD (shared) ─────────────────────────────────────
       // Last line of defense: if any upstream path (LLM, archetype flip,
       // hardener, brain INVERT) ended up with a direction badge whose
       // SL/TP geometry contradicts it (e.g. SHORT with SL<entry & TP>entry),
       // mirror prices around entry so the card matches the action the user
-      // would take. Same shape as the pre-LLM auto-correct at L6643 but
-      // runs AFTER every mutation in the pipeline so it catches anything
-      // that slipped through. Fails open on any error.
+      // would take. The mirror logic lives in server/lib/geometryGuard.ts —
+      // the SAME implementation runs at every emission point (this endpoint
+      // also feeds the scanner "Execute" loop and the below-threshold
+      // transparency cards). Runs AFTER every mutation in the pipeline so it
+      // catches anything that slipped through. Fails open on any error.
       try {
         if (parsed?.signal && parsed.entry?.price && parsed.stopLoss?.price && parsed.tp1?.price) {
           const sigU = String(parsed.signal).toUpperCase();
-          const isLong  = sigU.includes("LONG");
-          const isShort = sigU.includes("SHORT");
-          const ep = Number(parsed.entry.price);
-          const sl = Number(parsed.stopLoss.price);
-          const t1 = Number(parsed.tp1.price);
-          if ((isLong || isShort) && Number.isFinite(ep) && ep > 0 && Number.isFinite(sl) && Number.isFinite(t1)) {
-            // Per-leg mismatch: a level is "wrong side" if it's on the side
-            // the badge says it shouldn't be on. LONG → SL must be < ep,
-            // TPs must be > ep; SHORT → mirror. This catches partial shapes
-            // (e.g. LONG with SL>ep but TP also >ep) that the full-shape
-            // check would miss after a downstream mutation.
-            const wrongSide = (lvl: any, isStop: boolean): boolean => {
-              if (lvl == null) return false;
-              const n = Number(lvl);
-              if (!Number.isFinite(n)) return false;
-              if (isLong)  return isStop ? n >= ep : n <= ep;
-              /* short */   return isStop ? n <= ep : n >= ep;
-            };
-            const anyWrong =
-              wrongSide(sl, true) ||
-              wrongSide(parsed.tp1?.price, false) ||
-              (parsed.tp2?.price != null && wrongSide(parsed.tp2.price, false)) ||
-              (parsed.tp3?.price != null && wrongSide(parsed.tp3.price, false));
-            if (anyWrong) {
-              const mirrorIfWrong = (lvl: any, isStop: boolean): any => {
-                if (!wrongSide(lvl, isStop)) return lvl;
-                const m = 2 * ep - Number(lvl);
-                return m > 0 ? m : lvl;
-              };
-              parsed.stopLoss.price = mirrorIfWrong(parsed.stopLoss.price, true);
-              if (parsed.tp1?.price != null) parsed.tp1.price = mirrorIfWrong(parsed.tp1.price, false);
-              if (parsed.tp2?.price != null) parsed.tp2.price = mirrorIfWrong(parsed.tp2.price, false);
-              if (parsed.tp3?.price != null) parsed.tp3.price = mirrorIfWrong(parsed.tp3.price, false);
-              const slDist = Math.abs(ep - Number(parsed.stopLoss.price));
-              if (slDist > 0.000001 && ep > 0) {
-                if (parsed.tp1?.price != null) {
-                  parsed.tp1.gain_pct = parseFloat((Math.abs(Number(parsed.tp1.price) - ep) / ep * 100).toFixed(2));
-                  parsed.tp1.rr_ratio = parseFloat((Math.abs(Number(parsed.tp1.price) - ep) / slDist).toFixed(2));
-                }
-                if (parsed.tp2?.price != null) {
-                  parsed.tp2.gain_pct = parseFloat((Math.abs(Number(parsed.tp2.price) - ep) / ep * 100).toFixed(2));
-                  parsed.tp2.rr_ratio = parseFloat((Math.abs(Number(parsed.tp2.price) - ep) / slDist).toFixed(2));
-                }
-                if (parsed.tp3?.price != null) {
-                  parsed.tp3.gain_pct = parseFloat((Math.abs(Number(parsed.tp3.price) - ep) / ep * 100).toFixed(2));
-                  parsed.tp3.rr_ratio = parseFloat((Math.abs(Number(parsed.tp3.price) - ep) / slDist).toFixed(2));
-                }
-                parsed.stopLoss.distance_pct = parseFloat((slDist / ep * 100).toFixed(2));
-                parsed.rr = parsed.tp1?.rr_ratio ?? parsed.rr;
+          const dir = sigU.includes("SHORT") ? "SHORT" : sigU.includes("LONG") ? "LONG" : null;
+          if (dir) {
+            const g = enforceGeometry({
+              direction: dir,
+              entry: Number(parsed.entry.price),
+              stopLoss: Number(parsed.stopLoss.price),
+              tp1: Number(parsed.tp1.price),
+              tp2: parsed.tp2?.price != null ? Number(parsed.tp2.price) : null,
+              tp3: parsed.tp3?.price != null ? Number(parsed.tp3.price) : null,
+            }, { symbol: ticker, source: "ai_signal" });
+            if (g.corrected) {
+              const ep = g.entry;
+              parsed.stopLoss.price = g.stopLoss;
+              parsed.tp1.price = g.tp1;
+              if (parsed.tp2?.price != null && g.tp2 != null) parsed.tp2.price = g.tp2;
+              if (parsed.tp3?.price != null && g.tp3 != null) parsed.tp3.price = g.tp3;
+              // Recompute displayed metrics from the repaired levels.
+              // Per-leg R:R uses the DIRECTIONAL stop distance — same sign
+              // convention as the guard's headline rr (no Math.abs).
+              const dd = dir === "LONG" ? ep - g.stopLoss : g.stopLoss - ep;
+              const legRR = (tp: number): number | null =>
+                dd > 0 ? parseFloat(((dir === "LONG" ? tp - ep : ep - tp) / dd).toFixed(2)) : null;
+              parsed.tp1.gain_pct = g.tpGainPct ?? parsed.tp1.gain_pct;
+              parsed.tp1.rr_ratio = g.rr;
+              if (parsed.tp2?.price != null) {
+                parsed.tp2.gain_pct = parseFloat((Math.abs(Number(parsed.tp2.price) - ep) / ep * 100).toFixed(2));
+                parsed.tp2.rr_ratio = legRR(Number(parsed.tp2.price));
               }
+              if (parsed.tp3?.price != null) {
+                parsed.tp3.gain_pct = parseFloat((Math.abs(Number(parsed.tp3.price) - ep) / ep * 100).toFixed(2));
+                parsed.tp3.rr_ratio = legRR(Number(parsed.tp3.price));
+              }
+              parsed.stopLoss.distance_pct = g.slDistancePct ?? parsed.stopLoss.distance_pct;
+              parsed.rr = g.rr; // directional headline R:R — null when geometry stays invalid
               parsed.geometry_auto_corrected = true;
-              console.warn(`[Quant] ${ticker} ${sigU}: final geometry guard mirrored prices to match direction badge`);
             }
           }
         }
@@ -9785,6 +9771,41 @@ Every level must be technically defensible. Return JSON only.`;
                 `(dropped=${hardened.dropped} vetoed=${hardened.vetoed} regen=${hardened.regenerated})`,
               );
             }
+            // ── FINAL GEOMETRY GUARD (shared) — LAST step before serialize ──
+            // Repair-only: mirror wrong-side SL/TP legs around entry so the
+            // published card matches its direction badge. Never flips the
+            // badge, never drops a card. Per-card fail-open.
+            try {
+              parsed.trades = parsed.trades.map((c: any) => {
+                try {
+                  const dirU = String(c?.direction || "").toUpperCase();
+                  const dir = dirU.includes("SHORT") ? "SHORT" : dirU.includes("LONG") ? "LONG" : null;
+                  const e = Number(c?.entry);
+                  const sl = Number(c?.sl);
+                  const t1raw = c?.tp1?.price ?? c?.tp1;
+                  const t2raw = c?.tp2?.price ?? c?.tp2;
+                  const t1 = Number(t1raw);
+                  if (!dir || !Number.isFinite(e) || e <= 0 || !Number.isFinite(sl) || !Number.isFinite(t1)) return c;
+                  const g = enforceGeometry({
+                    direction: dir, entry: e, stopLoss: sl, tp1: t1,
+                    tp2: Number.isFinite(Number(t2raw)) ? Number(t2raw) : null,
+                  }, { symbol: String(c?.asset || "?"), source: "ai_signal" });
+                  if (!g.corrected) return c;
+                  const out: any = { ...c, sl: g.stopLoss, geometry_auto_corrected: true };
+                  if (c?.tp1 && typeof c.tp1 === "object") out.tp1 = { ...c.tp1, price: g.tp1 };
+                  else out.tp1 = g.tp1;
+                  if (g.tp2 != null && c?.tp2 != null) {
+                    if (typeof c.tp2 === "object") out.tp2 = { ...c.tp2, price: g.tp2 };
+                    else out.tp2 = g.tp2;
+                  }
+                  // Only overwrite an existing top-level rr — keep it directional/null-honest.
+                  if ("rr" in out) out.rr = g.rr;
+                  return out;
+                } catch { return c; }
+              });
+            } catch (geoErr: any) {
+              console.warn("[ai/analyze] geometry guard failed (non-fatal):", geoErr?.message || geoErr);
+            }
             // ── Structured empty_reason — honest reporting when zero ideas
             // survive. No gate is weakened; we only explain WHY it's empty.
             if (parsed.trades.length === 0) {
@@ -10520,6 +10541,30 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         }
       } catch (defErr: any) {
         console.warn("[kronos DEFENSE] floor check error (fail-open):", defErr?.message || defErr);
+      }
+
+      // ── FINAL GEOMETRY GUARD (shared) — LAST step before serialize ────────
+      // Repair-only mirror of wrong-side SL/TP legs around entry (see
+      // server/lib/geometryGuard.ts). Never flips the direction, fails open.
+      try {
+        const tpG = (parsed as any)?.trade_plan;
+        if (tpG && (tpG.direction === "LONG" || tpG.direction === "SHORT")) {
+          const g = enforceGeometry({
+            direction: tpG.direction,
+            entry: Number(tpG.entry),
+            stopLoss: Number(tpG.sl),
+            tp1: Number(tpG.tp1),
+            tp2: tpG.tp2 != null ? Number(tpG.tp2) : null,
+          }, { symbol: String((parsed as any)?.asset || ticker || "?"), source: "ai_signal" });
+          if (g.corrected) {
+            tpG.sl = g.stopLoss;
+            tpG.tp1 = g.tp1;
+            if (tpG.tp2 != null && g.tp2 != null) tpG.tp2 = g.tp2;
+            tpG.geometry_auto_corrected = true;
+          }
+        }
+      } catch (geoErr: any) {
+        console.warn("[kronos] geometry guard failed (non-fatal):", geoErr?.message || geoErr);
       }
 
       // ── Headline reconciliation (DISPLAY layer only) ──────────────────────

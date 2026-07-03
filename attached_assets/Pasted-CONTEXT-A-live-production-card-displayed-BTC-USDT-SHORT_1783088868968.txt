@@ -1,0 +1,113 @@
+CONTEXT
+A live production card displayed: BTC/USDT SHORT, entry 61866, TP1 62197,
+TP2 62863, SL 61532 — LONG geometry under a SHORT badge. The final geometry
+guard (mirror-prices-around-entry logic) exists inline ONLY in the per-ticker
+/api/quant route in server/routes.ts (search comment "FINAL GEOMETRY GUARD").
+Other emission paths are unprotected, including:
+  - the multi-symbol Quant Scanner scan/Execute route
+  - below-threshold "shown for transparency" cards
+  - Trade Ideas generation (promptV2Runner / signalGen)
+  - Morning Brief trade plans
+Policy decision (do not revisit): REPAIR mode — mirror wrong-side levels
+around entry so the card matches its direction badge. Never silently flip
+the badge, never drop the card for geometry alone.
+
+════════ PART A — extract shared guard ════════
+
+1. Create server/lib/geometryGuard.ts exporting:
+
+   export type GeometryLevels = {
+     direction: "LONG" | "SHORT";
+     entry: number;
+     stopLoss: number;
+     tp1: number;
+     tp2?: number | null;
+     tp3?: number | null;
+   };
+   export type GeometryResult = GeometryLevels & {
+     corrected: boolean;
+     correctedLegs: string[];        // e.g. ["SL","TP1"]
+     rr: number | null;              // directional R:R from tp1
+     tpGainPct: number | null;
+     slDistancePct: number | null;
+   };
+   export function enforceGeometry(input: GeometryLevels): GeometryResult
+
+2. Port the EXISTING per-leg logic from the inline guard in /api/quant
+   verbatim in behavior (wrongSide check per leg; mirror = 2*entry - level;
+   only mirror legs that are on the wrong side; reject mirror results <= 0
+   by keeping the original leg and recording it in correctedLegs with a
+   "-UNMIRRORABLE" suffix). LONG: SL < entry, TPs > entry. SHORT: SL > entry,
+   TPs < entry.
+
+3. CRITICAL — directional R:R, not absolute: after any correction, compute
+   rr = (LONG: (tp1 - entry)/(entry - sl)) or (SHORT: (entry - tp1)/(sl - entry)).
+   If the denominator is <= 0 after repair, set rr = null. Never use
+   Math.abs on both legs for the headline R:R — absolute math is what let
+   this bug display "1.0:1" on an inverted card.
+
+4. Log one line per correction:
+   console.warn(`[GeometryGuard] ${symbol} ${direction}: mirrored ${legs} to match badge`)
+   and call the existing logRejection-style telemetry if a rejection ring
+   exists, with reason "GEOMETRY_REPAIRED" (informational, not a drop).
+
+════════ PART B — apply at every emission point ════════
+
+For each path below, call enforceGeometry() as the LAST step before the
+card/object is serialized to the client or persisted, after ALL mutations
+(hardener stop moves, edge-policy INVERT, brain verdicts, archetype flips):
+
+1. /api/quant per-ticker route: REPLACE the inline "FINAL GEOMETRY GUARD"
+   block with a call to the shared function. Preserve the existing
+   parsed.geometry_auto_corrected = true flag (set it from result.corrected)
+   and the recalculated gain_pct / rr_ratio / distance_pct fields using the
+   shared function's outputs.
+
+2. Multi-symbol Quant Scanner scan route (the endpoint behind the scanner
+   "Execute" button — locate by searching for the response fields "scanned"
+   / "signals" / regime score, or the below-threshold transparency
+   emission). Apply to EVERY card in the response, including cards flagged
+   below-threshold / transparency / watch-only. Transparency cards are
+   user-visible and MUST pass the guard.
+
+3. Trade Ideas generation (promptV2Runner / signalGen publish path in
+   server/routes.ts or its module): apply per idea before publish/persist.
+
+4. Morning Brief: apply to topTrade and each additionalTrades entry that
+   has entry/SL/TP prices.
+
+If any of these paths already call an equivalent final guard, replace the
+inline copy with the shared function — the goal is exactly one
+implementation.
+
+════════ PART C — client R:R display honesty ════════
+
+In client/src/App.jsx, locate the scanner card render that shows the R:R
+value and the "BELOW R:R X.X THRESHOLD" banner. If the server payload now
+includes rr === null, display "—" instead of a number. Do not recompute
+R:R client-side from prices; trust the server field. If the payload has
+geometry_auto_corrected / corrected === true, render a small muted chip
+"LEVELS AUTO-ALIGNED" on the card (mono font, existing muted color token)
+so corrections are visible rather than silent.
+
+════════ CONSTRAINTS ════════
+- Do NOT weaken, bypass, or remove any gate, threshold, or suppression
+  logic. The guard repairs display geometry only.
+- Do NOT flip direction badges. Direction decisions belong to the edge
+  policy / brain modules, not this guard.
+- Fail open: wrap every call site in try/catch; on error, emit the card
+  unchanged and console.warn.
+
+════════ VERIFY ════════
+1. Build passes with no new type errors.
+2. Unit-style check (inline test or script): SHORT entry=61866, sl=61532,
+   tp1=62197, tp2=62863 → returns sl≈62200, tp1≈61535, tp2≈60869,
+   corrected=true, correctedLegs=["SL","TP1","TP2"], rr>0.
+3. LONG with correct geometry passes through unchanged, corrected=false.
+4. Confirm the scanner transparency-card path calls the guard (show the
+   call site in your summary).
+5. List every emission point modified and confirm only ONE implementation
+   of the mirror logic remains in the codebase.
+
+COMMIT MESSAGE: fix(signals): shared directional geometry guard at all card
+emission points; directional R:R; repair transparency-card path

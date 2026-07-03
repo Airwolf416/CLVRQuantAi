@@ -114,11 +114,9 @@ export default function QuantScanner({ mode, isPro, isElite }) {
           throw new Error(body.error || `Failed (${res.status})`);
         }
         const data = await res.json();
-        if (data.signal !== "SUPPRESSED" && !data.rr && data.entry?.price && data.tp1?.price && data.stopLoss?.price) {
-          const r = Math.abs(data.entry.price - data.stopLoss.price);
-          const w = Math.abs(data.tp1.price - data.entry.price);
-          data.rr = r > 0.000001 ? w / r : 0;
-        }
+        // R:R comes from the server's directional geometry guard — do NOT
+        // recompute it client-side from prices (absolute math hid inverted
+        // levels). rr === null renders as "—".
         collected.push({ ticker, result: data, error: null, fundingRate: funding[ticker] || 0 });
       } catch (err) {
         collected.push({ ticker, result: null, error: err.message });
