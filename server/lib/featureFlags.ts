@@ -153,3 +153,17 @@ export function tokenSoftGateEnabled(): boolean {
 export function chartAiConfidenceWarningEnabled(): boolean {
   return envBool("CHART_AI_CONFIDENCE_WARNING_ENABLED", true);
 }
+
+// ── Entry Optimizer (Jul 2026) ──────────────────────────────────────────────
+// Surfaces a PREFERRED LIMIT pullback entry near the invalidation level next to
+// the tracked MARKET entry so the trader gets better reward-to-risk and can
+// choose per trade ("show BOTH"). DISPLAY-ONLY: the alternative is attached
+// AFTER the ai_signal_log persist and never mutates the persisted/scored
+// levels, so win-rate stats, geometryGuard, and hardening are untouched.
+//   "off"    — disabled (no compute).
+//   "shadow" — compute + log the R:R delta, attach `alt_entry_shadow` only
+//              (the card does not render it) — validate before exposing.
+//   "on"     — attach `alt_entry` for the card to render (default).
+export function entryOptimizerMode(): "off" | "shadow" | "on" {
+  return envEnum<"off" | "shadow" | "on">("ENTRY_OPTIMIZER_MODE", ["off", "shadow", "on"], "on");
+}
