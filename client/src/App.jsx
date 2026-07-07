@@ -5488,7 +5488,8 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           {/* Owner-only Telegram autoposter health banner — auto-refreshes every 30s */}
           {isOwnerOnly&&<AdminAutoposterStatus/>}
           <div style={{marginBottom:14}}><SLabel>{i18n.commandCenter}</SLabel></div>
-          <PerformanceHighlights/>
+          {/* Owner-only: published-signals win-rate highlight (hidden from all clients) */}
+          {isOwnerOnly&&<PerformanceHighlights/>}
           <TwitterMarketModeStrip onSpikeClick={(tk)=>setSpikeFilter(tk)} activeSpike={spikeFilter}/>
 
           {/* ── Fear & Greed widget — uses live data from useDataBus ── */}

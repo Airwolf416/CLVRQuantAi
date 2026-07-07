@@ -3662,10 +3662,18 @@ export async function registerRoutes(
     }
   }
 
-  // ── PUBLIC PERFORMANCE HIGHLIGHTS ────────────────────────────────────────
-  // Curated, admin-safe view: overall win rate (suppressed-excluded) +
-  // top 3 token/direction combos with sample size >= 25. No negative figures.
-  app.get("/api/performance-highlights", async (_req, res) => {
+  // ── OWNER-ONLY PERFORMANCE HIGHLIGHTS ────────────────────────────────────
+  // Curated view: overall win rate (suppressed-excluded) + top 3 token/direction
+  // combos with sample size >= 25. Win-rate figures are hidden from all clients
+  // (compliance) — the client only mounts this card for the owner, and the
+  // endpoint enforces the same owner gate so the numbers aren't reachable by curl.
+  app.get("/api/performance-highlights", async (req, res) => {
+    const phUserId = (req.session as any)?.userId;
+    if (!phUserId) return res.status(403).json({ error: "Forbidden" });
+    try {
+      const phUser = await storage.getUser(phUserId);
+      if (!phUser || (phUser.email || "").toLowerCase() !== OWNER_EMAIL) return res.status(403).json({ error: "Forbidden" });
+    } catch { return res.status(403).json({ error: "Forbidden" }); }
     try {
       const sinceDays = 30;
       const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
