@@ -1,5 +1,6 @@
 - [Binance server-side geo-block in dev](binance-server-geo-block.md) — Binance REST 451 / CCXT 403 server-side in Replit dev but fine on Railway prod; server-side Binance features only activate in prod.
 - [Signal expectancy diagnostics](signal-expectancy-diagnostics.md) — raw scanner signals are net-negative and conviction inverts above 50; the live empirical-filter rules live in the topic file.
+- [Quant scanner volume + no-momentum gates](quant-scanner-gates.md) — volumeRatio must use the last CLOSED bar (forming bar vol is always 0); missing volume is null not 0; range floor is per-asset-class; NEUTRAL = no-trade normalized at one chokepoint.
 - [Finnhub earnings flow](finnhub-earnings.md) — earnings is Finnhub-only after FMP rip-out; go through the finnhubEarnings service; route filters cached calendar per watchlist (no global response cache); free tier is EPS-only.
 - [IPO calendar data sources](fmp-earnings-data-tiers.md) — IPO calendar uses Nasdaq public API (primary) with FMP as best-effort fallback; FMP free tier 403s the IPO endpoint, Nasdaq IP-blocks Railway egress.
 - [Quant sigma units & notional cap](quant-sigma-units.md) — intraday sigma fallback must be scaled to DAILY before sizing's sqrt(365), or size balloons ~38x to 2x equity; MAX_NOTIONAL_FRACTION hard-caps it.
