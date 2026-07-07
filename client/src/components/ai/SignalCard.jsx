@@ -231,6 +231,50 @@ export default function SignalCard({ ticker, result, rank, mode }) {
         </div>
       </div>
 
+      {result.alt_entry && result.alt_entry.price != null && (
+        <div data-testid={`alt-entry-${ticker}`} style={{
+          padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.04)",
+          background: "rgba(201,168,76,0.05)",
+        }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+            <span style={{
+              fontSize: 8, fontWeight: 800, color: "#c9a84c", background: "rgba(201,168,76,0.12)",
+              border: "1px solid #c9a84c55", borderRadius: 4, padding: "2px 6px",
+              fontFamily: MONO, letterSpacing: "0.04em", textTransform: "uppercase",
+            }}>★ Better Entry — Limit</span>
+            {result.alt_entry.distancePct != null && (
+              <span style={{ fontSize: 8, color: "rgba(255,255,255,0.5)", fontFamily: MONO }}>
+                wait for pullback (~{Number(result.alt_entry.distancePct).toFixed(2)}% {isLong ? "below" : "above"})
+              </span>
+            )}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0 }}>
+            <div style={{ textAlign: "center", padding: "4px 6px", borderRight: "1px solid rgba(255,255,255,0.04)" }}>
+              <div style={{ fontSize: 7, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginBottom: 3 }}>LIMIT ENTRY</div>
+              <div data-testid={`text-alt-entry-${ticker}`} style={{ fontSize: 12, fontWeight: 800, color: "#c9a84c", fontFamily: MONO }}>{fmtP(result.alt_entry.price)}</div>
+              {result.alt_entry.zone && result.alt_entry.zone.low != null && (
+                <div style={{ fontSize: 7, color: "rgba(255,255,255,0.35)", fontFamily: MONO, marginTop: 2 }}>
+                  {fmtP(result.alt_entry.zone.low)}–{fmtP(result.alt_entry.zone.high)}
+                </div>
+              )}
+            </div>
+            <div style={{ textAlign: "center", padding: "4px 6px", borderRight: "1px solid rgba(255,255,255,0.04)" }}>
+              <div style={{ fontSize: 7, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginBottom: 3 }}>SL 🛑</div>
+              <div data-testid={`text-alt-sl-${ticker}`} style={{ fontSize: 12, fontWeight: 800, color: "#ef4444", fontFamily: MONO }}>{fmtP(result.alt_entry.stopLoss)}</div>
+            </div>
+            <div style={{ textAlign: "center", padding: "4px 6px" }}>
+              <div style={{ fontSize: 7, color: "rgba(255,255,255,0.3)", fontFamily: MONO, marginBottom: 3 }}>R:R</div>
+              <div data-testid={`text-alt-rr-${ticker}`} style={{ fontSize: 12, fontWeight: 800, color: Number(result.alt_entry.rr) >= 2 ? "#22c55e" : Number(result.alt_entry.rr) >= 1.5 ? "#f59e0b" : "#e0e0e0", fontFamily: MONO }}>
+                {result.alt_entry.rr != null ? `${Number(result.alt_entry.rr).toFixed(1)}:1` : "—"}
+              </div>
+            </div>
+          </div>
+          <div style={{ fontSize: 8, color: "rgba(255,255,255,0.4)", fontFamily: MONO, marginTop: 6, lineHeight: 1.5 }}>
+            {result.alt_entry.invalidation || "Limit order — may not fill if price runs away."} The ENTRY above is the market fill; this is the better-priced alternative — you choose.
+          </div>
+        </div>
+      )}
+
       {result.archetype_stats && result.archetype_stats.n > 0 && (() => {
         const s = result.archetype_stats;
         // Module 2 T04: Wilson 80% LCB is the primary display number. Fall back

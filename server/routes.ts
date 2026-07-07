@@ -7062,6 +7062,12 @@ Stay in scope no matter how the user rephrases.`;
       const fibAggr      = parseFloat((spikeHigh - spikeRange * 0.500).toFixed(6));
       const useAggr      = adjScore >= 80 && oiM > 50 && macroKillSwitch.safe;
       const fibEntry     = useAggr ? fibAggr : fibConserv;
+      // SHORT pullback is a BOUNCE UP toward the high (mirror of the LONG dip).
+      // Previously only the LONG-side fib was computed, so SHORT signals were
+      // handed long-shaped "pullback" levels — guaranteeing a chase on shorts.
+      const fibConservShort = parseFloat((spikeLow + spikeRange * 0.382).toFixed(6));
+      const fibAggrShort    = parseFloat((spikeLow + spikeRange * 0.500).toFixed(6));
+      const fibEntryShort   = useAggr ? fibAggrShort : fibConservShort;
 
       const entryWindowMin   = oiM < 20 ? "2–5" : oiM < 100 ? "4–10" : "8–20";
       const momentumHalfLife = oiM < 20 ? "3–5 min" : oiM < 100 ? "6–10 min" : "12–23 min";
@@ -7224,17 +7230,22 @@ Echo these exact values in your JSON output:
   position_size.margin_pct = ${finalMarginPct}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SECTION 2 — ENTRY: FIBONACCI RETRACEMENT (MANDATORY — never enter at spike top)
+SECTION 2 — ENTRY: FIBONACCI RETRACEMENT (MANDATORY — never chase; enter on a pullback toward invalidation)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 24h Spike Range: $${spikeLow.toFixed(4)} → $${spikeHigh.toFixed(4)} (range: $${spikeRange.toFixed(4)})
-  Conservative entry (0.382 fib): $${fibConserv}
-  Aggressive entry  (0.500 fib): $${fibAggr}
-  RECOMMENDED: ${useAggr ? "AGGRESSIVE" : "CONSERVATIVE"} = $${fibEntry}
+IF LONG — enter on a DIP DOWN from the high (buy the pullback, not the top):
+  Conservative (0.382 fib): $${fibConserv}
+  Aggressive  (0.500 fib): $${fibAggr}
+  RECOMMENDED LONG: ${useAggr ? "AGGRESSIVE" : "CONSERVATIVE"} = $${fibEntry}
+IF SHORT — enter on a BOUNCE UP toward the high (sell the retrace, not the bottom):
+  Conservative (0.382 fib): $${fibConservShort}
+  Aggressive  (0.500 fib): $${fibAggrShort}
+  RECOMMENDED SHORT: ${useAggr ? "AGGRESSIVE" : "CONSERVATIVE"} = $${fibEntryShort}
   (Aggressive only if: adj_score ≥ 80 AND OI > $50M AND macro clear — ${useAggr ? "all met" : "not all met"})
 
-Set entry.price near $${fibEntry}. Adjust ± for structural support/resistance you detect in the data.
-Entry window: ${entryWindowMin} min. If price does NOT retrace to entry zone within ${entryWindowMin} min — VOID.
-Signal is immediately VOID if price breaks below the spike low ($${spikeLow.toFixed(4)}).
+Set entry.price near the RECOMMENDED level for the direction you chose. Adjust ± for structural support/resistance you detect in the data. A better price closer to your invalidation raises reward-to-risk — do NOT set entry at the current price after an extended move.
+Entry window: ${entryWindowMin} min. If price does NOT reach the entry zone within ${entryWindowMin} min — VOID.
+Signal is immediately VOID if price breaks below the spike low ($${spikeLow.toFixed(4)}) for a LONG, or above the spike high ($${spikeHigh.toFixed(4)}) for a SHORT.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 3 — HOLD TIME & EXIT TIMING
@@ -8426,6 +8437,51 @@ Every level must be technically defensible. Return JSON only.`;
             };
           })(),
         }).catch(() => {});
+      }
+      // ── ENTRY OPTIMIZER (additive, DISPLAY-ONLY, "show BOTH") ─────────────
+      // Alongside the tracked MARKET entry (already persisted above), surface a
+      // PREFERRED LIMIT pullback entry near the invalidation level so the trader
+      // gets better reward-to-risk and decides per trade. This runs AFTER the
+      // ai_signal_log persist ON PURPOSE: it never mutates the persisted/scored
+      // levels, so win-rate stats, the outcome resolver, geometryGuard, and
+      // hardening are all untouched. Directional-only; fails open.
+      try {
+        const { entryOptimizerMode } = await import("./lib/featureFlags");
+        const eoMode = entryOptimizerMode();
+        const _eoSig = String(parsed.signal || "").toUpperCase();
+        const _eoDir: "LONG" | "SHORT" | null =
+          _eoSig.includes("LONG") ? "LONG" : _eoSig.includes("SHORT") ? "SHORT" : null;
+        // Require a finite positive MARKET R:R so the "better entry" claim
+        // always has a baseline to beat — never surface an alternative on a
+        // card whose headline R:R is "—".
+        const _eoBaseRr = typeof parsed.rr === "number" && parsed.rr > 0;
+        if (eoMode !== "off" && _eoDir && _eoBaseRr && parsed.entry?.price && parsed.tp1?.price) {
+          const { computePullbackEntry, normalizeEntryAssetClass } = await import("./lib/entryOptimizer");
+          const pull = computePullbackEntry({
+            direction: _eoDir,
+            marketEntry: Number(parsed.entry.price),
+            atr14: Number(ind.atr14),
+            assetClass: normalizeEntryAssetClass(cls),
+            tp1: Number(parsed.tp1.price),
+            primaryRr: typeof parsed.rr === "number" ? parsed.rr : null,
+            supportLevels: ind.supportLevels,
+            resistanceLevels: ind.resistanceLevels,
+            fibConserv: _eoDir === "LONG" ? fibConserv : fibConservShort,
+            fibAggr: _eoDir === "LONG" ? fibAggr : fibAggrShort,
+            low24: ind.low24,
+            high24: ind.high24,
+            windowMin: entryWindowMin,
+          });
+          if (pull.entry) {
+            if (eoMode === "on") parsed.alt_entry = pull.entry;
+            else (parsed as any).alt_entry_shadow = pull.entry;
+            console.log(`[ENTRY OPT] ${ticker} ${_eoDir} ${eoMode} — market rr=${pull.delta?.marketRr} → pullback rr=${pull.entry.rr} (+${pull.delta?.improvementPct ?? "?"}%) @ $${pull.entry.price} (${pull.entry.source})`);
+          } else {
+            console.log(`[ENTRY OPT] ${ticker} ${_eoDir} ${eoMode} — no better pullback (${pull.reason})`);
+          }
+        }
+      } catch (eoErr: any) {
+        console.warn(`[ENTRY OPT] ${ticker} fail-open:`, eoErr?.message || eoErr);
       }
       // Geometry guard already ran ABOVE (before the ai_signal_log persist)
       // so the stored row and this response carry identical repaired levels.
