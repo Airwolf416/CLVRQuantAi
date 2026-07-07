@@ -6474,10 +6474,21 @@ Stay in scope no matter how the user rephrases.`;
     const recentLows  = recent50.map((c: any) => c.l).sort((a: number, b: number) => a-b);
     const resistance  = recentHighs.filter((v: number) => v > currentPrice).slice(0, 3);
     const support     = recentLows.filter((v: number) => v < currentPrice).slice(0, 3);
-    const avgVol  = volumes.slice(-20).reduce((a: number, b: number) => a+b, 0) / 20;
-    const lastVol = volumes[n-1];
-    const volRatio = lastVol / Math.max(avgVol, 0.0001);
-    const volumeSignal = volRatio>2?"SURGE":volRatio>1.3?"ABOVE AVG":volRatio<0.7?"BELOW AVG":"NORMAL";
+    // Volume ratio must use the last CLOSED bar (n-2), never the forming bar
+    // (n-1) whose volume is 0/partial until the hour completes — using the
+    // forming bar made volRatio ≈ 0 on virtually every scan, which silently
+    // (a) made a volume surge impossible to detect and (b) collapsed the
+    // no-momentum gate into "range-only". When the feed carries no volume at
+    // all (Yahoo reports 0 volume on every FX/commodity bar) volumeRatio is
+    // null = "unknown" so downstream gates never mistake missing volume for
+    // low volume.
+    const closedVols = volumes.slice(0, Math.max(0, n - 1));
+    const avgVolWindow = closedVols.slice(-20);
+    const avgVol  = avgVolWindow.length ? avgVolWindow.reduce((a: number, b: number) => a+b, 0) / avgVolWindow.length : 0;
+    const lastVol = closedVols.length ? closedVols[closedVols.length - 1] : 0;
+    const volRatio: number | null = avgVol > 0 ? lastVol / avgVol : null;
+    const volumeSignal = volRatio == null ? "UNKNOWN"
+      : volRatio>2?"SURGE":volRatio>1.3?"ABOVE AVG":volRatio<0.7?"BELOW AVG":"NORMAL";
     const trend =
       currentPrice>currentEma20 && currentEma20>currentEma50 && currentEma50>currentEma200 ? "STRONG UPTREND" :
       currentPrice<currentEma20 && currentEma20<currentEma50 && currentEma50<currentEma200 ? "STRONG DOWNTREND" :
@@ -6505,7 +6516,7 @@ Stay in scope no matter how the user rephrases.`;
       atr14:parseFloat(atr14.toFixed(6)), atrPct:parseFloat(atrPct.toFixed(3)),
       nearestResistance:resistance[0]||null, resistanceLevels:resistance,
       nearestSupport:support[0]||null, supportLevels:support,
-      volumeSignal, volumeRatio:parseFloat(volRatio.toFixed(2)),
+      volumeSignal, volumeRatio: volRatio == null ? null : parseFloat(volRatio.toFixed(2)),
       trend, momentumScore:momentum,
       high24, low24, high7d, low7d, posInRange,
       range24hPct:parseFloat(((high24-low24)/low24*100).toFixed(2)),
@@ -7124,7 +7135,7 @@ Nearest Support:    $${ind.nearestSupport?.toFixed(4)||"none below"}
 24h High: $${ind.high24.toFixed(4)} | 24h Low: $${ind.low24.toFixed(4)} | Range: ${ind.range24hPct}%
 7d  High: $${ind.high7d.toFixed(4)} | 7d  Low:  $${ind.low7d.toFixed(4)}
 Position in 24h range: ${ind.posInRange}% from bottom
-Volume: ${ind.volumeSignal} (${ind.volumeRatio}× average)
+Volume: ${ind.volumeSignal}${ind.volumeRatio != null ? ` (${ind.volumeRatio}× average)` : " (feed reports no volume for this market)"}
 Momentum Score: ${ind.momentumScore}/100
 ${mtfStr}`;
 
@@ -7583,7 +7594,11 @@ Every level must be technically defensible. Return JSON only.`;
       const isShortSig = sigStr.includes("SHORT");
       const range24Pct = ind.range24hPct || 0;
       const pir        = ind.posInRange ?? 50;
-      const volSurge   = (ind.volumeRatio || 1) >= 2.0;
+      // Volume ratio is number | null (null = the feed carries no volume for
+      // this market, e.g. Yahoo FX/commodities). A surge only counts when the
+      // ratio is actually known — never treat "unknown" as a surge.
+      const vr: number | null = ind.volumeRatio ?? null;
+      const volSurge   = vr != null && vr >= 2.0;
       const breakoutHigh = ind.high7d && ind.currentPrice >= ind.high7d * 0.999;
       const breakoutLow  = ind.low7d  && ind.currentPrice <= ind.low7d  * 1.001;
       const tfAligned    = confluence?.confluent === true;
@@ -7592,17 +7607,31 @@ Every level must be technically defensible. Return JSON only.`;
       const shortChase = isShortSig && pir <= 20 && range24Pct >= 4 && !(breakoutLow  && volSurge && tfAligned);
 
       // ── NO-MOMENTUM GATE — block flat-market signals (the "0% move" complaint) ──
-      // Daily range <1.5% AND volume not above average = no edge, just chop. Force NEUTRAL.
-      const noMomentum = (isLongSig || isShortSig) && range24Pct < 1.5 && (ind.volumeRatio || 1) < 1.2;
+      // Flat daily range AND volume not above average = no edge, just chop.
+      // The range floor is PER ASSET CLASS: a flat 1.5% is crypto-calibrated and
+      // wrongly silenced calmer markets (a big S&P name moves ~0.5%/day, FX far
+      // less), so equities/commodities use 0.8% and FX 0.3% (confirmed with the
+      // user). Volume is only a factor when the feed actually carries it — a null
+      // ratio means "unknown", so we fall back to range-only rather than treating
+      // missing volume as "low volume" (that false-0 was the original bug).
+      const NO_MOMENTUM_RANGE_PCT: Record<string, number> = { crypto: 1.5, equity: 0.8, commodity: 0.8, fx: 0.3 };
+      // Normalize to the singular keys the map uses so a direct caller passing
+      // "equities"/"commodities"/"forex" still gets the right (lower) floor
+      // instead of silently falling back to the crypto 1.5% default.
+      const clsKey = cls === "equities" ? "equity" : cls === "commodities" ? "commodity" : cls === "forex" ? "fx" : cls;
+      const flatThreshold = NO_MOMENTUM_RANGE_PCT[clsKey] ?? 1.5;
+      const volLabel = vr != null ? `${vr.toFixed(2)}× avg` : "no volume data";
+      const noMomentum = (isLongSig || isShortSig) && range24Pct < flatThreshold && (vr == null || vr < 1.2);
       if (noMomentum) {
-        const reason = `No-momentum gate: 24h range only ${range24Pct}%, volume ${(ind.volumeRatio || 1).toFixed(2)}× avg — no actionable setup`;
+        const reason = `No-momentum gate: 24h range only ${range24Pct}% (< ${flatThreshold}% ${cls} floor), volume ${volLabel} — no actionable setup`;
         console.warn(`[Quant] ${ticker} ${sigStr} blocked — ${reason}`);
         parsed.signal = "NEUTRAL";
         parsed.signal_strength = 0;
         parsed.no_momentum_blocked = true;
         parsed.no_momentum_reason = reason;
-        parsed.quant_rationale = `${ticker} has only moved ${range24Pct}% over the last 24 hours on ${(ind.volumeRatio || 1).toFixed(2)}× average volume — there is no real edge here, just chop. Forcing a trade in this environment is the fastest way to give back gains.`;
-        parsed.invalidation = `Wait for daily range to expand above 1.5% or volume to surge above 1.5× average before re-evaluating ${ticker}.`;
+        parsed.neutral_source = "no_momentum";
+        parsed.quant_rationale = `${ticker} has only moved ${range24Pct}% over the last 24 hours (${volLabel}) — below the ${flatThreshold}% floor for this market there is no real edge here, just chop. Forcing a trade in this environment is the fastest way to give back gains.`;
+        parsed.invalidation = `Wait for daily range to expand above ${flatThreshold}% or volume to surge before re-evaluating ${ticker}.`;
         parsed.thesis = `The market is asleep on ${ticker} right now. The right move is patience — come back when there is a real move to trade.`;
       }
 
@@ -7615,6 +7644,7 @@ Every level must be technically defensible. Return JSON only.`;
         parsed.signal_strength = 0;
         parsed.anti_chase_blocked = true;
         parsed.anti_chase_reason = reason;
+        parsed.neutral_source = "anti_chase";
         parsed.quant_rationale = `${ticker} is currently at ${pir}% of its 24h range with a ${range24Pct}% daily span — entering ${isLongSig ? "long" : "short"} here means chasing a move that is already extended. Wait for a pullback toward the 40–60% range zone before re-evaluating.`;
         parsed.invalidation = `Setup re-validated only after price retraces to ${(ind.low24 + (ind.high24 - ind.low24) * 0.5).toFixed(4)} or breaks decisively beyond ${isLongSig ? ind.high24.toFixed(4) : ind.low24.toFixed(4)} on 2x+ volume.`;
         parsed.thesis = `The asset is exhausted at the edge of its 24h range, so a fresh ${isLongSig ? "long" : "short"} here has poor reward-to-risk. Patience for a mean-reversion entry will give a far better setup.`;
@@ -7642,6 +7672,7 @@ Every level must be technically defensible. Return JSON only.`;
 
       if (gate.action === "BLOCK") {
         parsed.signal           = "NEUTRAL";
+        parsed.neutral_source   = "regime_block";
         parsed.entry            = null;
         parsed.tp1              = null;
         parsed.tp2              = null;
@@ -7784,6 +7815,7 @@ Every level must be technically defensible. Return JSON only.`;
             reason: "COOLDOWN", detail: `${cdHit.minutesLeft}m left in 2h cooldown`,
           });
           parsed.signal = "NEUTRAL";
+          parsed.neutral_source = "cooldown";
           parsed.suppressed = true;
           parsed.suppression_message = `${ticker} ${aiDir} cooldown active — ${cdHit.minutesLeft}m remaining (${COOLDOWN_WINDOW_MINUTES}m floor between same-direction signals).`;
           parsed.suppression_rules = ["COOLDOWN"];
@@ -7793,6 +7825,7 @@ Every level must be technically defensible. Return JSON only.`;
             reason: "MACRO_HALT", detail: macroRisk.reason || "BTC -3%/4h",
           });
           parsed.signal = "NEUTRAL";
+          parsed.neutral_source = "macro_halt";
           parsed.suppressed = true;
           parsed.suppression_message = `LONG suppressed — ${macroRisk.reason || "macro risk-off"}. SHORTs still permitted.`;
           parsed.suppression_rules = ["MACRO_HALT"];
@@ -7806,6 +7839,7 @@ Every level must be technically defensible. Return JSON only.`;
               detail: `${newsHit.severity} severity contradicts ${aiDir} — ${(newsHit.topHeadlines[0] || "").slice(0, 80)}`,
             });
             parsed.signal = "NEUTRAL";
+            parsed.neutral_source = "news_conflict";
             parsed.suppressed = true;
             parsed.suppression_message = `${aiDir} suppressed — high-severity news conflict (${newsHit.bearishCount}↓/${newsHit.bullishCount}↑). ${(newsHit.topHeadlines[0] || "").slice(0, 100)}`;
             parsed.suppression_rules = ["NEWS_CONFLICT_HIGH"];
@@ -8261,12 +8295,33 @@ Every level must be technically defensible. Return JSON only.`;
       // the client rendered them as SHORT trade cards with long-side levels.
       const _sigForRR = String(parsed.signal || "").toUpperCase();
       const _isDirectional = _sigForRR.includes("LONG") || _sigForRR.includes("SHORT");
+      const _isSuppressed  = _sigForRR === "SUPPRESSED";
       if (!_isDirectional) {
         // Non-directional (NEUTRAL) results must never ship an R:R at all —
         // not even one the LLM supplied via tp1.rr_ratio. R:R is meaningless
         // without a direction and a fake value promoted NEUTRAL into the
         // scanner's qualifying bucket.
         parsed.rr = null;
+      }
+      // ── NEUTRAL OUTPUT NORMALIZATION (single chokepoint) ──────────────────
+      // "The direction and pricing should always make sense." A NEUTRAL is a
+      // NO-TRADE — it must not carry the LLM's long-shaped reference entry/SL/TP
+      // or a leftover win probability (two of the NEUTRAL gates used to leave
+      // both, so a scan looked like an 82%-confidence trade with a phantom
+      // direction). Regardless of WHICH path forced NEUTRAL, guarantee one
+      // consistent shape here. SUPPRESSED keeps its existing contract (only rr
+      // was ever nulled). `neutral_source` defaults to "llm_direct" when Claude
+      // returned NEUTRAL on its own with no gate firing.
+      if (!_isDirectional && !_isSuppressed) {
+        parsed.entry           = null;
+        parsed.stopLoss        = null;
+        parsed.tp1             = null;
+        parsed.tp2             = null;
+        parsed.tp3             = null;
+        parsed.rr              = null;
+        parsed.win_probability = 0;
+        parsed.conviction_tier = "D";
+        if (!parsed.neutral_source) parsed.neutral_source = "llm_direct";
       }
       if (!parsed.rr && !parsed.geometry_auto_corrected && _isDirectional && parsed.tp1?.price && parsed.stopLoss?.price && parsed.entry?.price) {
         const rAmt = Math.abs(parsed.entry.price - parsed.stopLoss.price);
