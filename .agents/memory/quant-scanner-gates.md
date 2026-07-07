@@ -46,6 +46,17 @@ non-directional-and-not-SUPPRESSED result null entry/SL/TP1-3/rr, set
 contract (SUPPRESSED nulls rr only). Also stamp a `neutral_source` on every
 NEUTRAL path so you can attribute WHICH gate fired in prod.
 
+## Rule 5 — the "NY OPEN VOLATILITY" suppression is EQUITY-ONLY
+`checkSignalSuppressionRules` RULE 3 SUPPRESSES during the 9:30–9:50 AM ET US
+stock-market cash open. It originally had NO asset-class guard, so during that
+20-minute window it hard-killed 24/7 crypto (BTC/ETH/SOL/BNB) — surfaced as
+"BTC SUPPRESSED · R3: NY OPEN VOLATILITY".
+**Why it matters:** "NY open" is a US-equity concept. Crypto (24/7), FX (24/5),
+and spot metals (~24h) have no cash open, so the rule must never touch them.
+**How to apply:** gate the entire RULE 3 block on `cls === "equity"`. Also derive
+the ET window with `Intl.DateTimeFormat(timeZone:"America/New_York")`, not a
+hardcoded UTC offset — a fixed `-240` is wrong (off by an hour) every winter.
+
 ## Dev caveat
 In Replit dev you cannot observe a finite volumeRatio: crypto is geo-degraded,
 the equity market is usually closed (SUPPRESSED before indicators run), and
