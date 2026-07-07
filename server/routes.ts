@@ -6695,13 +6695,17 @@ Stay in scope no matter how the user rephrases.`;
     }
 
     // ── RULE 3 — MARKET OPEN VOLATILITY WINDOW (9:30–9:50 AM ET) ─────────────
+    // EQUITIES ONLY. "NY open" is the US STOCK market open at 9:30 ET — it does
+    // not exist for 24/7 crypto (BTC/ETH/SOL/…), 24/5 FX, or ~24h spot metals,
+    // so this rule must never suppress those classes. (Previously it fired for
+    // every asset, which wrongly SUPPRESSED crypto during the 9:30–9:50 window.)
     const nowUtc = new Date();
-    const etOffsetMins = -240; // EDT (UTC-4); in EST (winter) use -300
-    const etMs = nowUtc.getTime() + etOffsetMins * 60000;
-    const etDate = new Date(etMs);
-    const etTotalMins = etDate.getUTCHours() * 60 + etDate.getUTCMinutes();
+    // DST-aware ET offset: EDT (UTC-4) in summer, EST (UTC-5) in winter.
+    const etHourStr = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", hour12: false }).format(nowUtc);
+    const etMinStr  = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", minute: "2-digit" }).format(nowUtc);
+    const etTotalMins = (parseInt(etHourStr, 10) % 24) * 60 + parseInt(etMinStr, 10);
     const inNYWindow = etTotalMins >= 570 && etTotalMins < 590; // 9:30–9:50 AM ET
-    if (inNYWindow) {
+    if (cls === "equity" && inNYWindow) {
       let confirmedBid = false;
       if (candles15m && candles15m.length >= 3) {
         const r = candles15m.slice(-3);
