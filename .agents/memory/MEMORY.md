@@ -8,6 +8,7 @@
 - [Concierge booking webhook](concierge-booking-webhook.md) — paid bookings share the subscription checkout.session.completed handler; branch on metadata.kind or receipts mislabel; idempotent confirm vs Stripe retries.
 - [Booking email at-most-once](booking-email-idempotency.md) — stamp emails_sent_at as a claim but RELEASE it when the user email fails; paid webhook must always re-finalize, never early-return on confirmed.
 - [Railway vs Replit credentials](railway-vs-replit-credentials.md) — Replit-connector auths (incl. Google Calendar) do NOT work on Railway prod; need env-var path. Calendar uses OAuth refresh token; Stripe/Resend already env-native.
+- [Replit-purchased domain DNS](replit-purchased-domain-dns.md) — registrar nameservers do not imply a direct account; DNS UI may be publish-gated even when Railway is the real host.
 - [AI analyze cache key](ai-analyze-cache-key.md) — /api/ai/analyze caches on a truncated system+message hash only; new output-affecting inputs (history, etc.) are ignored on cache hits unless folded into the key.
 - [Deploy / push pipeline](deploy-pipeline.md) — prod = Railway auto-deploy on push to GitHub main; main agent blocked from ALL git incl rm .git/*.lock; Project-Task pushes did NOT move the remote — always verify with git ls-remote.
 - [GitHub API push (bypass jammed local git)](github-api-push.md) — when git push stalls (143MB LFS pre-push hook + stale .git/*.lock + diverged) and task pushes don't land, push the file delta via the Git Data API with GITHUB_PAT; verify via git ls-remote.
