@@ -17,3 +17,9 @@ public DNS to separate a healthy Railway app from a broken custom-domain route. 
 the Replit DNS control is inaccessible and there are no deployment logs, stop
 changing the project, preserve the Railway setup, and route the account-level domain
 issue to Replit Support with the exact old and required DNS records.
+
+For a Railway-hosted apex domain, Replit Support can manually replace the Replit A
+record with an ANAME pointing to Railway. Verify Railway ownership at
+`_railway-verify.<domain>` (not at the apex). After both records propagate, Railway
+can temporarily serve its generic `*.up.railway.app` certificate while issuing the
+custom certificate; do not churn the domain or records during that window.
