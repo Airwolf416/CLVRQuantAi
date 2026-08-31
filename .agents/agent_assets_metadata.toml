@@ -90,3 +90,10 @@ id = "KOd-E56TzJrYH_cg98kEm"
 uri = "file://exports/clvrquantai-full-source-2026-06-10.zip"
 type = "unspecified"
 title = "CLVRQuantAI — Full Website Source (143 MB, 682 files)"
+
+[[outputs]]
+id = "KrhPPb3xyQvYQREsqqvZm"
+uri = "file://CLVRQuantAI_IMPLEMENTATION_READY_UPGRADES.md"
+type = "text"
+title = "CLVRQuantAI Implementation-Ready Upgrades"
+description = "Consolidated, architecture-reviewed specification for the signal-quality/universe and session-security/UI workstreams, including phased rollout, migration safeguards, and acceptance tests."
