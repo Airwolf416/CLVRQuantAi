@@ -129,26 +129,19 @@ function FlashRow({ sym, label, price, chg, flash, isForex, children }) {
   injectBlink();
   const chgN = Number(chg) || 0;
   const isUp = chgN >= 0;
-  const bgFlash = flash === "green" ? "rgba(0,199,135,0.22)"
-                : flash === "red"   ? "rgba(255,64,96,0.18)"
-                : "transparent";
   const priceColor = flash === "green" ? C.green
                    : flash === "red"   ? C.red
                    : C.white;
 
   // Arrow blinks while flash is active; direction follows last-tick or 24h chg
   const arrowUp    = flash === "green" ? true : flash === "red" ? false : isUp;
-  const arrowAnim  = flash === "green" ? "clvrBlinkUp 0.28s 2 ease-in-out"
-                   : flash === "red"   ? "clvrBlinkDown 0.28s 2 ease-in-out"
-                   : "none";
   const arrowColor = flash === "green" ? C.green : flash === "red" ? C.red : isUp ? C.green : C.red;
 
   return (
     <div data-testid={`row-${sym}`} style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
       padding: "11px 10px", borderBottom: `1px solid ${C.border}`,
-      background: bgFlash,
-      transition: flash ? "none" : "background 0.5s",
+      background: "transparent",
       borderRadius: 4,
     }}>
       {/* Left: ticker + blinking arrow */}
@@ -160,16 +153,14 @@ function FlashRow({ sym, label, price, chg, flash, isForex, children }) {
         <span style={{
           fontSize: 14, fontWeight: 900, display: "inline-block",
           color: arrowColor,
-          animation: arrowAnim,
         }}>{arrowUp ? "↑" : "↓"}</span>
       </div>
 
       {/* Right: price + change + badge */}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{
+        <span className={flash ? "motion-price-pulse" : undefined} style={{
           fontFamily: MONO, fontSize: 15, fontWeight: 700,
           color: priceColor,
-          transition: flash ? "none" : "color 0.5s",
         }}>
           {isForex ? fmtFx(price) : fmt(price, sym)}
         </span>

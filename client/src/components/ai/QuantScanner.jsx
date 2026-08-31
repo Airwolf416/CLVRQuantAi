@@ -1,7 +1,9 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import SignalCard, { SuppressedSignal } from "./SignalCard.jsx";
 import ScanSummary from "./ScanSummary.jsx";
 import { useDataBus } from "../../context/DataBusContext.jsx";
+import { apiFetch } from "../../lib/apiClient";
+import { useNewItemMotion, useStableResponseItemIds } from "../../hooks/useNewItemMotion.js";
 
 const MONO = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
@@ -73,9 +75,53 @@ export default function QuantScanner({ mode, isPro, isElite }) {
   const [tf, setTf] = useState("hours");
   const [scanning, setScanning] = useState(false);
   const [results, setResults] = useState([]);
+  const scanItemIds = useStableResponseItemIds(results, row => row?.result?.id, "quant-scan");
+  const isNewScanSignal = useNewItemMotion(scanItemIds);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("ALL");
+  const [hlUniverse, setHlUniverse] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    apiFetch("/api/universe", { credentials: "include" })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Universe unavailable (${response.status})`);
+        const data = await response.json();
+        if (active && Array.isArray(data.assets)) setHlUniverse(data);
+      })
+      .catch(() => { /* preserve the complete static picker on failure */ });
+    return () => { active = false; };
+  }, []);
+
+  const assetLibrary = useMemo(() => {
+    if (!hlUniverse?.assets) return FULL_ASSET_LIBRARY;
+    const byTicker = new Map(FULL_ASSET_LIBRARY.map(asset => [asset.ticker, { ...asset }]));
+    for (const market of hlUniverse.assets) {
+      const ticker = market.canonicalSymbol || market.symbol;
+      if (!ticker) continue;
+      const current = byTicker.get(ticker);
+      const universeFields = {
+        hlMarket: true,
+        hlSupported: market.eligible && market.status === "active" && market.supportStatus === "supported",
+        hlSupportReason: market.supportReason || market.reasons?.[0] || null,
+      };
+      byTicker.set(ticker, current
+        ? { ...current, ...universeFields }
+        : {
+            ticker, name: market.symbol || ticker,
+            cat: market.assetClass === "equity" ? "EQUITY" : "CRYPTO",
+            hlOnly: true,
+            ...universeFields,
+          });
+    }
+    // A successful authoritative response means an absent static crypto has no
+    // discovered HL perp. It remains available for SPOT, but not for PERP.
+    return [...byTicker.values()].map(asset =>
+      asset.cat === "CRYPTO" && !asset.hlMarket
+        ? { ...asset, hlSupported: false, hlSupportReason: "Not available as a supported Hyperliquid perp" }
+        : asset);
+  }, [hlUniverse]);
 
   const { regime, killSwitch, macroEvents: macroEvts, prices, funding, oi } = useDataBus();
 
@@ -96,12 +142,20 @@ export default function QuantScanner({ mode, isPro, isElite }) {
     const collected = [];
     for (let i = 0; i < selected.length; i++) {
       const ticker = selected[i];
-      const ac = ASSET_CLASS(ticker);
+      const picked = assetLibrary.find(asset => asset.ticker === ticker);
+      if (picked?.hlSupported === false
+          && (picked.hlOnly || market === "PERP" || market === "BOTH")) {
+        collected.push({ ticker, result: null, error: "Unsupported for perp scoring" });
+        setProgress({ done: i + 1, total: selected.length });
+        continue;
+      }
+      const ac = picked?.cat === "EQUITY" ? "equity"
+        : picked?.cat === "COMMODITY" ? "commodity" : picked?.cat === "FX" ? "fx" : "crypto";
       // Crypto + FX both support PERP (Hyperliquid lists both). Equities/commodities are SPOT-only.
       const supportsPerp = ac === "crypto" || ac === "fx";
       const assetMarket = supportsPerp ? market : "SPOT";
       try {
-        const res = await fetch("/api/quant", {
+        const res = await apiFetch("/api/quant", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -145,7 +199,7 @@ export default function QuantScanner({ mode, isPro, isElite }) {
   const errors = results.filter(r => r.error);
   const hasDone = results.length > 0 && !scanning;
 
-  const filtered = FULL_ASSET_LIBRARY.filter(a => {
+  const filtered = assetLibrary.filter(a => {
     const mc = catFilter === "ALL" || a.cat === catFilter;
     const q = search.toLowerCase();
     const ms = !q || a.ticker.toLowerCase().includes(q) || a.name.toLowerCase().includes(q);
@@ -194,16 +248,18 @@ export default function QuantScanner({ mode, isPro, isElite }) {
           {filtered.map(a => {
             const isSel = selected.includes(a.ticker);
             const col = CAT_COLORS[a.cat] || "#6b7a99";
-            const disabled = !isSel && selected.length >= 5;
+            const unsupported = a.hlSupported === false
+              && (a.hlOnly || market === "PERP" || market === "BOTH");
+            const disabled = (!isSel && unsupported) || (!isSel && selected.length >= 5);
             return (
-              <button key={a.ticker} data-testid={`scan-chip-${a.ticker}`} onClick={() => !disabled && toggle(a.ticker)} style={{
+              <button key={a.ticker} data-testid={`scan-chip-${a.ticker}`} title={unsupported ? `Unavailable: ${a.hlSupportReason || "scorer unsupported"}` : undefined} onClick={() => !disabled && toggle(a.ticker)} style={{
                 padding: "5px 10px", borderRadius: 6,
                 border: `1px solid ${isSel ? col : "rgba(255,255,255,0.06)"}`,
                 background: isSel ? `${col}18` : "transparent",
                 color: isSel ? col : "rgba(255,255,255,0.4)",
                 fontFamily: MONO, fontSize: 9, cursor: disabled ? "not-allowed" : "pointer",
                 opacity: disabled ? 0.3 : 1, fontWeight: isSel ? 700 : 400,
-              }}>{a.ticker}</button>
+              }}>{a.ticker}{unsupported ? " · UNSUPPORTED" : ""}</button>
             );
           })}
         </div>
@@ -250,13 +306,11 @@ export default function QuantScanner({ mode, isPro, isElite }) {
       </div>
 
       {scanning && (
-        <div style={{ textAlign: "center", padding: "24px 16px" }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>🧠</div>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#e8c96d", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 8 }}>MASTERBRAIN ACTIVE</div>
-          <div style={{ fontSize: 9, color: "rgba(255,255,255,0.4)", fontFamily: MONO }}>Analyzing {progress.done} / {progress.total} assets...</div>
-          <div style={{ width: "60%", margin: "10px auto", height: 3, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%`, background: "linear-gradient(90deg, #c9a84c, #22c55e)", borderRadius: 3, transition: "width 0.5s ease" }} />
-          </div>
+        <div aria-busy="true" aria-live="polite" aria-label="Loading scanner results" style={{ padding: "16px 0" }}>
+          <span className="sr-only">Analyzing {progress.done} of {progress.total} assets</span>
+          {[0, 1, 2].map(i => (
+            <div key={i} aria-hidden="true" className="motion-shimmer" style={{ height: 138, marginBottom: 12, borderRadius: 12, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(201,168,76,0.12)" }} />
+          ))}
         </div>
       )}
 
@@ -266,9 +320,11 @@ export default function QuantScanner({ mode, isPro, isElite }) {
 
       {qualifying.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {qualifying.map((r, i) => (
-            <SignalCard key={r.ticker} ticker={r.ticker} result={r.result} rank={i} mode={mode} />
-          ))}
+          {qualifying.map((r, i) => {
+            const resultIndex = results.indexOf(r);
+            const id = scanItemIds[resultIndex];
+            return <SignalCard key={id} ticker={r.ticker} result={r.result} rank={i} mode={mode} animateIn={isNewScanSignal(id)} />;
+          })}
         </div>
       )}
 
@@ -278,9 +334,11 @@ export default function QuantScanner({ mode, isPro, isElite }) {
             ⚠ BELOW R:R 1.3 THRESHOLD — {belowThreshold.length} setup{belowThreshold.length !== 1 ? "s" : ""} (shown for transparency)
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12, opacity: 0.85 }}>
-            {belowThreshold.map((r, i) => (
-              <SignalCard key={r.ticker} ticker={r.ticker} result={r.result} rank={qualifying.length + i} mode={mode} />
-            ))}
+            {belowThreshold.map((r, i) => {
+              const resultIndex = results.indexOf(r);
+              const id = scanItemIds[resultIndex];
+              return <SignalCard key={id} ticker={r.ticker} result={r.result} rank={qualifying.length + i} mode={mode} animateIn={isNewScanSignal(id)} />;
+            })}
           </div>
         </div>
       )}

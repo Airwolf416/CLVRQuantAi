@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { buildMarketSnapshot, buildMacroPreflightContext } from "../../utils/marketDataSnapshot.js";
+import { apiFetch } from "../../lib/apiClient";
 
 const MONO = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
@@ -112,7 +113,7 @@ async function getEligibleExecutionSymbols() {
   if (__eligibleExecCache) return __eligibleExecCache;
   __eligibleExecCache = (async () => {
     try {
-      const r = await fetch("/api/execution_levels/eligible", { credentials: "include" });
+      const r = await apiFetch("/api/execution_levels/eligible", { credentials: "include" });
       if (!r.ok) return null;
       return await r.json();
     } catch { return null; }
@@ -165,7 +166,7 @@ export default function AIChat({
       // Independent pre-fetches run concurrently; each resolves to null on
       // failure so one never blocks or fails the other.
       const [preflight, eligibleMap] = await Promise.all([
-        fetch("/api/macro/preflight", { credentials: "include" })
+        apiFetch("/api/macro/preflight", { credentials: "include" })
           .then(r => (r.ok ? r.json() : null))
           .catch(() => null),
         getEligibleExecutionSymbols().catch(() => null),
@@ -210,7 +211,7 @@ export default function AIChat({
         // original `mentions` order, and filter(Boolean) drops the misses.
         const settled = await Promise.all(mentions.map(async (sym) => {
           try {
-            const r = await fetch(`/api/execution_levels/${sym}`, { credentials: "include" });
+            const r = await apiFetch(`/api/execution_levels/${sym}`, { credentials: "include" });
             if (!r.ok) return null;
             const lvl = await r.json();
             const dec = lvl.current_price < 10 ? 4 : 2;
@@ -246,7 +247,7 @@ ${execContext ? execContext + "\n\n" : ""}TODAY: ${new Date().toLocaleDateString
 
 ${snap.sections}`;
 
-      const res = await fetch("/api/ai/analyze", {
+      const res = await apiFetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

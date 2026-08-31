@@ -6,20 +6,42 @@
 import { hlData, recordPrice } from "../state";
 import { HL_PERP_SYMS, HL_TO_APP, HL_SCALE_FACTORS } from "../config/assets";
 import { createRepeatableWorker } from "./queue";
+import { observeHyperliquidMeta } from "../lib/assetUniverse";
 
 const HL_INTERVAL_MS = 5_000;
 
 // ── Single tick: fetch allMids + metaAndAssetCtxs, update hlData + priceHistory
 
-export async function runHlTick(onPricesUpdated: () => void): Promise<void> {
+type HlTickDeps = {
+  fetch?: typeof fetch;
+  observe?: typeof observeHyperliquidMeta;
+  now?: () => number;
+};
+
+export function validateHlResponses(mids: unknown, meta: unknown): {
+  mids: Record<string, unknown>; universe: any[]; contexts: any[];
+} | null {
+  if (!mids || typeof mids !== "object" || Array.isArray(mids)
+      || Object.getPrototypeOf(mids) !== Object.prototype
+      || Object.values(mids).some(value => !Number.isFinite(Number(value)))) return null;
+  if (!Array.isArray(meta) || meta.length !== 2
+      || !meta[0] || typeof meta[0] !== "object"
+      || !Array.isArray(meta[0].universe) || !Array.isArray(meta[1])
+      || meta[0].universe.length !== meta[1].length) return null;
+  return { mids: mids as Record<string, unknown>, universe: meta[0].universe, contexts: meta[1] };
+}
+
+export async function runHlTick(onPricesUpdated: () => void, deps: HlTickDeps = {}): Promise<boolean> {
+  const request = deps.fetch || fetch;
+  try {
   const [r1, r2] = await Promise.all([
-    fetch("https://api.hyperliquid.xyz/info", {
+    request("https://api.hyperliquid.xyz/info", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "allMids" }),
       signal: AbortSignal.timeout(5000),
     }),
-    fetch("https://api.hyperliquid.xyz/info", {
+    request("https://api.hyperliquid.xyz/info", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "metaAndAssetCtxs" }),
@@ -27,10 +49,19 @@ export async function runHlTick(onPricesUpdated: () => void): Promise<void> {
     }),
   ]);
 
-  const mids: any = await r1.json();
-  const meta: any = await r2.json();
-  const universe = meta[0].universe;
-  const ctxs = meta[1];
+  if (!r1.ok || !r2.ok) return false;
+  let midsRaw: unknown;
+  let meta: unknown;
+  try {
+    [midsRaw, meta] = await Promise.all([r1.json(), r2.json()]);
+  } catch {
+    return false;
+  }
+  const validated = validateHlResponses(midsRaw, meta);
+  if (!validated) return false;
+  const { mids, universe, contexts: ctxs } = validated;
+  // Discovery cadence is advanced only after both upstream payloads validate.
+  (deps.observe || observeHyperliquidMeta)(meta);
 
   universe.forEach((asset: any, i: number) => {
     if (!HL_PERP_SYMS.includes(asset.name)) return;
@@ -45,15 +76,20 @@ export async function runHlTick(onPricesUpdated: () => void): Promise<void> {
     hlData[appName] = {
       funding:   +(parseFloat(ctxs[i]?.funding     || 0) * 100).toFixed(4),
       oi:        parseFloat(ctxs[i]?.openInterest  || 0) * markPx,
-      perpPrice: mids[asset.name] ? parseFloat(mids[asset.name]) * scale : 0,
+      perpPrice: mids[asset.name] ? Number(mids[asset.name]) * scale : 0,
       volume:    parseFloat(ctxs[i]?.dayNtlVlm     || 0),
       dayChg,
-      ts:        Date.now(), // Module 2: per-asset freshness for microstructure staleness
+      ts:        (deps.now || Date.now)(), // Module 2: per-asset freshness for microstructure staleness
     };
     if (markPx > 0) recordPrice(appName, markPx);
   });
 
   onPricesUpdated();
+  return true;
+  } catch (error: any) {
+    console.error("[hl-worker] tick error:", error?.message || error);
+    return false;
+  }
 }
 
 // ── Start the worker: BullMQ repeatable job when Redis is available, else setInterval

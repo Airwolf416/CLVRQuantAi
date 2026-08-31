@@ -12,6 +12,7 @@ import { getThresholdFor, recalculateThresholds } from "./lib/adaptiveThresholds
 import { getCircuitState, isHalted, isProbation, manualHalt, manualResume, checkCircuitBreaker, isMacroRiskOff } from "./lib/circuitBreaker";
 import { logRejection, getRecentRejections, getRejectionStats } from "./lib/rejectionLog";
 import { enforceGeometry } from "./lib/geometryGuard";
+import { applyEmissionPolicy } from "./lib/emissionPolicy";
 import { isInCooldown, COOLDOWN_WINDOW_MINUTES } from "./lib/cooldown";
 import { isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
 import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
@@ -39,6 +40,16 @@ import webpush from "web-push";
 import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./insider";
 import QRCode from "qrcode";
 import rateLimit from "express-rate-limit";
+import { PostgresRateLimitStore } from "./lib/postgresRateLimitStore";
+import { stripeResourceOwnedByUser } from "./lib/billingOwnership";
+import { rejectLegacyWebAuthnAuthentication } from "./lib/webauthnPolicy";
+import {
+  initializeAuthenticatedSession,
+  markStrongPasswordAuth,
+  requireRecentAuth,
+  sessionStatus,
+  updateSessionActivity,
+} from "./lib/sessionSecurity";
 
 // Per-IP rate limiter for AI / Quant endpoints: 30 requests per 15 min
 const aiIpLimiter = rateLimit({
@@ -52,6 +63,7 @@ const aiIpLimiter = rateLimit({
     const userId = (req.session as any)?.userId;
     return userId ? `ai:user:${userId}` : `ai:ip:${req.ip || "anon"}`;
   },
+  store: new PostgresRateLimitStore("route-ai"),
 });
 
 // Brute-force protection on credential endpoints: 10 attempts / 15 min per IP
@@ -62,6 +74,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many attempts. Please wait 15 minutes and try again." },
+  store: new PostgresRateLimitStore("auth"),
 });
 
 // Signup abuse protection: 5 new accounts / hour per IP.
@@ -71,7 +84,80 @@ const signupLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many signups from this network. Please try again later." },
+  store: new PostgresRateLimitStore("signup"),
 });
+
+const confirmPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { keyGeneratorIpFallback: false },
+  keyGenerator: (req: Request) =>
+    `confirm:${req.ip || "unknown"}:${(req.session as any)?.userId || "anonymous"}`,
+  message: { error: "Unable to confirm credentials", code: "CONFIRM_PASSWORD_FAILED" },
+  store: new PostgresRateLimitStore("confirm-password"),
+});
+
+const recentAuth = requireRecentAuth();
+
+function regenerateSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) =>
+    req.session.regenerate(error => error ? reject(error) : resolve()),
+  );
+}
+
+function saveSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) =>
+    req.session.save(error => error ? reject(error) : resolve()),
+  );
+}
+
+async function revokePresentedBearer(req: Request): Promise<void> {
+  const authorization = req.headers.authorization;
+  if (!authorization?.startsWith("Bearer ")) return;
+  const sid = authorization.slice(7).trim();
+  if (sid) await pool.query("DELETE FROM user_sessions WHERE sid = $1", [sid]);
+}
+
+function auditSecurityEvent(event: string, req: Request, success: boolean): void {
+  console.info(JSON.stringify({
+    type: "security_audit",
+    event,
+    success,
+    userId: (req.session as any)?.userId || null,
+    sessionIdHash: cryptoCreateHash("sha256").update(req.sessionID || "").digest("hex").slice(0, 12),
+    at: new Date().toISOString(),
+  }));
+}
+
+const ALLOWED_CHECKOUT_LOOKUP_KEYS = [
+  "pro_monthly1", "pro_yearly1", "elite_monthly", "elite_yearly",
+] as const;
+
+async function resolveAllowedCheckoutPrice(stripe: any, requested: unknown): Promise<any | null> {
+  if (typeof requested !== "string" || !requested) return null;
+  const prices = await stripe.prices.list({
+    lookup_keys: [...ALLOWED_CHECKOUT_LOOKUP_KEYS],
+    active: true,
+    limit: ALLOWED_CHECKOUT_LOOKUP_KEYS.length,
+  });
+  return prices.data.find((price: any) =>
+    price.id === requested || price.lookup_key === requested,
+  ) || null;
+}
+
+async function requireOwnedSubscription(stripe: any, user: any): Promise<any | null> {
+  if (!user?.stripeSubscriptionId) return null;
+  const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+  return await stripeResourceOwnedByUser(stripe, subscription.customer, user)
+    ? subscription
+    : null;
+}
+
+function billingNotOwned(res: Response) {
+  return res.status(403).json({ error: "Billing resource is not available", code: "BILLING_RESOURCE_NOT_OWNED" });
+}
 
 // ── Modular imports ───────────────────────────────────────────────────────────
 import { getIO } from "./socketServer";
@@ -108,6 +194,14 @@ import {
   broadcastKronosFlipPush,
 } from "./workers/notifications";
 import { startHlRefreshWorker } from "./workers/hlRefreshWorker";
+import {
+  getUniverseDto,
+  getDiscoveredHyperliquidSupport,
+  getHyperliquidEmissionEligibility,
+  isHyperliquidScorerSupported,
+  loadUniverseLastKnownGood,
+} from "./lib/assetUniverse";
+import { canonicalMarketType, discoveredPerpDenial, registerUniverseHttpRoute } from "./lib/universeHttp";
 import { startStockRefreshWorker } from "./workers/stockRefreshWorker";
 import { startDataBus, getDataBusStatus, setDataBusMacroNews } from "./databus";
 import {
@@ -1583,6 +1677,14 @@ async function detectMoves() {
       continue;
     }
 
+    let emissionPolicySnapshot: Record<string, unknown> | null = null;
+    let suppressEmission = false;
+    // Hard universe authorization precedes geometry/policy and every sink.
+    // Unlike optional scoring controls this is fail-closed and cannot be
+    // bypassed by a geometry adapter error.
+    if (!getHyperliquidEmissionEligibility(sym, {
+      assetClass: "crypto", forceHyperliquid: true,
+    }).allowed) continue;
     // ── FINAL GEOMETRY GUARD (auto-scanner emission) ─────────────────────
     // Levels above are constructed directionally, but this is the LAST gate
     // before the signal reaches liveSignals (/api/signals), the DB persist,
@@ -1617,9 +1719,28 @@ async function detectMoves() {
         }
         (signal as any).geometry_auto_corrected = true;
       }
+      const policy = applyEmissionPolicy({
+        source: "auto_scanner", symbol: sym, conviction: Number(signal.conf), direction: gDir, entry: Number(signal.entry), stopLoss: Number(signal.stopLoss),
+        tp1: Number(signal.tp1), tp2: Number(signal.tp2), assetClass: "crypto", regime: "unknown",
+        leverageTier: String(signal.lev || "unknown"), holdHorizonBand: "day", venueProfile: "hyperliquid_native",
+        volume24hUsd: Number((hl as any)?.volume ?? NaN), fundingRatePct: Number((hl as any)?.funding ?? NaN), expectedHoldHours: 24,
+      });
+      signal.entry = policy.candidate.entry; signal.stopLoss = policy.candidate.stopLoss; signal.tp1 = policy.candidate.tp1;
+      if (policy.candidate.conviction != null) signal.conf = policy.candidate.conviction;
+      if (policy.candidate.tp2 != null) { signal.tp2 = policy.candidate.tp2; signal.target = policy.candidate.tp2; }
+      suppressEmission = policy.decision.suppress;
+      emissionPolicySnapshot = {
+        ...policy.decision.snapshot,
+        dimensions: { source: "auto_scanner", assetClass: "crypto", direction: gDir, venueProfile: "hyperliquid_native",
+          holdHorizonBand: "day", rrBand: policy.candidate.rr == null ? "unknown" : `${Math.floor(policy.candidate.rr)}R`,
+          regime: "unknown", leverageTier: String(signal.lev || "unknown") },
+      };
     } catch (geoErr: any) {
       console.warn(`[SCANNER] ${sym} geometry guard failed (non-fatal):`, (geoErr as Error)?.message || geoErr);
     }
+    // Skip only this scanner candidate. The scheduler continues evaluating the
+    // remaining symbols, and off/shadow never set suppress=true.
+    if (suppressEmission) continue;
 
     liveSignals.unshift(signal);
     // ── AUTOPOSTER DISABLED ──────────────────────────────────────────────
@@ -1671,6 +1792,10 @@ async function detectMoves() {
       conviction: signal.advancedScore || signal.conf || null,
       killClockHours: 24,
       scores: signal.scoreBreakdown || null,
+      entryFillStatus: "VERIFIED",
+      entryFilledAt: new Date(),
+      holdHorizonPolicy: "auto_scanner_day_24h",
+      signalPolicySnapshot: emissionPolicySnapshot,
     }).catch(() => {});
 
     // ── BROADCAST PUSH NOTIFICATION FOR STRONG SIGNALS (score ≥ 80) ─────────
@@ -2123,7 +2248,12 @@ export async function registerRoutes(
     }
   });
 
+  // Stable authenticated picker DTO. Raw venue metadata, lease state and
+  // internal policy details are intentionally never serialized.
+  registerUniverseHttpRoute(app);
+
   await seedAccessCodes();
+  await loadUniverseLastKnownGood();
   startStockRefreshWorker();
   startHlRefreshWorker(detectMoves);
   startNotificationWorker();
@@ -6787,8 +6917,14 @@ Stay in scope no matter how the user rephrases.`;
     }
 
     try {
-      const { ticker, marketType, userQuery, riskId, timeframeId, assetClass, twitterContext } = req.body;
-      if (!ticker || !marketType || !riskId || !timeframeId) return res.status(400).json({ error: "Missing required parameters." });
+      const { ticker: tickerInput, marketType: marketTypeInput, userQuery, riskId, timeframeId, assetClass, twitterContext } = req.body;
+      if (!tickerInput || !marketTypeInput || !riskId || !timeframeId) return res.status(400).json({ error: "Missing required parameters." });
+      const ticker = String(tickerInput).trim().toUpperCase();
+      if (!ticker) return res.status(400).json({ error: "Missing required parameters." });
+      const marketType = canonicalMarketType(marketTypeInput);
+      if (!marketType) {
+        return res.status(400).json({ error: "Invalid market type.", code: "INVALID_MARKET_TYPE" });
+      }
       const risk = QUANT_RISK_PROFILES[riskId];
       const tfBase = QUANT_TIMEFRAMES[timeframeId];
       if (!risk || !tfBase) return res.status(400).json({ error: "Invalid risk or timeframe." });
@@ -6799,6 +6935,25 @@ Stay in scope no matter how the user rephrases.`;
       const QUANT_COMMODITIES = ["XAU","XAG","WTI","BRENT","NATGAS","COPPER","PLATINUM"];
       const QUANT_FOREX = ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD","EURGBP","EURJPY","GBPJPY","USDMXN","USDZAR","USDTRY","USDSGD"];
       const cls: string = assetClass || (QUANT_EQUITIES.includes(ticker) ? "equity" : QUANT_COMMODITIES.includes(ticker) ? "commodity" : QUANT_FOREX.includes(ticker) ? "fx" : "crypto");
+      const normalizedTicker = ticker;
+      const discoveredSupport = getDiscoveredHyperliquidSupport(normalizedTicker);
+      const known = getUniverseDto().assets.find(asset =>
+          asset.canonicalSymbol.toUpperCase() === normalizedTicker
+          || asset.rawSymbol.toUpperCase() === normalizedTicker);
+      const discoveredDenial = discoveredPerpDenial(marketType, normalizedTicker, discoveredSupport, known?.status);
+      if (discoveredDenial) {
+        return res.status(422).json({
+          error: `${normalizedTicker} is not available for perp scoring.`,
+          code: discoveredDenial,
+        });
+      }
+      if ((marketType === "PERP" || marketType === "BOTH")
+          && cls === "crypto" && !isHyperliquidScorerSupported(normalizedTicker)) {
+        return res.status(422).json({
+          error: `${normalizedTicker} is not supported by the scoring pipeline.`,
+          code: "SCORER_UNSUPPORTED",
+        });
+      }
 
       // ── MARKET-OPEN GATE (non-crypto only) ────────────────────────────────
       // Skip generation entirely when the asset's session is closed — no point
@@ -8354,6 +8509,53 @@ Every level must be technically defensible. Return JSON only.`;
       // ── Log to ai_signal_log (non-blocking) ──────────────────────────────
       if (parsed.signal && (parsed.signal.includes("LONG") || parsed.signal.includes("SHORT")) && parsed.entry?.price) {
         const killHours = tf.id === "scalp" ? 4 : tf.id === "day" ? 24 : tf.id === "swing" ? 72 : 168;
+        // Track S policy adapter is intentionally shadow-default. It owns the
+        // final levels used by this persistence and the response below; its
+        // decision remains internal and is never merged into `parsed`.
+        const policy = applyEmissionPolicy({
+          source: "quant_scanner", symbol: ticker, marketType, conviction: Number(parsed.conviction ?? parsed.confidence),
+          direction: parsed.signal.includes("LONG") ? "LONG" : "SHORT",
+          entry: Number(parsed.entry.price),
+          stopLoss: Number(parsed.stopLoss?.price),
+          tp1: Number(parsed.tp1?.price),
+          tp2: parsed.tp2?.price == null ? null : Number(parsed.tp2.price),
+          tp3: parsed.tp3?.price == null ? null : Number(parsed.tp3.price),
+          assetClass: String(cls || "unknown"),
+          regime: typeof (parsed as any).regime === "string" ? (parsed as any).regime : "unknown",
+          leverageTier: parsed.leverage ? String(parsed.leverage) : "unknown",
+          holdHorizonBand: tf.id || "unknown",
+          venueProfile: "phantom",
+          volume24hUsd: Number((ind as any).volume24hUsd ?? (ind as any).volume24h ?? NaN),
+          fundingRatePct: Number(hlData[ticker]?.funding ?? NaN),
+          expectedHoldHours: killHours,
+        });
+        parsed.entry.price = policy.candidate.entry;
+        if (parsed.stopLoss) parsed.stopLoss.price = policy.candidate.stopLoss;
+        if (parsed.tp1) parsed.tp1.price = policy.candidate.tp1;
+        if (parsed.tp2 && policy.candidate.tp2 != null) parsed.tp2.price = policy.candidate.tp2;
+        if (parsed.tp3 && policy.candidate.tp3 != null) parsed.tp3.price = policy.candidate.tp3;
+        if (policy.candidate.conviction != null) {
+          if ("conviction" in parsed) parsed.conviction = policy.candidate.conviction;
+          else parsed.confidence = policy.candidate.conviction;
+        }
+        if (policy.decision.suppress) {
+          // Preserve the established transparent per-ticker no-trade contract.
+          // The stable reason is intentionally non-numeric: pWin, netEV, cost,
+          // and the policy snapshot remain internal audit data.
+          return res.json({
+            signal: "SUPPRESSED",
+            suppressed: true,
+            suppression_message: "No qualifying setup met the signal quality requirements.",
+            suppression_rules: ["EXPECTANCY_POLICY_REJECTED"],
+            no_signal_reason: "EXPECTANCY_POLICY_REJECTED",
+            empty_reason: {
+              type: "ALL_REJECTED",
+              detail: "1 candidate evaluated; none met the quality thresholds",
+              evaluated: 1,
+              top_rejections: ["EXPECTANCY_POLICY_REJECTED"],
+            },
+          });
+        }
         // ── pwin Phase 1 — passive calibration snapshot ───────────────────
         // Build the snapshot from what's already in scope here (no new HTTP
         // calls, fully passive). direction_probability + p_loss_meta_proxy
@@ -8422,6 +8624,21 @@ Every level must be technically defensible. Return JSON only.`;
           archetype: (parsed as any).archetype || undefined,
           classificationSource: "live",
           classificationDiagnostics: (parsed as any).archetype_diagnostics || undefined,
+          // MARKET quote at emission is the available fill evidence. This
+          // says the entry was observed, not that a user order was filled.
+          entryFillStatus: "VERIFIED",
+          entryFilledAt: new Date(),
+          holdHorizonPolicy: `quant_${tf.id || "unknown"}_${killHours}h`,
+          signalPolicySnapshot: {
+            ...policy.decision.snapshot,
+            dimensions: {
+              source: "quant_scanner", assetClass: String(cls || "unknown"), direction: policy.candidate.direction,
+              venueProfile: "phantom", holdHorizonBand: tf.id || "unknown",
+              rrBand: policy.candidate.rr == null ? "unknown" : `${Math.floor(policy.candidate.rr)}R`,
+              regime: typeof (parsed as any).regime === "string" ? (parsed as any).regime : "unknown",
+              leverageTier: parsed.leverage ? String(parsed.leverage) : "unknown",
+            },
+          },
           newsContext: (() => {
             const dir = parsed.signal.includes("LONG") ? "LONG" : "SHORT";
             const ni = dir === "LONG" ? newsImpactLong : newsImpactShort;
@@ -9000,6 +9217,21 @@ Every level must be technically defensible. Return JSON only.`;
             }
           }
         } catch { /* fail open — persist original levels */ }
+        const policy = applyEmissionPolicy({
+          source: "trade_ideas", symbol: token, marketType: t.marketType ?? t.market_type, conviction: Number(t?.conviction ?? t?.confidence), direction, entry: Number(entry), stopLoss: Number(gSl), tp1: Number(gTp1),
+          tp2: gTp2 == null ? null : Number(gTp2), tp3: gTp3 == null ? null : Number(gTp3),
+          assetClass: String(t.assetClass || t.asset_class || "unknown"), regime: String(t.regime || "unknown"),
+          leverageTier: t.leverage ? String(t.leverage) : "unknown",
+          holdHorizonBand: String(t.tradeType || t.trade_type || "day"),
+          venueProfile: "phantom", volume24hUsd: Number(t.volume24hUsd ?? NaN),
+          fundingRatePct: Number(t.fundingRatePct ?? NaN), expectedHoldHours: Number(t.killClockHours ?? t.kill_clock_hours ?? 24),
+        });
+        gSl = policy.candidate.stopLoss; gTp1 = policy.candidate.tp1;
+        if (policy.candidate.tp2 != null) gTp2 = policy.candidate.tp2;
+        if (policy.candidate.tp3 != null) gTp3 = policy.candidate.tp3;
+        // This route receives a list of cards; suppressing one must not abort
+        // logging the remaining cards. Off/shadow preserve the old loop.
+        if (policy.decision.suppress) continue;
         const id = await logSignal({
           source: "trade_ideas",
           token,
@@ -9019,6 +9251,17 @@ Every level must be technically defensible. Return JSON only.`;
           thesis: t.thesis || null,
           invalidation: t.invalidation || null,
           scores: t.scores || null,
+          // This endpoint receives client-rendered cards after emission, so
+          // it cannot prove a market fill and remains censored by default.
+          signalPolicySnapshot: {
+            ...policy.decision.snapshot,
+            dimensions: {
+              source: "trade_ideas", assetClass: String(t.assetClass || t.asset_class || "unknown"), direction,
+              venueProfile: "phantom", holdHorizonBand: String(t.tradeType || t.trade_type || "day"),
+              rrBand: policy.candidate.rr == null ? "unknown" : `${Math.floor(policy.candidate.rr)}R`,
+              regime: String(t.regime || "unknown"), leverageTier: t.leverage ? String(t.leverage) : "unknown",
+            },
+          },
         });
         if (id) logged++;
       }
@@ -9614,6 +9857,26 @@ Every level must be technically defensible. Return JSON only.`;
     const userMessageInput = req.body.userMessage || req.body.prompt || "";
     const userMessageRaw = typeof userMessageInput === "string" ? userMessageInput.slice(0, 16000) : "";
     if (!userMessageRaw) return res.status(400).json({ error: "userMessage is required" });
+    const basketMarketType = featureKey === "basketAI"
+      ? canonicalMarketType(req.body.marketType || "BOTH") : null;
+    if (featureKey === "basketAI" && !basketMarketType) {
+      return res.status(400).json({ error: "Invalid market type.", code: "INVALID_MARKET_TYPE" });
+    }
+    if (featureKey === "basketAI" && basketMarketType !== "SPOT") {
+      const requested = Array.isArray(req.body.tickers) ? req.body.tickers : [];
+      const unsupported = requested
+        .map((value: unknown) => String(value || "").trim().toUpperCase())
+        .find((symbol: string) => {
+          const support = getDiscoveredHyperliquidSupport(symbol);
+          return support.discovered && !support.supported;
+        });
+      if (unsupported) {
+        return res.status(422).json({
+          error: `${unsupported} is discoverable but is not supported for scoring.`,
+          code: "SCORER_UNSUPPORTED",
+        });
+      }
+    }
 
     // Auth + tier gate handled by requirePaidTier (pro OR elite OR owner)
     const userId = (req.session as any)?.userId;
@@ -10060,12 +10323,20 @@ Every level must be technically defensible. Return JSON only.`;
                   const t2raw = c?.tp2?.price ?? c?.tp2;
                   const t1 = Number(t1raw);
                   if (!dir || !Number.isFinite(e) || e <= 0 || !Number.isFinite(sl) || !Number.isFinite(t1)) return c;
-                  const g = enforceGeometry({
-                    direction: dir, entry: e, stopLoss: sl, tp1: t1,
-                    tp2: Number.isFinite(Number(t2raw)) ? Number(t2raw) : null,
-                  }, { symbol: String(c?.asset || "?"), source: "ai_signal" });
-                  if (!g.corrected) return c;
-                  const out: any = { ...c, sl: g.stopLoss, geometry_auto_corrected: true };
+                   const policy = applyEmissionPolicy({
+                     source: "trade_ideas", symbol: String(c?.symbol || c?.asset || ""), marketType: c?.marketType ?? c?.market_type, conviction: Number(c?.conviction ?? c?.confidence), direction: dir, entry: e, stopLoss: sl, tp1: t1,
+                     tp2: Number.isFinite(Number(t2raw)) ? Number(t2raw) : null,
+                     assetClass: String(c?.assetClass || c?.asset_class || "unknown"),
+                     regime: String(c?.regime || "unknown"), leverageTier: String(c?.leverage || "unknown"),
+                     holdHorizonBand: String(c?.tradeType || c?.trade_type || "day"), venueProfile: "phantom",
+                   });
+                   const g = policy.candidate;
+                   if (policy.decision.suppress) {
+                     runTally.EXPECTANCY_POLICY_REJECTED = (runTally.EXPECTANCY_POLICY_REJECTED || 0) + 1;
+                     return null;
+                   }
+                   const out: any = { ...c, sl: g.stopLoss };
+                   if (g.corrected) out.geometry_auto_corrected = true;
                   if (c?.tp1 && typeof c.tp1 === "object") out.tp1 = { ...c.tp1, price: g.tp1 };
                   else out.tp1 = g.tp1;
                   if (g.tp2 != null && c?.tp2 != null) {
@@ -10076,7 +10347,7 @@ Every level must be technically defensible. Return JSON only.`;
                   if ("rr" in out) out.rr = g.rr;
                   return out;
                 } catch { return c; }
-              });
+              }).filter((c: any) => c != null);
             } catch (geoErr: any) {
               console.warn("[ai/analyze] geometry guard failed (non-fatal):", geoErr?.message || geoErr);
             }
@@ -10839,6 +11110,34 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         }
       } catch (geoErr: any) {
         console.warn("[kronos] geometry guard failed (non-fatal):", geoErr?.message || geoErr);
+      }
+      // Kronos normally emits a forecast, but when a directional trade_plan is
+      // present it is normalized before response serialization. No internal
+      // decision/snapshot is attached to this client DTO.
+      try {
+        const plan = (parsed as any)?.trade_plan;
+        if (plan && (plan.direction === "LONG" || plan.direction === "SHORT")) {
+          const policy = applyEmissionPolicy({
+            source: "kronos", symbol: String(plan.symbol || plan.asset || ""), marketType: plan.marketType ?? plan.market_type, conviction: Number(plan.conviction ?? parsed.confidence), direction: plan.direction, entry: Number(plan.entry), stopLoss: Number(plan.sl),
+            tp1: Number(plan.tp1), tp2: plan.tp2 == null ? null : Number(plan.tp2),
+            assetClass: String((parsed as any).asset_class || "unknown"), regime: String((parsed as any).regime || "unknown"),
+            leverageTier: String(plan.leverage || "unknown"), holdHorizonBand: String(timeframe || "unknown"),
+            venueProfile: "phantom",
+          });
+          plan.entry = policy.candidate.entry; plan.sl = policy.candidate.stopLoss; plan.tp1 = policy.candidate.tp1;
+          if (plan.tp2 != null && policy.candidate.tp2 != null) plan.tp2 = policy.candidate.tp2;
+          if (policy.decision.suppress) {
+            // Reuse Kronos' established non-directional representation so no
+            // trade card is emitted, without serializing policy diagnostics.
+            (parsed as any).trade_plan = {
+              ...plan,
+              direction: "NO_TRADE",
+              notes: "No qualifying setup met the signal quality requirements.",
+            };
+          }
+        }
+      } catch (policyErr: any) {
+        console.warn("[kronos] emission policy failed (non-fatal):", policyErr?.message || policyErr);
       }
 
       // ── Headline reconciliation (DISPLAY layer only) ──────────────────────
@@ -11815,53 +12114,63 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
 
   // Embedded Stripe Checkout: returns clientSecret for <EmbeddedCheckout/>
   app.post("/api/stripe/checkout", async (req, res) => {
-    const { priceId, email } = req.body;
-    if (!priceId) return res.status(400).json({ error: "priceId required" });
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required", code: "UNAUTHENTICATED" });
+    const requestedPrice = req.body?.priceId || req.body?.tier;
+    if (!requestedPrice) return res.status(400).json({ error: "A valid tier is required", code: "INVALID_CHECKOUT_TIER" });
 
     try {
       const stripe = await getUncachableStripeClient();
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Authentication required", code: "UNAUTHENTICATED" });
+      const price = await resolveAllowedCheckoutPrice(stripe, requestedPrice);
+      if (!price) return res.status(400).json({ error: "A valid tier is required", code: "INVALID_CHECKOUT_TIER" });
+      if (user.stripeCustomerId
+          && !await stripeResourceOwnedByUser(stripe, user.stripeCustomerId, user)) {
+        return billingNotOwned(res);
+      }
       const baseUrl = process.env.APP_URL
         || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : 'http://localhost:5000');
-
-      const sessionUserId = (req.session as any)?.userId;
-      let sessionEmail = email;
-      if (!sessionEmail && sessionUserId) {
-        try {
-          const r = await pool.query("SELECT email FROM users WHERE id = $1", [sessionUserId]);
-          sessionEmail = r.rows[0]?.email;
-        } catch {}
-      }
 
       const sessionParams: any = {
         ui_mode: 'embedded',
         mode: 'subscription',
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: [{ price: price.id, quantity: 1 }],
         return_url: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         payment_method_types: ['card'],
         metadata: {
-          userId: sessionUserId ? String(sessionUserId) : '',
-          priceId,
+          userId: String(user.id),
+          priceId: price.id,
         },
       };
-      if (sessionEmail) sessionParams.customer_email = sessionEmail;
+      if (user.stripeCustomerId) sessionParams.customer = user.stripeCustomerId;
+      else sessionParams.customer_email = user.email;
 
       const session = await stripe.checkout.sessions.create(sessionParams);
       res.json({ clientSecret: session.client_secret, sessionId: session.id });
     } catch (e: any) {
       console.error('[stripe] Checkout error:', e.message, e.type, e.code);
-      res.status(500).json({ error: e.message });
+      res.status(502).json({ error: "Unable to create checkout", code: "BILLING_PROVIDER_ERROR" });
     }
   });
 
   // Status check for /payment-success page
   app.get("/api/stripe/checkout-session-status", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Authentication required", code: "UNAUTHENTICATED" });
     const sessionId = req.query.session_id as string;
     if (!sessionId) return res.status(400).json({ error: "session_id required" });
     try {
       const stripe = await getUncachableStripeClient();
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: "Authentication required", code: "UNAUTHENTICATED" });
       const session = await stripe.checkout.sessions.retrieve(sessionId, {
         expand: ["line_items", "subscription"],
       });
+      if (session.metadata?.userId !== String(user.id)
+          || !await stripeResourceOwnedByUser(stripe, session.customer, user)) {
+        return billingNotOwned(res);
+      }
       const priceItem: any = (session as any).line_items?.data?.[0]?.price
         || (session as any).subscription?.items?.data?.[0]?.price;
       const lookupKey = priceItem?.lookup_key || "";
@@ -11871,12 +12180,11 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       res.json({
         status: session.status,
         payment_status: session.payment_status,
-        customer_email: session.customer_details?.email || null,
         plan: planLabel,
       });
     } catch (e: any) {
       console.error('[stripe] session-status error:', e.message);
-      res.status(500).json({ error: e.message });
+      res.status(502).json({ error: "Unable to retrieve checkout", code: "BILLING_PROVIDER_ERROR" });
     }
   });
 
@@ -11888,25 +12196,34 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
   });
 
   app.get("/api/stripe/subscription", async (req, res) => {
+    const sessionUserId = (req.session as any)?.userId;
+    if (!sessionUserId) return res.status(401).json({ error: "Authentication required", code: "UNAUTHENTICATED" });
     const sessionId = req.query.session_id as string;
     if (!sessionId) return res.json({ tier: "free" });
 
     try {
       const stripe = await getUncachableStripeClient();
       const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["line_items"] });
+      const user = await storage.getUser(sessionUserId);
+      if (!user || session.metadata?.userId !== String(user.id)
+          || !await stripeResourceOwnedByUser(stripe, session.customer, user)) {
+        return billingNotOwned(res);
+      }
       if (session.payment_status === 'paid' && session.subscription) {
         const sub = await stripe.subscriptions.retrieve(session.subscription as string, { expand: ["items.data.price"] });
+        if (!await stripeResourceOwnedByUser(stripe, sub.customer, user)) return billingNotOwned(res);
         // Detect Elite plan by lookup_key or by price amount (Elite monthly ~$12900, yearly ~$119900)
         const priceItem = (sub as any).items?.data?.[0]?.price;
         const lookupKey = priceItem?.lookup_key || "";
         const unitAmount = priceItem?.unit_amount || 0;
         const isElitePlan = lookupKey.startsWith("elite") || unitAmount >= 11900;
         // Store the tier in DB for the signed-in user
-        const sessionUserId = (req.session as any)?.userId;
-        if (sessionUserId) {
-          const tierToSet = isElitePlan ? "elite" : "pro";
-          await pool.query("UPDATE users SET tier = $1, stripe_subscription_id = $2 WHERE id = $3", [tierToSet, sub.id, sessionUserId]);
-        }
+        const tierToSet = isElitePlan ? "elite" : "pro";
+        const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
+        await pool.query(
+          "UPDATE users SET tier = $1, stripe_subscription_id = $2, stripe_customer_id = COALESCE(stripe_customer_id, $3) WHERE id = $4",
+          [tierToSet, sub.id, customerId, sessionUserId],
+        );
         return res.json({
           tier: isElitePlan ? "elite" : "pro",
           status: sub.status,
@@ -11916,11 +12233,12 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }
       res.json({ tier: "free" });
     } catch (e: any) {
-      res.json({ tier: "free" });
+      console.error("[stripe] subscription attachment error:", e.message);
+      res.status(502).json({ error: "Unable to verify subscription", code: "BILLING_PROVIDER_ERROR" });
     }
   });
 
-  app.post("/api/stripe/portal", async (req, res) => {
+  app.post("/api/stripe/portal", recentAuth, async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
 
@@ -11930,6 +12248,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (!customerId) return res.status(400).json({ error: "No Stripe customer found" });
 
       const stripe = await getUncachableStripeClient();
+      if (!await stripeResourceOwnedByUser(stripe, customerId, user)) return billingNotOwned(res);
       const baseUrl = process.env.APP_URL
         || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : 'http://localhost:5000');
 
@@ -11943,13 +12262,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
-  app.post("/api/stripe/pause", async (req, res) => {
+  app.post("/api/stripe/pause", recentAuth, async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     try {
       const user = await storage.getUser(userId);
       if (!user?.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription" });
       const stripe = await getUncachableStripeClient();
+      if (!await requireOwnedSubscription(stripe, user)) return billingNotOwned(res);
       await stripe.subscriptions.update(user.stripeSubscriptionId, {
         pause_collection: { behavior: "void" },
       });
@@ -11959,13 +12279,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
-  app.post("/api/stripe/resume", async (req, res) => {
+  app.post("/api/stripe/resume", recentAuth, async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     try {
       const user = await storage.getUser(userId);
       if (!user?.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription" });
       const stripe = await getUncachableStripeClient();
+      if (!await requireOwnedSubscription(stripe, user)) return billingNotOwned(res);
       await stripe.subscriptions.update(user.stripeSubscriptionId, {
         pause_collection: "",
       } as any);
@@ -11975,13 +12296,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
-  app.post("/api/stripe/cancel", async (req, res) => {
+  app.post("/api/stripe/cancel", recentAuth, async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     try {
       const user = await storage.getUser(userId);
       if (!user?.stripeSubscriptionId) return res.status(400).json({ error: "No active subscription" });
       const stripe = await getUncachableStripeClient();
+      if (!await requireOwnedSubscription(stripe, user)) return billingNotOwned(res);
       await stripe.subscriptions.update(user.stripeSubscriptionId, {
         cancel_at_period_end: true,
       });
@@ -12485,14 +12807,16 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     if (!email || !name) return res.status(400).json({ error: "name and email required" });
     try {
       const crypto = await import("crypto");
-      const tempPwd = "CLVR-" + crypto.randomBytes(6).toString("hex").toUpperCase();
-      const hashed = await bcrypt.hash(tempPwd, 12);
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const resetTokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
+      const unusablePassword = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
       const id = crypto.randomUUID();
       const insertRes = await pool.query(
-        `INSERT INTO users (id, name, email, password, tier, email_verified, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        `INSERT INTO users (id, username, name, email, password, tier, email_verified,
+                            reset_token, reset_token_expiry, created_at)
+         VALUES ($1, $2, $3, $2, $4, $5, $6, $7, NOW() + INTERVAL '1 hour', NOW())
          ON CONFLICT (email) DO NOTHING`,
-        [id, name.trim(), email.toLowerCase().trim(), hashed, tier, emailVerified]
+        [id, email.toLowerCase().trim(), name.trim(), unusablePassword, tier, emailVerified, resetTokenHash]
       );
       const created = (insertRes.rowCount || 0) > 0;
       // Never return the temp password in the API response — email it to the
@@ -12505,19 +12829,19 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             from: fromEmail,
             to: email.toLowerCase().trim(),
             subject: "Your CLVRQuantAI account has been restored",
-            text: `Hello ${name.trim()},\n\nYour CLVRQuantAI account has been restored.\n\nSign in with this temporary password, then change it right away in Account settings:\n\n${tempPwd}\n\nSign in: https://clvrquantai.com\n\nIf you didn't expect this, contact Support@clvrquantai.com.\n\n© 2026 CLVRQuant`,
+            text: `Hello ${name.trim()},\n\nYour CLVRQuantAI account has been restored. Set your password using this single-use link (expires in 1 hour):\n\n${getAppUrl()}?reset=${resetToken}\n\nIf you didn't expect this, contact Support@clvrquantai.com.\n\n© 2026 CLVRQuant`,
           });
           emailed = true;
         } catch { /* best-effort — never block the restore on email failure */ }
       }
-      res.json({ ok: true, created, emailed, note: created ? (emailed ? "Temp password emailed to the user." : "User created but email failed — use forgot-password flow.") : "User already exists — nothing changed." });
+      res.json({ ok: true, created, emailed, note: created ? (emailed ? "Password setup link emailed to the user." : "User created but email failed — use forgot-password flow.") : "User already exists — nothing changed." });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
   // ── Downgrade to free (cancel Stripe sub + clear promo tier) ─────────────
-  app.post("/api/stripe/downgrade", async (req, res) => {
+  app.post("/api/stripe/downgrade", recentAuth, async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     try {
@@ -12527,8 +12851,11 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (user.stripeSubscriptionId) {
         try {
           const stripe = await getUncachableStripeClient();
+          if (!await requireOwnedSubscription(stripe, user)) return billingNotOwned(res);
           await stripe.subscriptions.cancel(user.stripeSubscriptionId);
-        } catch {}
+        } catch {
+          return res.status(502).json({ error: "Unable to update subscription", code: "BILLING_PROVIDER_ERROR" });
+        }
       }
       // Clear tier and promo code
       await pool.query(
@@ -12705,12 +13032,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       } catch (emailErr: any) {
         console.error(`[signup] Welcome email FAILED for ${email.toLowerCase().trim()}:`, JSON.stringify(emailErr));
       }
-      (req.session as any).userId = user.id;
-      req.session.save(() => {
-        // Return `token` (session ID) for the cookieless bearer-token
-        // fallback used inside the Replit preview iframe on Safari/iOS.
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier, emailVerified: false, pendingVerification: true }, token: req.sessionID });
-      });
+      await revokePresentedBearer(req);
+      await regenerateSession(req);
+      initializeAuthenticatedSession(req.session as any, user.id);
+      await saveSession(req);
+      // Return `token` (session ID) for the cookieless bearer-token fallback
+      // used inside the Replit preview iframe on Safari/iOS.
+      res.set("Cache-Control", "no-store");
+      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier: user.tier, emailVerified: false, pendingVerification: true }, token: req.sessionID });
     } catch (e: any) {
       console.error("Signup error:", e.message);
       if (e.message?.includes("unique") || e.message?.includes("duplicate")) {
@@ -12735,22 +13064,20 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }
       const tier = ownerMatch ? "elite" : await getEffectiveTier(user);
       const mustChangePassword = !!(user as any).mustChangePassword;
-      (req.session as any).userId = user.id;
-      req.session.save(() => {
-        // Include isAdmin so the client unlocks admin-only UI (e.g. the
-        // "Send to Telegram" button on signal cards) immediately after
-        // sign-in, without needing a page refresh to pick it up via /me.
-        // Also return `token` (the session ID) so the client can fall back
-        // to Authorization: Bearer auth in cookieless contexts (Safari ITP
-        // inside the Replit preview iframe drops the cookie silently).
-        res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification: !user.emailVerified && !!user.emailVerificationToken, isAdmin: !!(user as any).isAdmin }, mustChangePassword, token: req.sessionID });
-      });
+      await revokePresentedBearer(req);
+      await regenerateSession(req);
+      initializeAuthenticatedSession(req.session as any, user.id);
+      await saveSession(req);
+      // Include isAdmin so the client unlocks admin-only UI immediately after
+      // sign-in. The compatibility raw SID response must never be cached.
+      res.set("Cache-Control", "no-store");
+      res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification: !user.emailVerified && !!user.emailVerificationToken, isAdmin: !!(user as any).isAdmin }, mustChangePassword, token: req.sessionID });
     } catch (e: any) {
       res.status(500).json({ error: "Sign in failed" });
     }
   });
 
-  app.post("/api/auth/change-password", async (req, res) => {
+  app.post("/api/auth/change-password", recentAuth, async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     const { newPassword } = req.body;
@@ -12781,6 +13108,51 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification, isAdmin: !!(user as any).isAdmin } });
     } catch {
       res.json({ user: null });
+    }
+  });
+
+  app.get("/api/session/status", (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const status = sessionStatus(req);
+    if (!status) return res.status(401).json({ error: "Authentication required", code: "UNAUTHENTICATED" });
+    res.json(status);
+  });
+
+  app.post("/api/session/heartbeat", async (req, res) => {
+    if (!(req.session as any)?.userId) {
+      return res.status(401).json({ error: "Authentication required", code: "UNAUTHENTICATED" });
+    }
+    try {
+      await updateSessionActivity(req);
+      res.json(sessionStatus(req));
+    } catch (error: any) {
+      if (error?.code === "SESSION_REVOKED") {
+        return res.status(401).json({ error: "Session expired", code: "SESSION_REVOKED" });
+      }
+      res.status(503).json({ error: "Session unavailable", code: "SESSION_STORE_ERROR" });
+    }
+  });
+
+  app.post("/api/session/confirm-password", confirmPasswordLimiter, async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    const password = req.body?.password;
+    if (!userId || typeof password !== "string") {
+      auditSecurityEvent("confirm_password", req, false);
+      return res.status(401).json({ error: "Unable to confirm credentials", code: "CONFIRM_PASSWORD_FAILED" });
+    }
+    try {
+      const user = await storage.getUser(userId);
+      const valid = !!user && await bcrypt.compare(password, user.password);
+      if (!valid) {
+        auditSecurityEvent("confirm_password", req, false);
+        return res.status(401).json({ error: "Unable to confirm credentials", code: "CONFIRM_PASSWORD_FAILED" });
+      }
+      await markStrongPasswordAuth(req);
+      auditSecurityEvent("confirm_password", req, true);
+      res.json({ ok: true });
+    } catch {
+      auditSecurityEvent("confirm_password", req, false);
+      res.status(401).json({ error: "Unable to confirm credentials", code: "CONFIRM_PASSWORD_FAILED" });
     }
   });
 
@@ -12985,21 +13357,18 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
   });
 
   // ── WEBAUTHN / FACE ID BIOMETRIC AUTH ────────────────────────────────────
-  // Simplified flow: store credential ID server-side, verify on auth.
-  // Actual biometric check is done locally by the device (no signature verification needed).
+  // Legacy rows contain only a credential ID and cannot authenticate safely.
+  // Enrollment/authentication stay fail-closed until challenge, public-key,
+  // origin/RP and counter fields are added and verified server-side.
 
   // Register a new WebAuthn credential for the logged-in user
   app.post("/api/auth/webauthn/register", async (req, res) => {
     const uid = (req.session as any)?.userId;
     if (!uid) return res.status(401).json({ error: "Not signed in" });
-    const { credentialId } = req.body;
-    if (!credentialId || typeof credentialId !== "string") return res.status(400).json({ error: "credentialId required" });
-    try {
-      await storage.createWebAuthnCredential(uid, credentialId);
-      res.json({ ok: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
+    res.status(503).json({
+      error: "Passkey enrollment is temporarily unavailable",
+      code: "WEBAUTHN_SECURE_ENROLLMENT_REQUIRED",
+    });
   });
 
   // List credentials for logged-in user (so frontend can show "biometric enabled")
@@ -13014,31 +13383,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
-  // Authenticate with credential ID (creates session for that user)
-  app.post("/api/auth/webauthn/authenticate", async (req, res) => {
-    const { credentialId } = req.body;
-    if (!credentialId || typeof credentialId !== "string") return res.status(400).json({ error: "credentialId required" });
-    try {
-      const user = await storage.getUserByCredentialId(credentialId);
-      if (!user) return res.status(401).json({ error: "Unknown credential" });
-      const tier = (user.email || "").toLowerCase() === OWNER_EMAIL ? "pro" : user.tier;
-      // Set BOTH session.userId (used by all protected routes) and session.user (legacy)
-      (req.session as any).userId = user.id;
-      (req.session as any).user = { id: user.id, email: user.email, name: user.name, tier, username: user.username };
-      await new Promise<void>((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-      // Return `token` (session ID) for the cookieless bearer-token fallback
-      // used inside the Replit preview iframe. The client only persists this
-      // when actually running inside an iframe, so non-iframe biometric
-      // sign-ins don't expose the session ID to JS unnecessarily.
-      // Include isAdmin so admin-only UI (e.g. the "Send to Telegram"
-      // button on each signal card) unlocks for biometric sign-ins too.
-      // Without this, owner accounts that prefer Face ID/Touch ID would
-      // never see admin controls because the response shape was missing.
-      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, tier, username: user.username, isAdmin: !!(user as any).isAdmin }, token: req.sessionID });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+  // Credential-ID-only authentication is intentionally forbidden.
+  app.post("/api/auth/webauthn/authenticate", rejectLegacyWebAuthnAuthentication);
 
   // Remove a biometric credential
   app.delete("/api/auth/webauthn/credential/:credId", async (req, res) => {
@@ -13059,11 +13405,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const user = await storage.getUserByEmail(email.toLowerCase().trim());
       if (!user) return res.json({ ok: true });
       const crypto = await import("crypto");
-      const tempPassword = "CLVR-" + crypto.randomBytes(4).toString("hex").toUpperCase();
       const token = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
       const expiry = new Date(Date.now() + 3600000);
-      const hashedTemp = await bcrypt.hash(tempPassword, 12);
-      await storage.updateUserResetToken(user.id, token, expiry);
+      await storage.updateUserResetToken(user.id, tokenHash, expiry);
       const resetLink = `${getAppUrl()}?reset=${token}`;
       try {
         const { client: resend, fromEmail } = await getUncachableResendClient();
@@ -13072,7 +13417,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
           replyTo: "Support@clvrquantai.com",
           to: email.toLowerCase().trim(),
           subject: "CLVRQuant — Password Reset",
-          text: `Hello ${user.name},\n\nYou requested a password reset.\n\nTemporary password: ${tempPassword}\n\nOr reset via link (expires in 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
+          text: `Hello ${user.name},\n\nYou requested a password reset. Use this single-use link (expires in 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:24px">
               <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d">CLVRQuant</div>
@@ -13080,11 +13425,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             </div>
             <div style="border-top:1px solid #141e35;padding-top:20px">
               <p style="font-size:14px;color:#f0f4ff">Hello ${user.name},</p>
-              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">You requested a password reset. Here is your temporary password:</p>
-              <div style="background:#0c1220;border:1px solid #c9a84c;border-radius:4px;padding:16px;margin:16px 0;text-align:center">
-                <div style="font-family:monospace;font-size:22px;color:#e8c96d;letter-spacing:0.15em;font-weight:900">${tempPassword}</div>
-              </div>
-              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">Use this temporary password to sign in, then set a new password. Or click the link below:</p>
+              <p style="font-size:13px;color:#6b7fa8;line-height:1.8">You requested a password reset. Use the single-use link below:</p>
               <div style="text-align:center;margin:20px 0">
                 <a href="${resetLink}" style="background:rgba(201,168,76,0.15);color:#e8c96d;padding:12px 32px;border-radius:4px;text-decoration:none;font-family:Georgia,serif;font-weight:700;font-size:14px;border:1px solid rgba(201,168,76,0.3)">Reset Password →</a>
               </div>
@@ -13093,8 +13434,6 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             </div>
           </div>`,
         });
-        await storage.updateUserPassword(user.id, hashedTemp);
-        await pool.query("UPDATE users SET must_change_password = true WHERE id = $1", [user.id]);
       } catch (emailErr: any) {
         console.error("Reset email failed:", emailErr.message);
         await storage.clearResetToken(user.id);
@@ -13111,14 +13450,36 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     if (!token) return res.status(400).json({ error: "Reset token required" });
     if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
     try {
-      const user = await storage.getUserByResetToken(token);
-      if (!user) return res.status(400).json({ error: "Invalid or expired reset link" });
-      if (user.resetTokenExpiry && new Date(user.resetTokenExpiry) < new Date()) {
-        return res.status(400).json({ error: "Reset link has expired. Please request a new one." });
-      }
       const hashed = await bcrypt.hash(newPassword, 12);
-      await storage.updateUserPassword(user.id, hashed);
-      await storage.clearResetToken(user.id);
+      const tokenHash = cryptoCreateHash("sha256").update(String(token)).digest("hex");
+      const client = await pool.connect();
+      let userId: string | undefined;
+      try {
+        await client.query("BEGIN");
+        const changed = await client.query(
+          `UPDATE users
+              SET password = $1, reset_token = NULL, reset_token_expiry = NULL,
+                  must_change_password = false
+            WHERE reset_token = $2 AND reset_token_expiry > NOW()
+            RETURNING id`,
+          [hashed, tokenHash],
+        );
+        userId = changed.rows[0]?.id;
+        if (!userId) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: "Invalid or expired reset link" });
+        }
+        await client.query(
+          "DELETE FROM user_sessions WHERE sess ->> 'userId' = $1",
+          [userId],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: "Failed to reset password" });
@@ -13201,7 +13562,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
-  app.delete("/api/account", async (req, res) => {
+  app.delete("/api/account", recentAuth, async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     try {
@@ -13211,6 +13572,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (user.stripeSubscriptionId) {
         try {
           const stripe = await getUncachableStripeClient();
+          if (!await requireOwnedSubscription(stripe, user)) return billingNotOwned(res);
           await stripe.subscriptions.cancel(user.stripeSubscriptionId);
         } catch (e: any) { console.log("[account] Stripe cancel error:", e.message); }
       }
@@ -13234,6 +13596,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }
       await pool.query("UPDATE subscribers SET active = false WHERE email = $1", [user.email]);
       await pool.query("UPDATE access_codes SET used_by = NULL, used_at = NULL WHERE used_by = $1", [userId]);
+      await pool.query("DELETE FROM user_sessions WHERE sess ->> 'userId' = $1", [userId]);
       await pool.query("DELETE FROM users WHERE id = $1", [userId]);
       req.session.destroy(() => {});
       res.json({ ok: true });

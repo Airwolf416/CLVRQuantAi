@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import QuantStatusCard from "./components/QuantStatusCard";
+import { apiFetch } from "./lib/apiClient";
 
 const C = {
   bg:"#050709", panel:"#0c1220", border:"#141e35", border2:"#1c2b4a",
@@ -178,7 +179,7 @@ Tasks:
       // sees the same vision input + edge gates that /api/quant uses.
       const focusAsset = String(tradeSetup.asset || "").toUpperCase();
       const focusDir = tradeSetup.direction === "LONG" || tradeSetup.direction === "SHORT" ? tradeSetup.direction : undefined;
-      const res = await fetch("/api/ai/analyze", {
+      const res = await apiFetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

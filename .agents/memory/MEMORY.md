@@ -21,3 +21,5 @@
 - [Curl-testing auth-gated routes](curl-auth-testing.md) — Secure session cookie is dropped over plain-http curl; use the signin bearer token; in-memory rate limiters reset on workflow restart.
 - [applySignalHardening caller propagation](signal-hardening-caller-propagation.md) — shared gate RETURNS levels (doesn't mutate); all 3 callers must echo back any newly-mutated field or it's silently dropped.
 - [NEUTRAL badge fabrication](neutral-badge-fabrication.md) — when server guards are verified clean but users still see bad cards, audit the UI's attribute derivation; binary `isLong ? LONG : SHORT` painted NEUTRAL as SHORT.
+- [Calibration label integrity](calibration-label-integrity.md) — sampled marks can measure excursion but cannot prove TP-before-SL; only complete, continuous interval evidence may label expectancy outcomes.
+- [Dynamic universe authority](dynamic-universe-authority.md) — market discovery is not scoring or emission authorization; every server sink must re-check durable eligibility and explicit scorer support.

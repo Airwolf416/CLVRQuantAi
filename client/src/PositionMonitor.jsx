@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "./lib/apiClient";
 
 export default function PositionMonitor({ C, MONO, SANS, SERIF }) {
   const [positions, setPositions] = useState([]);
@@ -11,13 +12,13 @@ export default function PositionMonitor({ C, MONO, SANS, SERIF }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/positions", { credentials:"include" });
+      const r = await apiFetch("/api/positions", { credentials:"include" });
       const d = await r.json();
       const ps = d.positions || [];
       setPositions(ps);
       const syms = [...new Set(ps.map(p => p.symbol))].join(",");
       if (syms) {
-        try { const pr = await fetch(`/api/basket-prices?syms=${encodeURIComponent(syms)}`, { credentials:"include" }); setPrices(await pr.json() || {}); } catch {}
+        try { const pr = await apiFetch(`/api/basket-prices?syms=${encodeURIComponent(syms)}`, { credentials:"include" }); setPrices(await pr.json() || {}); } catch {}
       }
     } catch {} finally { setLoading(false); }
   }, []);
@@ -33,19 +34,19 @@ export default function PositionMonitor({ C, MONO, SANS, SERIF }) {
       leverage: form.leverage ? Number(form.leverage) : 1,
       stopPrice: form.stopPrice ? Number(form.stopPrice) : null,
       targetPrice: form.targetPrice ? Number(form.targetPrice) : null };
-    const r = await fetch("/api/positions", { method:"POST", headers:{ "Content-Type":"application/json" }, credentials:"include", body: JSON.stringify(body) });
+    const r = await apiFetch("/api/positions", { method:"POST", headers:{ "Content-Type":"application/json" }, credentials:"include", body: JSON.stringify(body) });
     if (r.ok) { setForm({ symbol:"", assetClass:"equity", side:"long", entryPrice:"", sizeUsd:"", leverage:"1", stopPrice:"", targetPrice:"" }); load(); }
   }
 
   async function closePosition(id) {
-    await fetch(`/api/positions/${id}`, { method:"PATCH", headers:{ "Content-Type":"application/json" }, credentials:"include", body: JSON.stringify({ status:"closed" }) });
+    await apiFetch(`/api/positions/${id}`, { method:"PATCH", headers:{ "Content-Type":"application/json" }, credentials:"include", body: JSON.stringify({ status:"closed" }) });
     load();
   }
 
   async function analyze(p) {
     setBusy(b => ({ ...b, [p.id]: true }));
     try {
-      const r = await fetch(`/api/positions/${p.id}/analyze`, { method:"POST", headers:{ "Content-Type":"application/json" }, credentials:"include", body: JSON.stringify({ currentPrice: livePrice(p.symbol) }) });
+      const r = await apiFetch(`/api/positions/${p.id}/analyze`, { method:"POST", headers:{ "Content-Type":"application/json" }, credentials:"include", body: JSON.stringify({ currentPrice: livePrice(p.symbol) }) });
       const d = await r.json();
       setAnalyses(a => ({ ...a, [p.id]: d }));
     } catch {} finally { setBusy(b => ({ ...b, [p.id]: false })); }

@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "./lib/apiClient";
+// Wallet RPC/Hyperliquid endpoints are cross-origin and intentionally bypass apiFetch.
+const nativeFetch = globalThis.fetch.bind(globalThis);
 
 const KNOWN_MINTS = {
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
@@ -35,14 +38,14 @@ const SIGNAL_COLORS = {
 
 async function solRpc(method, params) {
   try {
-    const res = await fetch(SOL_PROXY, {
+    const res = await nativeFetch(SOL_PROXY, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ method, params }),
     });
     return await res.json();
   } catch {
-    const res = await fetch(SOL_RPC, {
+    const res = await nativeFetch(SOL_RPC, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -52,7 +55,7 @@ async function solRpc(method, params) {
 }
 
 async function fetchHLAccountState(evmAddress) {
-  const res = await fetch(HL_API, {
+  const res = await nativeFetch(HL_API, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "clearinghouseState", user: evmAddress }),
@@ -63,7 +66,7 @@ async function fetchHLAccountState(evmAddress) {
 
 async function fetchHLOpenOrders(evmAddress) {
   try {
-    const res = await fetch(HL_API, {
+    const res = await nativeFetch(HL_API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "openOrders", user: evmAddress }),
@@ -74,7 +77,7 @@ async function fetchHLOpenOrders(evmAddress) {
 
 async function fetchAllMids() {
   try {
-    const res = await fetch(HL_API, {
+    const res = await nativeFetch(HL_API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "allMids" }),
@@ -85,7 +88,7 @@ async function fetchAllMids() {
 
 async function fetchFundingRates() {
   try {
-    const res = await fetch(HL_API, {
+    const res = await nativeFetch(HL_API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "metaAndAssetCtxs" }),
@@ -614,7 +617,7 @@ Wallet:   ${pubkey ? pubkey.slice(0, 6) + "…" + pubkey.slice(-4) : "demo"}
 Consider: existing ${selectedAsset} exposure, portfolio margin health, liquidation proximity on current positions, and whether this trade improves or worsens risk-adjusted returns.`;
 
     try {
-      const response = await fetch("/api/ai/analyze", {
+      const response = await apiFetch("/api/ai/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

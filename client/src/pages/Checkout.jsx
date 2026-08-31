@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
+import { apiFetch } from "../lib/apiClient";
 
 let stripePromiseCache = null;
 function getStripePromise() {
   if (stripePromiseCache) return stripePromiseCache;
-  stripePromiseCache = fetch("/api/stripe/publishable-key", { credentials: "include" })
+  stripePromiseCache = apiFetch("/api/stripe/publishable-key", { credentials: "include" })
     .then(r => r.json())
     .then(d => {
       if (!d?.publishableKey) throw new Error("Missing Stripe publishable key");
@@ -36,7 +37,7 @@ export default function CheckoutPage() {
     // recreates it instead of relying on a stashed secret.
     if (isConcierge) {
       if (!bookingId) throw new Error("Missing booking — please start again from the concierge.");
-      const res = await fetch("/api/concierge/checkout-session", {
+      const res = await apiFetch("/api/concierge/checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -47,7 +48,7 @@ export default function CheckoutPage() {
       fetchedSecretRef.current = data.clientSecret;
       return data.clientSecret;
     }
-    const res = await fetch("/api/stripe/checkout", {
+    const res = await apiFetch("/api/stripe/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",

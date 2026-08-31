@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { apiFetch } from "../../lib/apiClient";
 
 const MONO = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
@@ -14,7 +15,7 @@ function copyToClipboard(text) {
   try { navigator.clipboard.writeText(text); } catch { }
 }
 
-export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAlertCreated }) {
+export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAlertCreated, animateIn = false }) {
   const [copied, setCopied] = useState(false);
   const [alertStatus, setAlertStatus] = useState(null);
   const isLong = trade.direction === "LONG";
@@ -60,7 +61,7 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
     setAlertStatus("saving");
     try {
       const sym = (trade.asset || "").replace(/\/USDT?$/i, "").replace(/\/USD$/i, "").trim();
-      const res = await fetch("/api/alerts", {
+      const res = await apiFetch("/api/alerts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -127,13 +128,13 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
   return (
     <div
       data-testid={`trade-idea-card-${rank}`}
+      className={animateIn ? "motion-card-enter" : undefined}
       style={{
         background: locked ? "#0c1220" : "#0c1220",
         border: "1px solid rgba(201,168,76,0.15)",
         borderLeft: `4px solid ${borderColor}`,
         borderRadius: 12,
         overflow: "hidden",
-        transition: "box-shadow 0.2s",
         filter: locked ? "blur(6px)" : "none",
         userSelect: locked ? "none" : "auto",
         pointerEvents: locked ? "none" : "auto",
@@ -259,10 +260,11 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
-            <div style={{
-              height: "100%", width: `${conviction}%`,
+            <div className="motion-meter" style={{
+              "--motion-meter-value": conviction / 100,
+              height: "100%",
               background: `linear-gradient(90deg, ${cColor}80, ${cColor})`,
-              borderRadius: 3, transition: "width 1.2s ease",
+              borderRadius: 3,
             }} />
           </div>
           <span style={{ fontSize: 10, fontWeight: 700, color: cColor, fontFamily: MONO, minWidth: 32, textAlign: "right" }} data-testid={`text-conviction-${trade.asset || "card"}`}>{conviction}%</span>
@@ -339,6 +341,7 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
         <button
           data-testid={`btn-copy-trade-${rank}`}
           onClick={handleCopy}
+          className="motion-press"
           style={{ padding: "10px 8px", background: "transparent", border: "none", borderRight: "1px solid rgba(201,168,76,0.08)", color: copied ? "#22c55e" : "rgba(255,255,255,0.4)", cursor: "pointer", fontFamily: MONO, fontSize: 9, fontWeight: 600 }}
         >
           {copied ? "✓ Copied!" : "📋 Copy Trade"}
@@ -347,6 +350,7 @@ export default function TradeIdeaCard({ trade, rank, mode, isElite, locked, onAl
           data-testid={`btn-alert-trade-${rank}`}
           onClick={handleSetAlert}
           disabled={alertStatus === "saving" || alertStatus === "done"}
+          className="motion-press"
           style={{
             padding: "10px 8px", background: "transparent", border: "none",
             color: alertStatus === "done" ? "#22c55e" : alertStatus === "error" ? "#ef4444" : alertStatus === "saving" ? "rgba(255,255,255,0.3)" : "#c9a84c",

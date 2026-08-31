@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { apiFetch } from "./lib/apiClient";
 
 const C = {
   bg:"#050709", panel:"#0c1220", border:"#141e35", border2:"#1c2b4a",
@@ -23,15 +24,15 @@ function SupportInbox(){
   const listRef=useRef(null);
   const stickRef=useRef(true); // keep pinned to the newest message (WhatsApp-style) unless the owner scrolls up to read history
   const scrollToBottom=()=>{ const el=listRef.current; if(el) el.scrollTop=el.scrollHeight; };
-  const loadInbox=async()=>{ try{ const r=await fetch("/api/support/inbox",{credentials:"include"}); if(r.ok){ const d=await r.json(); setThreads(d.threads||[]); } }catch{} finally{ setLoading(false);} };
-  const openThread=async(id)=>{ setActive(id); try{ const r=await fetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); setUserTyping(!!d.userTyping); } }catch{} };
+  const loadInbox=async()=>{ try{ const r=await apiFetch("/api/support/inbox",{credentials:"include"}); if(r.ok){ const d=await r.json(); setThreads(d.threads||[]); } }catch{} finally{ setLoading(false);} };
+  const openThread=async(id)=>{ setActive(id); try{ const r=await apiFetch(`/api/support/thread/${id}`,{credentials:"include"}); if(r.ok){ const d=await r.json(); setMsgs(d.messages||[]); setUserTyping(!!d.userTyping); } }catch{} };
   // Throttled (~1 per 2.5s) so the client sees "support is typing…" without spamming.
-  const pingTyping=()=>{ const now=Date.now(); if(!active||now-typingPing.current<2500) return; typingPing.current=now; fetch(`/api/support/thread/${active}/typing`,{method:"POST",credentials:"include"}).catch(()=>{}); };
+  const pingTyping=()=>{ const now=Date.now(); if(!active||now-typingPing.current<2500) return; typingPing.current=now; apiFetch(`/api/support/thread/${active}/typing`,{method:"POST",credentials:"include"}).catch(()=>{}); };
   const selectThread=(id)=>{ stickRef.current=true; openThread(id); };
-  const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); stickRef.current=true; setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await fetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
+  const sendReply=async()=>{ const b=reply.trim(); if(!b||!active) return; setReply(""); stickRef.current=true; setMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"owner",body:b,msg_type:"text"}]); try{ await apiFetch("/api/support/reply",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({threadId:active,body:b})}); }catch{} openThread(active); loadInbox(); };
   // Close = terminate the chat (keeps history, drops it from the active inbox). Delete = remove the whole conversation for good.
-  const closeThread=async()=>{ if(!active) return; if(!window.confirm("End this chat? It will close and leave the active inbox. The history is kept.")) return; try{ const r=await fetch(`/api/support/thread/${active}/close`,{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
-  const deleteThread=async()=>{ if(!active) return; if(!window.confirm("Delete this chat permanently? The whole conversation will be removed and cannot be undone.")) return; try{ const r=await fetch(`/api/support/thread/${active}`,{method:"DELETE",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not delete the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
+  const closeThread=async()=>{ if(!active) return; if(!window.confirm("End this chat? It will close and leave the active inbox. The history is kept.")) return; try{ const r=await apiFetch(`/api/support/thread/${active}/close`,{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
+  const deleteThread=async()=>{ if(!active) return; if(!window.confirm("Delete this chat permanently? The whole conversation will be removed and cannot be undone.")) return; try{ const r=await apiFetch(`/api/support/thread/${active}`,{method:"DELETE",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not delete the chat. Please try again."); return; } setActive(null); setMsgs([]); loadInbox(); };
   useEffect(()=>{ loadInbox(); const i=setInterval(loadInbox,12000); return ()=>clearInterval(i); },[]);
   useEffect(()=>{ if(!active) return; const i=setInterval(()=>openThread(active),3000); return ()=>clearInterval(i); },[active]);
   useEffect(()=>{ if(stickRef.current) requestAnimationFrame(scrollToBottom); },[msgs,active,userTyping]);
@@ -130,7 +131,7 @@ function OwnerEmailTool({ C, MONO, title, description, endpoint, testId, buttonL
   const handle = async () => {
     setStatus("sending"); setMsg("");
     try {
-      const r = await fetch(endpoint, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } });
+      const r = await apiFetch(endpoint, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } });
       const d = await r.json();
       if (r.ok) {
         setStatus("sent");
@@ -177,7 +178,7 @@ function EmailSystemHealth({ C, MONO }) {
   const check = async () => {
     setLoading(true); setErr(null); setData(null);
     try {
-      const r = await fetch("/api/admin/email-health", { credentials: "include" });
+      const r = await apiFetch("/api/admin/email-health", { credentials: "include" });
       const d = await r.json();
       if (r.ok) setData(d); else setErr(d.error || `HTTP ${r.status}`);
     } catch (e) { setErr(e.message || "Network error"); }
@@ -318,7 +319,7 @@ function OwnerStatsPanel({ C, MONO, SERIF }) {
     let stopped = false;
     async function load() {
       try {
-        const r = await fetch("/api/admin/owner/stats", { credentials: "include" });
+        const r = await apiFetch("/api/admin/owner/stats", { credentials: "include" });
         const d = await r.json();
         if (stopped) return;
         if (!r.ok || !d.ok) {
@@ -497,7 +498,7 @@ function UserDirectoryPanel({ C, MONO, SERIF }) {
     let stopped = false;
     async function load() {
       try {
-        const r = await fetch("/api/admin/owner/live-users", { credentials: "include" });
+        const r = await apiFetch("/api/admin/owner/live-users", { credentials: "include" });
         const d = await r.json();
         if (stopped) return;
         if (!r.ok || !d.ok) setLiveErr(d.error || `HTTP ${r.status}`);
@@ -513,7 +514,7 @@ function UserDirectoryPanel({ C, MONO, SERIF }) {
   async function loadAll() {
     setAllLoading(true);
     try {
-      const r = await fetch("/api/admin/users/list", { credentials: "include" });
+      const r = await apiFetch("/api/admin/users/list", { credentials: "include" });
       const d = await r.json();
       if (!r.ok) setAllErr(d.error || `HTTP ${r.status}`);
       else { setAllUsers(d.users || []); setAllErr(null); }
@@ -713,7 +714,7 @@ function ShadowInversionsPanel({ C, MONO, SERIF, variant = "owner" }) {
     let stopped = false;
     const load = async () => {
       try {
-        const r = await fetch("/api/admin/shadow-inversions/summary", { credentials: "include" });
+        const r = await apiFetch("/api/admin/shadow-inversions/summary", { credentials: "include" });
         const d = await r.json();
         if (stopped) return;
         if (!r.ok || !d.ok) {
@@ -861,7 +862,7 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
     setActionStatus(s => ({ ...s, [key]: "running" }));
     setActionMsg(m => ({ ...m, [key]: "" }));
     try {
-      const r = await fetch(url, { method: opts.method || "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: opts.body });
+      const r = await apiFetch(url, { method: opts.method || "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: opts.body });
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         setActionStatus(s => ({ ...s, [key]: "ok" }));
@@ -881,7 +882,7 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
     setTestStatus(s => ({ ...s, [key]: "sending" }));
     setTestMsg(m => ({ ...m, [key]: "" }));
     try {
-      const r = await fetch("/api/admin/test-system-email", {
+      const r = await apiFetch("/api/admin/test-system-email", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -919,7 +920,7 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
     if (!subject.trim() || !body.trim()) { setSendMsg("Subject and body are both required."); setSendStatus("error"); return; }
     setSendStatus("sending"); setSendMsg("");
     try {
-      const r = await fetch("/api/admin/send-custom-email", {
+      const r = await apiFetch("/api/admin/send-custom-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subject: subject.trim(), body: body.trim(), targetAll, htmlMode, testMode }),
@@ -1038,7 +1039,7 @@ function AdminTab({ C, MONO, SANS, SERIF }) {
           ✍️ Manual override — fill out the form below to publish a hand-written update instead of letting the AI generate it.
         </div>
         <WeeklyUpdateEditor onSave={async (payload) => {
-          const r = await fetch("/api/admin/weekly-update", {
+          const r = await apiFetch("/api/admin/weekly-update", {
             method:"POST", credentials:"include",
             headers:{ "Content-Type":"application/json" },
             body: JSON.stringify(payload)
@@ -1232,7 +1233,7 @@ function UpdateLogManager({ C, MONO }) {
 
   const refresh = async () => {
     try {
-      const r = await fetch("/api/admin/update-log", { credentials:"include" });
+      const r = await apiFetch("/api/admin/update-log", { credentials:"include" });
       const j = await r.json();
       if (r.ok) { setEntries(j.entries || []); setPendingCount(j.pendingCount || 0); }
     } catch {}
@@ -1244,7 +1245,7 @@ function UpdateLogManager({ C, MONO }) {
     if (!headline.trim()) { setMsg("Headline required"); return; }
     setSaving(true); setMsg("");
     try {
-      const r = await fetch("/api/admin/update-log", {
+      const r = await apiFetch("/api/admin/update-log", {
         method:"POST", credentials:"include",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ headline: headline.trim(), detail: detail.trim() || null, emoji: emoji.trim() || null }),
@@ -1262,7 +1263,7 @@ function UpdateLogManager({ C, MONO }) {
   const del = async (id) => {
     if (!confirm("Delete this entry?")) return;
     try {
-      const r = await fetch(`/api/admin/update-log/${id}`, { method:"DELETE", credentials:"include" });
+      const r = await apiFetch(`/api/admin/update-log/${id}`, { method:"DELETE", credentials:"include" });
       if (r.ok) await refresh();
     } catch {}
   };
@@ -1337,7 +1338,7 @@ function EmailDiagnosticsPanel({ C, MONO }) {
     if (!email.includes("@")) { setErr("Enter a valid email"); return; }
     setBusy("diag"); setErr(""); setResult(null); setDiag(null);
     try {
-      const r = await fetch(`/api/admin/email-diag?email=${encodeURIComponent(email.trim())}`, { credentials:"include" });
+      const r = await apiFetch(`/api/admin/email-diag?email=${encodeURIComponent(email.trim())}`, { credentials:"include" });
       const j = await r.json();
       if (!r.ok) { setErr(j?.error || "Lookup failed"); return; }
       setDiag(j);
@@ -1348,7 +1349,7 @@ function EmailDiagnosticsPanel({ C, MONO }) {
   const resend = async () => {
     setBusy("resend"); setErr(""); setResult(null);
     try {
-      const r = await fetch("/api/admin/resend-verification-by-email", {
+      const r = await apiFetch("/api/admin/resend-verification-by-email", {
         method:"POST", credentials:"include",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ email: email.trim() }),
@@ -1363,7 +1364,7 @@ function EmailDiagnosticsPanel({ C, MONO }) {
     if (!confirm(`Manually mark ${email} as verified? Use only if email delivery is blocked.`)) return;
     setBusy("mark"); setErr(""); setResult(null);
     try {
-      const r = await fetch("/api/admin/mark-verified", {
+      const r = await apiFetch("/api/admin/mark-verified", {
         method:"POST", credentials:"include",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ email: email.trim() }),
@@ -1455,7 +1456,7 @@ function AIWeeklyUpdateControls({ C, MONO }) {
   const runPreview = async () => {
     setBusy("preview"); setMsg(""); setPreview(null);
     try {
-      const r = await fetch("/api/admin/weekly-update/ai-preview", { method:"POST", credentials:"include" });
+      const r = await apiFetch("/api/admin/weekly-update/ai-preview", { method:"POST", credentials:"include" });
       const j = await r.json();
       if (!r.ok) { setMsg("✗ " + (j?.error || "Preview failed")); return; }
       setPreview(j);
@@ -1476,7 +1477,7 @@ function AIWeeklyUpdateControls({ C, MONO }) {
     setConfirmingGen(false);
     setBusy("generate"); setMsg("");
     try {
-      const r = await fetch("/api/admin/weekly-update/ai-generate", { method:"POST", credentials:"include" });
+      const r = await apiFetch("/api/admin/weekly-update/ai-generate", { method:"POST", credentials:"include" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setMsg("✗ " + (j?.error || `Generate failed (HTTP ${r.status})`)); return; }
       if (!j.ok) { setMsg("⚠ " + (j.message || "AI produced nothing")); return; }
@@ -1545,7 +1546,7 @@ function WeeklyUpdateEditor({ onSave }) {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/api/weekly-update/latest");
+        const r = await apiFetch("/api/weekly-update/latest");
         const j = await r.json();
         if (j && j.id) setLatest(j);
       } catch {}
@@ -1605,7 +1606,7 @@ function WeeklyUpdateEditor({ onSave }) {
             const cleanItems = items.filter(i => i.title.trim());
             try { await onSave({ version: version.trim() || null, title: title.trim(), summary: summary.trim(), items: cleanItems }); }
             finally { setSaving(false); }
-            try { const r = await fetch("/api/weekly-update/latest"); const j = await r.json(); if (j && j.id) setLatest(j); } catch {}
+            try { const r = await apiFetch("/api/weekly-update/latest"); const j = await r.json(); if (j && j.id) setLatest(j); } catch {}
           }}
           style={{ background:"linear-gradient(135deg,#00e5ff,#0099cc)", border:"none", color:"#080d18", borderRadius:4, padding:"10px 18px", fontFamily:MONO, fontSize:11, fontWeight:700, cursor:saving?"not-allowed":"pointer", letterSpacing:"0.08em", opacity:saving?0.6:1 }}>
           {saving ? "SAVING…" : "💾 SAVE & PUBLISH UPDATE"}
@@ -1674,10 +1675,10 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
     setLoading(true); setErr(null);
     try {
       const [trRes, shRes, thRes, pcRes] = await Promise.all([
-        fetch("/api/track-record", { credentials: "include" }),
-        fetch("/api/signal-history?limit=100", { credentials: "include" }),
-        fetch("/api/admin/thresholds", { credentials: "include" }),
-        fetch("/api/performance-context", { credentials: "include" }),
+        apiFetch("/api/track-record", { credentials: "include" }),
+        apiFetch("/api/signal-history?limit=100", { credentials: "include" }),
+        apiFetch("/api/admin/thresholds", { credentials: "include" }),
+        apiFetch("/api/performance-context", { credentials: "include" }),
       ]);
       const tr = trRes.ok ? await trRes.json() : null;
       const sh = shRes.ok ? await shRes.json() : null;
@@ -1695,7 +1696,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
 
   const updateThreshold = async (id, patch) => {
     try {
-      const r = await fetch(`/api/admin/thresholds/${id}`, {
+      const r = await apiFetch(`/api/admin/thresholds/${id}`, {
         method: "PUT", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -1706,7 +1707,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
   const resetToken = async (token) => {
     if (!window.confirm(`Reset adaptive learning for ${token}?`)) return;
     try {
-      const r = await fetch(`/api/admin/thresholds/reset/${token}`, { method: "POST", credentials: "include" });
+      const r = await apiFetch(`/api/admin/thresholds/reset/${token}`, { method: "POST", credentials: "include" });
       if (r.ok) loadData();
     } catch {}
   };
@@ -1717,7 +1718,7 @@ function AdminTab2({ C, MONO, SANS, SERIF }) {
     setActionStatus(s => ({ ...s, [key]: "running" }));
     setActionMsg(m => ({ ...m, [key]: "" }));
     try {
-      const r = await fetch(url, { method: opts.method || "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: opts.body });
+      const r = await apiFetch(url, { method: opts.method || "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: opts.body });
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         setActionStatus(s => ({ ...s, [key]: "ok" }));
@@ -2011,7 +2012,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
     let attempts = 0;
     const tryLoad = () => {
       if (cancelled) return;
-      fetch("/api/account", { credentials: "include" }).then(r => {
+      apiFetch("/api/account", { credentials: "include" }).then(r => {
         if (cancelled) return null;
         if (r.status === 401) {
           if (attempts++ < 3) setTimeout(tryLoad, 1500); // retry — session may not be ready yet
@@ -2036,7 +2037,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const handleToggleDailyEmail = async (subscribe) => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/account/toggle-daily-email", {
+      const res = await apiFetch("/api/account/toggle-daily-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subscribe }),
@@ -2054,7 +2055,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const handleManageStripe = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/stripe/portal", {
+      const res = await apiFetch("/api/stripe/portal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -2070,7 +2071,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const handlePauseSubscription = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/stripe/pause", { method: "POST", credentials: "include" });
+      const res = await apiFetch("/api/stripe/pause", { method: "POST", credentials: "include" });
       const data = await res.json();
       if (data.ok) {
         setAcct(a => ({ ...a, subscription: { ...a.subscription, paused: true } }));
@@ -2084,7 +2085,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const handleResumeSubscription = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/stripe/resume", { method: "POST", credentials: "include" });
+      const res = await apiFetch("/api/stripe/resume", { method: "POST", credentials: "include" });
       const data = await res.json();
       if (data.ok) {
         setAcct(a => ({ ...a, subscription: { ...a.subscription, paused: false } }));
@@ -2098,7 +2099,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const handleCancelSubscription = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/stripe/cancel", { method: "POST", credentials: "include" });
+      const res = await apiFetch("/api/stripe/cancel", { method: "POST", credentials: "include" });
       const data = await res.json();
       if (data.ok) {
         setAcct(a => ({ ...a, subscription: { ...a.subscription, cancelAtPeriodEnd: true } }));
@@ -2112,7 +2113,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const handleDowngradeToFree = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/stripe/downgrade", { method: "POST", credentials: "include" });
+      const res = await apiFetch("/api/stripe/downgrade", { method: "POST", credentials: "include" });
       const data = await res.json();
       if (data.ok) {
         setAcct(a => ({ ...a, tier: "free", promoCode: null, promoExpiresAt: null, stripeSubscriptionId: null, subscription: null }));
@@ -2127,7 +2128,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const handleDelete = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/account", { method: "DELETE" });
+      const res = await apiFetch("/api/account", { method: "DELETE" });
       const data = await res.json();
       if (data.ok && onSignOut) onSignOut();
     } catch (e) {}
@@ -2144,7 +2145,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const loadTrialCode = async () => {
     setTrialLoading(true);
     try {
-      const res = await fetch("/api/admin/current-trial-code");
+      const res = await apiFetch("/api/admin/current-trial-code");
       const data = await res.json();
       if (data.code) setTrialCode(data);
       else showToast(data.error || "Could not load trial code");
@@ -2155,7 +2156,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const generateNewTrialCode = async () => {
     setTrialLoading(true);
     try {
-      const res = await fetch("/api/admin/generate-trial-code", { method: "POST" });
+      const res = await apiFetch("/api/admin/generate-trial-code", { method: "POST" });
       const data = await res.json();
       if (data.code) {
         setTrialCode(data);
@@ -2168,7 +2169,7 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const generateProAccessCode = async () => {
     setProCodeLoading(true);
     try {
-      const res = await fetch("/api/admin/generate-access-code", {
+      const res = await apiFetch("/api/admin/generate-access-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ durationMonths: proCodeDuration }),

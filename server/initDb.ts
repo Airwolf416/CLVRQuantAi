@@ -153,6 +153,14 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_user_sessions_expire ON user_sessions (expire)
     `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rate_limit_entries (
+        key      TEXT PRIMARY KEY,
+        hits     INTEGER NOT NULL,
+        reset_at TIMESTAMPTZ NOT NULL
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rate_limit_entries_reset ON rate_limit_entries (reset_at)`);
 
     // ── daily_briefs_log ─────────────────────────────────────────────────────
     await client.query(`
@@ -373,9 +381,11 @@ export async function initializeDatabase(): Promise<void> {
         id            SERIAL PRIMARY KEY,
         user_id       TEXT NOT NULL,
         credential_id TEXT NOT NULL UNIQUE,
+         is_legacy     BOOLEAN NOT NULL DEFAULT true,
         created_at    TIMESTAMP DEFAULT NOW()
       )
     `);
+    await client.query(`ALTER TABLE webauthn_credentials ADD COLUMN IF NOT EXISTS is_legacy BOOLEAN NOT NULL DEFAULT true`);
 
     // ── signal_history ───────────────────────────────────────────────────────
     await client.query(`
@@ -440,6 +450,20 @@ export async function initializeDatabase(): Promise<void> {
         outcome            VARCHAR(20) DEFAULT 'PENDING',
         pnl_pct            DECIMAL(10,4),
         resolved_at        TIMESTAMP,
+         observed_mfe_pct   DECIMAL(10,4),
+         observed_mae_pct   DECIMAL(10,4),
+         observed_mfe_at    TIMESTAMP,
+         observed_mae_at    TIMESTAMP,
+         entry_fill_status  VARCHAR(20) NOT NULL DEFAULT 'UNVERIFIED',
+         entry_filled_at    TIMESTAMP,
+         entry_fill_evidence JSONB,
+         observation_cursor JSONB,
+          observation_cursor_at TIMESTAMP,
+         hold_horizon_policy VARCHAR(40),
+         observation_method_version VARCHAR(40),
+         calibration_label  VARCHAR(20),
+         calibration_exclusion_reason VARCHAR(80),
+         signal_policy_snapshot JSONB,
         thesis             TEXT,
         invalidation       TEXT,
         scores             JSONB,
@@ -471,6 +495,121 @@ export async function initializeDatabase(): Promise<void> {
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS scope VARCHAR(16) NOT NULL DEFAULT 'global'`).catch(() => {});
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS target_user_id VARCHAR(64)`).catch(() => {});
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS news_context JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS observed_mfe_pct DECIMAL(10,4)`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS observed_mae_pct DECIMAL(10,4)`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS observed_mfe_at TIMESTAMP`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS observed_mae_at TIMESTAMP`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS entry_fill_status VARCHAR(20) NOT NULL DEFAULT 'UNVERIFIED'`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS entry_filled_at TIMESTAMP`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS entry_fill_evidence JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS observation_cursor JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS observation_cursor_at TIMESTAMP`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS hold_horizon_policy VARCHAR(40)`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS observation_method_version VARCHAR(40)`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS calibration_label VARCHAR(20)`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS calibration_exclusion_reason VARCHAR(80)`).catch(() => {});
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS signal_policy_snapshot JSONB`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_calibration_labels ON ai_signal_log (resolved_at DESC) WHERE calibration_label IN ('WIN', 'LOSS')`).catch(() => {});
+
+    // Track S durable, shadow-only foundations.  Jobs use the calibration
+    // lease row below; all timestamps are TIMESTAMPTZ and interpreted as UTC.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS signal_calibration (
+        id SERIAL PRIMARY KEY,
+        model_version VARCHAR(40) NOT NULL,
+        bucket_key TEXT NOT NULL,
+        dimensions JSONB NOT NULL,
+        wins INTEGER NOT NULL,
+        sample_size INTEGER NOT NULL,
+        p_win DECIMAL(8,6) NOT NULL,
+        backoff_level INTEGER NOT NULL,
+        lookback_start TIMESTAMPTZ NOT NULL,
+        lookback_end TIMESTAMPTZ NOT NULL,
+        computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (model_version, bucket_key)
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS signal_policy_leases (
+        lease_name TEXT PRIMARY KEY,
+        holder TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS asset_universe_snapshots (
+        id SERIAL PRIMARY KEY,
+        schema_version VARCHAR(40) NOT NULL,
+        asset_count INTEGER NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS asset_universe (
+        venue VARCHAR(24) NOT NULL,
+        raw_symbol VARCHAR(64) NOT NULL,
+        display_symbol VARCHAR(64) NOT NULL,
+        canonical_symbol VARCHAR(64) NOT NULL,
+        market_type VARCHAR(16) NOT NULL,
+        asset_class VARCHAR(16) NOT NULL,
+        size_decimals INTEGER NOT NULL,
+        price_decimals INTEGER,
+        max_leverage DECIMAL(12,4),
+        mark_price DECIMAL(30,12) NOT NULL,
+        day_volume_usd DECIMAL(30,4) NOT NULL,
+        open_interest_raw DECIMAL(30,8),
+        open_interest_usd DECIMAL(30,4),
+        funding DECIMAL(18,10),
+        status VARCHAR(16) NOT NULL,
+        eligible BOOLEAN NOT NULL,
+        eligibility_reasons TEXT[] NOT NULL,
+        scorer_supported BOOLEAN NOT NULL,
+        scorer_support_reason VARCHAR(64),
+        discovered_at TIMESTAMPTZ NOT NULL,
+        last_seen_at TIMESTAMPTZ NOT NULL,
+        last_successful_refresh_at TIMESTAMPTZ NOT NULL,
+        floor_met_since TIMESTAMPTZ,
+        listing_evidence JSONB NOT NULL,
+        missing_refresh_count INTEGER NOT NULL DEFAULT 0,
+        last_missing_at TIMESTAMPTZ,
+        snapshot_version INTEGER NOT NULL,
+        schema_version VARCHAR(40) NOT NULL,
+        raw_metadata JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (venue, raw_symbol)
+      )
+    `);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS asset_universe_venue_raw_uidx ON asset_universe (venue, raw_symbol)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS asset_universe_picker_idx ON asset_universe (venue, status, scorer_supported)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS signal_policy_audit (
+        id SERIAL PRIMARY KEY, source VARCHAR(40) NOT NULL,
+        decision_state VARCHAR(40) NOT NULL, policy_mode VARCHAR(10) NOT NULL,
+        suppressed BOOLEAN NOT NULL, snapshot JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_signal_policy_audit_created ON signal_policy_audit (created_at DESC)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS hourly_market_closes (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(32) NOT NULL,
+        close_at TIMESTAMPTZ NOT NULL,
+        close_price DECIMAL(24,8) NOT NULL,
+        source_version VARCHAR(40) NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (symbol, close_at, source_version)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_hourly_market_closes_symbol_close ON hourly_market_closes (symbol, close_at DESC)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS signal_exposure_audit (
+        id BIGSERIAL PRIMARY KEY, source VARCHAR(40) NOT NULL, symbol VARCHAR(32) NOT NULL,
+        direction VARCHAR(10) NOT NULL, exposure_note TEXT NOT NULL, mode VARCHAR(10) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
 
     // ── Module 2 (Setup Taxonomy + Per-Setup Stats): additive columns +
     // tables. Same forbidden-file constraints as Module 1 — shared/schema.ts

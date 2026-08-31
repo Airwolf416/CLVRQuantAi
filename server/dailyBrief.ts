@@ -15,7 +15,10 @@ import { notifyAutoposter } from "./autoposterNotify";
 void notifyAutoposter;
 import { computeRegimeGate } from "./lib/regimeGate";
 import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
-import { enforceGeometry } from "./lib/geometryGuard";
+import { applyEmissionPolicy } from "./lib/emissionPolicy";
+import { exposureCapMode } from "./lib/featureFlags";
+import { selectExposureCapped } from "./lib/exposureSelector";
+import { correlationToBtc } from "./lib/hourlyCloseHistory";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -672,33 +675,44 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
   // ── FINAL GEOMETRY GUARD (shared) — repair wrong-side levels on Claude's
   // trade plans BEFORE tiered selection, email render, and Telegram post.
   // Repair-only: mirrors wrong-side SL/TP legs around entry so the plan
-  // matches its stated direction. Never flips direction, never drops a
-  // trade. Per-trade fail-open.
+  // matches its stated direction. Never flips direction; it only removes a
+  // trade when the explicitly enabled emission policy suppresses it.
   try {
-    const guardBriefTrade = (t: any) => {
-      if (!t || !t.asset) return;
+    const guardBriefTrade = (t: any): boolean => {
+      if (!t || !t.asset) return true;
       try {
         const dirU = String(t.dir || t.direction || "").toUpperCase();
         const dir = dirU.includes("SHORT") ? "SHORT" : dirU.includes("LONG") ? "LONG" : null;
         const num = (v: any) => parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
         const e = num(t.entry), sl = num(t.stop), t1 = num(t.tp1), t2 = num(t.tp2);
-        if (!dir || !Number.isFinite(e) || e <= 0 || !Number.isFinite(sl) || !Number.isFinite(t1)) return;
-        const g = enforceGeometry(
-          { direction: dir, entry: e, stopLoss: sl, tp1: t1, tp2: Number.isFinite(t2) ? t2 : null },
-          { symbol: String(t.asset), source: "ai_signal" },
-        );
-        if (!g.corrected) return;
+        if (!dir || !Number.isFinite(e) || e <= 0 || !Number.isFinite(sl) || !Number.isFinite(t1)) return true;
+        const policy = applyEmissionPolicy({
+          source: "morning_brief", symbol: String(t.asset), marketType: t.marketType ?? t.market_type, conviction: Number(t.conviction ?? t.confidence), direction: dir, entry: e, stopLoss: sl, tp1: t1,
+          tp2: Number.isFinite(t2) ? t2 : null, assetClass: "unknown", regime: String(briefJson.macroRegime || "unknown"),
+          leverageTier: "unknown", holdHorizonBand: "day", venueProfile: "phantom",
+        });
+        const g = policy.candidate;
         // Write back as plain numeric strings (same shape the email/telegram
         // renderers and pushClaudeTrade parse).
         const fmt = (n: number) => n >= 1000 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(6);
         t.stop = fmt(g.stopLoss);
         t.tp1 = fmt(g.tp1);
         if (g.tp2 != null && t.tp2 != null) t.tp2 = fmt(g.tp2);
-        t.geometry_auto_corrected = true;
-      } catch { /* per-trade fail-open — ship the original levels */ }
+        if (g.corrected) t.geometry_auto_corrected = true;
+        // Policy decisions are intentionally not attached to the brief DTO.
+        // Shadow/off retain the existing repaired output.  In enforcement,
+        // remove the card before any email, tier selection, or downstream
+        // promotion can serialize it.
+        return !policy.decision.suppress;
+      } catch {
+        // Existing fail-open behavior is retained if the adapter itself fails.
+        return true;
+      }
     };
-    guardBriefTrade(briefJson.topTrade);
-    for (const t of (briefJson.additionalTrades || [])) guardBriefTrade(t);
+    if (!guardBriefTrade(briefJson.topTrade)) briefJson.topTrade = null;
+    if (Array.isArray(briefJson.additionalTrades)) {
+      briefJson.additionalTrades = briefJson.additionalTrades.filter(guardBriefTrade);
+    }
   } catch (e: any) {
     console.warn("[daily-brief] geometry guard failed (non-fatal):", e?.message || e);
   }
@@ -753,8 +767,11 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
         const stopN  = parseFloat(String(t.stop).replace(/[^0-9.\-]/g, ""))  || 0;
         const tp1N   = parseFloat(String(t.tp1).replace(/[^0-9.\-]/g, ""))   || 0;
         const tp2N   = parseFloat(String(t.tp2).replace(/[^0-9.\-]/g, ""))   || 0;
-        const risk   = Math.abs(entryN - stopN);
-        const reward = Math.abs(tp2N - entryN);
+        // Levels have already passed through applyEmissionPolicy above.  TP1
+        // is the canonical expectancy/ranking target, and distances must be
+        // directional rather than absolute so a malformed plan cannot score.
+        const risk   = dir === "LONG" ? entryN - stopN : stopN - entryN;
+        const reward = dir === "LONG" ? tp1N - entryN : entryN - tp1N;
         const rr     = risk > 0 ? reward / risk : 0;
         const symU   = String(t.asset).toUpperCase();
         const cls: AssetClass =
@@ -788,6 +805,23 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       const hydrated = await hydrateCalibration(rawCandidates);
       const selection = await selectDailyTrades(hydrated);
       eliteTrades = selection.trades;
+      // Ranked-set exposure accounting is shadow-only by default. Do not apply
+      // it to the raw per-ticker scanner and do not change this email's list
+      // unless a separate reviewed `on` rollout is approved.
+      if (exposureCapMode() !== "off") {
+        const correlated = await Promise.all(eliteTrades.map(async t => ({
+          direction: t.direction, assetClass: t.assetClass, symbol: t.instrument, payload: t,
+          correlationToBtc: (await correlationToBtc(t.instrument, t.assetClass)).correlation,
+        })));
+        const exposure = selectExposureCapped(correlated);
+        for (const d of exposure.demoted) {
+          await pool.query(`INSERT INTO signal_exposure_audit (source, symbol, direction, exposure_note, mode) VALUES ($1,$2,$3,$4,$5)`,
+            ["morning_brief", d.symbol, d.direction, d.exposureNote, exposureCapMode()]).catch(() => {});
+        }
+        // Enforcement remains disabled until an admin data-quality review
+        // confirms durable aligned history; `on` is intentionally non-live in
+        // this release rather than silently suppressing ideas.
+      }
       console.log(`[daily-brief] tiered v1 (${tieredMode}): ${selection.candidateCount} candidates → ${eliteTrades.length} winners` +
         (selection.filteredOut.length ? ` | filtered: ${selection.filteredOut.map(f => `${f.instrument}/${f.direction}=${f.reason}`).join(", ")}` : ""));
       if (eliteTrades.length < 3) {

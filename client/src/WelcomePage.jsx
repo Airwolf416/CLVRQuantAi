@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "./lib/apiClient";
+// Auth/reset/verification endpoints are public by design, but use the same
+// same-origin transport for bearer compatibility and structured responses.
 import { SiInstagram, SiTiktok } from "react-icons/si";
 
 // ── WebAuthn / Face ID helpers ─────────────────────────────────────────────
@@ -319,6 +322,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const [verifySignInLoading, setVerifySignInLoading] = useState(false);
 
   useEffect(() => {
+    try {
+      const notice = sessionStorage.getItem("clvr_session_notice");
+      if (notice) { setSuccess(notice); sessionStorage.removeItem("clvr_session_notice"); }
+    } catch {}
     const params = new URLSearchParams(window.location.search);
     const resetTok = params.get("reset");
     const verifyTok = params.get("verify");
@@ -351,7 +358,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
         .catch(() => { setVerifyError("Network error. Please try again."); setVerifyState("error"); });
       return;
     }
-    fetch("/api/auth/me", { cache: "no-store" }).then(r => r.json()).then(data => {
+    apiFetch("/api/auth/me", { cache: "no-store" }).then(r => r.json()).then(data => {
       if (data.user) onEnter(data.user);
       else setCheckingSession(false);
     }).catch(() => setCheckingSession(false));
@@ -1205,7 +1212,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
           </div>
           <button data-testid="btn-enter-app" onClick={() => {
             if (signedUpUser) { onEnter(signedUpUser); return; }
-            fetch("/api/auth/me?t=" + Date.now(), { cache: "no-store" }).then(r => r.json()).then(data => {
+            apiFetch("/api/auth/me?t=" + Date.now(), { cache: "no-store" }).then(r => r.json()).then(data => {
               if (data.user) onEnter(data.user);
               else { setError("Session expired. Please sign in."); setMode("signin"); }
             }).catch(() => { setError("Connection error. Please sign in."); setMode("signin"); });

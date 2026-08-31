@@ -21,7 +21,7 @@ function copyToClipboard(text) {
   try { navigator.clipboard.writeText(text); } catch { }
 }
 
-export default function SignalCard({ ticker, result, rank, mode }) {
+export default function SignalCard({ ticker, result, rank, mode, animateIn = false }) {
   const [detailExpanded, setDetailExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -69,7 +69,7 @@ export default function SignalCard({ ticker, result, rank, mode }) {
   };
 
   return (
-    <div data-testid={`signal-card-${ticker}`} style={{
+    <div data-testid={`signal-card-${ticker}`} className={animateIn ? "motion-card-enter" : undefined} style={{
       background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)",
       borderLeft: `4px solid ${borderColor}`, borderRadius: 12, overflow: "hidden",
     }}>
@@ -162,7 +162,7 @@ export default function SignalCard({ ticker, result, rank, mode }) {
             <span style={{ fontSize: 10, fontWeight: 700, color: cColor, fontFamily: MONO }}>{winProb}%</span>
           </div>
           <div style={{ height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${winProb}%`, background: `linear-gradient(90deg, ${cColor}80, ${cColor})`, borderRadius: 3, transition: "width 1.2s ease" }} />
+            <div className="motion-meter" style={{ "--motion-meter-value": winProb / 100, height: "100%", background: `linear-gradient(90deg, ${cColor}80, ${cColor})`, borderRadius: 3 }} />
           </div>
           <div style={{ fontSize: 8, color: "#6b7280", fontFamily: MONO, marginTop: 3, lineHeight: 1.4 }}>Model confidence score — not a prediction of profit.</div>
         </div>
@@ -403,7 +403,7 @@ export default function SignalCard({ ticker, result, rank, mode }) {
 
       {mode === "pro" && (result.indicators || result.multi_tf || result.bayesian) && (
         <div style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-          <button data-testid={`btn-detail-${ticker}`} onClick={() => setDetailExpanded(d => !d)} style={{ width: "100%", background: "transparent", border: "none", padding: "7px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+          <button className="motion-press" data-testid={`btn-detail-${ticker}`} onClick={() => setDetailExpanded(d => !d)} style={{ width: "100%", background: "transparent", border: "none", padding: "7px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
             <span style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: MONO }}>Advanced Quant Detail</span>
             <span style={{ fontSize: 9, color: "rgba(255,255,255,0.2)" }}>{detailExpanded ? "▾" : "▸"}</span>
           </button>
@@ -439,10 +439,10 @@ export default function SignalCard({ ticker, result, rank, mode }) {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
-        <button data-testid={`btn-copy-${ticker}`} onClick={handleCopy} style={{ padding: "10px 8px", background: "transparent", border: "none", borderRight: "1px solid rgba(201,168,76,0.08)", color: copied ? "#22c55e" : "rgba(255,255,255,0.4)", cursor: "pointer", fontFamily: MONO, fontSize: 9, fontWeight: 600 }}>
+        <button className="motion-press" data-testid={`btn-copy-${ticker}`} onClick={handleCopy} style={{ padding: "10px 8px", background: "transparent", border: "none", borderRight: "1px solid rgba(201,168,76,0.08)", color: copied ? "#22c55e" : "rgba(255,255,255,0.4)", cursor: "pointer", fontFamily: MONO, fontSize: 9, fontWeight: 600 }}>
           {copied ? "✓ Copied!" : "📋 Copy Trade"}
         </button>
-        <button data-testid={`btn-alert-${ticker}`} style={{ padding: "10px 8px", background: "transparent", border: "none", color: "#c9a84c", cursor: "pointer", fontFamily: MONO, fontSize: 9, fontWeight: 600 }}>
+        <button className="motion-press" data-testid={`btn-alert-${ticker}`} style={{ padding: "10px 8px", background: "transparent", border: "none", color: "#c9a84c", cursor: "pointer", fontFamily: MONO, fontSize: 9, fontWeight: 600 }}>
           ⏰ Set Alert
         </button>
       </div>
