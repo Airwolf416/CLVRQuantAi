@@ -1,0 +1,72 @@
+━━━ PART D — DYNAMIC ASSET UNIVERSE SYNC (Hyperliquid / Phantom Perps parity) ━━━
+Goal: the scanner's tradable universe must mirror all perp markets live on
+Hyperliquid (which is what Phantom Perps exposes), refreshed automatically.
+Do NOT hardcode a token list.
+
+1. DISCOVERY: locate where the current 47-asset scanner universe is defined
+   (search for the asset array/constant feeding Trade Ideas + Quant Scanner)
+   and where Hyperliquid API calls already live. Report before changing.
+
+2. New module server/lib/assetUniverse.ts:
+   - Fetch POST https://api.hyperliquid.xyz/info body {"type":"meta"} for the
+     full perp universe (name, szDecimals, maxLeverage), and
+     {"type":"metaAndAssetCtxs"} for per-asset dayNtlVlm (24h notional volume),
+     openInterest, funding, markPx.
+   - Persist to a new table asset_universe (symbol, maxLeverage, dayVolumeUsd,
+     openInterestUsd, isEquityPerp boolean, status 'active'|'quarantine'|'delisted',
+     firstSeenAt, lastSeenAt, updatedAt).
+   - Refresh job every 6 hours + on server boot. Symbols missing from the meta
+     response for 2 consecutive refreshes → status 'delisted' (never emit, keep
+     history). HIP-3 equity perps → isEquityPerp=true.
+
+3. TIERED ADMISSION (critical — do not skip):
+   - LIQUIDITY FLOOR: only assets with dayVolumeUsd >= $25M AND
+     openInterestUsd >= $5M are eligible for signal emission at all.
+     Below floor → status stays 'quarantine'; scanner may still track prices
+     but every emission path must reject with empty_reason detail LOW_LIQUIDITY.
+   - NEW LISTINGS: any symbol first seen < 30 days ago is treated as
+     off-whitelist in the existing token soft gate (conviction capped, flag
+     'new-listing') even if it clears the liquidity floor. It graduates only
+     when the shadow calibration (Part C) has n >= 25 resolved signals for it
+     OR 30 days elapse with the floor continuously met.
+   - EQUITY PERPS (isEquityPerp): eligible for scanning but tagged so the
+     macro gate uses the equity-relevant context (DXY, index futures, earnings
+     proximity via earnings_cache) instead of the BTC 4-hour move. If that
+     wiring doesn't exist yet, exclude equity perps from emission with
+     empty_reason detail EQUITY_CONTEXT_PENDING rather than emitting with a
+     crypto-only macro gate.
+
+4. SCANNER SCALE: 200+ assets cannot be scanned the way 47 were.
+   - Batch the universe: majors + whitelist every cycle; the remaining active
+     assets on a rotating schedule (each asset at least once per hour).
+   - Respect Hyperliquid rate limits: single metaAndAssetCtxs call returns all
+     asset contexts at once — use it instead of per-asset calls wherever possible.
+   - Candidate pre-filter BEFORE any AI/scoring spend: only assets passing the
+     liquidity floor AND showing a minimum 4h |move| or funding/OI anomaly enter
+     the scoring pipeline. Everything else is skipped silently that cycle.
+
+5. COST MODEL HOOK (amends Part A §3): add venue profiles to the cost model.
+   Default 'hyperliquid_native' (taker 0.045%/side). Add 'phantom' profile:
+   Hyperliquid base + 0.05% builder fee per side. Make the venue profile a
+   config constant defaulting to 'phantom' since that's the client-facing
+   audience. Slippage tiers now key off the asset's actual dayVolumeUsd:
+   >= $500M → 0.02%, >= $100M → 0.05%, >= $25M → 0.10%.
+
+6. CLIENT SIDE: asset pickers (Quant Scanner ticker input, My Basket) should
+   read the active universe from a new GET /api/universe endpoint (active,
+   non-quarantined symbols only) instead of any hardcoded list. No marketing
+   copy changes — do not add "trade on Phantom" or venue endorsement language
+   anywhere client-facing.
+
+━━━ ADDITIONAL ACCEPTANCE CRITERIA (Part D) ━━━
+8. asset_universe populates on boot; symbol count roughly matches Hyperliquid's
+   live universe (spot-check BTC, ETH, SOL present; a known HIP-3 equity perp
+   flagged isEquityPerp).
+9. A sub-$25M-volume asset never reaches emission; rejection logged LOW_LIQUIDITY.
+10. A synthetic "first seen yesterday" symbol gets the new-listing conviction cap.
+11. Equity perps are excluded with EQUITY_CONTEXT_PENDING until macro wiring exists.
+12. One metaAndAssetCtxs call per refresh cycle, not N per-asset calls.
+13. Quant Scanner accepts any active universe symbol; rejects delisted/quarantined
+    with a clear message.
+
+Suggested commit: "feat(universe): dynamic Hyperliquid asset universe sync with liquidity floor, new-listing quarantine, Phantom fee profile"

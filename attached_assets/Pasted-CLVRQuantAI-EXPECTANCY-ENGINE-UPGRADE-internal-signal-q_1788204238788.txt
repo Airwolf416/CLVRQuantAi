@@ -1,0 +1,98 @@
+CLVRQuantAI — EXPECTANCY ENGINE UPGRADE (internal signal quality, no client-facing claims)
+
+CONTEXT
+This upgrade improves internal signal selection math. It must NOT add any client-facing
+win-rate, performance, or probability-of-profit claims anywhere. All new numbers are
+internal gating values or neutral labels.
+
+DISCOVERY FIRST (do not assume line numbers):
+1. Locate the trade-idea hardening path: search server/lib for signalHardening,
+   convictionCap, empiricalFilters, and the /api/ai/analyze route in server/routes.ts.
+2. Locate the unified log table ai_signal_log in the Drizzle schema.
+3. Locate where Trade Ideas final candidates are assembled before emission
+   (the point where the 4/6 ideas are chosen from scored candidates).
+Report what you found (file + function names) before making changes.
+
+━━━ PART A — COST-ADJUSTED EXPECTANCY GATE ━━━
+Create server/lib/expectancyGate.ts exporting computeNetExpectancy(candidate, marketCtx):
+
+1. Derive R_win and R_loss from FINAL geometry (post geometry-guard if present):
+   directional R:R — for LONG: (tp1-entry)/(entry-sl); for SHORT: (entry-tp1)/(sl-entry).
+   If either denominator <= 0, return { blocked: true, reason: "INVALID_GEOMETRY" }.
+
+2. Estimate p_win: use the empirical calibration value for the candidate's bucket if
+   available (see Part C); otherwise use direction_probability from the scorer prepass;
+   otherwise fall back to a conservative 0.45. Never use raw LLM conviction as p_win.
+
+3. Cost model (subtract from expected R):
+   - taker fees: 2 × fee_rate (entry+exit), default 0.05% per side if unknown
+   - slippage: 0.02% majors (BTC/ETH), 0.08% alts, 0.15% off-whitelist alts
+   - funding drag: |current funding rate| × expected hold hours / 8h, signed against
+     the trade direction only when the trade PAYS funding
+   Convert total cost % into R units using the entry-to-SL distance.
+
+4. netEV = p_win × R_win − (1 − p_win) × 1.0 − cost_R
+   Gate: netEV must be >= +0.10R to pass. Below that:
+   { blocked: true, reason: "NEGATIVE_EXPECTANCY", netEV } — feeds the existing
+   empty_reason transparency payload as ALL_REJECTED detail, never shown as a
+   probability claim to users.
+
+5. Wire the gate at EVERY emission point that produces cards: Trade Ideas,
+   Quant Scanner per-ticker, Morning Brief, Basket. Log netEV, cost_R, and the
+   p_win source ("empirical" | "scorer" | "fallback") into ai_signal_log.scores jsonb.
+
+━━━ PART B — CROSS-IDEA CORRELATION / EXPOSURE CAP ━━━
+Problem: emitting 4–6 ideas that are all the same BTC-beta trade multiplies risk
+without adding edge.
+
+Create server/lib/exposureCap.ts:
+1. Compute rolling 30-day return correlation of each candidate token vs BTC using
+   existing cached price history (do not add a new data vendor). If history is
+   insufficient, assume correlation 0.9 for alts, 1.0 for BTC/ETH.
+2. When assembling the final Trade Ideas set:
+   - max 2 ideas with same direction AND |corr vs BTC| > 0.75
+   - the excess candidates are demoted, not deleted: pick the next-highest netEV
+     candidate that diversifies (different direction, or corr < 0.75, or non-crypto
+     asset class if available)
+   - if no diversifying candidate clears the expectancy gate, emit fewer ideas.
+     Fewer good ideas > filler. Never pad the set to hit 4 or 6.
+3. Add internal field exposureNote to each emitted idea (e.g. "demoted: btc-beta
+   cluster") for the admin view only. Not client-facing.
+
+━━━ PART C — MFE/MAE LOGGING + NIGHTLY SHADOW CALIBRATION (Phase 1) ━━━
+Your own backtest doc states MFE/MAE logging is the prerequisite for testing exits.
+
+1. Schema: add columns to ai_signal_log (Drizzle migration):
+   mfePct decimal(10,4), maePct decimal(10,4), mfeAt timestamp, maeAt timestamp.
+2. In the existing outcome-resolution job, while a signal is PENDING, track the
+   max favorable and max adverse excursion from entry using the same price feed
+   the resolver already polls. Persist on resolution.
+3. New nightly job server/jobs/shadowCalibration.ts:
+   - bucket resolved signals by (source, asset class, conviction band, regime,
+     leverage tier), minimum 90-day lookback
+   - empirical hit rate per bucket with Laplace smoothing: (wins+1)/(n+2)
+   - write to a new table signal_calibration (bucketKey, pWinEmpirical, n, updatedAt)
+   - ZERO live behavior change from this job itself; Part A's p_win lookup reads
+     signal_calibration only when n >= 25 for the bucket
+4. Log a one-line summary per run. First calibration summary is a REVIEW CHECKPOINT —
+   surface it in admin, do not auto-promote anything.
+
+━━━ DO NOT TOUCH ━━━
+- convictionCap.ts capping logic, empiricalFilters.ts levers, circuit breaker,
+  macro gate, geometry guard — leave all existing risk controls exactly as-is.
+- No changes to any client-facing copy, WelcomePage, marketing strings, or labels.
+- No new client-facing numbers that read as win probability or performance promises.
+- Do not remove or weaken any existing NO_SIGNAL / suppression path.
+
+━━━ ACCEPTANCE CRITERIA ━━━
+1. A candidate with inverted geometry is blocked with reason INVALID_GEOMETRY.
+2. A 1.2:1 R:R alt trade with p_win 0.45 and full costs is blocked as
+   NEGATIVE_EXPECTANCY (netEV < 0.10R) — verify with a unit test.
+3. Feeding 5 LONG candidates all corr>0.75 vs BTC yields max 2 emitted from that
+   cluster; set size shrinks rather than padding.
+4. After one resolved signal, mfePct/maePct are populated.
+5. Nightly job writes signal_calibration rows; live path only reads buckets n>=25.
+6. Zero changes in any client-visible copy (grep diff on client/src confirms).
+7. TypeScript compiles clean; existing tests pass.
+
+Suggested commit: "feat(engine): cost-adjusted expectancy gate, exposure cap, MFE/MAE + shadow calibration (internal only)"
