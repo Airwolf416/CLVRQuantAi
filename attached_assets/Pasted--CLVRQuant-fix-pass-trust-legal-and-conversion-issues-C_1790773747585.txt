@@ -1,0 +1,39 @@
+# CLVRQuant fix pass — trust, legal, and conversion issues
+
+Context: CLVRQuant (clvrquantai.com) is a React single-page app — gold-on-black luxury theme, mobile-first (~400px centered column). Freemium: FREE $0 / PRO $29.99/mo CAD / ELITE $129/mo CAD via Stripe. An external audit found the issues below. Implement ALL of them. After each change, verify in both dark and light mode.
+
+## PRIORITY 1 — Legal & trust (do first)
+
+1. **Dead "Read full disclaimer →" on homepage footer.** Underlined like a link but clicking does nothing. Wire it to open the same disclaimer modal used in the "Explore Features" tour.
+2. **Dead "Email policy →" on the signup form.** Clicking does nothing. Create an email-policy modal and wire the link to it.
+3. **No Terms of Service.** The homepage footer "Terms" is plain text. Write a proper Terms of Service page/route (education-only, no financial advice, no liability, account rules, Stripe billing, termination) and link it in the footer. Reuse existing disclaimer copy where appropriate.
+4. **Privacy Policy placeholders are live** at /privacy: "[Legal Entity Name]" and "[Insert specific retention periods if applicable.]". Replace with real values. Put them in one clearly-marked config (e.g. `src/config/legal.ts` with `LEGAL_ENTITY_NAME`, `DATA_RETENTION_PERIOD`, support email) so the owner edits in one place — do NOT invent a company name; use obvious `TODO_OWNER` markers for anything unknown.
+5. **Accidental consent bug (important).** On signup, the "Terms →" and "Email policy →" spans sit inside `<label>` elements, so clicking the link text toggles the consent/marketing checkboxes. Restructure: keep checkbox + label text toggling the box, but render the "→" links as separate elements OUTSIDE the label so clicking them only opens the modal and never changes checkbox state. Verify: clicking each link 3x must leave both checkboxes unchanged.
+6. **Enforce email verification.** The banner says "verify your email to activate your account" but the whole product works unverified. Gate it: unverified users see the dashboard shell, but signals, AI features, and markets data stay locked behind a "verify your email" screen until they click the link. Add resend with 60s cooldown.
+7. **Bot protection on signup.** None exists. Add Cloudflare Turnstile (free) to the signup form.
+
+## PRIORITY 2 — Conversion & UX
+
+8. **Public pricing.** No pricing page and no nav — pricing only exists inside the feature tour (step 5) and the logged-in plans modal. Add a minimal top nav (Features, Pricing, FAQ, Sign in) plus a public pricing section showing Free $0 / Pro $29.99/mo CAD / Elite $129/mo CAD with feature comparison.
+9. **Pricing contradictions.** Tour says Pro "save 17% yearly", Elite "save 23% yearly"; account plans modal says "Yearly -20%". Create ONE pricing config (`src/config/pricing.ts`) as the single source of truth; render all UIs from it. Use 17%/23% unless told otherwise — mark values clearly.
+10. **Docs contradictions.** Help FAQ says Free gets "no AI signals" but the Signals page shows free users delayed signals with paywalled entries; signup offers a free "Daily 6AM Market Brief" email while the plan table marks Morning Brief "Locked" for Free. Decide the real rule, then make FAQ, Signals page, signup copy, and plan table all agree.
+11. **"Real-time signals" promise.** Homepage subhead promises real-time signals; free tier is 30-min delayed. Qualify it (e.g. "Real-time signals on Pro & Elite") — don't let the top of the funnel overpromise.
+12. **Dead-end AI button.** Free users see "Generate Top 2 Trade Ideas ✦" but it only says it's Pro-exclusive. For free users replace it with an upgrade CTA ("Unlock with Pro →") opening the plans modal.
+13. **Password policy.** Minimum is 6 chars with no guidance. Raise to 10 minimum and add a live strength meter (length, mixed case, number, symbol).
+14. **Face ID banner.** "Not now" doesn't persist — it reappears on reload. Persist dismissal in localStorage.
+15. **Welcome tour count.** Says "6 steps" but footer shows "1 / 8". Fix to match reality.
+
+## PRIORITY 3 — Polish
+
+16. **Viewport zoom.** Meta tag has `user-scalable=no, maximum-scale=1`, blocking pinch zoom (WCAG fail). Remove those attributes; keep `width=device-width, initial-scale=1`.
+17. **Unescaped HTML in news feed.** Headline renders literally as `&#039;Alternative Nobel&#039; honors...`. Decode HTML entities when rendering headlines.
+18. **Spacing typos:** "⚠$TSLAspike", "SOURCE DIVERSITY ·2CHANNELS", "2026-10-0102:00ET". Fix, then grep for similar patterns.
+19. **Data-feed hardening.** Owner confirms the feed is live and accurate. Add skeleton/loading states on tickers during refresh/reload so values are never shown mid-update — numbers must be fresh or visibly loading, never stale-looking.
+20. **Macro calendar.** (a) Verify "This Week" matches upcoming events in the RADAR view — they disagreed during the audit. (b) Replace "0 events / No events match your filters" with a useful empty state, e.g. "No macro events scheduled today. Next up: [event, date] →".
+21. **1-on-1 booking.** Help + privacy policy mention it, but there's no entry point in the dashboard. Add it to the nav or remove the mentions.
+22. **Trust signals.** Add testimonials and a signal-performance track record with honest disclaimers (past performance ≠ future results).
+
+## Verification
+Walk through: fresh signup (links open modals WITHOUT toggling checkboxes, Turnstile present, verification email arrives and gates the product), all homepage footer links work, /privacy has no `[brackets]` left, pricing identical in tour + plans modal + public page, Face ID dismissal persists across reload, 390px mobile layout intact. List anything you could not verify.
+
+Do not change the visual theme, pricing amounts, or plan feature sets — only the issues above. Ask me for any value you don't know (legal entity name, retention period, support email) instead of inventing it.

@@ -72,11 +72,22 @@ const globalLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => !req.path.startsWith("/api/"),
+  skip: (req) => !req.path.startsWith("/api/") || (req.method === "GET" && req.path === "/api/macro"),
   message: { error: "Too many requests. Please slow down." },
   store: new PostgresRateLimitStore("global"),
 });
 app.use(globalLimiter);
+
+// Cached calendar reads have an independent bounded budget: dashboard polling
+// must not exhaust their allowance and make the schedule disappear on reload.
+app.use("/api/macro", rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Calendar request limit reached. Please retry shortly." },
+  store: new PostgresRateLimitStore("macro-calendar"),
+}));
 
 // ── AI/Quant endpoint rate limiter — 30 requests / 15 minutes per IP ──────────
 export const aiLimiter = rateLimit({

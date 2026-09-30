@@ -1,0 +1,10 @@
+---
+name: Macro feed failure semantics
+description: Operational lessons from intermittent MACRO event disappearance.
+---
+
+Do not bypass calendar cache TTL merely because a scheduled event lacks an actual value. Such entries can remain unresolved indefinitely.
+
+**Why:** This caused every dashboard refresh to launch another multi-day scrape; upstream rate limiting then looked like an empty calendar. On 2026-09-30, ForexFactory day pages also returned Cloudflare 403 while published weekly exports remained available.
+
+**How to apply:** Coalesce refreshes, back off failures, explicitly label retained data stale, and distinguish a validated empty schedule from transport/parse failures. A calendar HTTP 429 can also originate from the app-wide limiter exhausted by unrelated dashboard polling; inspect response provenance before blaming the provider. API repeatability does not substitute for authenticated browser reload acceptance.

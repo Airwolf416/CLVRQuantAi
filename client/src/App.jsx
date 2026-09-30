@@ -31,6 +31,7 @@ import EarningsContent from "./components/EarningsContent.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
 import { playMarketBell, unlockAudio, unlockSpeech, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
+import { macroWeekRange, filterMacroCalendar, createMacroLoader } from "./utils/macroCalendar.js";
 import { DataBusProvider, DataBusCtx, useDataBus, mapRegimeLabel, regimeMultiplier, fearGreedColor } from "./context/DataBusContext.jsx";
 import { apiFetch } from "./lib/apiClient";
 import SessionSecurity from "./components/SessionSecurity.jsx";
@@ -3960,6 +3961,9 @@ function Dashboard({user,setUser,onShowAuth}){
   useEffect(()=>{isProRef.current=isPro;},[isPro]);
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
+  const [macroError,setMacroError]=useState(false);
+  const [macroStale,setMacroStale]=useState(false);
+  const macroLoaderRef=useRef(null);
   const [macroAiEvent,setMacroAiEvent]=useState(null);
   const [macroAiResp,setMacroAiResp]=useState(null);
   const [macroAiLoading,setMacroAiLoading]=useState(false);
@@ -4334,13 +4338,22 @@ function Dashboard({user,setUser,onShowAuth}){
   };
 
   // ── Macro calendar (30s refresh — fast enough to catch 8:30 AM ET releases) ─
-  const fetchMacro=useCallback(()=>{
-    apiFetch("/api/macro").then(r=>r.json()).then(data=>{
-      if(Array.isArray(data)) setMacroEvents(data);
-      setMacroLoading(false);
-    }).catch(()=>setMacroLoading(false));
+  useEffect(()=>{
+    const loader=createMacroLoader(async(force)=>{
+      const r=await apiFetch(force?"/api/macro?retry=1":"/api/macro");
+      if(!r.ok)throw new Error(`Macro calendar HTTP ${r.status}`);
+      return {events:await r.json(),stale:r.headers.get("X-Macro-Stale")==="1"};
+    },update=>{
+      if(update.events)setMacroEvents(update.events);
+      setMacroLoading(update.loading);
+      setMacroError(update.error);
+      if(update.stale!==undefined)setMacroStale(update.stale);
+    });
+    macroLoaderRef.current=loader;
+    loader.fetch();
+    const iv=setInterval(()=>loader.fetch(),30000);
+    return()=>{clearInterval(iv);loader.dispose();macroLoaderRef.current=null;};
   },[]);
-  useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,30000);return()=>clearInterval(iv);},[fetchMacro]);
   // Tick every 30s so nextEvents recomputes and hides the countdown box once an event passes
   useEffect(()=>{const iv=setInterval(()=>setClockTick(t=>t+1),30000);return()=>clearInterval(iv);},[]);
 
@@ -4844,16 +4857,9 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
   };
 
   // Use ET timezone for date comparisons so US economic events (e.g. 8:30 AM ET jobless claims) show on correct day
-  const macroTodayStr=new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});// YYYY-MM-DD in ET
+  const macroTodayStr=macroWeekRange(new Date()).start;// YYYY-MM-DD in ET
   const macroTodayEvents=macroEvents.filter(e=>e.date===macroTodayStr);
-  const macroWeekEndDate=new Date();macroWeekEndDate.setDate(macroWeekEndDate.getDate()+(6-macroWeekEndDate.getDay()));macroWeekEndDate.setHours(23,59,59,999);
-  const macroWeekStartStr=macroTodayStr;
-  const macroWeekEndStr=macroWeekEndDate.toLocaleDateString("en-CA",{timeZone:"America/New_York"});
-  const macroWeekEvents=macroEvents.filter(e=>e.date>=macroWeekStartStr&&e.date<=macroWeekEndStr);
-  const macroAllFiltered=(macroCalTab==="today"?macroTodayEvents:macroWeekEvents)
-    .filter(e=>macroRegionFilter==="ALL"||(e.country||"").toUpperCase()===macroRegionFilter)
-    .filter(e=>macroImpactFilter==="ALL"||e.impact===macroImpactFilter)
-    .sort((a,b)=>{const da=new Date(a.date).getTime();const db=new Date(b.date).getTime();if(da!==db)return da-db;const ta=a.timeET||a.time||"00:00";const tb=b.timeET||b.time||"00:00";return ta.localeCompare(tb);});
+  const macroAllFiltered=filterMacroCalendar(macroEvents,macroCalTab,macroRegionFilter,macroImpactFilter);
   const macroReleasedCount=macroAllFiltered.filter(e=>e.released||e.isPast).length;
   const macroPendingCount=macroAllFiltered.filter(e=>!e.released&&!e.isPast).length;
   const macroHighCount=macroAllFiltered.filter(e=>e.impact==="HIGH").length;
@@ -5839,6 +5845,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             );
           })()}
 
+          {macroStale&&<div role="status" style={{fontFamily:MONO,fontSize:9,color:C.orange,marginBottom:8}}>Macro calendar: showing last known events (stale). <button type="button" onClick={()=>macroLoaderRef.current?.fetch(true)} style={{background:"transparent",border:"none",color:C.gold,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>retry</button></div>}
           {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
             <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:10}}>{i18n.nextMacro}</div>
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.text,marginBottom:3}}>{nextEvents[0].bank}: {nextEvents[0].name}</div>
@@ -6067,9 +6074,12 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>
           <div style={{marginBottom:14}}><SLabel>Macro Calendar</SLabel></div>
-          {macroLoading&&<div style={{padding:20,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>Loading calendar...</div>}
+          {macroLoading&&<div role="status" style={{padding:20,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>Loading calendar...</div>}
+          {(macroError||macroStale)&&!macroLoading&&<div role="alert" style={{padding:16,textAlign:"center",color:C.red,fontFamily:MONO,fontSize:10}}>
+            {macroError?"Couldn't load events — ":"Showing last known events (stale) — "}<button type="button" onClick={()=>macroLoaderRef.current?.fetch(true)} style={{background:"transparent",border:`1px solid ${C.red}`,color:C.red,cursor:"pointer",padding:"5px 10px",fontFamily:MONO}}>retry</button>
+          </div>}
 
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
+          {!macroLoading&&!macroError&&!macroStale&&<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
             {[
               {label:"HIGH IMPACT",val:macroHighCount,col:C.red,bg:"rgba(255,64,96,.08)",bc:"rgba(255,64,96,.2)"},
               {label:"RELEASED",val:macroReleasedCount,col:C.green,bg:"rgba(0,199,135,.08)",bc:"rgba(0,199,135,.2)"},
@@ -6080,9 +6090,9 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                 <div style={{fontFamily:MONO,fontSize:7,color:s.col+"88",letterSpacing:"0.12em",marginTop:4}}>{s.label}</div>
               </div>
             ))}
-          </div>
+          </div>}
 
-          {macroNextPending&&(
+          {!macroLoading&&macroNextPending&&(
             <div data-testid="macro-next-event" style={{background:"rgba(201,168,76,.04)",border:`1px solid ${C.border2}`,borderRadius:2,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
                 <div style={{fontFamily:MONO,fontSize:7,color:C.gold,letterSpacing:"0.18em",marginBottom:3}}>NEXT RELEASE</div>
@@ -6120,14 +6130,16 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             );})}
           </div>
 
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{macroAllFiltered.length} events · ForexFactory + Central Banks · 60s refresh</div>
-            <Badge label="LIVE" color="green" style={{fontSize:7}}/>
-          </div>
+          {!macroLoading&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{(macroStale||macroError)&&macroAllFiltered.length===0?"Last known calendar unavailable":`${macroAllFiltered.length} events · ForexFactory weekly feed · 5m refresh`}</div>
+            {!macroStale&&!macroError&&<Badge label="LIVE" color="green" style={{fontSize:7}}/>}
+          </div>}
 
-          {macroAllFiltered.length===0&&<div style={{padding:30,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>No events match your filters.</div>}
+          {!macroLoading&&!macroError&&!macroStale&&macroAllFiltered.length===0&&<div style={{padding:30,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>
+            {(macroRegionFilter!=="ALL"||macroImpactFilter!=="ALL")?"No events match your filters.":<>No macro events scheduled. {macroNextPending?<>Next up: <button type="button" onClick={()=>setTab("radar")} style={{background:"transparent",border:"none",color:C.gold,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>{macroNextPending.name}, {macroNextPending.date} →</button></>:"No later events are currently known."}</>}
+          </div>}
 
-          {macroAllFiltered.map(evt=>{
+          {!macroLoading&&macroAllFiltered.map(evt=>{
             const imp=MACRO_IMPACT[evt.impact]||MACRO_IMPACT.LOW;
             const surprise=getMacroSurprise(evt);
             const marketImpacts=getMacroMarketImpact(evt);

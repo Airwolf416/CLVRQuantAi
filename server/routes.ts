@@ -203,6 +203,8 @@ import {
 } from "./lib/assetUniverse";
 import { canonicalMarketType, discoveredPerpDenial, registerUniverseHttpRoute } from "./lib/universeHttp";
 import { startStockRefreshWorker } from "./workers/stockRefreshWorker";
+import { MacroCalendarCache } from "./lib/macroCalendarCache";
+import { etWeekStart, parseMacroWeeklyCsv, parseMacroWeeklyXml, validateMacroWeeklyFeed } from "./lib/macroWeeklyFeed";
 import { startDataBus, getDataBusStatus, setDataBusMacroNews } from "./databus";
 import {
   hlData, priceHistory, livePrices, cache, metalsRef,
@@ -7024,7 +7026,7 @@ Stay in scope no matter how the user rephrases.`;
       if (_comboPrior !== null) {
         console.log(`[Calibration] ${ticker} ${_trendDir} prior=${(_comboPrior*100).toFixed(1)}% → bayesian=${bayesian.probability}`);
       }
-      const macroKillSwitch = checkMacroKillSwitch(macroCache.data || []);
+      const macroKillSwitch = checkMacroKillSwitch(macroCache.snapshot);
 
       // Get live funding rate from HL data (crypto only)
       const fundingRate: number = cls === "crypto" ? (hlData[ticker]?.funding || 0) : 0;
@@ -11283,38 +11285,17 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     {bank:"FED",flag:"🇺🇸",name:"FOMC Rate Decision",date:"2026-03-18",time:"14:00 ET",impact:"HIGH",desc:"Federal Reserve rate decision with projections.",currency:"USD"},
   ].map((e, i) => ({ current: "—", forecast: "—", previous: "—", unit: "", ...e, id: i + 1 }));
 
-  let macroCache: { data: any[]; ts: number } = { data: [], ts: 0 };
   // Keeps released events for today so they're never lost when the API stops returning them
   const releasedEventsMemory: Map<string, any> = new Map();
   let releasedMemoryDate = ""; // track which calendar date the memory belongs to
   const MACRO_CACHE_MS = 300000; // 5 minutes — avoids ForexFactory rate limits (429 retry-after ~300s)
-  let ffRateLimitUntil = 0; // don't re-hit FF API until this timestamp passes
-
-  // Returns true if any event is past its scheduled release time but still has no actual value
-  // In that case we skip cache and fetch fresh data immediately
-  function hasPastDueEvents(events: any[]): boolean {
-    const nowMs = Date.now();
-    return events.some((e: any) => {
-      if (e.released || e.actual) return false;
-      try {
-        const [y, mo, d] = e.date.split("-").map(Number);
-        const [h, m] = (e.timeET || "00:00").split(":").map(Number);
-        // Convert ET release time to UTC (use -4 for EDT March-November, -5 for EST)
-        const etOffset = (mo >= 3 && mo <= 11) ? 4 : 5;
-        const releaseMs = Date.UTC(y, mo - 1, d, h + etOffset, m, 0);
-        return releaseMs < nowMs;
-      } catch { return false; }
-    });
-  }
 
   function getDateRange() {
     // Use ET date to match client-side macroTodayStr
     const todayETStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-    const todayStart = new Date(todayETStr + "T00:00:00");
-    const endDate = new Date(todayStart);
-    endDate.setDate(todayStart.getDate() + 14);
-    endDate.setHours(23, 59, 59, 999);
-    return { todayStart, endDate };
+    const endDate = new Date(todayETStr + "T12:00:00Z");
+    endDate.setUTCDate(endDate.getUTCDate() + 14);
+    return { start: todayETStr, end: endDate.toISOString().slice(0, 10) };
   }
 
   const COUNTRY_TO_REGION: Record<string,string> = {
@@ -11335,135 +11316,51 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     } catch { return false; }
   }
 
-  // Build ForexFactory day URLs for a range of days around today
-  function getFFDayUrls(): string[] {
-    const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-    const urls: string[] = [];
-    for (let offset = -3; offset <= 14; offset++) {
-      const d = new Date();
-      d.setDate(d.getDate() + offset);
-      if (d.getDay() === 0 || d.getDay() === 6) continue; // skip weekends
-      const mon = months[d.getMonth()];
-      urls.push(`https://www.forexfactory.com/calendar?day=${mon}${d.getDate()}.${d.getFullYear()}`);
-    }
-    return urls;
-  }
-
-
-  // Parse event JSON objects from ForexFactory website HTML using brace counting
-  // The website embeds full event data (including actual values) that the JSON API lacks
-  function parseFFWebsiteEvents(html: string): any[] {
-    const events: any[] = [];
-    const marker = '{"id":';
-    let pos = 0;
-    while ((pos = html.indexOf(marker, pos)) !== -1) {
-      // Walk forward counting braces to find the closing }
-      let depth = 0;
-      let inStr = false;
-      let i = pos;
-      for (; i < Math.min(html.length, pos + 4000); i++) {
-        const c = html[i];
-        if (inStr) {
-          if (c === "\\") { i++; } // skip escaped char
-          else if (c === '"') { inStr = false; }
-        } else {
-          if (c === '"') { inStr = true; }
-          else if (c === '{') { depth++; }
-          else if (c === '}') {
-            depth--;
-            if (depth === 0) { i++; break; }
-          }
-        }
-      }
-      const objStr = html.slice(pos, i);
-      try {
-        const obj = JSON.parse(objStr);
-        // Only include if it has the fields we expect from calendar events
-        if (obj.ebaseId !== undefined && obj.dateline && obj.currency && obj.impactName) {
-          events.push(obj);
-        }
-      } catch {}
-      pos = pos + 1;
-    }
-    return events;
-  }
-
   async function fetchLiveCalendar(): Promise<any[]> {
-    // Skip if currently rate-limited
-    if (Date.now() < ffRateLimitUntil) {
-      console.log(`[macro] FF rate-limited for ${Math.round((ffRateLimitUntil - Date.now()) / 1000)}s more`);
-      return [];
-    }
+    // Official FF weekly JSON feed. The website's day pages return Cloudflare
+    // 403 and scraping 15 of them on each refresh triggers rate limits.
+    const response = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", {
+      signal: AbortSignal.timeout(12000),
+    });
+    // FF occasionally rate-limits formats independently. All three are
+    // complete official weekly exports, not scraped day fragments.
+    const raw = response.ok ? await response.json() : await (async () => {
+      const csvResponse = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.csv", {
+        signal: AbortSignal.timeout(12000),
+      });
+      if (csvResponse.ok) return parseMacroWeeklyCsv(await csvResponse.text());
+      const xmlResponse = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.xml", {
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!xmlResponse.ok) throw new Error(`FF weekly calendar HTTP ${response.status}/${csvResponse.status}/${xmlResponse.status}`);
+      return parseMacroWeeklyXml(await xmlResponse.text());
+    })();
+    // An empty valid array is genuinely empty, unlike a network/parser failure.
+    const calendar = validateMacroWeeklyFeed(raw, getDateRange().start);
     const RELEVANT_CURRENCIES = new Set(["USD","EUR","GBP","JPY","CAD","AUD","CHF","NZD"]);
-    const allRaw: any[] = [];
-
-    const seenEventIds = new Set<number>();
-    const dayUrls = getFFDayUrls();
-    let rateLimited = false;
-
-    try {
-      // Fetch all day pages in parallel (3 at a time) to get actual values for each day
-      const BATCH_SIZE = 3;
-      for (let b = 0; b < dayUrls.length && !rateLimited; b += BATCH_SIZE) {
-        const batch = dayUrls.slice(b, b + BATCH_SIZE);
-        const results = await Promise.allSettled(batch.map(url =>
-          fetch(url, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.9",
-            },
-            signal: AbortSignal.timeout(12000),
-          }).then(async res => ({ url, res, html: res.ok ? await res.text() : null }))
-        ));
-
-        for (const result of results) {
-          if (result.status !== "fulfilled") continue;
-          const { url, res, html } = result.value;
-          if (res.status === 429) {
-            const retryAfter = parseInt(res.headers.get("retry-after") || "300") * 1000;
-            ffRateLimitUntil = Date.now() + retryAfter;
-            console.log(`[macro] FF website 429 — backing off ${Math.round(retryAfter / 1000)}s`);
-            rateLimited = true; break;
-          }
-          if (!html) { console.log(`[macro] FF ${res.status} for ${url}`); continue; }
-          const parsed = parseFFWebsiteEvents(html);
-          let added = 0;
-          for (const obj of parsed) {
-            if (!RELEVANT_CURRENCIES.has(obj.currency)) continue;
-            if (obj.name === "Bank Holiday") continue;
-            if (seenEventIds.has(obj.id)) continue; // dedup across pages
-            seenEventIds.add(obj.id);
-            allRaw.push(obj);
-            added++;
-          }
-          console.log(`[macro] FF ${url.slice(-15)}: ${parsed.length} parsed, ${added} new`);
-        }
-      }
-    } catch {}
-
-    if (!allRaw.length) return [];
-
-    return allRaw.map((e: any, i: number) => {
-      const dt = new Date(e.dateline * 1000);
-      const dateStr = dt.toISOString().slice(0, 10);
+    return calendar.filter(e => RELEVANT_CURRENCIES.has(e.country as string) &&
+      e.impact !== "Holiday" && e.title !== "Bank Holiday").map((e) => {
+      const dt = new Date(e.date as string);
+      const dateStr = dt.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
       const timeET = dt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" });
       const actual = e.actual && e.actual !== "" ? String(e.actual) : null;
       const forecast = e.forecast && e.forecast !== "" ? String(e.forecast) : "—";
       const previous = e.previous && e.previous !== "" ? String(e.previous) : "—";
       const released = actual !== null;
       const isPast = computeIsPast(dateStr, timeET);
-      const cc = COUNTRY_TO_CODE[e.currency] || e.currency?.slice(0, 2) || "US";
+      const currency = e.country as string;
+      const name = e.title as string;
+      const cc = COUNTRY_TO_CODE[currency] || currency.slice(0, 2);
       return {
-        id: 10000 + i,
-        bank: mapCountryToBank(e.currency, e.name),
-        flag: countryFlag(e.currency),
-        name: e.name,
+        id: `ff-${currency}-${e.date}-${name}`,
+        bank: mapCountryToBank(currency, name),
+        flag: countryFlag(currency),
+        name,
         date: dateStr,
         time: timeET + " ET",
         timeET,
         country: cc,
-        region: COUNTRY_TO_REGION[e.currency] || cc,
+        region: COUNTRY_TO_REGION[currency] || cc,
         current: previous,
         forecast,
         previous,
@@ -11471,9 +11368,9 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         unit: "",
         released,
         isPast,
-        impact: e.impactName === "high" ? "HIGH" : e.impactName === "medium" ? "MED" : "LOW",
-        desc: `${e.name}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : isPast ? " Data not yet available." : " Pending release."}`,
-        currency: e.currency,
+        impact: e.impact === "High" ? "HIGH" : e.impact === "Medium" ? "MED" : "LOW",
+        desc: `${name}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : isPast ? " Data not yet available." : " Pending release."}`,
+        currency,
         live: true,
       };
     });
@@ -11500,7 +11397,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     return flags[country] || "🌐";
   }
 
-  app.get("/api/macro", async (_req, res) => {
+  const macroCache = new MacroCalendarCache(fetchLiveCalendar, MACRO_CACHE_MS);
+  app.get("/api/macro", async (req, res) => {
     try {
       // Today's date in ET timezone — matches client's macroTodayStr
       const todayETStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
@@ -11511,25 +11409,15 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         releasedMemoryDate = todayETStr;
       }
 
-      let liveEvents: any[] = [];
-      const cacheExpired = Date.now() - macroCache.ts > MACRO_CACHE_MS;
-      const pastDue = !cacheExpired && macroCache.data.length > 0 && hasPastDueEvents(macroCache.data);
-      if (cacheExpired || pastDue) {
-        const fetched = await fetchLiveCalendar();
-        if (fetched.length > 0) {
-          macroCache = { data: fetched, ts: Date.now() };
-          updateSharedMacroCache(fetched);
-          liveEvents = fetched;
-        } else if (macroCache.data.length > 0) {
-          liveEvents = macroCache.data;
-        } else {
-          macroCache = { data: [], ts: Date.now() - MACRO_CACHE_MS + 60000 };
-          liveEvents = [];
-        }
-      } else {
-        liveEvents = macroCache.data;
-        if (liveEvents.length > 0) updateSharedMacroCache(liveEvents);
+      const { events, stale, fetchedAt } = await macroCache.get(req.query.retry === "1");
+      let liveEvents = events;
+      if (stale && etWeekStart(new Date(fetchedAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" })) !==
+        etWeekStart(todayETStr)) {
+        throw new Error("Previous week's calendar is not evidence of this week's events");
       }
+      if (!stale) updateSharedMacroCache(liveEvents);
+      res.setHeader("X-Macro-Stale", stale ? "1" : "0");
+      res.setHeader("X-Macro-Fetched-At", new Date(fetchedAt).toISOString());
 
       // Update released events memory: accumulate any released events from today
       liveEvents.forEach((e: any) => {
@@ -11543,20 +11431,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const memoryEvents = Array.from(releasedEventsMemory.values()).filter((e: any) => !liveKeys.has(`${e.date}-${e.name}`));
       liveEvents = [...liveEvents, ...memoryEvents];
 
-      const { todayStart, endDate } = getDateRange();
-      const existingDates = new Set(liveEvents.map((e: any) => `${e.date}-${e.name}`));
-      // For MACRO_2026 fallback events, compute isPast so they don't show as "PENDING" when past their date
-      const macro2026Enriched = MACRO_2026
-        .filter(e => !existingDates.has(`${e.date}-${e.name}`))
-        .map(e => ({ ...e, isPast: computeIsPast(e.date, (e.time || "08:30 ET").replace(" ET","").trim()) }));
-      // FIX 1: Deduplicate by composite key (name + date + time) before returning
-      const rawCombined = [
-        ...liveEvents,
-        ...macro2026Enriched,
-      ].filter(e => {
-        const d = new Date(e.date);
-        return d >= todayStart && d <= endDate;
-      });
+      const { start, end } = getDateRange();
+      const rawCombined = liveEvents.filter(e => e.date >= start && e.date <= end);
 
       const dedupMap: Record<string, any> = {};
       for (const ev of rawCombined) {
@@ -11576,11 +11452,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
       res.json(combined);
     } catch (e: any) {
-      const { todayStart, endDate } = getDateRange();
-      res.json(MACRO_2026.filter(e => {
-        const d = new Date(e.date);
-        return d >= todayStart && d <= endDate;
-      }).map(e => ({ ...e, isPast: computeIsPast(e.date, (e.time || "08:30 ET").replace(" ET","").trim()) })));
+      res.status(503).json({ error: "Macro calendar unavailable. Please retry." });
     }
   });
 
