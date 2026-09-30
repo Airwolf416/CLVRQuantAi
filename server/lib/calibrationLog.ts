@@ -81,10 +81,8 @@ export function mapOutcomeToWinLoss(
     case "TP1_HIT":
     case "TP2_HIT":
     case "TP3_HIT":
-    case "EXPIRED_WIN":
       return "win";
     case "SL_HIT":
-    case "EXPIRED_LOSS":
       return "loss";
     default:
       return "void";

@@ -3,6 +3,7 @@ import {
   ScanLine, Upload, X, Zap, Clock, TrendingUp, Calendar,
   Info, Share2, RotateCcw, AlertTriangle, Camera, Sparkles,
 } from "lucide-react";
+import { apiFetch } from "../lib/apiClient";
 import LiveOverlayChart from "../components/chartai/LiveOverlayChart.jsx";
 
 // AI provider tagline shown in the header so users know which model is
@@ -105,7 +106,7 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
   // ── Usage counter ─────────────────────────────────────────────────────────
   const refreshUsage = useCallback(async () => {
     try {
-      const r = await fetch("/api/chart-ai/usage", { credentials: "include" });
+      const r = await apiFetch("/api/chart-ai/usage", { credentials: "include" });
       if (r.ok) setUsage(await r.json());
     } catch {}
   }, []);
@@ -155,7 +156,7 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
       fd.append("image", file);
       fd.append("horizon", horizon);
       if (asset.trim()) fd.append("asset", asset.trim());
-      const r = await fetch("/api/chart-ai/analyze", {
+      const r = await apiFetch("/api/chart-ai/analyze", {
         method: "POST",
         credentials: "include",
         body: fd,
@@ -218,7 +219,7 @@ export default function ChartAITab({ C, MONO, SERIF, SANS, isMobile }) {
       fd.append("image", new File([blob], `live-${liveSym || "chart"}.png`, { type: "image/png" }));
       fd.append("horizon", horizon);
       if (tickerForPrompt) fd.append("asset", tickerForPrompt);
-      const r = await fetch("/api/chart-ai/analyze", {
+      const r = await apiFetch("/api/chart-ai/analyze", {
         method: "POST",
         credentials: "include",
         body: fd,

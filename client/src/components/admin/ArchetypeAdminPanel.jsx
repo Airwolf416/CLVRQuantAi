@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { apiFetch } from "../../lib/apiClient";
 
 const MONO = "IBM Plex Mono, ui-monospace, monospace";
 const SERIF = "Playfair Display, ui-serif, serif";
@@ -51,8 +52,8 @@ export default function ArchetypeAdminPanel() {
     setErr(null);
     try {
       const [s, l] = await Promise.all([
-        fetch(`/api/admin/archetype/summary?lookbackDays=${lookback}`, { credentials: "include" }),
-        fetch(`/api/admin/archetype/refresh-log`, { credentials: "include" }),
+        apiFetch(`/api/admin/archetype/summary?lookbackDays=${lookback}`, { credentials: "include" }),
+        apiFetch(`/api/admin/archetype/refresh-log`, { credentials: "include" }),
       ]);
       if (!s.ok) throw new Error(`summary HTTP ${s.status}`);
       setSummary(await s.json());
@@ -69,7 +70,7 @@ export default function ArchetypeAdminPanel() {
   const onRefreshNow = async () => {
     setRefreshing(true);
     try {
-      const r = await fetch(`/api/admin/archetype/refresh-stats`, { method: "POST", credentials: "include" });
+      const r = await apiFetch(`/api/admin/archetype/refresh-stats`, { method: "POST", credentials: "include" });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) {
         alert(`Refresh failed: ${body?.message || body?.error || r.status}`);

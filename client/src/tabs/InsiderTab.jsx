@@ -1,5 +1,6 @@
 // ── InsiderTab — SEC EDGAR Form 4 insider cluster buys & large purchases ───
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "../lib/apiClient";
 
 const C = {
   bg:"#050709", navy:"#080d18", panel:"#0c1220",
@@ -80,7 +81,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/insider", { credentials: "include" });
+      const r = await apiFetch("/api/insider", { credentials: "include" });
       if (r.status === 429) {
         // Rate-limited upstream — show friendly note, keep prior data, auto-retry in 60s
         setError(null);
@@ -111,7 +112,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
     if (!isPro || !scanLoading) return;
     const poll = setInterval(async () => {
       try {
-        const r = await fetch("/api/insider/status", { credentials: "include" });
+        const r = await apiFetch("/api/insider/status", { credentials: "include" });
         if (!r.ok) return;
         const s = await r.json();
         setScanStatus({ phase: s.phase, done: s.done, total: s.total });

@@ -51,6 +51,13 @@ export interface LogSignalInput {
   // "live". The 90d backfill script writes the other two values.
   classificationSource?: "live" | "backfill" | "backfill_unrecoverable";
   classificationDiagnostics?: ClassificationDiagnostics;
+  entryFillStatus?: "VERIFIED" | "UNVERIFIED";
+  entryFilledAt?: Date | null;
+  entryFillEvidence?: Record<string, unknown> | null;
+  holdHorizonPolicy?: string | null;
+  observationMethodVersion?: string | null;
+  /** Internal-only versioned policy/cost/calibration input; never serialize. */
+  signalPolicySnapshot?: Record<string, unknown> | null;
 }
 
 const toDec = (v: any): string | null => {
@@ -88,6 +95,16 @@ export async function logSignal(input: LogSignalInput): Promise<number | null> {
       kronos: input.kronos || false,
       killClockHours: input.killClockHours ?? null,
       killClockExpires,
+      entryFillStatus: input.entryFillStatus ?? "UNVERIFIED",
+      entryFilledAt: input.entryFilledAt ?? null,
+      entryFillEvidence: input.entryFillEvidence ?? (input.entryFillStatus === "VERIFIED" ? {
+        kind: "virtual_mark_entry_snapshot", exchangeExecution: false,
+        fillVerification: "observed_mark_not_exchange_execution",
+        observedAt: new Date().toISOString(), source: "live_mark", version: "mark_price_1m_v1",
+      } : null),
+      holdHorizonPolicy: input.holdHorizonPolicy ?? (input.killClockHours ? `kill_clock_${input.killClockHours}h` : null),
+      observationMethodVersion: input.observationMethodVersion ?? "mark_price_1m_v1",
+      signalPolicySnapshot: input.signalPolicySnapshot ?? null,
       outcome: "PENDING",
       thesis: input.thesis ?? null,
       invalidation: input.invalidation ?? null,

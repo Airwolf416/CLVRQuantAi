@@ -21,6 +21,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io as socketIO } from "socket.io-client";
+import { apiFetch } from "../lib/apiClient";
 
 const HL_API        = "https://api.hyperliquid.xyz/info";
 const REFRESH_MS    = 15_000;
@@ -278,7 +279,7 @@ const SPOT_ALIASES = {
 async function fetchSpotViaBackend(symbols) {
   if (!symbols || symbols.length === 0) return {};
   try {
-    const res = await fetch("/api/finnhub", { credentials: "include", signal: AbortSignal.timeout(12_000) });
+    const res = await apiFetch("/api/finnhub", { credentials: "include", signal: AbortSignal.timeout(12_000) });
     if (!res.ok) return {};
     const data = await res.json();
     const out = {};
@@ -311,7 +312,7 @@ async function fetchSpotViaBackend(symbols) {
 // Also fetch VIX and macro spot assets from the backend crypto endpoint
 async function fetchCryptoSpot() {
   try {
-    const res = await fetch("/api/crypto", { credentials: "include", signal: AbortSignal.timeout(10_000) });
+    const res = await apiFetch("/api/crypto", { credentials: "include", signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return {};
     const data = await res.json();
     const out = {};
@@ -446,7 +447,7 @@ function computeMarketMode(perpMap, spotMap, sentimentScore) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function fetchSentiment() {
   try {
-    const res = await fetch("/api/cryptopanic", { credentials: "include", signal: AbortSignal.timeout(8_000) });
+    const res = await apiFetch("/api/cryptopanic", { credentials: "include", signal: AbortSignal.timeout(8_000) });
     if (!res.ok) return { score: 50, label: "NEUTRAL", headlines: [] };
     const data = await res.json();
     const results = data?.results || data || [];

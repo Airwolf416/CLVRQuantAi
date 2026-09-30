@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { apiFetch } from "../lib/apiClient";
 
 export default function PaymentSuccessPage() {
   const [status, setStatus] = useState("loading");
@@ -8,7 +9,7 @@ export default function PaymentSuccessPage() {
   useEffect(() => {
     const sessionId = new URLSearchParams(window.location.search).get("session_id");
     if (!sessionId) { setStatus("error"); return; }
-    fetch(`/api/stripe/checkout-session-status?session_id=${encodeURIComponent(sessionId)}`, { credentials: "include" })
+    apiFetch(`/api/stripe/checkout-session-status?session_id=${encodeURIComponent(sessionId)}`, { credentials: "include" })
       .then(r => r.json())
       .then(data => {
         if (data?.status === "complete") {
@@ -16,7 +17,7 @@ export default function PaymentSuccessPage() {
           setPlan(data.plan);
           setEmail(data.customer_email);
           // Refresh tier in DB via the existing subscription endpoint (back-compat)
-          fetch(`/api/stripe/subscription?session_id=${encodeURIComponent(sessionId)}`, { credentials: "include" }).catch(() => {});
+          apiFetch(`/api/stripe/subscription?session_id=${encodeURIComponent(sessionId)}`, { credentials: "include" }).catch(() => {});
         } else if (data?.status === "open") {
           setStatus("open");
         } else {

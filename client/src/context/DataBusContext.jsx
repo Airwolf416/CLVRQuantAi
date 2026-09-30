@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import { apiFetch } from "../lib/apiClient";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DataBusContext — CLVRQuant AI
@@ -82,7 +83,7 @@ export function DataBusProvider({ children }) {
     if (abortRef.current) abortRef.current.abort();
     abortRef.current = new AbortController();
     try {
-      const res = await fetch("/api/databus/status", {
+      const res = await apiFetch("/api/databus/status", {
         credentials: "include",
         signal: AbortSignal.timeout(12_000),
       });

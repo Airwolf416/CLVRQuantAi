@@ -17,6 +17,7 @@
 
 import { calcATR14, detectMicrostructure, type Candle } from "../services/ta";
 import { logRejection, type RejectionReason } from "./rejectionLog";
+import { enforceGeometry } from "./geometryGuard";
 
 export type HoldHorizon = "scalp" | "swing";       // <4h vs ≥4h
 
@@ -275,54 +276,31 @@ export function applySignalHardening(input: HardeningInput): HardeningResult {
     return { action: "REJECT", reason, detail, adjustments };
   };
 
-  // ── Gate 0: Directional geometry coherence (REPAIR, runs before all others) ─
+  // ── Gate 0: directional geometry coherence ───────────────────────────────
   // Every downstream gate measures distance with Math.abs(), so a level on the
   // WRONG side of entry for the trade's `direction` (e.g. a SHORT whose target
   // sits ABOVE entry) still yields a healthy positive R:R and would slip
   // straight through. Enforce the invariant here and mirror any offending level
   // across entry so entry / stop / targets are always coherent with direction.
-  // MODE="repair" fixes in place (matches the /api/quant inline behaviour and
-  // keeps signal throughput up); MODE="reject" would drop-and-log instead.
-  const MODE: "repair" | "reject" = "repair";
+  // Repair in place (matches the /api/quant inline behaviour and keeps signal
+  // throughput up). Rejection policy belongs to the canonical final geometry
+  // and emission-policy stages, not this legacy hardening helper.
   {
-    const { entry, direction } = input;
-    const slDist = Math.abs(entry - stopLoss) || entry * 0.01;
-    const R1 = 1.5, R2 = 2.5;   // default TP R-multiples when a target must be rebuilt
-    const hasTp2 = Number.isFinite(tp2) && tp2 > 0;
-    const geomBad =
-      Number.isFinite(entry) && Number.isFinite(stopLoss) && Number.isFinite(tp1) &&
-      (direction === "LONG"
-        ? (stopLoss >= entry || tp1 <= entry || (hasTp2 && tp2 <= entry))
-        : (stopLoss <= entry || tp1 >= entry || (hasTp2 && tp2 >= entry)));
-    if (geomBad) {
-      if (MODE === "reject") {
-        return reject(
-          "DIRECTION_GEOMETRY_MISMATCH",
-          `${direction} levels inverted vs entry (entry=${entry}, sl=${stopLoss}, tp1=${tp1}${hasTp2 ? `, tp2=${tp2}` : ""})`,
-        );
-      }
-      const fixes: string[] = [];
-      if (direction === "LONG") {
-        if (stopLoss >= entry)      { const b = stopLoss; stopLoss = entry - slDist;     fixes.push(`SL ${b}→${stopLoss.toFixed(6)}`); }
-        if (tp1 <= entry)           { const b = tp1;      tp1 = entry + slDist * R1;      fixes.push(`TP1 ${b}→${tp1.toFixed(6)}`); }
-        if (hasTp2 && tp2 <= entry) { const b = tp2;      tp2 = entry + slDist * R2;      fixes.push(`TP2 ${b}→${tp2.toFixed(6)}`); }
-      } else {
-        if (stopLoss <= entry)      { const b = stopLoss; stopLoss = entry + slDist;     fixes.push(`SL ${b}→${stopLoss.toFixed(6)}`); }
-        if (tp1 >= entry)           { const b = tp1;      tp1 = entry - slDist * R1;      fixes.push(`TP1 ${b}→${tp1.toFixed(6)}`); }
-        if (hasTp2 && tp2 >= entry) { const b = tp2;      tp2 = entry - slDist * R2;      fixes.push(`TP2 ${b}→${tp2.toFixed(6)}`); }
-      }
-      // A partial repair can leave the ladder non-monotonic (a rebuilt TP1 landing
-      // beyond an already-valid but nearby TP2, or vice-versa). Keep TP2 strictly
-      // beyond TP1 in the trade direction so R-multiples stay coherent downstream.
-      if (hasTp2) {
-        if (direction === "LONG"  && tp2 <= tp1) { const b = tp2; tp2 = tp1 + slDist; fixes.push(`TP2(order) ${b}→${tp2.toFixed(6)}`); }
-        if (direction === "SHORT" && tp2 >= tp1) { const b = tp2; tp2 = tp1 - slDist; fixes.push(`TP2(order) ${b}→${tp2.toFixed(6)}`); }
-      }
-      if (fixes.length) {
-        const detail = `Direction geometry repair (${direction}): ${fixes.join("; ")}`;
-        adjustments.push({ type: "direction_repair", detail });
-        console.warn(`[hardening] ${input.token} ${direction}: inverted levels auto-corrected — ${fixes.join("; ")}`);
-      }
+    // Do not maintain a second definition of "final" here.  The legacy
+    // hardener still needs coherent levels for its mechanical gates, but the
+    // canonical guard owns both repair and unusable-geometry detection.
+    const geometry = enforceGeometry(
+      { direction: input.direction, entry: input.entry, stopLoss, tp1, tp2 },
+      { symbol: input.token, source: input.source },
+    );
+    stopLoss = geometry.stopLoss;
+    tp1 = geometry.tp1;
+    tp2 = geometry.tp2 ?? input.tp2;
+    if (geometry.corrected) {
+      adjustments.push({
+        type: "direction_repair",
+        detail: `Canonical geometry repair (${input.direction}): ${geometry.correctedLegs.join(", ")}`,
+      });
     }
   }
 

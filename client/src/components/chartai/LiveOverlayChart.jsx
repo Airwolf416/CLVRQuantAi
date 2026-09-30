@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { apiFetch } from "../../lib/apiClient";
 import {
   ComposedChart, Line, XAxis, YAxis, ReferenceLine, ReferenceArea,
   ResponsiveContainer, Tooltip,
@@ -53,7 +54,7 @@ export default function LiveOverlayChart({ symbol, onSymbolChange, onLevelsChang
   // Load eligible symbol list once for the selector
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/execution_levels/eligible", { credentials: "include" })
+    apiFetch("/api/execution_levels/eligible", { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(j => { if (!cancelled && j) setEligible(j); })
       .catch(() => {});
@@ -90,8 +91,8 @@ export default function LiveOverlayChart({ symbol, onSymbolChange, onLevelsChang
       }
       try {
         const [barsRes, lvlRes] = await Promise.all([
-          fetch(`/api/execution_levels/${sym}/bars`, { credentials: "include" }),
-          fetch(`/api/execution_levels/${sym}`,      { credentials: "include" }),
+          apiFetch(`/api/execution_levels/${sym}/bars`, { credentials: "include" }),
+          apiFetch(`/api/execution_levels/${sym}`,      { credentials: "include" }),
         ]);
         if (cancelled) return;
         if (barsRes.status === 404 || lvlRes.status === 404) {

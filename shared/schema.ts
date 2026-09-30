@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, serial, integer, decimal, jsonb, doublePrecision, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, serial, integer, decimal, jsonb, doublePrecision, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -72,6 +72,9 @@ export const webauthnCredentials = pgTable("webauthn_credentials", {
   id: serial("id").primaryKey(),
   userId: text("user_id").notNull(),
   credentialId: text("credential_id").notNull().unique(),
+  // Existing ID-only rows are non-authenticating. A future verified enrollment
+  // must store public-key material and explicitly clear this marker.
+  isLegacy: boolean("is_legacy").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -164,6 +167,25 @@ export const aiSignalLog = pgTable("ai_signal_log", {
   outcome: varchar("outcome", { length: 20 }).default("PENDING"),// 'PENDING' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED_WIN' | 'EXPIRED_LOSS'
   pnlPct: decimal("pnl_pct", { precision: 10, scale: 4 }),
   resolvedAt: timestamp("resolved_at"),
+  // Sampled (one-minute mark-price) directional high-water marks. These are
+  // intentionally not candle/tick extrema.
+  observedMfePct: decimal("observed_mfe_pct", { precision: 10, scale: 4 }),
+  observedMaePct: decimal("observed_mae_pct", { precision: 10, scale: 4 }),
+  observedMfeAt: timestamp("observed_mfe_at"),
+  observedMaeAt: timestamp("observed_mae_at"),
+  entryFillStatus: varchar("entry_fill_status", { length: 20 }).default("UNVERIFIED").notNull(),
+  entryFilledAt: timestamp("entry_filled_at"),
+  entryFillEvidence: jsonb("entry_fill_evidence"),
+  observationCursor: jsonb("observation_cursor"),
+   // Durable timestamp of the last sampled point consumed by the resolver.
+   // JSON cursor retains the point identity/price for audit; this typed field
+   // is the restart-safe ordering boundary.
+   observationCursorAt: timestamp("observation_cursor_at"),
+  holdHorizonPolicy: varchar("hold_horizon_policy", { length: 40 }),
+  observationMethodVersion: varchar("observation_method_version", { length: 40 }),
+  calibrationLabel: varchar("calibration_label", { length: 20 }),
+  calibrationExclusionReason: varchar("calibration_exclusion_reason", { length: 80 }),
+  signalPolicySnapshot: jsonb("signal_policy_snapshot"),
   thesis: text("thesis"),
   invalidation: text("invalidation"),
   scores: jsonb("scores"),
@@ -183,6 +205,96 @@ export const aiSignalLog = pgTable("ai_signal_log", {
 
 export type AiSignalLogRecord = typeof aiSignalLog.$inferSelect;
 export type InsertAiSignalLog = typeof aiSignalLog.$inferInsert;
+
+// Persisted shadow-only calibration snapshots. `dimensions` is versioned so
+// the bucket contract can evolve without mixing incompatible labels.
+export const signalCalibration = pgTable("signal_calibration", {
+  id: serial("id").primaryKey(),
+  modelVersion: varchar("model_version", { length: 40 }).notNull(),
+  bucketKey: text("bucket_key").notNull(),
+  dimensions: jsonb("dimensions").notNull(),
+  wins: integer("wins").notNull(),
+  sampleSize: integer("sample_size").notNull(),
+  pWin: decimal("p_win", { precision: 8, scale: 6 }).notNull(),
+  backoffLevel: integer("backoff_level").notNull(),
+  lookbackStart: timestamp("lookback_start", { withTimezone: true }).notNull(),
+  lookbackEnd: timestamp("lookback_end", { withTimezone: true }).notNull(),
+  computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({ uniqueVersionBucket: uniqueIndex("signal_calibration_version_bucket_uidx").on(t.modelVersion, t.bucketKey) }));
+
+export const signalPolicyLeases = pgTable("signal_policy_leases", {
+  leaseName: text("lease_name").primaryKey(),
+  holder: text("holder").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const signalPolicyAudit = pgTable("signal_policy_audit", {
+  id: serial("id").primaryKey(),
+  source: varchar("source", { length: 40 }).notNull(),
+  decisionState: varchar("decision_state", { length: 40 }).notNull(),
+  policyMode: varchar("policy_mode", { length: 10 }).notNull(),
+  suppressed: boolean("suppressed").notNull(),
+  snapshot: jsonb("snapshot").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({ byCreated: index("signal_policy_audit_created_idx").on(t.createdAt) }));
+
+export const hourlyMarketCloses = pgTable("hourly_market_closes", {
+  id: serial("id").primaryKey(),
+  symbol: varchar("symbol", { length: 32 }).notNull(),
+  closeAt: timestamp("close_at", { withTimezone: true }).notNull(),
+  closePrice: decimal("close_price", { precision: 24, scale: 8 }).notNull(),
+  sourceVersion: varchar("source_version", { length: 40 }).notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  bySymbolClose: index("hourly_market_closes_symbol_close_idx").on(t.symbol, t.closeAt),
+}));
+
+// Durable Hyperliquid discovery state. Database identity deliberately remains
+// (venue, rawSymbol), so contract aliases such as kPEPE never collapse.
+export const assetUniverse = pgTable("asset_universe", {
+  venue: varchar("venue", { length: 24 }).notNull(),
+  rawSymbol: varchar("raw_symbol", { length: 64 }).notNull(),
+  displaySymbol: varchar("display_symbol", { length: 64 }).notNull(),
+  canonicalSymbol: varchar("canonical_symbol", { length: 64 }).notNull(),
+  marketType: varchar("market_type", { length: 16 }).notNull(),
+  assetClass: varchar("asset_class", { length: 16 }).notNull(),
+  sizeDecimals: integer("size_decimals").notNull(),
+  priceDecimals: integer("price_decimals"),
+  maxLeverage: decimal("max_leverage", { precision: 12, scale: 4 }),
+  markPrice: decimal("mark_price", { precision: 30, scale: 12 }).notNull(),
+  dayVolumeUsd: decimal("day_volume_usd", { precision: 30, scale: 4 }).notNull(),
+  openInterestRaw: decimal("open_interest_raw", { precision: 30, scale: 8 }),
+  openInterestUsd: decimal("open_interest_usd", { precision: 30, scale: 4 }),
+  funding: decimal("funding", { precision: 18, scale: 10 }),
+  status: varchar("status", { length: 16 }).notNull(),
+  eligible: boolean("eligible").notNull(),
+  eligibilityReasons: text("eligibility_reasons").array().notNull(),
+  scorerSupported: boolean("scorer_supported").notNull(),
+  scorerSupportReason: varchar("scorer_support_reason", { length: 64 }),
+  discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+  lastSuccessfulRefreshAt: timestamp("last_successful_refresh_at", { withTimezone: true }).notNull(),
+  floorMetSince: timestamp("floor_met_since", { withTimezone: true }),
+  listingEvidence: jsonb("listing_evidence").notNull(),
+  missingRefreshCount: integer("missing_refresh_count").notNull().default(0),
+  lastMissingAt: timestamp("last_missing_at", { withTimezone: true }),
+  snapshotVersion: integer("snapshot_version").notNull(),
+  schemaVersion: varchar("schema_version", { length: 40 }).notNull(),
+  rawMetadata: jsonb("raw_metadata").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  identity: uniqueIndex("asset_universe_venue_raw_uidx").on(t.venue, t.rawSymbol),
+  picker: index("asset_universe_picker_idx").on(t.venue, t.status, t.scorerSupported),
+}));
+
+export const assetUniverseSnapshots = pgTable("asset_universe_snapshots", {
+  id: serial("id").primaryKey(),
+  schemaVersion: varchar("schema_version", { length: 40 }).notNull(),
+  assetCount: integer("asset_count").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+export type AssetUniverseRow = typeof assetUniverse.$inferSelect;
 
 // ── News Items (persisted CryptoPanic feed for analytics + correlation) ──────
 // Live signal gating reads from the in-memory cache for speed; this table is

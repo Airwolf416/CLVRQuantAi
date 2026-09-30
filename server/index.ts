@@ -20,6 +20,8 @@ import { startAdaptiveThresholds, suppressHistoricalBleeders } from "./lib/adapt
 import { startCalibration } from "./lib/calibration";
 import { startCircuitBreaker } from "./lib/circuitBreaker";
 import { initSocketIO } from "./socketServer";
+import { PostgresRateLimitStore, isAuthMeRead } from "./lib/postgresRateLimitStore";
+import { isTrustedCookieMutation } from "./lib/csrfOrigin";
 
 let shuttingDown = false;
 const _origExit = process.exit;
@@ -70,10 +72,34 @@ const globalLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => !req.path.startsWith("/api/"),
+  skip: (req) => !req.path.startsWith("/api/") || (req.method === "GET" && req.path === "/api/macro") || isAuthMeRead(req),
   message: { error: "Too many requests. Please slow down." },
+  store: new PostgresRateLimitStore("global"),
 });
 app.use(globalLimiter);
+
+// Session checks have their own bounded allowance, independent of dashboard
+// polling. Sign-in, sign-up and other auth requests stay on their existing limits.
+app.get("/api/auth/me", rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method !== "GET",
+  message: { error: "Account check limit reached. Please retry shortly." },
+  store: new PostgresRateLimitStore("auth-me"),
+}));
+
+// Cached calendar reads have an independent bounded budget: dashboard polling
+// must not exhaust their allowance and make the schedule disappear on reload.
+app.use("/api/macro", rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Calendar request limit reached. Please retry shortly." },
+  store: new PostgresRateLimitStore("macro-calendar"),
+}));
 
 // ── AI/Quant endpoint rate limiter — 30 requests / 15 minutes per IP ──────────
 export const aiLimiter = rateLimit({
@@ -87,6 +113,7 @@ export const aiLimiter = rateLimit({
     const userId = (req.session as any)?.userId;
     return userId ? `user:${userId}` : req.ip || "anon";
   },
+  store: new PostgresRateLimitStore("ai"),
 });
 
 // ── Stripe webhook — MUST be registered before app.use(express.json()) ───────
@@ -468,9 +495,10 @@ app.use((req, res, next) => {
 
 app.use(express.urlencoded({ extended: false }));
 
-import session, { Session } from "express-session";
+import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { pool } from "./db";
+import { bearerHydrationMiddleware, sessionPolicyMiddleware } from "./lib/sessionSecurity";
 const PgSession = connectPgSimple(session);
 app.set("trust proxy", 1);
 // Wrapped in try/catch so a DB error here (e.g. Postgres in recovery mode,
@@ -520,39 +548,33 @@ try {
 // req.session.save — routes that legitimately call req.session.save() on
 // real (cookie) sessions still work normally, and the canonical bearer
 // session row in user_sessions is never overwritten with an empty hydrate.
-app.use(async (req: Request, res: Response, next: NextFunction) => {
-  const sess = req.session as Session & { userId?: string };
-  if (sess?.userId) return next();
-  // Sign-in and sign-up create their own real session via password auth and
-  // must persist normally; skip the bearer override on those paths so the
-  // sid we return in the response body is actually saved to the store.
-  if (req.path === "/api/auth/signin" || req.path === "/api/auth/signup") return next();
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith("Bearer ")) return next();
-  const token = auth.slice(7).trim();
-  if (!token) return next();
-  try {
-    const r = await pool.query(
-      "SELECT sess FROM user_sessions WHERE sid = $1 AND expire > NOW()",
-      [token]
-    );
-    if (r.rows.length > 0) {
-      const sessData = r.rows[0].sess as { userId?: string } | null;
-      const userId = sessData?.userId;
-      if (userId) {
-        // Non-enumerable: invisible to JSON.stringify, so express-session's
-        // modified-hash check sees no change and skips auto-save. Property
-        // access (req.session.userId) works exactly the same for routes.
-        Object.defineProperty(req.session, "userId", {
-          value: userId,
-          writable: true,
-          enumerable: false,
-          configurable: true,
-        });
-      }
-    }
-  } catch (e) {
-    // Silently fall through with no auth — the route will 401 itself.
+app.use(bearerHydrationMiddleware);
+
+// Enforce the same lifecycle against the canonical stored cookie or bearer
+// session. This intentionally does not record activity; only heartbeat does.
+app.use(sessionPolicyMiddleware);
+
+// Cookie-authenticated mutations reject explicit cross-site browser requests.
+// Bearer compatibility is not cookie/CSRF authentication and is handled by the
+// canonical session middleware above.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+  const context = (req as any).canonicalAuthSession;
+  if (context?.kind !== "cookie" || !context.data?.userId) return next();
+  const origin = req.get("origin");
+  const trustedOrigins = [
+    "https://clvrquantai.com",
+    "https://www.clvrquantai.com",
+    process.env.APP_URL,
+    ...(process.env.REPLIT_DOMAINS || "").split(",").filter(Boolean).map(domain => `https://${domain.trim()}`),
+  ].filter((value): value is string => !!value);
+  if (!isTrustedCookieMutation({
+    origin,
+    fetchSite: req.get("sec-fetch-site"),
+    requestOrigin: `${req.protocol}://${req.get("host")}`,
+    trustedOrigins,
+  })) {
+    return res.status(403).json({ error: "Cross-site request rejected", code: "CSRF_ORIGIN_REJECTED" });
   }
   next();
 });
@@ -797,6 +819,22 @@ process.on("uncaughtException", (err) => {
   startChartAIResolver();
   startAdaptiveThresholds();
   startCalibration();
+  const { startSignalCalibrationJob } = await import("./lib/signalCalibrationJob");
+  const { startHourlyCloseCollection } = await import("./lib/hourlyCloseHistory");
+  const { hlData, livePrices } = await import("./state");
+  startSignalCalibrationJob();
+  startHourlyCloseCollection(() => {
+    const prices: Record<string, number> = {};
+    for (const [symbol, value] of Object.entries(hlData || {})) {
+      const p = Number((value as any)?.perpPrice);
+      if (Number.isFinite(p) && p > 0) prices[symbol] = p;
+    }
+    for (const [symbol, value] of Object.entries(livePrices || {})) {
+      const p = Number((value as any)?.price);
+      if (Number.isFinite(p) && p > 0) prices[symbol] = p;
+    }
+    return prices;
+  });
   startCircuitBreaker();
   const { startNewsCleanupScheduler } = await import("./lib/newsPersist");
   startNewsCleanupScheduler();

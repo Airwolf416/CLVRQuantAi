@@ -1,9 +1,17 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { aiSignalLog, signalShadowInversions } from "@shared/schema";
-import { livePrices, hlData } from "../state";
+import { livePrices, hlData, priceHistory } from "../state";
 import { resolvePrediction, mapOutcomeToWinLoss } from "./calibrationLog";
 import { enqueuePostTradeAnalysis } from "./postTradeAnalyzerWorker";
+import { observeAuthoritativeInterval, type BarrierObservation } from "./barrierObservation";
+import {
+  CLOSED_INTERVAL_MS,
+  CLOSED_INTERVAL_VERSION,
+  getClosedIntervals,
+  type ClosedInterval,
+  type ClosedIntervalResult,
+} from "./closedIntervalProvider";
 
 const INTERVAL_MS = 60 * 1000;
 let started = false;
@@ -40,9 +48,87 @@ interface PendingRow {
   tp3Price: string | null;
   stopLoss: string | null;
   killClockExpires: Date | null;
+  entryFillStatus: string;
+  entryFilledAt: Date | null;
+  observationCursorAt: Date | null;
 }
 
-async function resolveOnce(): Promise<void> {
+export function evaluateClosedIntervals(args: {
+  result: ClosedIntervalResult | undefined;
+  boundaryTs: number;
+  nowMs: number;
+  direction: string;
+  tp1: number | null;
+  stopLoss: number | null;
+}): { observation: BarrierObservation; intervals: ClosedInterval[]; source: string | null; version: string | null } {
+  const { result } = args;
+  if (!result || result.kind === "UNAVAILABLE") {
+    return {
+      observation: { kind: "CENSORED", reason: result?.reason ?? "AUTHORITATIVE_INTERVAL_MISSING", points: [] },
+      intervals: [],
+      source: null,
+      version: null,
+    };
+  }
+  const requiredStart = Math.ceil(args.boundaryTs / CLOSED_INTERVAL_MS) * CLOSED_INTERVAL_MS;
+  const intervals = result.intervals.filter(i => i.startTs >= requiredStart);
+  if (!intervals.length) {
+    if (requiredStart + CLOSED_INTERVAL_MS <= args.nowMs) {
+      return {
+        observation: { kind: "CENSORED", reason: "AUTHORITATIVE_INTERVAL_MISSING", points: [] },
+        intervals: [],
+        source: result.source,
+        version: result.version,
+      };
+    }
+    return {
+      observation: { kind: "PENDING", points: [] },
+      intervals: [],
+      source: result.source,
+      version: result.version,
+    };
+  }
+  if (intervals[0].startTs !== requiredStart) {
+    return {
+      observation: { kind: "CENSORED", reason: "AUTHORITATIVE_INTERVAL_GAP", points: [] },
+      intervals: [],
+      source: result.source,
+      version: result.version,
+    };
+  }
+  const consumed: ClosedInterval[] = [];
+  for (const interval of intervals) {
+    if (consumed.length && interval.startTs !== consumed[consumed.length - 1].endTs) {
+      return {
+        observation: { kind: "CENSORED", reason: "AUTHORITATIVE_INTERVAL_GAP", points: [] },
+        intervals: consumed,
+        source: result.source,
+        version: result.version,
+      };
+    }
+    consumed.push(interval);
+    const observation = observeAuthoritativeInterval({
+      interval,
+      direction: args.direction,
+      tp1: args.tp1,
+      stopLoss: args.stopLoss,
+    });
+    if (observation.kind !== "PENDING") {
+      return { observation, intervals: consumed, source: result.source, version: result.version };
+    }
+  }
+  return {
+    observation: {
+      kind: "PENDING",
+      points: consumed.flatMap(i => [{ price: i.low, ts: i.startTs }, { price: i.high, ts: i.endTs }]),
+    },
+    intervals: consumed,
+    source: result.source,
+    version: result.version,
+  };
+}
+
+export async function resolveOnce(): Promise<void> {
   const pending = (await db
     .select({
       id: aiSignalLog.id,
@@ -54,6 +140,9 @@ async function resolveOnce(): Promise<void> {
       tp3Price: aiSignalLog.tp3Price,
       stopLoss: aiSignalLog.stopLoss,
       killClockExpires: aiSignalLog.killClockExpires,
+      entryFillStatus: aiSignalLog.entryFillStatus,
+       entryFilledAt: aiSignalLog.entryFilledAt,
+       observationCursorAt: aiSignalLog.observationCursorAt,
     })
     .from(aiSignalLog)
     .where(eq(aiSignalLog.outcome, "PENDING"))
@@ -62,6 +151,17 @@ async function resolveOnce(): Promise<void> {
   if (!pending.length) return;
 
   const now = new Date();
+  const intervalRequests = new Map<string, number>();
+  for (const row of pending) {
+    if (row.entryFillStatus !== "VERIFIED" || !row.entryFilledAt || !Number.isFinite(row.entryFilledAt.getTime())) continue;
+    const boundary = Math.max(row.entryFilledAt.getTime(), row.observationCursorAt?.getTime() ?? -Infinity);
+    const symbol = row.token.toUpperCase();
+    intervalRequests.set(symbol, Math.min(intervalRequests.get(symbol) ?? Infinity, boundary));
+  }
+  const intervalResults = await getClosedIntervals(
+    [...intervalRequests].map(([symbol, startTs]) => ({ symbol, startTs })),
+    { nowMs: now.getTime() },
+  );
   let resolvedCount = 0;
 
   for (const row of pending) {
@@ -69,77 +169,98 @@ async function resolveOnce(): Promise<void> {
     if (!Number.isFinite(entry) || entry <= 0) continue;
 
     const price = getLivePrice(row.token);
+    const tp1 = row.tp1Price != null ? parseFloat(row.tp1Price) : null;
+    const sl = row.stopLoss != null ? parseFloat(row.stopLoss) : null;
+    const boundaryTs = Math.max(row.entryFilledAt?.getTime() ?? NaN, row.observationCursorAt?.getTime() ?? -Infinity);
+    const evaluated = row.entryFillStatus !== "VERIFIED"
+      ? { observation: { kind: "CENSORED" as const, reason: "ENTRY_UNVERIFIED", points: [] }, intervals: [], source: null, version: null }
+      : !Number.isFinite(boundaryTs)
+        ? { observation: { kind: "CENSORED" as const, reason: "ENTRY_FILL_TIME_MISSING", points: [] }, intervals: [], source: null, version: null }
+        : evaluateClosedIntervals({
+            result: intervalResults.get(row.token.toUpperCase()),
+            boundaryTs,
+            nowMs: now.getTime(),
+            direction: row.direction,
+            tp1,
+            stopLoss: sl,
+          });
+    const observation = evaluated.observation;
 
-    // Check TP/SL hits first (if we have a live price)
-    if (price != null && Number.isFinite(price)) {
-      const dir = row.direction;
-      const tp1 = row.tp1Price != null ? parseFloat(row.tp1Price) : null;
-      const tp2 = row.tp2Price != null ? parseFloat(row.tp2Price) : null;
-      const tp3 = row.tp3Price != null ? parseFloat(row.tp3Price) : null;
-      const sl  = row.stopLoss  != null ? parseFloat(row.stopLoss)  : null;
-
-      const hit = (target: number | null) => {
-        if (target == null || !Number.isFinite(target)) return false;
-        return dir === "LONG" ? price >= target : price <= target;
-      };
-      const stopHit = (target: number | null) => {
-        if (target == null || !Number.isFinite(target)) return false;
-        return dir === "LONG" ? price <= target : price >= target;
-      };
-
-      // Check most-ambitious TP first (TP3 > TP2 > TP1)
-      let outcome: string | null = null;
-      let exitPrice: number | null = null;
-      if (hit(tp3)) { outcome = "TP3_HIT"; exitPrice = tp3; }
-      else if (hit(tp2)) { outcome = "TP2_HIT"; exitPrice = tp2; }
-      else if (hit(tp1)) { outcome = "TP1_HIT"; exitPrice = tp1; }
-      else if (stopHit(sl)) { outcome = "SL_HIT"; exitPrice = sl; }
-
-      if (outcome && exitPrice != null) {
-        const pnl = computePnlPct(entry, exitPrice, dir);
-        // Compare-and-set on outcome='PENDING' so a slow tick that races the
-        // next tick (or any future concurrent worker) can never double-resolve.
-        // .returning() confirms WE were the writer that flipped the row, so
-        // the PTA enqueue below is guaranteed single-fire per signal.
-        const updated = await db.update(aiSignalLog)
-          .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
-          .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")))
-          .returning({ id: aiSignalLog.id });
-        // pwin Phase 1: fire-and-forget resolve to /calibration/resolve.
-        // Maps Node-side TP*_HIT/SL_HIT → simple win/loss; non-trade
-        // terminals (cancelled, never_filled etc.) → 'void' so they don't
-        // pollute Brier.
-        resolvePrediction({
-          predictionId: row.id,
-          outcome: mapOutcomeToWinLoss(outcome),
-          exitPrice,
-          pnlPct: pnl,
-        });
-        // Module 3 PTA: enqueue post-trade analysis only when we won the
-        // race. No-op when the analyzer flag is off.
-        if (updated && updated.length > 0) {
-          enqueuePostTradeAnalysis(row.id).catch(() => {});
-        }
-        resolvedCount++;
-        continue;
+    // Update every sampled high-water mark and cursor in the same statement as
+    // the terminal flip. This prevents a restart between observation and
+    // resolution from losing the path evidence.
+    // Complete OHLC ranges are authoritative for both labels and excursions.
+    // Discrete priceHistory remains excursion-only and is never passed to the
+    // barrier observer, so a sampled mark crossing cannot create a label.
+    const observed = evaluated.intervals.flatMap(interval => [
+      { price: interval.low, ts: interval.endTs },
+      { price: interval.high, ts: interval.endTs },
+    ]);
+    if (Number.isFinite(boundaryTs)) {
+      const excursionEndTs = evaluated.intervals[evaluated.intervals.length - 1]?.endTs ?? now.getTime();
+      for (const point of priceHistory[(row.token || "").toUpperCase()] ?? []) {
+        if (point.ts > boundaryTs && point.ts <= excursionEndTs && Number.isFinite(point.price) && point.price > 0) observed.push(point);
       }
     }
+    let maxFavorable = 0, maxAdverse = 0;
+    let maxFavorableAt: Date | null = null, maxAdverseAt: Date | null = null;
+    for (const point of observed) {
+      const pnl = computePnlPct(entry, point.price, row.direction);
+      if (pnl > maxFavorable) { maxFavorable = pnl; maxFavorableAt = new Date(point.ts); }
+      if (-pnl > maxAdverse) { maxAdverse = -pnl; maxAdverseAt = new Date(point.ts); }
+    }
+    const lastInterval = evaluated.intervals[evaluated.intervals.length - 1];
+    const cursorJson = lastInterval ? JSON.stringify({
+      startTs: lastInterval.startTs,
+      endTs: lastInterval.endTs,
+      source: evaluated.source,
+      provider: evaluated.source,
+      version: evaluated.version,
+    }) : null;
+    const terminal = observation.kind === "WIN" || observation.kind === "LOSS" || observation.kind === "CENSORED";
+    const legacyOutcome = observation.kind === "WIN" ? "TP1_HIT" : observation.kind === "LOSS" ? "SL_HIT" : "CENSORED";
+    const exitPrice = observation.kind === "WIN" ? tp1 : observation.kind === "LOSS" ? sl : null;
+    const pnl = exitPrice == null ? null : computePnlPct(entry, exitPrice, row.direction);
+    const censorReason = observation.kind === "CENSORED" ? observation.reason : null;
+    const result = await db.execute(sql`
+      UPDATE ai_signal_log
+         SET observed_mfe_pct = CASE WHEN ${maxFavorable} > 0 AND (observed_mfe_pct IS NULL OR observed_mfe_pct < ${maxFavorable}) THEN ${maxFavorable} ELSE observed_mfe_pct END,
+             observed_mfe_at = CASE WHEN ${maxFavorable} > 0 AND (observed_mfe_pct IS NULL OR observed_mfe_pct < ${maxFavorable}) THEN ${maxFavorableAt} ELSE observed_mfe_at END,
+             observed_mae_pct = CASE WHEN ${maxAdverse} > 0 AND (observed_mae_pct IS NULL OR observed_mae_pct < ${maxAdverse}) THEN ${maxAdverse} ELSE observed_mae_pct END,
+             observed_mae_at = CASE WHEN ${maxAdverse} > 0 AND (observed_mae_pct IS NULL OR observed_mae_pct < ${maxAdverse}) THEN ${maxAdverseAt} ELSE observed_mae_at END,
+             observation_cursor = COALESCE(${cursorJson}::jsonb, observation_cursor),
+              observation_cursor_at = COALESCE(${lastInterval ? new Date(lastInterval.endTs) : null}, observation_cursor_at),
+              observation_method_version = COALESCE(${evaluated.version ?? (row.entryFillStatus === "VERIFIED" ? CLOSED_INTERVAL_VERSION : null)}, observation_method_version),
+             outcome = CASE WHEN ${terminal} THEN ${legacyOutcome} ELSE outcome END,
+             pnl_pct = CASE WHEN ${terminal && pnl != null} THEN ${pnl?.toFixed(4) ?? null} ELSE pnl_pct END,
+             resolved_at = CASE WHEN ${terminal} THEN ${now} ELSE resolved_at END,
+             calibration_label = CASE WHEN ${terminal} THEN ${observation.kind === "WIN" ? "WIN" : observation.kind === "LOSS" ? "LOSS" : "CENSORED"} ELSE calibration_label END,
+             calibration_exclusion_reason = CASE WHEN ${terminal && observation.kind === "CENSORED"} THEN ${censorReason} ELSE calibration_exclusion_reason END
+       WHERE id = ${row.id} AND outcome = 'PENDING'
+       RETURNING id
+    `);
+    const wrote = (result as any).rows?.length > 0;
+    if (terminal && wrote) {
+      if (observation.kind === "WIN" || observation.kind === "LOSS") {
+        resolvePrediction({ predictionId: row.id, outcome: mapOutcomeToWinLoss(legacyOutcome), exitPrice, pnlPct: pnl });
+      }
+      enqueuePostTradeAnalysis(row.id).catch(() => {});
+      resolvedCount++;
+      continue;
+    }
 
-    // Check kill-clock expiry (use current price to mark as EXPIRED_WIN/LOSS)
+    // Expiry is a display lifecycle event only; it is never forwarded as a
+    // TP-before-SL win/loss label.
     if (row.killClockExpires && row.killClockExpires <= now) {
       const cur = price != null && Number.isFinite(price) ? price : entry;
       const pnl = computePnlPct(entry, cur, row.direction);
       const outcome = pnl >= 0 ? "EXPIRED_WIN" : "EXPIRED_LOSS";
+      // Preserve legacy EXPIRED_* display semantics, but it is never a
+      // TP-before-SL label for the new calibration contract.
       const updated = await db.update(aiSignalLog)
-        .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now })
+        .set({ outcome, pnlPct: pnl.toFixed(4), resolvedAt: now, calibrationLabel: "CENSORED", calibrationExclusionReason: price == null ? "PRICE_MISSING_AT_EXPIRY" : "HORIZON_EXPIRED" })
         .where(and(eq(aiSignalLog.id, row.id), eq(aiSignalLog.outcome, "PENDING")))
         .returning({ id: aiSignalLog.id });
-      resolvePrediction({
-        predictionId: row.id,
-        outcome: mapOutcomeToWinLoss(outcome),
-        exitPrice: cur,
-        pnlPct: pnl,
-      });
       if (updated && updated.length > 0) {
         enqueuePostTradeAnalysis(row.id).catch(() => {});
       }

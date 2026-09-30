@@ -1,5 +1,6 @@
 // client/src/components/EarningsContent.jsx
 import { useEffect, useState } from "react";
+import { apiFetch } from "../lib/apiClient";
 
 const C = {
   bg: "#050709", card: "#0a1020", cardAlt: "#0c1424",
@@ -107,7 +108,7 @@ export default function EarningsContent({ filter = "reported", watchlist = "", o
     let live = true;
     setLoading(true);
     const q = watchlist ? `?watchlist=${encodeURIComponent(watchlist)}` : "";
-    fetch(`/api/earnings${q}`)
+    apiFetch(`/api/earnings${q}`)
       .then((r) => r.json())
       .then((d) => {
         if (!live) return;

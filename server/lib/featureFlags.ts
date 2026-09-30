@@ -21,6 +21,19 @@ function envEnum<T extends string>(name: string, allowed: readonly T[], def: T):
   return (allowed as readonly string[]).includes(v) ? (v as T) : def;
 }
 
+/** New persisted TP-before-SL calibration is observational until explicitly
+ * reviewed. `on` is reserved for a path-by-path approval and is not promoted
+ * by the job. */
+export function calibrationMode(): "off" | "shadow" {
+  return envEnum<"off" | "shadow">("CALIBRATION_MODE", ["off", "shadow"], "shadow");
+}
+
+/** Exposure selection is ranked-set only. Shadow records demotions but leaves
+ * the existing ranked response untouched. */
+export function exposureCapMode(): "off" | "shadow" | "on" {
+  return envEnum<"off" | "shadow" | "on">("EXPOSURE_CAP_MODE", ["off", "shadow", "on"], "shadow");
+}
+
 /**
  * Module 2 T05 — when true, /api/quant / /api/ai/analyze / /api/kronos drop
  * the signal entirely if the classifier returns UNCLASSIFIED. When false

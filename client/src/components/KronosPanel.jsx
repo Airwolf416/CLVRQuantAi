@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { apiFetch } from "../lib/apiClient";
 
 const mono  = "'IBM Plex Mono', monospace";
 const serif = "'Playfair Display', serif";
@@ -112,7 +113,7 @@ export default function KronosPanel({ defaultAsset = "BTC" }) {
     setError(null);
     setResult(null);
     try {
-      const res = await fetch("/api/kronos", {
+      const res = await apiFetch("/api/kronos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

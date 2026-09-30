@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import TradeIdeaCard from "./TradeIdeaCard.jsx";
 import MacroPreFlight from "./MacroPreFlight.jsx";
 import { buildMarketSnapshot, buildMacroPreflightContext } from "../../utils/marketDataSnapshot.js";
+import { apiFetch } from "../../lib/apiClient";
+import { useNewItemMotion, useStableResponseItemIds } from "../../hooks/useNewItemMotion.js";
 
 const MONO = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
@@ -43,7 +45,7 @@ export default function TopTradeIdeas({
   const fetchPreflight = useCallback(async () => {
     setPreflightLoading(true);
     try {
-      const res = await fetch("/api/macro/preflight", { credentials: "include" });
+      const res = await apiFetch("/api/macro/preflight", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setPreflight(data);
@@ -162,7 +164,7 @@ ${snap.sections}`;
         "XAU", "CL",
       ];
 
-      const res = await fetch("/api/ai/analyze", {
+      const res = await apiFetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -241,7 +243,7 @@ ${snap.sections}`;
                 scores: t.scores,
               };
             });
-            fetch("/api/ai/log-trades", {
+            apiFetch("/api/ai/log-trades", {
               method: "POST",
               credentials: "include",
               headers: { "Content-Type": "application/json" },
@@ -261,6 +263,8 @@ ${snap.sections}`;
   };
 
   const tradesList = trades?.trades || [];
+  const tradeItemIds = useStableResponseItemIds(tradesList, trade => trade?.id || trade?.signalId, "trade-idea");
+  const isNewTrade = useNewItemMotion(tradeItemIds);
 
   return (
     <div data-testid="section-trade-ideas" style={{ marginBottom: 24 }}>
@@ -274,7 +278,7 @@ ${snap.sections}`;
         {isPro && (
           <div style={{ display: "flex", gap: 4 }}>
             {[{ k: "today", l: "Today" }, { k: "midterm", l: "Mid-Term" }, { k: "longterm", l: "Long-Term" }].map(t => (
-              <button key={t.k} data-testid={`btn-tf-${t.k}`} onClick={() => setTimeframe(t.k)} style={{
+              <button className="motion-press" key={t.k} data-testid={`btn-tf-${t.k}`} onClick={() => setTimeframe(t.k)} style={{
                 padding: "5px 10px", borderRadius: 6, border: `1px solid ${timeframe === t.k ? "rgba(201,168,76,0.4)" : "rgba(255,255,255,0.08)"}`,
                 background: timeframe === t.k ? "rgba(201,168,76,0.1)" : "transparent",
                 color: timeframe === t.k ? "#e8c96d" : "rgba(255,255,255,0.4)",
@@ -291,7 +295,7 @@ ${snap.sections}`;
           {Object.entries(TODAY_MODES).map(([key, m]) => {
             const sel = todayMode === key;
             return (
-              <button key={key} data-testid={`btn-todaymode-${key}`} onClick={() => setTodayMode(key)} style={{
+              <button className="motion-press" key={key} data-testid={`btn-todaymode-${key}`} onClick={() => setTodayMode(key)} style={{
                 padding: "5px 10px", borderRadius: 6,
                 border: `1px solid ${sel ? "rgba(201,168,76,0.4)" : "rgba(255,255,255,0.08)"}`,
                 background: sel ? "rgba(201,168,76,0.1)" : "transparent",
@@ -319,7 +323,7 @@ ${snap.sections}`;
           ].map(({ k, l, col }) => {
             const sel = assetClass === k;
             return (
-              <button key={k} data-testid={`btn-assetclass-${k.toLowerCase()}`} onClick={() => {
+              <button className="motion-press" key={k} data-testid={`btn-assetclass-${k.toLowerCase()}`} onClick={() => {
                 setAssetClass(k);
                 // FX has no perp market on HL — auto-flip to SPOT so the
                 // user doesn't sit in a permanently-empty PERP+FOREX state.
@@ -350,6 +354,7 @@ ${snap.sections}`;
                 data-testid={`btn-market-${m}`}
                 onClick={() => { if (!disabled) setMarketTypeFilter(m); }}
                 disabled={disabled}
+                className="motion-press"
                 title={disabled ? "Forex has no perp market — use SPOT or BOTH" : ""}
                 style={{
                   padding: "5px 12px", borderRadius: 6,
@@ -370,6 +375,7 @@ ${snap.sections}`;
 
       <button
         data-testid="btn-generate-trades"
+        className="motion-press"
         onClick={() => runTradeIdeas(false)}
         disabled={loading}
         style={{
@@ -379,7 +385,7 @@ ${snap.sections}`;
           borderRadius: 10, cursor: loading ? "not-allowed" : "pointer",
           color: loading ? "rgba(255,255,255,0.3)" : "#e8c96d",
           fontFamily: SERIF, fontStyle: "italic", fontWeight: 700, fontSize: 14,
-          letterSpacing: "0.02em", transition: "all 0.3s",
+          letterSpacing: "0.02em",
         }}
       >
         {loading ? "QuantBrain Analyzing..." : `Generate Top ${tradeCount} Trade Ideas ✦`}
@@ -388,6 +394,7 @@ ${snap.sections}`;
       {isElite && trades && !loading && (
         <button
           data-testid="btn-reroll-trades"
+            className="motion-press"
           onClick={() => runTradeIdeas(true)}
           style={{
             width: "100%", height: 38, marginBottom: 16,
@@ -396,7 +403,7 @@ ${snap.sections}`;
             borderRadius: 10, cursor: "pointer",
             color: "#c9a84c",
             fontFamily: MONO, fontWeight: 700, fontSize: 11,
-            letterSpacing: "0.08em", transition: "all 0.2s",
+            letterSpacing: "0.08em",
           }}
         >
           ↻ RE-ROLL FRESH (ELITE) — bypass shared cache
@@ -427,23 +434,22 @@ ${snap.sections}`;
       )}
 
       {loading && (
-        <div style={{ textAlign: "center", padding: "32px 16px" }}>
-          <div style={{ fontSize: 32, marginBottom: 10 }}>🧠</div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#e8c96d", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 8 }}>QUANTBRAIN ACTIVE</div>
-          <div style={{ fontSize: 9, color: "rgba(255,255,255,0.4)", fontFamily: MONO }}>Scanning markets for high-conviction setups...</div>
-          <div style={{ width: "60%", margin: "12px auto", height: 3, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: "60%", background: "linear-gradient(90deg, #c9a84c, #e8c96d)", borderRadius: 3, animation: "pulse 1.5s ease-in-out infinite" }} />
-          </div>
+        <div aria-busy="true" aria-live="polite" aria-label="Loading trade ideas" style={{ padding: "16px 0" }}>
+          <span className="sr-only">Loading trade ideas</span>
+          {[0, 1, 2].map(i => (
+            <div key={i} aria-hidden="true" className="motion-shimmer" style={{ height: 138, marginBottom: 12, borderRadius: 12, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(201,168,76,0.12)" }} />
+          ))}
         </div>
       )}
 
       {tradesList.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="motion-tab-content" key={`${timeframe}:${todayMode}:${assetClass}:${marketTypeFilter}`} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {tradesList.map((trade, i) => {
             const locked = !isPro && i >= freeLimit;
+            const id = tradeItemIds[i];
             return (
-              <div key={i} style={{ position: "relative" }}>
-                <TradeIdeaCard trade={trade} rank={trade.rank || i + 1} mode={mode} isElite={isElite} locked={locked} onAlertCreated={onAlertCreated} />
+              <div key={id} style={{ position: "relative" }}>
+                <TradeIdeaCard trade={trade} rank={trade.rank || i + 1} mode={mode} isElite={isElite} locked={locked} onAlertCreated={onAlertCreated} animateIn={isNewTrade(id)} />
                 {locked && (
                   <div style={{
                     position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",

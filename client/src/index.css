@@ -60,3 +60,116 @@ body {
   70%  { box-shadow: 0 0 0 8px rgba(34,197,94,0);   }
   100% { box-shadow: 0 0 0 0   rgba(34,197,94,0);   }
 }
+
+/* A15/A16 motion primitives. Decorative effects only animate composited
+   transform/opacity properties and are deliberately short. */
+.motion-card-enter {
+  animation: motion-card-enter 220ms ease-out both;
+}
+
+@keyframes motion-card-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.motion-press {
+  transition: transform 150ms ease-out;
+}
+
+.motion-press:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.motion-meter {
+  width: 100%;
+  transform: scaleX(var(--motion-meter-value, 0));
+  transform-origin: left center;
+  transition: transform 300ms ease-out;
+}
+
+.motion-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.motion-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.12), transparent);
+  transform: translateX(-240%);
+  /* A subtle, repeated 300ms translated transform cycle. */
+  animation: motion-shimmer 300ms ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes motion-shimmer {
+  to { transform: translateX(330%); }
+}
+
+.motion-tab-content {
+  animation: motion-tab-content 200ms ease-out both;
+}
+
+@keyframes motion-tab-content {
+  from { opacity: .01; }
+  to { opacity: 1; }
+}
+
+.motion-idle-banner-enter {
+  animation: motion-idle-banner-enter 220ms ease-out both;
+}
+
+.motion-idle-banner-exit {
+  animation: motion-idle-banner-exit 200ms ease-in both;
+}
+
+@keyframes motion-idle-banner-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes motion-idle-banner-exit {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(10px); }
+}
+
+.motion-price-pulse {
+  position: relative;
+  isolation: isolate;
+}
+
+.motion-price-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -2px -3px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: .18;
+  transform: scale(.98);
+  animation: motion-price-pulse 250ms ease-out both;
+  pointer-events: none;
+  z-index: -1;
+}
+
+@keyframes motion-price-pulse {
+  from { opacity: .22; transform: scale(.98); }
+  to { opacity: 0; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-card-enter,
+  .motion-shimmer::after,
+  .motion-tab-content,
+  .motion-idle-banner-enter,
+  .motion-idle-banner-exit,
+  .motion-price-pulse::after {
+    animation: none !important;
+  }
+
+  .motion-press,
+  .motion-meter {
+    transition: none !important;
+  }
+}

@@ -1,5 +1,6 @@
 // ── MyBasket — Global Asset Coverage · Personalised Scalper & Swing AI ───────
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { apiFetch } from "../lib/apiClient";
 
 const C = {
   bg:"#050709", navy:"#080d18", panel:"#0c1220",
@@ -154,6 +155,47 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   const [openPanel, setOpenPanel]   = useState(true);
   const [showHalalOnly, setShowHalalOnly] = useState(false);
   const [marketType, setMarketType] = useState("BOTH"); // PERP | SPOT | BOTH
+  const [hlUniverse, setHlUniverse] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    apiFetch("/api/universe", { credentials:"include" })
+      .then(async response => {
+        if (!response.ok) throw new Error("Universe unavailable");
+        const data = await response.json();
+        if (active && Array.isArray(data.assets)) setHlUniverse(data);
+      })
+      .catch(() => { /* retain the complete static multi-venue basket */ });
+    return () => { active = false; };
+  }, []);
+
+  const mergedAllAssets = useMemo(() => {
+    if (!hlUniverse?.assets) return ALL_ASSETS;
+    const assets = ALL_ASSETS.map(asset => ({ ...asset }));
+    const byCanonical = new Map(assets.map((asset, index) => [asset.sym, index]));
+    for (const market of hlUniverse.assets) {
+      const sym = market.canonicalSymbol || market.symbol;
+      if (!sym) continue;
+      const supported = market.eligible && market.status === "active"
+        && market.supportStatus === "supported";
+      const fields = {
+        hlMarket:true, hlSupported:supported,
+        hlSupportReason:market.supportReason || market.reasons?.[0] || null,
+      };
+      const index = byCanonical.get(sym);
+      if (index != null) assets[index] = { ...assets[index], ...fields };
+      else {
+        assets.push({
+          sym, label:market.symbol || sym, icon:sym.slice(0, 1),
+          cat:market.assetClass === "equity" ? "equities" : "crypto",
+          region:"global", venue:market.venue, marketType:"perp", ...fields,
+          hlOnly:true,
+        });
+        byCanonical.set(sym, assets.length - 1);
+      }
+    }
+    return assets;
+  }, [hlUniverse]);
 
   // ── Promote-to-Scanner (Elite-only) ───────────────────────────────────────
   const [promoted, setPromoted] = useState([]);                  // list of {id, assetSymbol, assetClass, yahooSymbol}
@@ -162,7 +204,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   const [promoteError, setPromoteError] = useState("");
   const reloadPromoted = useCallback(async () => {
     try {
-      const r = await fetch("/api/basket/promoted", { credentials: "include" });
+       const r = await apiFetch("/api/basket/promoted", { credentials: "include" });
       if (r.status === 401) { setPromoted([]); setPromotedTier("anon"); return; }
       const data = await r.json();
       setPromoted(data.assets || []);
@@ -173,12 +215,12 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   const promoteAsset = useCallback(async (sym) => {
     setPromoteError(""); setPromoteBusy(true);
     try {
-      const asset = ALL_ASSETS.find(a => a.sym === sym);
+      const asset = mergedAllAssets.find(a => a.sym === sym);
       const assetClass = asset?.cat === "crypto" ? "crypto"
         : asset?.cat === "equities" ? "equity"
         : asset?.cat === "commodities" ? "commodity"
         : "forex";
-      const r = await fetch("/api/basket/promoted", {
+       const r = await apiFetch("/api/basket/promoted", {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assetSymbol: sym, assetClass, yahooSymbol: sym }),
@@ -188,10 +230,10 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
       await reloadPromoted();
     } catch (e) { setPromoteError(e.message || "Failed"); }
     finally { setPromoteBusy(false); }
-  }, [reloadPromoted]);
+  }, [reloadPromoted, mergedAllAssets]);
   const unpromoteAsset = useCallback(async (id) => {
     try {
-      await fetch(`/api/basket/promoted/${id}`, { method: "DELETE", credentials: "include" });
+       await apiFetch(`/api/basket/promoted/${id}`, { method: "DELETE", credentials: "include" });
       await reloadPromoted();
     } catch {}
   }, [reloadPromoted]);
@@ -208,8 +250,8 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
       isFetchingRef.current = true;
       setPricesLoading(true);
       try {
-        const allSyms = ALL_ASSETS.map(a => a.sym).join(",");
-        const r = await fetch(`/api/basket-prices?syms=${encodeURIComponent(allSyms)}`, { credentials:"include" });
+        const allSyms = mergedAllAssets.map(a => a.sym).join(",");
+         const r = await apiFetch(`/api/basket-prices?syms=${encodeURIComponent(allSyms)}`, { credentials:"include" });
         if (r.ok) {
           const data = await r.json();
           setBPrices(data);
@@ -225,7 +267,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
     doFetch();
     const interval = setInterval(doFetch, 60000);
     return () => clearInterval(interval);
-  }, []);  // run once on mount, refresh every 60s
+  }, [mergedAllAssets]);
 
   const toggleAsset = useCallback((sym) => {
     setSelected(prev => {
@@ -237,7 +279,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   }, []);
 
   const filtered = useMemo(() => {
-    let list = ALL_ASSETS;
+    let list = mergedAllAssets;
     if (cat !== "all") list = list.filter(a => a.cat === cat);
     if (region !== "all") list = list.filter(a => a.region === region);
     if (showHalalOnly) list = list.filter(a => a.halal === true);
@@ -246,7 +288,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
       list = list.filter(a => a.sym.toLowerCase().includes(q) || a.label.toLowerCase().includes(q));
     }
     return list;
-  }, [cat, region, search, showHalalOnly]);
+  }, [cat, region, search, showHalalOnly, mergedAllAssets]);
 
   const fmtPrice = useCallback((price, currency) => {
     if (!price || price === 0) return null;
@@ -290,6 +332,14 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
 
   const runBasket = useCallback(async () => {
     if (selected.size === 0 || basketLoading) return;
+    if ([...selected].some(sym => {
+      const asset = mergedAllAssets.find(item => item.sym === sym);
+      return asset?.hlSupported === false
+        && (asset.hlOnly || marketType === "PERP" || marketType === "BOTH");
+    })) {
+      setBasketResult("One or more selected perp markets are not supported for scoring.");
+      return;
+    }
     setBasketLoading(true);
     setBasketResult("");
     setBasketData(null);
@@ -308,7 +358,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
     // Macro pre-flight + smart context (mirrors Ask AI / Trade Ideas).
     let basketPreflight = null;
     try {
-      const pf = await fetch("/api/macro/preflight", { credentials: "include" });
+       const pf = await apiFetch("/api/macro/preflight", { credentials: "include" });
       if (pf.ok) basketPreflight = await pf.json();
     } catch {}
     const macroLine = basketPreflight?.clear === false
@@ -337,7 +387,7 @@ LIVE PRICES: ${priceData}
 Return one signal object per asset. Do NOT skip any. If no setup, use direction:"NEUTRAL" and explain in thesis. JSON ONLY — no prose.`;
 
     try {
-      const r = await fetch("/api/ai/analyze", {
+       const r = await apiFetch("/api/ai/analyze", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -347,6 +397,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
           context,
           maxTokens: 6144,
           tickers: basketTickers,        // → per-asset Statistical Brain + VWAP/OR + unusual-activity context
+          marketType,                    // server-authoritative request field; never infer from prompt text
           attachBrainSummary: true,      // → global top/suppressed combos
         }),
       });
@@ -377,7 +428,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
     } finally {
       setBasketLoading(false);
     }
-  }, [selected, style, marketType, basketLoading, getPriceSnap]);
+  }, [selected, style, marketType, basketLoading, getPriceSnap, mergedAllAssets]);
 
   if (!isPro) {
     return (
@@ -480,9 +531,11 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
                 No assets match your filters
               </div>
             )}
-            {filtered.map(({ sym, label, cat:assetCat, halal }) => {
+            {filtered.map(({ sym, label, cat:assetCat, halal, hlSupported, hlSupportReason, hlOnly }) => {
               const active = selected.has(sym);
-              const blocked = !active && selected.size >= MAX_ASSETS;
+              const unsupported = hlSupported === false
+                && (hlOnly || marketType === "PERP" || marketType === "BOTH");
+              const blocked = (!active && unsupported) || (!active && selected.size >= MAX_ASSETS);
               const catColor = assetCat === "crypto" ? C.cyan : assetCat === "equities" ? C.blue : C.gold;
               // Live price — route by priceView toggle (SPOT matches Markets tab; PERP matches HL perps)
               const bp     = bPrices?.[sym];
@@ -518,7 +571,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
               const priceStr = rawPrice ? fmtPrice(rawPrice, currency) : (pricesLoading ? "…" : "—");
               const chgColor = rawChg > 0 ? C.green : rawChg < 0 ? C.red : C.muted;
               return (
-                <button key={sym} data-testid={`basket-asset-${sym}`} onClick={() => !blocked && toggleAsset(sym)}
+                <button key={sym} data-testid={`basket-asset-${sym}`} title={unsupported ? `Unavailable: ${hlSupportReason || "scorer unsupported"}` : undefined} onClick={() => !blocked && toggleAsset(sym)}
                   style={{ padding:"6px 4px 5px", borderRadius:3, border:`1px solid ${active ? C.purple : C.border}`, background:active ? "rgba(168,85,247,.12)" : blocked ? "rgba(8,13,24,.3)" : "rgba(8,13,24,.6)", cursor:blocked ? "not-allowed" : "pointer", textAlign:"center", position:"relative", opacity:blocked ? 0.45 : 1 }}>
                   {active && <div style={{ position:"absolute", top:3, right:4, width:5, height:5, borderRadius:"50%", background:C.purple }} />}
                   {isLive && !active && <div style={{ position:"absolute", top:3, right:4, width:4, height:4, borderRadius:"50%", background:C.green, opacity:0.7 }} />}
@@ -526,7 +579,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
                     <div style={{ position:"absolute", top:2, left:3, fontFamily:MONO, fontSize:6, color:C.halal, letterSpacing:"-0.02em", lineHeight:1 }}>☪</div>
                   )}
                   <div style={{ fontFamily:MONO, fontSize:8, fontWeight:700, color:active ? C.purple : C.muted2, lineHeight:1.2 }}>{sym.length > 7 ? sym.slice(0,7) : sym}</div>
-                  <div style={{ fontFamily:SANS, fontSize:6.5, color:blocked ? C.muted : active ? `${C.purple}bb` : C.muted, marginTop:1, lineHeight:1.2, display:"-webkit-box", WebkitLineClamp:1, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{label}</div>
+                  <div style={{ fontFamily:SANS, fontSize:6.5, color:blocked ? C.muted : active ? `${C.purple}bb` : C.muted, marginTop:1, lineHeight:1.2, display:"-webkit-box", WebkitLineClamp:1, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{label}{unsupported ? " · Unsupported" : ""}</div>
                   {priceStr && priceStr !== "—" ? (
                     <div style={{ fontFamily:MONO, fontSize:7, color:active ? C.purple : C.text, marginTop:2, lineHeight:1, letterSpacing:"-0.02em" }}>{priceStr}</div>
                   ) : null}
@@ -558,7 +611,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
             <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:10, padding:"8px 10px", background:"rgba(168,85,247,.04)", border:`1px solid rgba(168,85,247,.15)`, borderRadius:3 }}>
               <span style={{ fontFamily:MONO, fontSize:8, color:C.muted, alignSelf:"center" }}>BASKET ({selList.length}/{MAX_ASSETS}):</span>
               {selList.map(sym => {
-                const asset = ALL_ASSETS.find(a => a.sym === sym);
+                const asset = mergedAllAssets.find(a => a.sym === sym);
                 return (
                   <span key={sym} onClick={() => toggleAsset(sym)} style={{ fontFamily:MONO, fontSize:8, color:C.purple, background:"rgba(168,85,247,.12)", border:`1px solid rgba(168,85,247,.3)`, borderRadius:2, padding:"2px 8px", cursor:"pointer", display:"flex", alignItems:"center", gap:3 }}>
                     {asset?.halal === true && <span style={{ fontSize:7, color:C.halal }}>☪</span>}
@@ -619,13 +672,6 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
                     </button>
                   ))}
               </div>
-            )}
-
-            {promotedTier !== "elite" && (
-              <button data-testid="btn-upgrade-promote" onClick={onUpgrade}
-                style={{ marginTop:4, padding:"5px 10px", borderRadius:2, border:`1px solid rgba(201,168,76,.55)`, background:"rgba(201,168,76,.1)", color:C.gold2, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.08em" }}>
-                UPGRADE TO ELITE ⚡
-              </button>
             )}
 
             {promoteError && (

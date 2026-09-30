@@ -18,6 +18,7 @@ import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
+import { accessCodeFeedback, ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedback";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import InsiderTab from "./tabs/InsiderTab";
@@ -31,10 +32,17 @@ import EarningsContent from "./components/EarningsContent.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
 import { playMarketBell, unlockAudio, unlockSpeech, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
+import { macroEventDate, macroEventInstant, selectUpcomingMacroEvents, etDateParts, filterMacroCalendar, createMacroLoader } from "./utils/macroCalendar.js";
 import { DataBusProvider, DataBusCtx, useDataBus, mapRegimeLabel, regimeMultiplier, fearGreedColor } from "./context/DataBusContext.jsx";
+import { apiFetch, readAuthSession } from "./lib/apiClient";
+import SessionSecurity from "./components/SessionSecurity.jsx";
+import { publishSessionEvent } from "./components/SessionSecurity.jsx";
+import { useNewItemMotion, useStableResponseItemIds } from "./hooks/useNewItemMotion.js";
+// All same-origin API calls below go through apiFetch. No external fetches live here.
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
+const WA_DISMISS_KEY = "clvr_wa_setup_dismissed";
 function waSupported() { return !!(window.PublicKeyCredential && navigator.credentials?.create); }
 function getStoredWACred() { try { const c = JSON.parse(localStorage.getItem(WA_STORE_KEY) || "null"); return (c && c.v >= 2) ? c : null; } catch { return null; } }
 function storeWACred(credentialId, userId) { try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, platform: true, v: 2, registeredAt: Date.now() })); } catch {} }
@@ -123,28 +131,28 @@ const BINANCE_REVERSE=Object.fromEntries(Object.entries(BINANCE_WS_MAP).map(([k,
 
 // ─── API FETCHERS (proxied through backend) ──────────────
 async function fetchHyperliquid(){
-  const r=await fetch("/api/crypto");
+  const r=await apiFetch("/api/crypto");
   if(!r.ok)throw new Error(`Crypto API ${r.status}`);
   return await r.json();
 }
 async function fetchPerps(){
-  const r=await fetch("/api/perps");
+  const r=await apiFetch("/api/perps");
   if(!r.ok)throw new Error(`Perps API ${r.status}`);
   return await r.json();
 }
 async function fetchLiveSignals(since=0){
-  const r=await fetch(`/api/signals?since=${since}`);
+  const r=await apiFetch(`/api/signals?since=${since}`);
   if(!r.ok)throw new Error(`Signals API ${r.status}`);
   return await r.json();
 }
 async function fetchFinnhub(){
   // [migrated Apr 2026] /api/finnhub now serves FMP data; route name kept for compat.
-  const r=await fetch("/api/finnhub");
+  const r=await apiFetch("/api/finnhub");
   if(!r.ok)throw new Error(`Market data API ${r.status}`);
   return await r.json();
 }
 async function fetchNews(){
-  const r=await fetch("/api/news");
+  const r=await apiFetch("/api/news");
   if(!r.ok)throw new Error(`News API ${r.status}`);
   const j=await r.json();
   // Backward compat: server now returns {items, filtered}; older shape was a bare array.
@@ -243,7 +251,7 @@ function StrengthMeter({value,C:_C}){
   const col=pct>=75?_C.green:pct>=55?_C.orange:_C.red;
   return(
     <div data-testid="strength-meter" style={{width:"100%",height:6,background:"rgba(255,255,255,.06)",borderRadius:1,overflow:"hidden",position:"relative"}}>
-      <div style={{height:"100%",width:`${pct}%`,background:`linear-gradient(90deg,${col}88,${col})`,borderRadius:1,transition:"width .8s ease"}}/>
+      <div className="motion-meter" style={{"--motion-meter-value":pct/100,height:"100%",background:`linear-gradient(90deg,${col}88,${col})`,borderRadius:1}}/>
       <div style={{position:"absolute",right:4,top:-12,fontFamily:MONO,fontSize:8,color:col,fontWeight:700}}>{pct}%</div>
     </div>
   );
@@ -320,12 +328,10 @@ function AlertBanner({alerts,onDismiss,C:_C}){
 }
 
 // ─── COUNTDOWN TIMER ─────────────────────────────────────
-function getETtoUTCOffset(){try{const now=new Date();const utcMs=now.getTime();const etMs=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"})).getTime();return Math.round((utcMs-etMs)/3600000);}catch{return 5;}}
-function parseTimeET(timeStr){const tp=(timeStr||"12:00").match(/(\d+):(\d+)/);let h=tp?parseInt(tp[1]):12;const m=tp?parseInt(tp[2]):0;const isPM=timeStr&&timeStr.toLowerCase().includes("pm")&&h<12;if(isPM)h+=12;const isAM=timeStr&&timeStr.toLowerCase().includes("am")&&h===12;if(isAM)h=0;const isET=!timeStr||timeStr.includes("ET");return{h,m,offsetUTC:isET?getETtoUTCOffset():0};}
 function Countdown({dateStr,timeET,compact=false}){
   const[diff,setDiff]=useState(null);
   useEffect(()=>{
-    const calc=()=>{const{h,m,offsetUTC}=parseTimeET(timeET);const[y,mo,d]=dateStr.split("-").map(Number);const target=new Date(Date.UTC(y,mo-1,d,h+offsetUTC,m,0));setDiff(target-new Date());};
+    const calc=()=>{const target=macroEventInstant({date:dateStr,timeET});setDiff(target?target-new Date():null);};
     calc();const iv=setInterval(calc,1000);return()=>clearInterval(iv);
   },[dateStr,timeET]);
   if(diff===null)return null;
@@ -859,7 +865,7 @@ function holdWindowLabel(tf){
 }
 
 // ─── SIGNAL CARD (stable, outside Dashboard to prevent unmount) ──
-function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade,regimeName,regimeMult,isAdmin,onSendToTelegram}){
+function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAlerts,isPro,onUpgrade,regimeName,regimeMult,isAdmin,onSendToTelegram,animateIn=false}){
   const{C}=useContext(ThemeCtx);
   const[expanded,setExpanded]=useState(false);
   const[secsLeft,setSecsLeft]=useState(()=>sig.locked?Math.max(0,30*60-Math.floor((Date.now()-sig.ts)/1000)):0);
@@ -901,11 +907,11 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
   const whaleMatch=wAlerts&&wAlerts.some(w=>w.sym===sig.token&&Math.abs(w.ts-sig.ts)<300000);
   const isHighConf=displayScore>=75;
   return(
-    <div data-testid={`signal-card-${sig.id}`} className={isStrong?"high-confidence-glow":whaleMatch?"high-confidence-glow":""} style={{background:C.panel,border:`1px solid ${isStrong?"rgba(0,199,135,.6)":whaleMatch?C.gold+"88":isHighConf?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden",transition:"border-color .3s"}}>
+    <div data-testid={`signal-card-${sig.id}`} className={`${animateIn?"motion-card-enter ":""}${isStrong?"high-confidence-glow":whaleMatch?"high-confidence-glow":""}`} style={{background:C.panel,border:`1px solid ${isStrong?"rgba(0,199,135,.6)":whaleMatch?C.gold+"88":isHighConf?`${dirColor}44`:C.border}`,borderRadius:2,marginBottom:10,overflow:"hidden"}}>
       {isStrong&&<div style={{background:"linear-gradient(90deg,rgba(0,199,135,.15),rgba(0,199,135,.05))",borderBottom:"1px solid rgba(0,199,135,.25)",padding:"5px 14px",display:"flex",alignItems:"center",gap:8}}>
         <span style={{fontFamily:MONO,fontSize:8,fontWeight:800,color:C.green,letterSpacing:"0.2em"}}>⚡ STRONG SIGNAL — PUSH NOTIFICATION SENT · {sig.advancedScore}/100</span>
       </div>}
-      <div style={{padding:"14px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
+      <div className="motion-press" style={{padding:"14px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:28,height:28,background:dirBg,border:`1px solid ${dirColor}44`,borderRadius:2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:900,fontFamily:MONO,color:dirColor,flexShrink:0}}>
             {isLong?"+":"\u2212"}
@@ -1030,12 +1036,12 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
           ))}
         </div>
         <div style={{display:"flex",gap:8,marginTop:10}}>
-          <button data-testid={`trade-now-${sig.id}`} onClick={e=>{e.stopPropagation();onTrade&&onTrade(sig);}}
+          <button className="motion-press" data-testid={`trade-now-${sig.id}`} onClick={e=>{e.stopPropagation();onTrade&&onTrade(sig);}}
             style={{flex:1,padding:"8px 0",background:"rgba(0,199,135,.08)",border:"1px solid rgba(0,199,135,.3)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.green,cursor:"pointer"}}>{i18n.tradeNow} →</button>
-          <button data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();onAiAnalyze(sig);}}
+          <button className="motion-press" data-testid={`ai-analyze-${sig.id}`} onClick={e=>{e.stopPropagation();onAiAnalyze(sig);}}
             style={{flex:1,padding:"8px 0",background:"rgba(201,168,76,.06)",border:"1px solid rgba(201,168,76,.25)",borderRadius:2,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer"}}>Analyze with AI</button>
 
-          <button data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
+          <button className="motion-press" data-testid={`share-signal-${sig.id}`} onClick={e=>{e.stopPropagation();onShare(sig);}}
             style={{padding:"8px 16px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:2,fontFamily:MONO,fontSize:10,color:C.muted2,cursor:"pointer",letterSpacing:"0.08em"}}>↗ Share</button>
         </div>
         {isAdmin&&(()=>{
@@ -1052,7 +1058,7 @@ function SignalCard({sig,marketData,onShare,onAiAnalyze,onTrade,whaleAlerts:wAle
                   if(disabled)return;
                   setTgState(s=>({...s,sending:true,lastResult:null}));
                   try{
-                    const r=await fetch(`/api/admin/signals/${sig.id}/send-to-telegram`,{method:"POST",credentials:"include"});
+                    const r=await apiFetch(`/api/admin/signals/${sig.id}/send-to-telegram`,{method:"POST",credentials:"include"});
                     const body=await r.json().catch(()=>({}));
                     if(r.ok){
                       setTgState({sending:false,cooldownLeft:30,lastResult:"ok"});
@@ -1239,7 +1245,7 @@ function PerformanceHighlights(){
   const [err,setErr]=useState(false);
   useEffect(()=>{
     let on=true;
-    fetch("/api/performance-highlights",{credentials:"include"})
+    apiFetch("/api/performance-highlights",{credentials:"include"})
       .then(r=>r.ok?r.json():Promise.reject(r.status))
       .then(d=>{if(on)setData(d);})
       .catch(()=>{if(on)setErr(true);});
@@ -1312,7 +1318,7 @@ function AdminCandidatesTab(){
 
   const fetchData=async()=>{
     try{
-      const r=await fetch("/api/admin/candidates",{credentials:"include"});
+      const r=await apiFetch("/api/admin/candidates",{credentials:"include"});
       if(!r.ok)throw new Error(`HTTP ${r.status}`);
       const j=await r.json();setData(j);setErr(null);
     }catch(e){setErr(e.message||"Failed to load");}
@@ -1330,7 +1336,7 @@ function AdminCandidatesTab(){
     if(!window.confirm(`Approve & send ${c.token} ${c.dir} to Telegram?\n\nEntry ${c.entry} · SL ${c.stopLoss} · TP1 ${c.tp1}${c.tp2?` · TP2 ${c.tp2}`:""}\n\nThis fires the autoposter webhook (→ Claude formats downstream → Telegram channel).`))return;
     setBusyId(c.id);
     try{
-      const r=await fetch(`/api/admin/candidates/${c.id}/approve`,{method:"POST",credentials:"include"});
+      const r=await apiFetch(`/api/admin/candidates/${c.id}/approve`,{method:"POST",credentials:"include"});
       const j=await r.json().catch(()=>({}));
       if(r.ok&&j.ok){
         showToast(true,`Approved & sent: ${c.token} ${c.dir} (HTTP ${j.status||"?"}) ✓`);
@@ -1365,7 +1371,7 @@ function AdminCandidatesTab(){
     if(!id||busyId)return;
     setBusyId(id);
     try{
-      const r=await fetch(`/api/admin/candidates/${id}/reject`,{
+      const r=await apiFetch(`/api/admin/candidates/${id}/reject`,{
         method:"POST",
         credentials:"include",
         headers:{"Content-Type":"application/json"},
@@ -1550,7 +1556,7 @@ function AdminRejectionsTab(){
     try{
       const qs=new URLSearchParams({window:windowParam,limit:"100"});
       if(asset.trim())qs.set("asset",asset.trim().toUpperCase());
-      const r=await fetch(`/api/admin/rejections?${qs}`,{credentials:"include"});
+      const r=await apiFetch(`/api/admin/rejections?${qs}`,{credentials:"include"});
       if(!r.ok)throw new Error(`HTTP ${r.status}`);
       const j=await r.json();setData(j);
     }catch(e){setErr(e.message||"Failed to load");}
@@ -1670,7 +1676,7 @@ function AdminAutoposterStatus(){
   const fetchData=async()=>{
     setLoading(true);setErr(null);
     try{
-      const r=await fetch("/api/admin/autoposter/status",{credentials:"include"});
+      const r=await apiFetch("/api/admin/autoposter/status",{credentials:"include"});
       if(!r.ok)throw new Error(`HTTP ${r.status}`);
       const j=await r.json();setData(j);
     }catch(e){setErr(e.message||"Failed to load");}
@@ -1683,7 +1689,7 @@ function AdminAutoposterStatus(){
     if(!window.confirm("Send a test trade idea to the Telegram autoposter now?\n\nIf auto_publish=true on the autoposter (Railway), this will appear in your Telegram channel within ~30s.\n\nIf auto_publish=false, it will be queued for manual approval on the autoposter side."))return;
     setTesting(true);setTestMsg(null);
     try{
-      const r=await fetch("/api/admin/autoposter/test-send",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
+      const r=await apiFetch("/api/admin/autoposter/test-send",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
       // Tolerate empty/non-JSON bodies — distinguish "parsed but empty" from "parsed shape we expect".
       let j=null,parseFailed=false;
       try{j=await r.json();}catch{parseFailed=true;}
@@ -1788,8 +1794,8 @@ function TrackRecordTab({isPro,onUpgrade}){
   const fetchData=useCallback((isManual=false)=>{
     if(isManual)setRefreshing(true);
     Promise.all([
-      fetch("/api/track-record",{credentials:"include"}).then(r=>r.json()).catch(()=>null),
-      fetch("/api/signal-history?limit=30",{credentials:"include"}).then(r=>r.json()).catch(()=>({signals:[],isPaidUser:false})),
+      apiFetch("/api/track-record",{credentials:"include"}).then(r=>r.json()).catch(()=>null),
+      apiFetch("/api/signal-history?limit=30",{credentials:"include"}).then(r=>r.json()).catch(()=>({signals:[],isPaidUser:false})),
     ]).then(([s,h])=>{
       if(s)setStats(s);
       setHistory(h.signals||[]);
@@ -1961,7 +1967,7 @@ function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
   const fetchItems=useCallback(async(isInitial=false)=>{
     if(isInitial)setLoading(true);
     try{
-      const r=await fetch("/api/macro-intel");
+      const r=await apiFetch("/api/macro-intel");
       const d=await r.json();
       const list=d.items||[];
       if(!isInitial){
@@ -2053,7 +2059,7 @@ function SignalsDiagnosisPanel(){
     let alive=true;
     (async()=>{
       try{
-        const r=await fetch("/api/journal/diagnoses",{credentials:"same-origin"});
+        const r=await apiFetch("/api/journal/diagnoses",{credentials:"same-origin"});
         if(!r.ok){if(alive)setData(d=>({...d,loading:false,error:`HTTP ${r.status}`}));return;}
         const j=await r.json();
         if(alive)setData({trades:Array.isArray(j?.trades)?j.trades:[],displayEnabled:!!j?.displayEnabled,loading:false,error:""});
@@ -2147,7 +2153,7 @@ const IpoList=memo(function IpoList({C,MONO,SERIF}){
   const ipoQuery=useQuery({
     queryKey:["/api/ipo/calendar"],
     queryFn:async()=>{
-      const r=await fetch("/api/ipo/calendar");
+      const r=await apiFetch("/api/ipo/calendar");
       if(!r.ok) throw new Error("ipo fetch failed");
       return r.json();
     },
@@ -2255,7 +2261,7 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   const historyQuery=useQuery({
     queryKey:["/api/earnings/history",reactionSym],
     queryFn:async()=>{
-      const r=await fetch(`/api/earnings/history?symbol=${reactionSym}&limit=8`);
+      const r=await apiFetch(`/api/earnings/history?symbol=${reactionSym}&limit=8`);
       return r.json();
     },
     enabled:section==="reaction"&&!!reactionSym,
@@ -2267,7 +2273,7 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   // names to render (was 7d which mostly returned empty after big-week earnings).
   const radarQuery=useQuery({
     queryKey:["/api/earnings/radar","30d"],
-    queryFn:async()=>{const r=await fetch("/api/earnings/radar?lookaheadDays=30");return r.json();},
+    queryFn:async()=>{const r=await apiFetch("/api/earnings/radar?lookaheadDays=30");return r.json();},
     enabled:section==="radar",
     staleTime:600000,
     refetchInterval:false,
@@ -2281,7 +2287,7 @@ const EarningsTab=memo(function EarningsTab({C,MONO,SERIF,watchlist}){
   const refreshRadar=async()=>{
     setRefreshing(true);setRefreshMsg("");
     try{
-      const r=await fetch("/api/admin/earnings/run-scan",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({lookaheadDays:30})});
+      const r=await apiFetch("/api/admin/earnings/run-scan",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({lookaheadDays:30})});
       if(r.ok){
         const j=await r.json();
         setRefreshMsg(`Refreshed · ${j.cached||j.count||0} cached`);
@@ -2506,7 +2512,7 @@ function TradeJournalTab({isElite,onUpgrade}){
     try{
       const{dataUrl,mediaType,sizeKB}=await fileToCompressedDataUrl(file);
       setImportMsg(`Uploading (${sizeKB} KB) — analyzing with AI…`);
-      const r=await fetch("/api/journal/extract",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageBase64:dataUrl,mediaType})});
+      const r=await apiFetch("/api/journal/extract",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageBase64:dataUrl,mediaType})});
       let j=null;try{j=await r.json();}catch{}
       if(!r.ok){
         const msg=j?.error||`Server error ${r.status}`;
@@ -2546,7 +2552,7 @@ function TradeJournalTab({isElite,onUpgrade}){
     if(!importUrl.trim())return;
     setImportErr("");setImporting(true);
     try{
-      const r=await fetch("/api/journal/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:importUrl.trim()})});
+      const r=await apiFetch("/api/journal/extract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:importUrl.trim()})});
       const j=await r.json();
       if(!r.ok){setImportErr(j.error||"Extraction failed");setImporting(false);return;}
       const ex=j.extracted||{};
@@ -2630,7 +2636,7 @@ function TradeJournalTab({isElite,onUpgrade}){
       const a=document.createElement("a");a.href=dataUrl;a.download=fileName;document.body.appendChild(a);a.click();a.remove();
     }catch(err){console.error("share card failed",err);}
   }
-  const{data,isLoading,refetch}=useQuery({queryKey:["/api/journal"],queryFn:async()=>{const r=await fetch("/api/journal");return r.json();},enabled:isElite,refetchInterval:120000});
+  const{data,isLoading,refetch}=useQuery({queryKey:["/api/journal"],queryFn:async()=>{const r=await apiFetch("/api/journal");return r.json();},enabled:isElite,refetchInterval:120000});
   const entries=data?.entries||[];
   const closed=entries.filter(e=>e.outcome!=="OPEN");
   const wins=closed.filter(e=>e.outcome==="WIN").length;
@@ -2660,7 +2666,7 @@ function TradeJournalTab({isElite,onUpgrade}){
         stop:form.stop,tp1:form.tp1,tp2:form.tp2,size:form.size,notes:form.notes,
         ...(isClosed?{outcome:form.outcome,pnlPct:form.pnlPct||undefined}:{})
       };
-      const r=await fetch("/api/journal",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+      const r=await apiFetch("/api/journal",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
       let j=null;try{j=await r.json();}catch{}
       if(!r.ok){
         const msg=j?.error||`Server error ${r.status}`;
@@ -2675,12 +2681,12 @@ function TradeJournalTab({isElite,onUpgrade}){
     setSaving(false);
   }
   async function closeEntry(id){
-    await fetch(`/api/journal/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({outcome:closeData.outcome,pnlPct:closeData.pnlPct||undefined})});
+    await apiFetch(`/api/journal/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({outcome:closeData.outcome,pnlPct:closeData.pnlPct||undefined})});
     setClosing(null);setCloseData({outcome:"WIN",pnlPct:""});refetch();
   }
   async function deleteEntry(id){
     setDeleting(id);
-    await fetch(`/api/journal/${id}`,{method:"DELETE"});
+    await apiFetch(`/api/journal/${id}`,{method:"DELETE"});
     setDeleting(null);refetch();
   }
   const inp={background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:4,padding:"8px 10px",fontFamily:MONO,fontSize:11,color:C.text,outline:"none",width:"100%",boxSizing:"border-box"};
@@ -2875,7 +2881,7 @@ function SignalStatusBanner(){
   const[s,setS]=useState(null);
   useEffect(()=>{
     let alive=true;
-    const load=()=>fetch("/api/signal-status",{credentials:"include"}).then(r=>r.json()).then(d=>{if(alive)setS(d);}).catch(()=>{});
+    const load=()=>apiFetch("/api/signal-status",{credentials:"include"}).then(r=>r.json()).then(d=>{if(alive)setS(d);}).catch(()=>{});
     load();
     const iv=setInterval(load,60000);
     return()=>{alive=false;clearInterval(iv);};
@@ -2951,7 +2957,7 @@ function SignalHistoryPanel({isElite,onUpgrade}){
   const[markingId,setMarkingId]=useState(null);
   const[pnlInput,setPnlInput]=useState("");
   const[mutating,setMutating]=useState(false);
-  const{data,isLoading,refetch}=useQuery({queryKey:["/api/signal-history"],queryFn:async()=>{const r=await fetch("/api/signal-history?limit=50");return r.json();},refetchInterval:60000});
+  const{data,isLoading,refetch}=useQuery({queryKey:["/api/signal-history"],queryFn:async()=>{const r=await apiFetch("/api/signal-history?limit=50");return r.json();},refetchInterval:60000});
   const sigs=data?.signals||[];
   const isDelayedHistory=data?.isDelayed||false;
   const wins=sigs.filter(s=>s.outcome==="WIN").length;
@@ -2971,7 +2977,7 @@ function SignalHistoryPanel({isElite,onUpgrade}){
   async function markOutcome(id,outcome){
     setMutating(true);
     try{
-      await fetch(`/api/signal-history/${id}/outcome`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({outcome,pnlPct:pnlInput||undefined})});
+      await apiFetch(`/api/signal-history/${id}/outcome`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({outcome,pnlPct:pnlInput||undefined})});
       setMarkingId(null);setPnlInput("");refetch();
     }catch(e){}
     setMutating(false);
@@ -3131,7 +3137,7 @@ function WhatsNewPanel({ panel, ph, PTitle, Badge, C, SERIF, SANS }){
     let alive=true;
     (async()=>{
       try{
-        const r=await fetch("/api/weekly-update/latest");
+        const r=await apiFetch("/api/weekly-update/latest");
         const j=await r.json();
         if(alive && j && j.id) setU(j);
       }catch{}
@@ -3193,7 +3199,7 @@ function OwnerSupportAlert({ C, MONO, isMobile, onOpen, onNotify }){
     let alive=true;
     const tick=async()=>{
       try{
-        const r=await fetch("/api/support/unread-count",{credentials:"include"});
+        const r=await apiFetch("/api/support/unread-count",{credentials:"include"});
         if(!r.ok) return;
         const d=await r.json();
         if(!alive) return;
@@ -3262,7 +3268,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
     setBooking(true); setBMsg(""); setBConfirmed(false); setPLoading(true);
     if(!bDate){ const t=new Date(); t.setDate(t.getDate()+1); setBDate(t.toISOString().slice(0,10)); }
     try{
-      const r=await fetch("/api/concierge/pricing",{credentials:"include"});
+      const r=await apiFetch("/api/concierge/pricing",{credentials:"include"});
       if(r.ok){ setPricing(await r.json()); }
       else{ setBMsg("Could not load pricing. Please try again."); }
     }catch{ setBMsg("Could not load pricing. Please try again."); }
@@ -3275,7 +3281,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
     const next=[...messages,{role:"user",content:text}];
     setMessages(next); setInput(""); setSending(true);
     try{
-      const r=await fetch("/api/concierge/chat",{
+      const r=await apiFetch("/api/concierge/chat",{
         method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({messages:next.filter(m=>m.role==="user"||m.role==="assistant")}),
       });
@@ -3300,7 +3306,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
     if(!bDate||!bTime||bWorking) return;
     setBWorking(true); setBMsg("");
     try{
-      const r=await fetch("/api/concierge/book",{
+      const r=await apiFetch("/api/concierge/book",{
         method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({date:bDate,time:bTime,bookerTz:(Intl.DateTimeFormat().resolvedOptions().timeZone||"America/Toronto")}),
       });
@@ -3321,15 +3327,15 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   };
 
   const loadThread=async()=>{
-    try{ const r=await fetch("/api/support/thread",{credentials:"include"});
+    try{ const r=await apiFetch("/api/support/thread",{credentials:"include"});
       if(r.ok){ const d=await r.json(); if(d.thread){ setThreadMsgs(d.messages||[]); setEnded(!!d.closed); setOwnerTyping(!!d.ownerTyping); } } }catch{}
   };
   // Throttled (~1 per 2.5s) so the owner sees "client is typing…" without spamming.
-  const pingTyping=()=>{ const now=Date.now(); if(now-typingPing.current<2500) return; typingPing.current=now; fetch("/api/support/typing",{method:"POST",credentials:"include"}).catch(()=>{}); };
+  const pingTyping=()=>{ const now=Date.now(); if(now-typingPing.current<2500) return; typingPing.current=now; apiFetch("/api/support/typing",{method:"POST",credentials:"include"}).catch(()=>{}); };
   const escalate=async()=>{
     if(escalating) return; setEscalating(true);
     try{
-      const r=await fetch("/api/support/escalate",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
+      const r=await apiFetch("/api/support/escalate",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({messages:messages.filter(m=>m.role==="user"||m.role==="assistant").slice(-6)})});
       if(r.ok){ setHumanMode(true); await loadThread(); }
     }catch{} finally{ setEscalating(false); }
@@ -3337,12 +3343,12 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
   const sendHuman=async()=>{
     const text=hInput.trim(); if(!text) return; setHInput("");
     setThreadMsgs(m=>[...m,{id:`tmp-${Date.now()}`,sender:"user",body:text,msg_type:"text"}]);
-    try{ await fetch("/api/support/message",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({body:text})}); }catch{}
+    try{ await apiFetch("/api/support/message",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({body:text})}); }catch{}
     loadThread();
   };
   const endChat=async()=>{
     if(!window.confirm("End this support chat? You can start a new one any time.")) return;
-    try{ const r=await fetch("/api/support/close",{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; }
+    try{ const r=await apiFetch("/api/support/close",{method:"POST",credentials:"include"}); if(!r.ok) throw 0; }catch{ alert("Could not end the chat. Please try again."); return; }
     setThreadMsgs([]); setHumanMode(false); setEnded(false); setOwnerTyping(false);
   };
   useEffect(()=>{
@@ -3545,6 +3551,8 @@ export default function App(){
     }catch{}
   };
   const [sessionChecked,setSessionChecked]=useState(false);
+  const [sessionError,setSessionError]=useState(false);
+  const [sessionRetry,setSessionRetry]=useState(0);
   const [isDark,setIsDark]=useState(()=>{try{return localStorage.getItem("clvr_theme")!=="light";}catch{return true;}});
   const toggleTheme=useCallback(()=>{setIsDark(d=>{const next=!d;try{localStorage.setItem("clvr_theme",next?"dark":"light");}catch{}return next;});},[]);
   const themeVal={C:isDark?DARK_C:LIGHT_C,isDark,toggle:toggleTheme};
@@ -3556,21 +3564,22 @@ export default function App(){
   },[isDark]);
 
   // Check for existing session on mount.
-  // The server returns either { user: { id, ..., isAdmin } } (current shape)
-  // or, in older code paths, the user fields directly at the top level.
-  // We accept both so admin flags propagate correctly on page reload —
-  // otherwise admin-only UI like the "Send to Telegram" button stays
-  // hidden after a refresh even though the user is signed in.
+  // Only explicit unauthenticated responses may show the welcome screen.
+  // Transient errors must not discard credentials or masquerade as sign-out.
   useEffect(()=>{
-    fetch("/api/auth/me",{credentials:"include"})
-      .then(r=>r.ok?r.json():null)
-      .then(d=>{
-        const u = d?.user?.id ? d.user : (d?.id ? d : null);
-        if(u){ setUser(u); _checkPostLoginRedirect(); }
+    let active=true;
+    apiFetch("/api/auth/me",{credentials:"include"})
+      .then(readAuthSession)
+      .then(u=>{
+        if(!active)return;
+        setSessionError(false);
+        setUser(u);
+        if(u) _checkPostLoginRedirect();
       })
-      .catch(()=>{})
-      .finally(()=>setSessionChecked(true));
-  },[]);
+      .catch(()=>{if(active)setSessionError(true);})
+      .finally(()=>{if(active)setSessionChecked(true);});
+    return ()=>{active=false;};
+  },[sessionRetry]);
 
   // Brief splash while checking session
   if(!sessionChecked){
@@ -3579,6 +3588,16 @@ export default function App(){
         <div style={{fontFamily:"'Playfair Display',Georgia,serif",fontSize:28,fontWeight:900,color:"#c9a84c",letterSpacing:"-0.02em"}}>CLVRQuant</div>
         <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isDark?"#2a3650":LIGHT_C.muted,letterSpacing:"0.25em"}}>LOADING...</div>
       </div>
+    );
+  }
+
+  if(sessionError){
+    return(
+      <main role="main" aria-labelledby="account-status-title" style={{background:isDark?DARK_C.bg:LIGHT_C.bg,color:isDark?DARK_C.text:LIGHT_C.text,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24,textAlign:"center",fontFamily:SANS}}>
+        <h1 id="account-status-title" style={{fontFamily:SERIF,fontSize:28,margin:0}}>Account status unavailable</h1>
+        <p role="alert" style={{maxWidth:440,margin:0}}>We couldn’t verify your session right now. Your sign-in has not been cleared. Please try again.</p>
+        <button type="button" onClick={()=>{setSessionChecked(false);setSessionError(false);setSessionRetry(n=>n+1);}} style={{background:isDark?DARK_C.gold:LIGHT_C.gold,color:isDark?DARK_C.bg:"#fff",border:0,borderRadius:8,padding:"12px 20px",fontFamily:SANS,fontSize:16,fontWeight:700,cursor:"pointer"}}>Retry account check</button>
+      </main>
     );
   }
 
@@ -3725,6 +3744,19 @@ function Dashboard({user,setUser,onShowAuth}){
   const {isMobile,isTablet,isDesktop}=useWindowSize();
   const sidebarW=isDesktop?180:isTablet?64:0;
   const [tab,setTab]=useState("radar");
+  const expireSession = useCallback(() => {
+    try { sessionStorage.setItem("clvr_return_tab", ["radar","markets","macro","brief","signals","ai","account"].includes(tab) ? tab : "radar"); } catch {}
+    setUser(null);
+    onShowAuth();
+  }, [tab, setUser, onShowAuth]);
+  useEffect(() => {
+    try {
+      const returnTab = sessionStorage.getItem("clvr_return_tab");
+      if (returnTab && ["radar","markets","macro","brief","signals","ai","account"].includes(returnTab)) {
+        setTab(returnTab); sessionStorage.removeItem("clvr_return_tab");
+      }
+    } catch {}
+  }, []);
   const [clockTick,setClockTick]=useState(0);
   // ── Global market bell state ───────────────────────────────────────────────
   const [bellFlash,setBellFlash]=useState(null); // "open"|"close"|null
@@ -3756,11 +3788,14 @@ function Dashboard({user,setUser,onShowAuth}){
 
   const [flashes,setFlashes]=useState({});
   const prevRef=useRef({});
+  const lastPricePulseRef=useRef({});
   const [alerts,setAlerts]=useState([]);
   const alertsLoaded=useRef(false);
   const [alertForm,setAlertForm]=useState({sym:"BTC",field:"price",condition:"above",threshold:""});
   const [showAlertForm,setShowAlertForm]=useState(false);
   const [liveSignals,setLiveSignals]=useState([]);
+  const liveSignalIds=useStableResponseItemIds(liveSignals,signal=>signal?.id,"live-signal");
+  const isNewLiveSignal=useNewItemMotion(liveSignalIds);
   const [newsFeed,setNewsFeed]=useState([]);
   const [newsFilter,setNewsFilter]=useState("ALL");
   const [newsFilteredCount,setNewsFilteredCount]=useState(0);
@@ -3787,7 +3822,7 @@ function Dashboard({user,setUser,onShowAuth}){
     alertsLoaded.current=true;
     let alertRetries=0;
     const loadAlerts=()=>{
-      fetch("/api/alerts",{credentials:"include"}).then(r=>{
+      apiFetch("/api/alerts",{credentials:"include"}).then(r=>{
         if(r.status===401){if(alertRetries++<3)setTimeout(loadAlerts,2000);return null;}
         return r.ok?r.json():null;
       }).then(data=>{
@@ -3800,7 +3835,7 @@ function Dashboard({user,setUser,onShowAuth}){
     setTimeout(loadAlerts,500);
   },[user]);
   const refreshAlerts=useCallback(()=>{
-    fetch("/api/alerts",{credentials:"include"}).then(r=>r.ok?r.json():null).then(data=>{
+    apiFetch("/api/alerts",{credentials:"include"}).then(r=>r.ok?r.json():null).then(data=>{
       if(!data)return;
       const mapped=data.map(a=>({...a,threshold:Number(a.threshold)}));
       setAlerts(mapped);
@@ -3921,7 +3956,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [verifyBannerDismissed,setVerifyBannerDismissed]=useState(false);
   const handleResendVerification=useCallback(async()=>{
     setResendLoading(true);
-    try{const r=await fetch("/api/auth/resend-verification",{method:"POST",credentials:"include"});const d=await r.json();if(r.ok)setResendSent(true);else setToast(d.error||"Failed to send");}catch{setToast("Network error");}
+    try{const r=await apiFetch("/api/auth/resend-verification",{method:"POST",credentials:"include"});const d=await r.json();if(r.ok)setResendSent(true);else setToast(d.error||"Failed to send");}catch{setToast("Network error");}
     setResendLoading(false);
   },[]);
   const [mustChangePassword,setMustChangePassword]=useState(()=>!!(user?.mustChangePassword));
@@ -3939,6 +3974,9 @@ function Dashboard({user,setUser,onShowAuth}){
   useEffect(()=>{isProRef.current=isPro;},[isPro]);
   const [macroEvents,setMacroEvents]=useState([]);
   const [macroLoading,setMacroLoading]=useState(true);
+  const [macroError,setMacroError]=useState(false);
+  const [macroStale,setMacroStale]=useState(false);
+  const macroLoaderRef=useRef(null);
   const [macroAiEvent,setMacroAiEvent]=useState(null);
   const [macroAiResp,setMacroAiResp]=useState(null);
   const [macroAiLoading,setMacroAiLoading]=useState(false);
@@ -3957,12 +3995,17 @@ function Dashboard({user,setUser,onShowAuth}){
     const nF={};
     Object.entries(updates).forEach(([sym,d])=>{
       const prev=prevRef.current[sym];
-      if(prev&&d.price&&d.price!==prev)nF[sym]=d.price>prev?"green":"red";
+      // Price pulse is a visual-only, per-symbol throttle; it cannot alter
+      // price data, polling cadence, or layout.
+      if(prev&&d.price&&d.price!==prev&&Date.now()-(lastPricePulseRef.current[sym]||0)>=300){
+        nF[sym]=d.price>prev?"green":"red";
+        lastPricePulseRef.current[sym]=Date.now();
+      }
       if(d.price)prevRef.current[sym]=d.price;
     });
     if(Object.keys(nF).length){
       setFlashes(f=>({...f,...nF}));
-      setTimeout(()=>setFlashes(f=>{const n={...f};Object.keys(nF).forEach(k=>delete n[k]);return n;}),350);
+      setTimeout(()=>setFlashes(f=>{const n={...f};Object.keys(nF).forEach(k=>delete n[k]);return n;}),250);
     }
   },[]);
 
@@ -4155,7 +4198,7 @@ function Dashboard({user,setUser,onShowAuth}){
   useEffect(()=>{
     const userIsPro=userTier==="pro";
     if(!userIsPro)return;
-    const doInsider=async()=>{try{const r=await fetch("/api/insider",{credentials:"include"});if(r.ok){const d=await r.json();setInsiderData(d.trades||[]);}}catch{}};
+    const doInsider=async()=>{try{const r=await apiFetch("/api/insider",{credentials:"include"});if(r.ok){const d=await r.json();setInsiderData(d.trades||[]);}}catch{}};
     doInsider();
     const iv=setInterval(doInsider,15*60*1000);
     return()=>clearInterval(iv);
@@ -4164,7 +4207,7 @@ function Dashboard({user,setUser,onShowAuth}){
   // ── Unusual Activity (Pulse) — auto-refreshes every 30s (Elite only) ──────
   useEffect(()=>{
     if(!isElite)return;
-    const doUnusual=async()=>{try{const r=await fetch("/api/unusual",{credentials:"include"});if(r.ok){const d=await r.json();setUnusualData(d);}}catch{}};
+    const doUnusual=async()=>{try{const r=await apiFetch("/api/unusual",{credentials:"include"});if(r.ok){const d=await r.json();setUnusualData(d);}}catch{}};
     doUnusual();
     const iv=setInterval(doUnusual,30000);
     return()=>clearInterval(iv);
@@ -4227,7 +4270,7 @@ function Dashboard({user,setUser,onShowAuth}){
     const sessionId=params.get("session_id");
     const status=params.get("status");
     if(status==="success"&&sessionId){
-      fetch(`/api/stripe/subscription?session_id=${sessionId}`).then(r=>r.json()).then(data=>{
+      apiFetch(`/api/stripe/subscription?session_id=${sessionId}`).then(r=>r.json()).then(data=>{
         if(data.tier==="elite"){setUserTier("elite");try{localStorage.setItem("clvr_tier","elite");}catch{}setToast("✦ Welcome to CLVRQuant Elite!");}
         else if(data.tier==="pro"){setUserTier("pro");try{localStorage.setItem("clvr_tier","pro");}catch{}setToast("✦ Welcome to CLVRQuant Pro!");}
       }).catch(()=>{});
@@ -4238,36 +4281,55 @@ function Dashboard({user,setUser,onShowAuth}){
   },[]);
 
   useEffect(()=>{
-    fetch("/api/prices").then(r=>r.json()).then(data=>{
+    apiFetch("/api/prices").then(r=>r.json()).then(data=>{
       if(data?.monthly&&data?.yearly)setStripePrices(data);
     }).catch(()=>{});
   },[]);
 
   const verifyAccessCode=useCallback(async(codeOverride)=>{
     const code=(codeOverride||accessCodeInput).trim();
-    if(!code)return;
+    if(!code){const message="Enter an access code.";setAccessCodeMsg(message);return {success:false,message};}
     if(codeOverride)setAccessCodeInput(codeOverride);
     try{
-      const r=await fetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
+      const r=await apiFetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
       const data=await r.json();
-      if(data.valid){
-        const grantedTier=data.tier||"elite";
-        setUserTier(grantedTier);
-        try{localStorage.setItem("clvr_tier",grantedTier);localStorage.setItem("clvr_code",code);}catch{}
-        const tierLabel=grantedTier==="elite"?"Elite":"Pro";
-        setAccessCodeMsg(`✦ ${data.label} — ${tierLabel} access activated`);
-        setToast(`✦ ${tierLabel} access activated!`);
-      } else{setAccessCodeMsg(data.error||"Invalid or expired code");}
-    }catch{setAccessCodeMsg("Verification failed");}
-  },[accessCodeInput]);
+      const feedback=accessCodeFeedback(data);
+      if(!r.ok||!feedback.success){
+        setAccessCodeMsg(feedback.message);
+        return feedback;
+      }
+      // Re-read the authoritative session entitlement immediately after redemption.
+      const me=await apiFetch("/api/auth/me",{credentials:"include",cache:"no-store"});
+      const session=me.ok?(await me.json())?.user:null;
+      if(!session?.id||!session.tier)throw new Error("Code accepted, but couldn't refresh your account. Reload to see your access.");
+      setUser(session);
+      setUserTier(session.tier);
+      try{localStorage.setItem("clvr_tier",session.tier);}catch{}
+      const confirmed=accessCodeFeedback({...data,tier:session.tier});
+      if(!confirmed.success){setAccessCodeMsg(confirmed.message);return confirmed;}
+      setAccessCodeMsg(confirmed.message);
+      setToast(confirmed.message);
+      return confirmed;
+    }catch(e){
+      const message=e?.message?.startsWith("Code accepted")?e.message:"Verification failed. Please try again.";
+      setAccessCodeMsg(message);
+      return {success:false,message};
+    }
+  },[accessCodeInput,setUser]);
 
   // Show biometric setup prompt if WebAuthn is supported and no credential stored yet
   useEffect(()=>{
+    setShowBiometricSetup(false);
     if(!user||user?.guest)return;
+    try{if(localStorage.getItem(`${WA_DISMISS_KEY}_${user.id}`))return;}catch{}
     if(!waSupported()||getStoredWACred())return;
     const timer=setTimeout(()=>setShowBiometricSetup(true),2500);
     return()=>clearTimeout(timer);
-  },[user]);
+  },[user?.id,user?.guest]);
+  const dismissBiometricSetup=()=>{
+    try{localStorage.setItem(`${WA_DISMISS_KEY}_${user.id}`,"1");}catch{}
+    setShowBiometricSetup(false);
+  };
 
   // Register Face ID / biometric credential
   const registerBiometric=useCallback(async()=>{
@@ -4292,13 +4354,13 @@ function Dashboard({user,setUser,onShowAuth}){
       }});
       if(!cred)throw new Error("Registration cancelled");
       const credentialId=uint8ToB64(cred.rawId);
-      const r=await fetch("/api/auth/webauthn/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credentialId})});
+      const r=await apiFetch("/api/auth/webauthn/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credentialId})});
       if(r.ok){storeWACred(credentialId,user.id);setToast("✦ Face ID enabled — next login is one tap");}
-      else throw new Error("Server registration failed");
+      else {const data=await r.json().catch(()=>({}));throw new Error(data.error||"Server registration failed");}
     }catch(e){
       const msg=e?.message||"";
-      if(!msg.includes("cancel")&&!msg.includes("NotAllowed"))setToast("Biometric setup failed. Try again later.");
-    }finally{setBiometricRegistering(false);setShowBiometricSetup(false);}
+      if(!msg.includes("cancel")&&!msg.includes("NotAllowed"))setToast(msg||"Biometric setup failed. Try again later.");
+    }finally{setBiometricRegistering(false);dismissBiometricSetup();}
   },[user]);
 
   const handleCheckout=(priceId)=>{
@@ -4308,13 +4370,22 @@ function Dashboard({user,setUser,onShowAuth}){
   };
 
   // ── Macro calendar (30s refresh — fast enough to catch 8:30 AM ET releases) ─
-  const fetchMacro=useCallback(()=>{
-    fetch("/api/macro").then(r=>r.json()).then(data=>{
-      if(Array.isArray(data)) setMacroEvents(data);
-      setMacroLoading(false);
-    }).catch(()=>setMacroLoading(false));
+  useEffect(()=>{
+    const loader=createMacroLoader(async(force)=>{
+      const r=await apiFetch(force?"/api/macro?retry=1":"/api/macro");
+      if(!r.ok)throw new Error(`Macro calendar HTTP ${r.status}`);
+      return {events:await r.json(),stale:r.headers.get("X-Macro-Stale")==="1"};
+    },update=>{
+      if(update.events)setMacroEvents(update.events);
+      setMacroLoading(update.loading);
+      setMacroError(update.error);
+      if(update.stale!==undefined)setMacroStale(update.stale);
+    });
+    macroLoaderRef.current=loader;
+    loader.fetch();
+    const iv=setInterval(()=>loader.fetch(),30000);
+    return()=>{clearInterval(iv);loader.dispose();macroLoaderRef.current=null;};
   },[]);
-  useEffect(()=>{fetchMacro();const iv=setInterval(fetchMacro,30000);return()=>clearInterval(iv);},[fetchMacro]);
   // Tick every 30s so nextEvents recomputes and hides the countdown box once an event passes
   useEffect(()=>{const iv=setInterval(()=>setClockTick(t=>t+1),30000);return()=>clearInterval(iv);},[]);
 
@@ -4360,7 +4431,7 @@ function Dashboard({user,setUser,onShowAuth}){
     :null;
 
   const fetchRegime=useCallback(async()=>{
-    try{const r=await fetch("/api/regime");if(r.ok){const d=await r.json();setRegimeData(d);}}catch{}
+    try{const r=await apiFetch("/api/regime");if(r.ok){const d=await r.json();setRegimeData(d);}}catch{}
   },[]);
   useEffect(()=>{fetchRegime();const iv=setInterval(fetchRegime,60000);return()=>clearInterval(iv);},[fetchRegime]);
 
@@ -4368,7 +4439,7 @@ function Dashboard({user,setUser,onShowAuth}){
     setMacroAiEvent(evt);setMacroAiResp(null);setMacroAiLoading(true);
     try{
       const msg=`Analyze this economic release:\n\nEvent: ${evt.name}\nCountry/Region: ${evt.region||evt.country}\nForecast: ${evt.forecast} ${evt.unit||""}\nPrevious: ${evt.previous||evt.current} ${evt.unit||""}\nActual: ${evt.actual||"Not yet released"} ${evt.unit||""}\nImpact Level: ${evt.impact}\nToday: ${new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}\n\n${evt.actual?`The actual came in ${parseFloat(evt.actual)>parseFloat(evt.forecast)?"ABOVE":"BELOW"} expectations.`:"This event has not yet been released."}\n\nWhat does this mean for markets? Which assets move? What's the macro implication? What should I watch next?`;
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({feature:"macroAI",userMessage:msg})});
+      const res=await apiFetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({feature:"macroAI",userMessage:msg})});
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403)setMacroAiResp("✦ PRO FEATURE — Upgrade to Pro to unlock AI-powered macro analysis.");
@@ -4402,7 +4473,7 @@ function Dashboard({user,setUser,onShowAuth}){
           assets:[a.sym],
           id:`user-alert-${a.id||a.sym}-${Math.floor(Date.now()/60000)}`,
         });
-        if(user&&a.id)fetch(`/api/alerts/${a.id}/trigger`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:a.label,sym:a.sym,threshold:a.threshold,condition:a.condition})}).catch(()=>{});
+        if(user&&a.id)apiFetch(`/api/alerts/${a.id}/trigger`,{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:a.label,sym:a.sym,threshold:a.threshold,condition:a.condition})}).catch(()=>{});
         return{...a,triggered:true};
       }
       return a;
@@ -4447,7 +4518,7 @@ function Dashboard({user,setUser,onShowAuth}){
     if(!subEmail||!subEmail.includes("@")){setToast("Enter a valid email address");return;}
     setSubLoading(true);
     try{
-      await fetch("/api/subscribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:subEmail,name:subName||"Trader"})});
+      await apiFetch("/api/subscribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:subEmail,name:subName||"Trader"})});
       setSubList(prev=>[...prev.filter(e=>e!==subEmail),subEmail]);
       setToast(`✦ Subscribed — briefs at 6:00 AM`);
       setSubEmail("");setSubName("");
@@ -4508,7 +4579,7 @@ Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT 
         if (attempt > 1) {
           await new Promise(r => setTimeout(r, 1500 * Math.pow(2, attempt - 2))); // 1.5s, 3s
         }
-        const res = await fetch("/api/ai/analyze", {
+        const res = await apiFetch("/api/ai/analyze", {
           method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ feature: "morningBrief", userMessage: prompt, maxTokens: 6000, skipTools: true, enableWebSearch: true }),
@@ -4598,7 +4669,7 @@ Output STRICT JSON (no markdown, no commentary outside the JSON). Use the EXACT 
     // Fetch Polymarket prediction odds live and inject into AI context
     let polySnap="";
     try{
-      const pr=await fetch("/api/polymarket",{credentials:"include"});
+      const pr=await apiFetch("/api/polymarket",{credentials:"include"});
       if(pr.ok){
         const pd=await pr.json();
         if(Array.isArray(pd)&&pd.length>0){
@@ -4624,7 +4695,7 @@ COMMODITIES: ${metalSnap}
 FOREX (Yahoo/FMP — no HL forex perps): ${fxSnap}${sigSnap}${newsSnap}${politicalSnap}${storeModeSnap}${regimeSnap}${liqHeatSnap}
 ${macroAiSnap}${polySnap}${twAiContext||""}${conflictSnap}${insiderSnap}`;
     try{
-      const res=await fetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({feature:"askAI",context,userMessage:aiInput})});
+      const res=await apiFetch("/api/ai/analyze",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({feature:"askAI",context,userMessage:aiInput})});
       const data=await res.json();
       if(!res.ok){
         if(res.status===401||res.status===403)setAiOutput("✦ PRO FEATURE\n\nAI Market Analyst is exclusive to Pro subscribers. Upgrade to Pro to unlock:\n• CLVR AI analysis — powered by Claude Sonnet 4\n• Top 4 trade ideas with Entry / Stop / TP1 / TP2\n• Confidence levels & Kelly sizing\n• Cross-asset intelligence\n\nTap UPGRADE in the top bar.");
@@ -4688,7 +4759,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
     const ctrl = new AbortController();
     const timeoutId = setTimeout(() => ctrl.abort(), 90_000);
     try{
-      const res=await fetch("/api/ai/analyze",{
+      const res=await apiFetch("/api/ai/analyze",{
         method:"POST",
         credentials:"include",
         headers:{"Content-Type":"application/json"},
@@ -4743,9 +4814,10 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
   const today=new Date();
   // Date string helpers: compare event dates as YYYY-MM-DD strings using ET timezone
   // This prevents the off-by-one day issue (e.g., "2026-03-12" at UTC midnight = March 11 7PM ET)
-  const todayETStr=new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});
-  const tomorrowETStr=new Date(Date.now()+86400000).toLocaleDateString("en-CA",{timeZone:"America/New_York"});
+  const todayETStr=etDateParts(today).date;
+  const tomorrowETStr=etDateParts(new Date(today.getTime()+86400000)).date;
   const eventStatus=(dateStr)=>{
+    dateStr=macroEventDate(dateStr);
     if(!dateStr)return{label:"?",color:"muted"};
     if(dateStr<todayETStr)return{label:"PAST",color:"muted"};
     if(dateStr===todayETStr)return{label:"TODAY",color:"red"};
@@ -4818,21 +4890,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
   };
 
   // Use ET timezone for date comparisons so US economic events (e.g. 8:30 AM ET jobless claims) show on correct day
-  const macroTodayStr=new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});// YYYY-MM-DD in ET
-  const macroTodayEvents=macroEvents.filter(e=>e.date===macroTodayStr);
-  const macroWeekEndDate=new Date();macroWeekEndDate.setDate(macroWeekEndDate.getDate()+(6-macroWeekEndDate.getDay()));macroWeekEndDate.setHours(23,59,59,999);
-  const macroWeekStartStr=macroTodayStr;
-  const macroWeekEndStr=macroWeekEndDate.toLocaleDateString("en-CA",{timeZone:"America/New_York"});
-  const macroWeekEvents=macroEvents.filter(e=>e.date>=macroWeekStartStr&&e.date<=macroWeekEndStr);
-  const macroAllFiltered=(macroCalTab==="today"?macroTodayEvents:macroWeekEvents)
-    .filter(e=>macroRegionFilter==="ALL"||(e.country||"").toUpperCase()===macroRegionFilter)
-    .filter(e=>macroImpactFilter==="ALL"||e.impact===macroImpactFilter)
-    .sort((a,b)=>{const da=new Date(a.date).getTime();const db=new Date(b.date).getTime();if(da!==db)return da-db;const ta=a.timeET||a.time||"00:00";const tb=b.timeET||b.time||"00:00";return ta.localeCompare(tb);});
+  const macroTodayStr=todayETStr;// YYYY-MM-DD in ET
+  const macroTodayEvents=macroEvents.filter(e=>macroEventDate(e.date)===macroTodayStr);
+  const macroAllFiltered=filterMacroCalendar(macroEvents,macroCalTab,macroRegionFilter,macroImpactFilter,today);
   const macroReleasedCount=macroAllFiltered.filter(e=>e.released||e.isPast).length;
   const macroPendingCount=macroAllFiltered.filter(e=>!e.released&&!e.isPast).length;
   const macroHighCount=macroAllFiltered.filter(e=>e.impact==="HIGH").length;
-  const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&!e.isPast&&e.date>=macroTodayStr).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
-  const macroNextPending=macroSortedForNext[0]||null;
+  const macroUpcomingEvents=selectUpcomingMacroEvents(macroEvents,today);
+  const macroNextPending=macroUpcomingEvents[0]||null;
 
   const requestPush=async()=>{
     // ── Already granted + active → DISABLE ──────────────────────────────────
@@ -4844,7 +4909,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           if(sub) await sub.unsubscribe().catch(()=>{});
         }
       }catch(e){}
-      try{await fetch("/api/push/unsubscribe",{method:"POST",credentials:"include"});}catch(e){}
+      try{await apiFetch("/api/push/unsubscribe",{method:"POST",credentials:"include"});}catch(e){}
       setInAppAlerts(false);
       try{localStorage.removeItem("clvr_inapp_alerts");}catch(e){}
       setPushDisabled(true);
@@ -4862,14 +4927,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       // Then attempt to re-subscribe to OS push (best effort — non-blocking)
       try{
         const swReg=await navigator.serviceWorker.ready;
-        const keyRes=await fetch("/api/push/public-key");
+        const keyRes=await apiFetch("/api/push/public-key");
         const{publicKey}=await keyRes.json();
         const b64=publicKey.replace(/-/g,"+").replace(/_/g,"/");
         const raw=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
         const existing=await swReg.pushManager.getSubscription();
         if(existing) await existing.unsubscribe().catch(()=>{});
         const sub=await swReg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:raw});
-        await fetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
+        await apiFetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
         setToast("🔔 Push notifications re-enabled");
       }catch(e){
         // Push subscription failed but in-app alerts are active
@@ -4907,14 +4972,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       if(perm==="granted"){
         try{
           const swReg=await navigator.serviceWorker.ready;
-          const keyRes=await fetch("/api/push/public-key");
+          const keyRes=await apiFetch("/api/push/public-key");
           const{publicKey}=await keyRes.json();
           const b64=publicKey.replace(/-/g,"+").replace(/_/g,"/");
           const raw=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
           const existing=await swReg.pushManager.getSubscription();
           if(existing) await existing.unsubscribe().catch(()=>{});
           const sub=await swReg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:raw});
-          await fetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
+          await apiFetch("/api/push/subscribe",{method:"POST",credentials:"include",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub.toJSON()})});
           setPushDisabled(false);
           try{localStorage.removeItem("clvr_push_disabled");}catch(e){}
           setToast("🔔 Push notifications enabled — alerts will appear on your lock screen");
@@ -4928,9 +4993,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
     }
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- clockTick forces periodic recompute so expired events disappear
-  const todayDate=new Date();
-  const nextEvents=macroEvents.map(e=>{const timeStr=e.timeET||e.time||"12:00";const{h,m,offsetUTC}=parseTimeET(timeStr);const[y,mo,d]=e.date.split("-").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+offsetUTC,m,0));return{...e,timeET:timeStr,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs); // clockTick dependency: ${clockTick}
+  const nextEvents=macroUpcomingEvents; // Radar and Macro use identical upcoming-event rules.
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
 
   // Alerts are "active" when not paused AND the user has either granted OS push
@@ -4968,6 +5031,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
 
   return(
     <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:isMobile?76:24,paddingTop:"env(safe-area-inset-top,0px)",paddingLeft:isMobile?0:sidebarW,maxWidth:isMobile?780:undefined,margin:isMobile?"0 auto":0,position:"relative"}}>
+      {!isPreview&&<SessionSecurity onExpired={expireSession}/>}
       {user&&!isPreview&&<ConciergeWidget user={user} C={C} isMobile={isMobile} MONO={MONO} SERIF={SERIF} openSignal={conciergeOpenSignal}/>}
       {isOwnerOnly&&<OwnerSupportAlert C={C} MONO={MONO} isMobile={isMobile} onOpen={()=>{setAcctTabReq("support");setTab("account");}} onNotify={(m)=>setToast(m)}/>}
       {!isMobile&&<SideNav items={NAV} tab={tab} onTab={setTab} C={C} MONO={MONO} SERIF={SERIF} PRO_TABS_GATE2={PRO_TABS_GATE} isPro={isPro} isElite={isElite} isPreview={isPreview} upcomingCount={upcomingCount} isDark={isDark} toggleTheme={toggleTheme} wide={isDesktop}/>}
@@ -4991,7 +5055,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       `}</style>
 
       {/* QR Scanner overlay */}
-      {showQRScanner&&<QRScanner onScan={async(raw)=>{setShowQRScanner(false);const code=raw.trim().toUpperCase();await verifyAccessCode(code);}} onClose={()=>setShowQRScanner(false)}/>}
+      {showQRScanner&&<QRScanner onScan={verifyAccessCode} onClose={()=>setShowQRScanner(false)}/>}
 
       {/* ── Slide-out Menu Drawer ─────────────────────────────────────── */}
       <div
@@ -5090,7 +5154,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           <button data-testid="drawer-btn-signout"
             onClick={async()=>{
               setDrawerOpen(false);
-              try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}
+              try{await apiFetch("/api/auth/signout",{method:"POST"});}catch(e){}
               try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}
               setUser(null);
             }}
@@ -5142,7 +5206,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               if(newPwInput!==newPwInput2)return setChangePwError("Passwords don't match.");
               setChangePwLoading(true);
               try{
-                const r=await fetch("/api/auth/change-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({newPassword:newPwInput})});
+                const r=await apiFetch("/api/auth/change-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({newPassword:newPwInput})});
                 const d=await r.json();
                 if(!r.ok)return setChangePwError(d.error||"Failed to update password.");
                 setMustChangePassword(false);
@@ -5157,19 +5221,19 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       </div>}
 
       {/* Face ID / Biometric setup prompt */}
-      {showBiometricSetup&&<div style={{position:"fixed",inset:0,zIndex:400,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0 0 40px"}}>
-        <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:12,maxWidth:380,width:"100%",padding:"24px 20px",margin:"0 16px",position:"relative"}}>
+      {showBiometricSetup&&<div role="region" aria-label="Optional Face ID setup" style={{position:"fixed",right:16,bottom:16,zIndex:400,maxWidth:380,width:"calc(100% - 32px)",boxShadow:"0 12px 40px rgba(0,0,0,.55)"}}>
+        <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:12,width:"100%",padding:"16px 20px",position:"relative"}}>
           <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`,borderRadius:"12px 12px 0 0"}}/>
           <div style={{textAlign:"center",marginBottom:18}}>
             <div style={{fontSize:42,marginBottom:8}}>🔒</div>
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:18,color:C.gold2,marginBottom:4}}>Enable Face ID</div>
-            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,lineHeight:1.7,letterSpacing:"0.05em"}}>Sign in instantly on future visits.<br/>No password required.</div>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,lineHeight:1.7,letterSpacing:"0.05em"}}>Optional biometric setup. Password sign-in remains available.</div>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             <button data-testid="btn-enable-faceid" onClick={registerBiometric} disabled={biometricRegistering} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:8,padding:"13px 16px",fontFamily:MONO,fontSize:11,color:C.gold2,cursor:biometricRegistering?"not-allowed":"pointer",letterSpacing:"0.1em",opacity:biometricRegistering?0.6:1}}>
               {biometricRegistering?"Setting up...":"Enable Face ID / Biometric →"}
             </button>
-            <button data-testid="btn-skip-faceid" onClick={()=>setShowBiometricSetup(false)} style={{background:"none",border:"none",fontFamily:MONO,fontSize:9,color:C.muted,cursor:"pointer",letterSpacing:"0.08em",padding:"8px 0"}}>
+            <button data-testid="btn-skip-faceid" onClick={dismissBiometricSetup} style={{background:"none",border:"none",fontFamily:MONO,fontSize:9,color:C.muted,cursor:"pointer",letterSpacing:"0.08em",padding:"8px 0"}}>
               Not now
             </button>
           </div>
@@ -5300,10 +5364,11 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>HAVE AN ACCESS CODE?</div>
               <div style={{display:"flex",gap:6}}>
                 <button data-testid="btn-scan-qr" onClick={()=>setShowQRScanner(true)} title="Scan QR code" style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"8px 10px",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center"}}>📷</button>
-                <input data-testid="input-access-code" value={accessCodeInput} onChange={e=>setAccessCodeInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&verifyAccessCode()} placeholder="CLVR-VIP-XXXX or CLVR-FF-XXXX" style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 10px",color:C.text,fontFamily:MONO,fontSize:10}}/>
+                <input data-testid="input-access-code" value={accessCodeInput} onChange={e=>setAccessCodeInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&verifyAccessCode()} placeholder="Enter access code" style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 10px",color:C.text,fontFamily:MONO,fontSize:10}}/>
                 <button data-testid="btn-verify-code" onClick={()=>verifyAccessCode()} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,padding:"8px 14px",fontFamily:MONO,fontSize:9,color:C.gold,cursor:"pointer",letterSpacing:"0.1em"}}>VERIFY</button>
               </div>
-              {accessCodeMsg&&<div style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("✦")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
+              <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,marginTop:6}}>{ACCESS_CODE_FORMATS}</div>
+              {accessCodeMsg&&<div role="status" style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("activated")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
             </div>
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:10}}>Cancel anytime · Secure checkout via Stripe · CAD</div>
             <button onClick={()=>setShowUpgrade(false)} style={{marginTop:10,background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:9,cursor:"pointer",letterSpacing:"0.1em"}}>CLOSE</button>
@@ -5441,7 +5506,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                 style={{background:flash==="green"?"rgba(0,199,135,.08)":flash==="red"?"rgba(255,64,96,.06)":C.panel,
                   border:`1px solid ${d?.live?"rgba(201,168,76,.18)":C.border}`,borderRadius:2,padding:"5px 9px",flexShrink:0,cursor:"pointer",minWidth:64,transition:"background .35s"}}>
                 <div style={{fontFamily:MONO,fontSize:8,color:d?.live?C.gold:C.muted,letterSpacing:"0.08em"}}>{label}</div>
-                <div style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,transition:"color .5s ease-out",marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{d?.price!=null?(sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)):"—"}</div>
+                <div className={flash?"motion-price-pulse":undefined} style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{d?.price!=null?(sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)):"—"}</div>
                 <div style={{fontFamily:MONO,fontSize:9,color:isUp?C.green:C.red}}>{pct(d?.chg)}</div>
               </div>
             );
@@ -5481,7 +5546,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         {/* Pro-tier gate for Pro-only tabs (free users) */}
         {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
         {/* Elite-tier gate for Elite-only tabs (free AND pro users) */}
-        {!isPreview&&!isElite&&ELITE_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {!isPreview&&!isElite&&tab!=="basket"&&ELITE_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
@@ -5812,11 +5877,12 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             );
           })()}
 
+          {macroStale&&<div role="status" style={{fontFamily:MONO,fontSize:9,color:C.orange,marginBottom:8}}>Macro calendar: showing last known events (stale). <button type="button" onClick={()=>macroLoaderRef.current?.fetch(true)} style={{background:"transparent",border:"none",color:C.gold,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>retry</button></div>}
           {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
             <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:10}}>{i18n.nextMacro}</div>
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.text,marginBottom:3}}>{nextEvents[0].bank}: {nextEvents[0].name}</div>
-            <div style={{fontFamily:MONO,fontSize:11,color:C.muted2,marginBottom:10}}>{nextEvents[0].date} {nextEvents[0].timeET} ET — Forecast: {nextEvents[0].forecast}</div>
-            <Countdown dateStr={nextEvents[0].date} timeET={nextEvents[0].timeET}/>
+            <div style={{fontFamily:MONO,fontSize:11,color:C.muted2,marginBottom:10}}>{macroEventDate(nextEvents[0].date)} {nextEvents[0].timeET||nextEvents[0].time} {nextEvents[0].timeET?"ET":""} — Forecast: {nextEvents[0].forecast}</div>
+            <Countdown dateStr={nextEvents[0].date} timeET={nextEvents[0].timeET||nextEvents[0].time}/>
             {nextEvents[0].assets&&<div style={{display:"flex",gap:4,marginTop:10,flexWrap:"wrap"}}>{nextEvents[0].assets.map(s=><span key={s} style={{fontFamily:MONO,fontSize:9,color:C.gold,background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"3px 8px"}}>{s}</span>)}</div>}
             <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,marginTop:8,lineHeight:1.6}}>{nextEvents[0].desc}</div>
           </div>}
@@ -5830,7 +5896,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                   <div style={{fontFamily:SANS,fontSize:12,color:C.text}}>{evt.name}</div>
                   <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{evt.date} — {evt.forecast}</div>
                 </div>
-                <Countdown dateStr={evt.date} timeET={evt.timeET} compact/>
+                <Countdown dateStr={evt.date} timeET={evt.timeET||evt.time} compact/>
               </div>
             );})}
           </div>}
@@ -6040,9 +6106,12 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>
           <div style={{marginBottom:14}}><SLabel>Macro Calendar</SLabel></div>
-          {macroLoading&&<div style={{padding:20,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>Loading calendar...</div>}
+          {macroLoading&&<div role="status" style={{padding:20,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>Loading calendar...</div>}
+          {(macroError||macroStale)&&!macroLoading&&<div role="alert" style={{padding:16,textAlign:"center",color:C.red,fontFamily:MONO,fontSize:10}}>
+            {macroError?`${macroError}${macroStale?" — showing last known events":""} — `:"Showing last known events (stale) — "}<button type="button" onClick={()=>macroLoaderRef.current?.fetch(true)} style={{background:"transparent",border:`1px solid ${C.red}`,color:C.red,cursor:"pointer",padding:"5px 10px",fontFamily:MONO}}>retry</button>
+          </div>}
 
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
+          {!macroLoading&&!macroError&&!macroStale&&<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
             {[
               {label:"HIGH IMPACT",val:macroHighCount,col:C.red,bg:"rgba(255,64,96,.08)",bc:"rgba(255,64,96,.2)"},
               {label:"RELEASED",val:macroReleasedCount,col:C.green,bg:"rgba(0,199,135,.08)",bc:"rgba(0,199,135,.2)"},
@@ -6053,9 +6122,9 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                 <div style={{fontFamily:MONO,fontSize:7,color:s.col+"88",letterSpacing:"0.12em",marginTop:4}}>{s.label}</div>
               </div>
             ))}
-          </div>
+          </div>}
 
-          {macroNextPending&&(
+          {!macroLoading&&!macroError&&!macroStale&&macroNextPending&&(
             <div data-testid="macro-next-event" style={{background:"rgba(201,168,76,.04)",border:`1px solid ${C.border2}`,borderRadius:2,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
                 <div style={{fontFamily:MONO,fontSize:7,color:C.gold,letterSpacing:"0.18em",marginBottom:3}}>NEXT RELEASE</div>
@@ -6093,14 +6162,16 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             );})}
           </div>
 
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{macroAllFiltered.length} events · ForexFactory + Central Banks · 60s refresh</div>
-            <Badge label="LIVE" color="green" style={{fontSize:7}}/>
-          </div>
+          {!macroLoading&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{macroStale||macroError?"Calendar unavailable (last known events below)":`${macroAllFiltered.length} events · ForexFactory weekly feed · 5m refresh`}</div>
+            {!macroStale&&!macroError&&<Badge label="LIVE" color="green" style={{fontSize:7}}/>}
+          </div>}
 
-          {macroAllFiltered.length===0&&<div style={{padding:30,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>No events match your filters.</div>}
+          {!macroLoading&&!macroError&&!macroStale&&macroAllFiltered.length===0&&<div style={{padding:30,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>
+            {(macroRegionFilter!=="ALL"||macroImpactFilter!=="ALL")?"No events match your filters.":<>No macro events scheduled. {macroNextPending?<>Next up: <button type="button" onClick={()=>setTab("radar")} style={{background:"transparent",border:"none",color:C.gold,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>{macroNextPending.name}, {macroNextPending.date} →</button></>:"No later events are currently known."}</>}
+          </div>}
 
-          {macroAllFiltered.map(evt=>{
+          {!macroLoading&&macroAllFiltered.map(evt=>{
             const imp=MACRO_IMPACT[evt.impact]||MACRO_IMPACT.LOW;
             const surprise=getMacroSurprise(evt);
             const marketImpacts=getMacroMarketImpact(evt);
@@ -6433,7 +6504,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                 Signals appear when any tracked token moves &gt;0.8% within a 5-minute window.<br/>
                 Tracking {sigTracking} tokens in real-time. Detector is armed.
               </div>}
-            </div>:sorted.map(sig=><SignalCard key={sig.id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult} isAdmin={isAdmin} onSendToTelegram={r=>setToast(r.ok?`Sent ${r.sig.token} ${r.sig.dir} to Telegram ✦`:`Telegram dispatch failed: ${r.detail||"unknown error"}`)}/>);
+            </div>:sorted.map(sig=>{const id=liveSignalIds[liveSignals.indexOf(sig)];return <SignalCard key={id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult} isAdmin={isAdmin} animateIn={isNewLiveSignal(id)} onSendToTelegram={r=>setToast(r.ok?`Sent ${r.sig.token} ${r.sig.dir} to Telegram ✦`:`Telegram dispatch failed: ${r.detail||"unknown error"}`)}/>;});
           })()}
 
           {/* ── Signal Performance Tracker — owner-only diagnostic; the
@@ -6526,7 +6597,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                     const label=`${alertForm.sym} ${alertForm.field} ${alertForm.condition} ${alertForm.field==="price"?fmt(t,alertForm.sym):t+"%"}`;
                     if(user){
                       try{
-                        const r=await fetch("/api/alerts",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",body:JSON.stringify({sym:alertForm.sym,field:alertForm.field,condition:alertForm.condition,threshold:t,label})});
+                        const r=await apiFetch("/api/alerts",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",body:JSON.stringify({sym:alertForm.sym,field:alertForm.field,condition:alertForm.condition,threshold:t,label})});
                         if(r.ok){const saved=await r.json();setAlerts(prev=>[...prev,{...saved,threshold:Number(saved.threshold)}]);}
                         else{const err=await r.json().catch(()=>({}));setToast(err.error||"Failed to save alert");return;}
                       }catch(e){setToast("Network error — could not save alert");return;}
@@ -6556,7 +6627,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                   </div>
                   <button data-testid={`button-delete-alert-${a.id}`} onClick={()=>{
                     setAlerts(prev=>prev.filter(x=>x.id!==a.id));
-                    if(user)fetch(`/api/alerts/${a.id}`,{method:"DELETE",credentials:"include"}).catch(()=>{});
+                    if(user)apiFetch(`/api/alerts/${a.id}`,{method:"DELETE",credentials:"include"}).catch(()=>{});
                   }}
                     style={{background:"none",border:`1px solid ${C.border}`,borderRadius:2,color:C.muted2,cursor:"pointer",fontFamily:MONO,fontSize:9,padding:"3px 8px"}}>✕</button>
                 </div>
@@ -6598,7 +6669,6 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         {/* ══ BASKET ══ */}
         {tab==="basket"&&<>
           <div style={{marginBottom:6}}><SLabel>My Basket</SLabel></div>
-          <ProGate feature="basket" tier="elite" isPro={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}>
           <MyBasket
             isPro={isElite}
             onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
@@ -6611,7 +6681,6 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             equityPrices={equityPrices}
             metalPrices={metalPrices}
           />
-          </ProGate>
         </>}
 
         {/* ══ GUIDE ══ */}
@@ -6878,6 +6947,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               {q:"What is the Squawk Box and who can use it?",a:"The Squawk Box (📣 in the header) is an Elite-only live signal announcer. When active, it uses your device's text-to-speech to call out new QuantBrain signals in real-time — hands-free market awareness while you work. Pro users see a locked 📣 icon with a 🔒 badge; tap it to upgrade. Enable SOUND first, then tap 📣 SQUAWK to go live."},
             ]},
             {cat:"Billing & Subscription",color:C.red,items:[
+              {q:"Where do I redeem an access code?",a:"Go to Radar → LIVE ALERTS → SCAN ACCESS CODE → Manual, enter your issued code and tap ↵. You can also scan its QR code or use HAVE AN ACCESS CODE? in the plan selector. "+ACCESS_CODE_FORMATS+" Codes must be active and unused; the confirmation displays your actual plan and expiry."},
               {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year, all in CAD (save $60). CLVR Elite is $129/month or $1,199/year, all in CAD (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
               {q:"How do I upgrade to Pro or Elite?",a:"Tap your tier badge in the top navigation bar (the one showing UPGRADE, PRO, or ELITE). Free users are taken directly to the plan selector. Pro users who tap their PRO badge are directed straight to the Elite upgrade. Elite users who tap their ELITE badge can view downgrade options. You can also go to Account → Upgrade. All payments are processed by Stripe."},
               {q:"How do I downgrade from Elite to Pro or Free?",a:"Tap your ELITE badge in the header — this opens the pricing modal where you can select Pro or Free. For billing changes mid-cycle, go to Account → Manage Subscription to access the Stripe billing portal where you can switch plans or cancel anytime."},
@@ -6914,7 +6984,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         </>}
 
         {tab==="account"&&isPreview&&<PreviewPricingPage C2={C} MONO2={MONO} SERIF2={SERIF} onSignUp={()=>onShowAuth&&onShowAuth()} onSignIn={()=>onShowAuth&&onShowAuth()}/>}
-        {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await fetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell} requestedTab={acctTabReq}/>}
+        {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await apiFetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}publishSessionEvent("signout");setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell} requestedTab={acctTabReq}/>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · HYPERLIQUID · FMP · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT

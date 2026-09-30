@@ -116,3 +116,14 @@ export function applyTokenSoftGate(
   const capped = conv > OFFLIST_CONVICTION_CAP;
   return { offList: true, conviction: Math.min(conv, OFFLIST_CONVICTION_CAP), capped };
 }
+
+/** The same conservative ceiling used for off-list crypto, applied to an
+ * explicitly supported HL listing until durable universe graduation. */
+export function applyNewListingSoftGate(conviction: unknown, pending: boolean): {
+  conviction: number; capped: boolean; auditFlag: boolean;
+} {
+  const parsed = parseConfidencePct(conviction);
+  const value = Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 0;
+  return { conviction: pending ? Math.min(value, OFFLIST_CONVICTION_CAP) : value,
+    capped: pending && value > OFFLIST_CONVICTION_CAP, auditFlag: pending };
+}

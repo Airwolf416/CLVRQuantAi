@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import jsQR from "jsqr";
+import { ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedback";
 
 const C = {
   bg: "#050709", panel: "#0c1220", border: "#141e35",
@@ -21,6 +22,8 @@ export default function QRScanner({ onScan, onClose }) {
   const [showManual, setShowManual] = useState(false);
   const [torchOn,    setTorchOn]    = useState(false);
   const [detected,   setDetected]   = useState(false);
+  const [result,     setResult]     = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const stopAll = useCallback(() => {
     stoppedRef.current = true;
@@ -28,12 +31,28 @@ export default function QRScanner({ onScan, onClose }) {
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
   }, []);
 
-  const handleDetected = useCallback((raw) => {
-    if (stoppedRef.current) return;
+  const redeem = useCallback(async (raw) => {
+    if (submitting) return;
     stopAll();
     setDetected(true);
-    setTimeout(() => onScan(raw), 400);
-  }, [stopAll, onScan]);
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const feedback = await onScan(raw);
+      setResult(feedback || { success: false, message: "Verification failed. Please try again." });
+      if (!feedback?.success) setShowManual(true);
+    } catch (e) {
+      setResult({ success: false, message: e?.message || "Verification failed. Please try again." });
+      setShowManual(true);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [stopAll, onScan, submitting]);
+
+  const handleDetected = useCallback((raw) => {
+    if (stoppedRef.current) return;
+    redeem(raw);
+  }, [redeem]);
 
   useEffect(() => {
     let active = true;
@@ -117,8 +136,8 @@ export default function QRScanner({ onScan, onClose }) {
 
   const submitManual = () => {
     const code = manualCode.trim().toUpperCase();
-    if (!code) return;
-    handleDetected(code);
+    if (!code) { setResult({ success: false, message: "Enter an access code." }); return; }
+    redeem(code);
   };
 
   return (
@@ -207,7 +226,7 @@ export default function QRScanner({ onScan, onClose }) {
               value={manualCode}
               onChange={e => setManualCode(e.target.value.toUpperCase())}
               onKeyDown={e => e.key === "Enter" && submitManual()}
-              placeholder="CLVR-VIP-XXXX or CLVR-FF-XXXX"
+              placeholder="Enter access code"
               autoFocus
               style={{
                 flex: 1, background: "rgba(255,255,255,0.05)", border: `1px solid rgba(201,168,76,0.25)`,
@@ -218,12 +237,16 @@ export default function QRScanner({ onScan, onClose }) {
             <button
               data-testid="btn-qr-manual-submit"
               onClick={submitManual}
+              disabled={submitting}
               style={btnStyle(C.gold, "rgba(201,168,76,0.15)", "rgba(201,168,76,0.4)")}
             >
               ↵
             </button>
           </div>
         )}
+        {showManual && <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted2, marginTop: 10, lineHeight: 1.5 }}>{ACCESS_CODE_FORMATS}</div>}
+        {submitting && <div role="status" style={{ fontFamily: MONO, fontSize: 11, color: C.gold, marginTop: 10 }}>Verifying code…</div>}
+        {result && <div data-testid="qr-redemption-result" role="status" style={{ fontFamily: MONO, fontSize: 11, color: result.success ? C.green : C.red, marginTop: 10 }}>{result.message}</div>}
       </div>
     </div>
   );
