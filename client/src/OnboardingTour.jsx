@@ -22,8 +22,8 @@ const STEPS = [
     icon: "✦",
     label: "WELCOME",
     title: "Your AI Market Terminal",
-    subtitle: "A quick tour — 6 steps",
-    body: "CLVRQuant gives you real-time prices across every major asset class, AI-generated trade signals, a macro calendar, and CLVR AI analysis — all in one mobile-first dashboard.",
+    subtitle: "A quick tour",
+    body: "CLVRQuant gives you real-time prices across every major asset class, AI-generated trade signals (30-minute delay on Free; real-time on Pro & Elite), a macro calendar, and CLVR AI analysis — all in one mobile-first dashboard.",
     cta: null,
     tab: null,
   },
@@ -50,7 +50,7 @@ const STEPS = [
     label: "SIGNALS",
     title: "AI Trade Signals",
     subtitle: "Entry · Stop · TP1 · TP2 · Confidence",
-    body: "Quantitative signals generated from live price action, funding rates, open interest, and macro context. Each signal includes a precise entry, stop-loss, two profit targets, and a Kelly-sized confidence score.",
+    body: "Quantitative signals generated from live price action, funding rates, open interest, and macro context. Free sees delayed signals with prices hidden. Pro & Elite see real-time signals with entry, stop-loss and targets.",
     cta: "Open Signals →",
     tab: "signals",
   },
@@ -77,7 +77,7 @@ const STEPS = [
     label: "CLVR AI — PRO",
     title: "Ask CLVR AI Anything",
     subtitle: "AI Market Chat — Powered by Claude",
-    body: "Pro members unlock CLVR AI Market Chat — type any question about markets and Claude responds with institutional-grade analysis. Ask for trade ideas, macro breakdowns, sector rotations, or risk assessments. You also get a personalised Morning Brief at 6 AM ET daily with 4 trade ideas.",
+    body: "Pro members unlock CLVR AI Market Chat — type any question about markets and Claude responds with institutional-grade analysis. An optional 6 AM ET daily Morning Brief email is available to subscribers on every plan; trade-idea detail varies by tier.",
     cta: "Open AI →",
     tab: "ai",
     pro: true,
@@ -219,7 +219,7 @@ export default function OnboardingTour({ onClose, onNavigateTab, isPro }) {
 
         {/* Subtitle */}
         <div style={{ fontFamily: MONO, fontSize: 10, color: C.gold, letterSpacing: "0.15em", marginBottom: 16, fontWeight: 500 }}>
-          {current.subtitle}
+          {step === 0 ? `A quick tour — ${total} steps` : current.subtitle}
         </div>
 
         {/* Body */}
@@ -227,7 +227,7 @@ export default function OnboardingTour({ onClose, onNavigateTab, isPro }) {
           {current.body}
         </div>
 
-        {/* Progress dots */}
+        {/* Progress dots — one per actual step */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 24 }}>
           {STEPS.map((_, i) => (
             <button

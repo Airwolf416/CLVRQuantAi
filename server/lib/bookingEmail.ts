@@ -12,7 +12,7 @@ export type BookingEmailInput = {
   userEmail: string;
   tier: string; // "elite" | "pro" | "free"/guest
   paid: boolean; // true if a Stripe payment was required
-  priceDisplay: string; // e.g. "Free (Elite)" or "$49.00"
+  priceDisplay: string; // e.g. "Free (Elite)" or "$49.00 CAD"
   slotDate?: string; // YYYY-MM-DD
   slotTime?: string; // HH:MM
   timezone?: string; // default America/Toronto
@@ -375,7 +375,7 @@ export async function handlePaidConciergeBooking(session: any): Promise<void> {
   }
 
   const amountCents = session.amount_total || 0;
-  const priceDisplay = amountCents ? `$${(amountCents / 100).toFixed(2)}` : "Paid";
+  const priceDisplay = amountCents ? `$${(amountCents / 100).toFixed(2)} ${(session.currency || "unknown").toUpperCase()}` : "Paid";
 
   await finalizeBooking(String(bookingId), {
     paid: true,

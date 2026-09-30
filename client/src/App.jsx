@@ -14,8 +14,10 @@ import ChartAITab from "./tabs/ChartAITab.jsx";
 import CheckoutPage from "./pages/Checkout.jsx";
 import PaymentSuccessPage from "./pages/PaymentSuccess.jsx";
 import PrivacyPage from "./pages/Privacy.jsx";
+import TermsPage from "./pages/Terms.jsx";
 import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
+import { decodeTextEntities } from "./lib/decodeTextEntities";
 import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
 import { accessCodeFeedback, ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedback";
@@ -26,6 +28,9 @@ import PositionMonitor from "./PositionMonitor";
 import KronosPanel from "./components/KronosPanel";
 import AIQuantTab from "./tabs/AITab";
 import PricingModal from "./components/PricingModal.jsx";
+import PasswordStrength from "./components/PasswordStrength.jsx";
+import { TIER_ORDER, usePricing, annualDiscount, annualSavings, formatPrice, BRIEF_RULE, SIGNAL_RULE } from "./config/pricing.js";
+import { SUBSCRIPTION_PRICES } from "../../shared/billingPricing.js";
 import ArchetypeAdminPanel from "./components/admin/ArchetypeAdminPanel.jsx";
 import MyBasket from "./components/MyBasket.jsx";
 import EarningsContent from "./components/EarningsContent.jsx";
@@ -43,6 +48,7 @@ import { useNewItemMotion, useStableResponseItemIds } from "./hooks/useNewItemMo
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
 const WA_DISMISS_KEY = "clvr_wa_setup_dismissed";
+function biometricDismissed(userId) { try { return !!localStorage.getItem(`${WA_DISMISS_KEY}_${userId}`); } catch { return false; } }
 function waSupported() { return !!(window.PublicKeyCredential && navigator.credentials?.create); }
 function getStoredWACred() { try { const c = JSON.parse(localStorage.getItem(WA_STORE_KEY) || "null"); return (c && c.v >= 2) ? c : null; } catch { return null; } }
 function storeWACred(credentialId, userId) { try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, platform: true, v: 2, registeredAt: Date.now() })); } catch {} }
@@ -110,15 +116,11 @@ const fmt=(p,sym)=>{
 };
 const timeAgo=(ts)=>{if(!ts)return"";const s=Math.floor((Date.now()-ts)/1000);if(s<10)return"just now";if(s<60)return`${s}s ago`;const m=Math.floor(s/60);if(m<60)return`${m}m ago`;const h=Math.floor(m/60);if(h<24)return`${h}h ago`;return`${Math.floor(h/24)}d ago`;};
 
-// ─── BASE PRICES ──────────────────────────────────────────
-const CRYPTO_BASE={BTC:84000,ETH:1590,SOL:130,WIF:0.82,DOGE:0.168,AVAX:20.1,LINK:12.8,ARB:0.38,PEPE:0.0000072,XRP:2.1,BNB:600,ADA:0.65,DOT:6.5,POL:0.55,UNI:9.5,AAVE:220,NEAR:4.5,SUI:2.8,APT:8.2,OP:1.8,TIA:5.2,SEI:0.35,JUP:0.85,ONDO:1.2,RENDER:6.5,INJ:18,FET:1.5,TAO:380,PENDLE:3.8,HBAR:0.18,TRUMP:3.5,HYPE:31};
-const EQUITY_BASE={TSLA:248,NVDA:103,AAPL:209,GOOGL:155,META:558,MSFT:388,AMZN:192,MSTR:310,AMD:145,PLTR:70,COIN:210,SQ:72,SHOP:95,CRM:290,NFLX:850,DIS:105};
-const METALS_BASE={XAU:4495,XAG:70,WTI:100,BRENT:105,NATGAS:3.0,COPPER:5.49,PLATINUM:1870};
-const FOREX_BASE={EURUSD:1.0842,GBPUSD:1.2715,USDJPY:149.82,USDCHF:0.9012,AUDUSD:0.6524,USDCAD:1.3654,NZDUSD:0.5932,EURGBP:0.8526,EURJPY:162.45,GBPJPY:190.52,USDMXN:17.15,USDZAR:18.45,USDTRY:32.5,USDSGD:1.34};
-const CRYPTO_SYMS=Object.keys(CRYPTO_BASE);
-const EQUITY_SYMS=Object.keys(EQUITY_BASE);
-const METALS_SYMS=Object.keys(METALS_BASE);
-const FOREX_SYMS=Object.keys(FOREX_BASE);
+// Symbols only. Prices must come from a successful market-data fetch, never defaults.
+const CRYPTO_SYMS="BTC ETH SOL WIF DOGE AVAX LINK ARB PEPE XRP BNB ADA DOT POL UNI AAVE NEAR SUI APT OP TIA SEI JUP ONDO RENDER INJ FET TAO PENDLE HBAR TRUMP HYPE".split(" ");
+const EQUITY_SYMS="TSLA NVDA AAPL GOOGL META MSFT AMZN MSTR AMD PLTR COIN SQ SHOP CRM NFLX DIS".split(" ");
+const METALS_SYMS="XAU XAG WTI BRENT NATGAS COPPER PLATINUM".split(" ");
+const FOREX_SYMS="EURUSD GBPUSD USDJPY USDCHF AUDUSD USDCAD NZDUSD EURGBP EURJPY GBPJPY USDMXN USDZAR USDTRY USDSGD".split(" ");
 const ALL_SYMS=[...CRYPTO_SYMS,...EQUITY_SYMS,...METALS_SYMS,...FOREX_SYMS];
 const METAL_LABELS={XAU:"Gold",XAG:"Silver",WTI:"Oil WTI",BRENT:"Oil Brent",NATGAS:"Nat Gas",COPPER:"Copper",PLATINUM:"Platinum"};
 const FOREX_LABELS={EURUSD:"EUR/USD",GBPUSD:"GBP/USD",USDJPY:"USD/JPY",USDCHF:"USD/CHF",AUDUSD:"AUD/USD",USDCAD:"USD/CAD",NZDUSD:"NZD/USD",EURGBP:"EUR/GBP",EURJPY:"EUR/JPY",GBPJPY:"GBP/JPY",USDMXN:"USD/MXN",USDZAR:"USD/ZAR",USDTRY:"USD/TRY",USDSGD:"USD/SGD"};
@@ -156,8 +158,9 @@ async function fetchNews(){
   if(!r.ok)throw new Error(`News API ${r.status}`);
   const j=await r.json();
   // Backward compat: server now returns {items, filtered}; older shape was a bare array.
-  if(Array.isArray(j))return{items:j,filtered:0};
-  return{items:Array.isArray(j?.items)?j.items:[],filtered:j?.filtered||0};
+  const decodeItems=items=>items.map(item=>({...item,title:decodeTextEntities(item.title)}));
+  if(Array.isArray(j))return{items:decodeItems(j),filtered:0};
+  return{items:decodeItems(Array.isArray(j?.items)?j.items:[]),filtered:j?.filtered||0};
 }
 
 // ─── SPARKLINE ────────────────────────────────────────────
@@ -556,11 +559,11 @@ function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
 }
 
 function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
-  const plans=[
-    {name:"Free",price:"$0",period:"forever",color:C2.muted2,borderColor:"#1c2b4a",features:["Live crypto, equities & forex prices","Macro calendar & event tracker","Market regime dashboard","Signals with 30-min delay (prices hidden)","Signal history log"]},
-    {name:"Pro",price:"$29.99",period:"/mo CAD",color:C2.gold2,borderColor:"rgba(201,168,76,.5)",badge:"MOST POPULAR",features:["Everything in Free","⚡ Real-time signals — no delay, full prices","📰 Daily AI Morning Brief · 1 trade idea","🔔 Custom price alerts + push notifications","👛 Phantom Wallet + Solana integration","🤖 CLVR AI Market Analyst · full history"]},
-    {name:"Elite",price:"$129",period:"/mo CAD",color:"#00e5ff",borderColor:"rgba(0,229,255,.4)",badge:"FULL ACCESS",features:["Everything in Pro","🏛 SEC Insider / Form 4 flow","🐋 Whale cluster tracking","⚡ Hyperliquid perps integration","🔑 Direct founder access · all future features"]},
-  ];
+  const tiers=usePricing();
+  const plans=TIER_ORDER.map(id=>{
+    const p=tiers[id];
+    return {name:id==="free"?"Free":id==="pro"?"Pro":"Elite",price:formatPrice(p.monthlyPrice),period:`/mo ${p.currency}`,color:id==="free"?C2.muted2:id==="pro"?C2.gold2:"#00e5ff",borderColor:p.borderColor,badge:id==="pro"?"MOST POPULAR":id==="elite"?"FULL ACCESS":null,features:p.features.filter(f=>!f.locked).map(f=>f.label),yearly:id==="free"?"":`${formatPrice(p.yearlyPrice)}/yr ${p.currency} · save ${annualDiscount(p)}%`};
+  });
   return(
     <div style={{padding:"20px 4px 40px"}}>
       {/* Header */}
@@ -593,6 +596,7 @@ function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
                 <span style={{fontFamily:MONO2,fontSize:9,color:C2.muted}}>{plan.period}</span>
               </div>
             </div>
+            {plan.yearly&&<div style={{fontFamily:MONO2,fontSize:9,color:C2.muted2,marginBottom:10}}>{plan.yearly}</div>}
             {plan.features.map(f=>(
               <div key={f} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:6}}>
                 <span style={{color:plan.color,fontFamily:MONO2,fontSize:10,lineHeight:1.6,flexShrink:0}}>✓</span>
@@ -1109,7 +1113,7 @@ function LiqHeatmap({sym,price,oi}){
     {above.reverse().map(l=>(<div key={l.price} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}><div style={{fontFamily:MONO,fontSize:10,color:C.red,width:68,textAlign:"right"}}>{fmt(l.price,sym)}</div><div style={{flex:1,position:"relative",height:14,background:"rgba(255,64,96,.06)",borderRadius:1}}><div style={{position:"absolute",right:0,top:0,bottom:0,width:`${(l.size/maxSize)*100}%`,background:`rgba(255,64,96,${0.15+l.size/maxSize*0.45})`,borderRadius:1}}/></div><div style={{fontFamily:MONO,fontSize:9,color:C.muted2,width:42}}>${l.size}M</div></div>))}
     <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,marginTop:2}}><div style={{fontFamily:MONO,fontSize:11,color:C.gold,width:68,textAlign:"right",fontWeight:700}}>{fmt(price,sym)}</div><div style={{flex:1,height:1,background:`linear-gradient(90deg,${C.gold},transparent)`}}/><div style={{fontFamily:MONO,fontSize:9,color:C.gold,width:42}}>NOW</div></div>
     {below.map(l=>(<div key={l.price} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}><div style={{fontFamily:MONO,fontSize:10,color:C.green,width:68,textAlign:"right"}}>{fmt(l.price,sym)}</div><div style={{flex:1,position:"relative",height:14,background:"rgba(0,199,135,.06)",borderRadius:1}}><div style={{position:"absolute",left:0,top:0,bottom:0,width:`${(l.size/maxSize)*100}%`,background:`rgba(0,199,135,${0.15+l.size/maxSize*0.45})`,borderRadius:1}}/></div><div style={{fontFamily:MONO,fontSize:9,color:C.muted2,width:42}}>${l.size}M</div></div>))}
-    <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}><div style={{fontFamily:MONO,fontSize:9,color:C.green}}>LONG LIQUIDATIONS</div><div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>Based on {oiM>0?`$${oiM.toFixed(0)}M OI`:"live OI"}</div><div style={{fontFamily:MONO,fontSize:9,color:C.red}}>SHORT LIQUIDATIONS</div></div>
+    <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}><div style={{fontFamily:MONO,fontSize:9,color:C.green}}>LONG LIQUIDATIONS</div><div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{`Based on ${oiM>0?`$${oiM.toFixed(0)}M OI`:"live OI"}`}</div><div style={{fontFamily:MONO,fontSize:9,color:C.red}}>SHORT LIQUIDATIONS</div></div>
   </div>);
 }
 
@@ -3095,7 +3099,7 @@ function useWindowSize(){
 }
 
 // ─── SIDE NAV (tablet / desktop) ───────────────────────────
-function SideNav({items,tab,onTab,C,MONO,SERIF,PRO_TABS_GATE2,isPro,isElite,isPreview,upcomingCount,isDark,toggleTheme,wide}){
+function SideNav({items,tab,onTab,onBook,C,MONO,SERIF,PRO_TABS_GATE2,isPro,isElite,isPreview,upcomingCount,isDark,toggleTheme,wide}){
   return(
     <div style={{position:"fixed",left:0,top:0,bottom:0,width:wide?180:64,background:isDark?"rgba(5,7,9,.98)":"rgba(255,255,255,.98)",borderRight:`1px solid ${C.border}`,backdropFilter:"blur(14px)",zIndex:100,display:"flex",flexDirection:"column",overflow:"hidden",paddingTop:"env(safe-area-inset-top,0px)"}}>
       <div style={{padding:wide?"16px 14px 14px":"16px 0 14px",textAlign:"center",borderBottom:`1px solid ${C.border}`}}>
@@ -3110,7 +3114,7 @@ function SideNav({items,tab,onTab,C,MONO,SERIF,PRO_TABS_GATE2,isPro,isElite,isPr
           const proGated=!isPreview&&PRO_TABS_GATE2.includes(item.k)&&!isPro;
           const locked=(isPreview&&!previewFreeTab)||eliteGated||proGated;
           return(
-            <button key={item.k} data-testid={`sidenav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}onTab(item.k);}} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:wide?"flex-start":"center",gap:wide?10:0,padding:wide?"9px 14px":"10px 0",background:"none",border:"none",borderLeft:`3px solid ${active?C.gold:"transparent"}`,cursor:"pointer",position:"relative",transition:"border-color .2s"}}>
+            <button key={item.k} data-testid={`sidenav-${item.k}`} onClick={()=>{if(item.k==="book"){onBook();return;}if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}onTab(item.k);}} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:wide?"flex-start":"center",gap:wide?10:0,padding:wide?"9px 14px":"10px 0",background:"none",border:"none",borderLeft:`3px solid ${active?C.gold:"transparent"}`,cursor:"pointer",position:"relative",transition:"border-color .2s"}}>
               <span style={{fontSize:item.k==="ai"?11:14,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:locked?C.muted:C.muted2,flexShrink:0}}>{item.icon}</span>
               {wide&&<span style={{fontFamily:MONO,fontSize:9,color:active?C.gold:locked?C.muted:C.muted2,letterSpacing:"0.06em",fontWeight:active?700:400,textTransform:"uppercase"}}>{item.label}</span>}
               {macroAlert&&!active&&<div style={{position:"absolute",top:6,right:wide?8:2,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
@@ -3229,7 +3233,7 @@ function OwnerSupportAlert({ C, MONO, isMobile, onOpen, onNotify }){
   );
 }
 
-function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
+function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal, bookingSignal }){
   const [open,setOpen]=useState(false);
   // Allow opening from outside (e.g. the burger menu "Ask Concierge" row) by
   // bumping openSignal — reuses this single concierge instance + its state.
@@ -3274,6 +3278,7 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal }){
     }catch{ setBMsg("Could not load pricing. Please try again."); }
     finally{ setPLoading(false); }
   };
+  useEffect(()=>{ if(bookingSignal){setOpen(true);openBooking();} },[bookingSignal]);
 
   const send=async()=>{
     const text=input.trim();
@@ -3540,6 +3545,7 @@ export default function App(){
   if (_path === "/checkout" || _path.startsWith("/checkout?")) return <CheckoutPage/>;
   if (_path === "/payment-success" || _path.startsWith("/payment-success?")) return <PaymentSuccessPage/>;
   if (_path === "/privacy" || _path.startsWith("/privacy?")) return <PrivacyPage/>;
+  if (_path === "/terms" || _path.startsWith("/terms?")) return <TermsPage/>;
 
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
@@ -3739,6 +3745,7 @@ function TradeIdeasDisplay({raw,C,MONO,SERIF}){
 }
 
 function Dashboard({user,setUser,onShowAuth}){
+  const pricing=usePricing();
   const {C,isDark,toggle:toggleTheme}=useContext(ThemeCtx);
   const {regime:dbRegime,fearGreed:dbFearGreed,killSwitch:dbKillSwitch}=useDataBus();
   const {isMobile,isTablet,isDesktop}=useWindowSize();
@@ -3780,11 +3787,13 @@ function Dashboard({user,setUser,onShowAuth}){
   const [pushDisabled,setPushDisabled]=useState(()=>{try{return localStorage.getItem("clvr_push_disabled")==="1";}catch(e){return false;}});
   const [inAppAlerts,setInAppAlerts]=useState(()=>{try{return localStorage.getItem("clvr_inapp_alerts")==="1";}catch(e){return false;}});
   const [soundEnabled,setSoundEnabled]=useState(()=>{try{return localStorage.getItem("clvr_sound")!=="off";}catch(e){return true;}});
-  const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,volume:0,live:false,oiHistory:[],volHistory:[],fundHistory:[]}])));
-  const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:CRYPTO_BASE[k],chg:0,funding:0,oi:0,live:false}])));
-  const [equityPrices,setEquityPrices]=useState(()=>Object.fromEntries(EQUITY_SYMS.map(k=>[k,{price:EQUITY_BASE[k],chg:0,live:false}])));
-  const [metalPrices,setMetalPrices]=useState(()=>Object.fromEntries(METALS_SYMS.map(k=>[k,{price:METALS_BASE[k],chg:0,live:false}])));
-  const [forexPrices,setForexPrices]=useState(()=>Object.fromEntries(FOREX_SYMS.map(k=>[k,{price:FOREX_BASE[k],chg:0,live:false}])));
+  const [cryptoPrices,setCryptoPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:null,chg:null,funding:0,oi:0,volume:0,live:false,oiHistory:[],volHistory:[],fundHistory:[]}])));
+  const [perpPrices,setPerpPrices]=useState(()=>Object.fromEntries(CRYPTO_SYMS.map(k=>[k,{price:null,chg:null,funding:0,oi:0,live:false}])));
+  const [equityPrices,setEquityPrices]=useState(()=>Object.fromEntries(EQUITY_SYMS.map(k=>[k,{price:null,chg:null,live:false}])));
+  const [metalPrices,setMetalPrices]=useState(()=>Object.fromEntries(METALS_SYMS.map(k=>[k,{price:null,chg:null,live:false}])));
+  const [forexPrices,setForexPrices]=useState(()=>Object.fromEntries(FOREX_SYMS.map(k=>[k,{price:null,chg:null,live:false}])));
+  const [cryptoRefreshing,setCryptoRefreshing]=useState(false);
+  const [fhRefreshing,setFhRefreshing]=useState(false);
 
   const [flashes,setFlashes]=useState({});
   const prevRef=useRef({});
@@ -3924,6 +3933,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [drawerOpen,setDrawerOpen]=useState(false);
   // Bumped by the burger-menu "Ask Concierge" row to open the single ConciergeWidget.
   const [conciergeOpenSignal,setConciergeOpenSignal]=useState(0);
+  const [conciergeBookingSignal,setConciergeBookingSignal]=useState(0);
   const [acctTabReq,setAcctTabReq]=useState(null);
   useEffect(()=>{ if(tab!=="account" && acctTabReq!==null) setAcctTabReq(null); },[tab,acctTabReq]);
   useEffect(()=>{
@@ -3952,13 +3962,30 @@ function Dashboard({user,setUser,onShowAuth}){
     }catch{}
   },[user?.id]);
   const [resendLoading,setResendLoading]=useState(false);
-  const [resendSent,setResendSent]=useState(false);
+  const [resendUntil,setResendUntil]=useState(0);
+  const [resendSeconds,setResendSeconds]=useState(0);
   const [verifyBannerDismissed,setVerifyBannerDismissed]=useState(false);
+  const verificationLocked=!!user&&!user.preview&&!user.emailVerified&&!user.isAdmin;
+  const gatedTab=verificationLocked&&["radar","prices","macro","signals","ai","chartai","basket","journal","insider","monitor","pulse","earnings","brief"].includes(tab);
+  useEffect(()=>{
+    const tick=()=>setResendSeconds(Math.max(0,Math.ceil((resendUntil-Date.now())/1000)));
+    tick();const timer=setInterval(tick,1000);return()=>clearInterval(timer);
+  },[resendUntil]);
+  useEffect(()=>{
+    if(!verificationLocked)return;
+    const refresh=()=>apiFetch("/api/auth/me?t="+Date.now(),{cache:"no-store"}).then(r=>r.json()).then(d=>{
+      if(d.user?.emailVerified)setUser(u=>({...u,...d.user}));
+    }).catch(()=>{});
+    window.addEventListener("focus",refresh);
+    const timer=setInterval(refresh,15000);
+    return()=>{window.removeEventListener("focus",refresh);clearInterval(timer);};
+  },[verificationLocked,setUser]);
   const handleResendVerification=useCallback(async()=>{
+    if(resendSeconds>0)return;
     setResendLoading(true);
-    try{const r=await apiFetch("/api/auth/resend-verification",{method:"POST",credentials:"include"});const d=await r.json();if(r.ok)setResendSent(true);else setToast(d.error||"Failed to send");}catch{setToast("Network error");}
+    try{const r=await apiFetch("/api/auth/resend-verification",{method:"POST",credentials:"include"});const d=await r.json();if(r.ok){setResendUntil(Date.now()+60000);setToast("Verification email sent — check your inbox");}else{if(r.status===429)setResendUntil(Date.now()+(Number(d.retryAfter)||60)*1000);setToast(d.error||"Failed to send");}}catch{setToast("Network error");}
     setResendLoading(false);
-  },[]);
+  },[resendSeconds]);
   const [mustChangePassword,setMustChangePassword]=useState(()=>!!(user?.mustChangePassword));
   const [newPwInput,setNewPwInput]=useState("");
   const [newPwInput2,setNewPwInput2]=useState("");
@@ -3966,6 +3993,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [changePwError,setChangePwError]=useState("");
   const [biometricRegistering,setBiometricRegistering]=useState(false);
   const [stripePrices,setStripePrices]=useState({monthly:null,yearly:null,eliteMonthly:null,eliteYearly:null});
+  const [stripePriceError,setStripePriceError]=useState("");
   const [checkoutLoading,setCheckoutLoading]=useState(false);
   const isElite=userTier==="elite";
   const isPro=userTier==="pro"||isElite;
@@ -4079,7 +4107,7 @@ function Dashboard({user,setUser,onShowAuth}){
       const next={...prev};
       Object.entries(buf).forEach(([sym,price])=>{
         // Preserve the real 24h chg from the last Binance REST poll — never recalculate from a static base
-        next[sym]={...prev[sym],price,live:true};
+        next[sym]={...prev[sym],price,live:true,receivedAt:Date.now()};
       });
       triggerFlashes(next);return next;
     });
@@ -4087,6 +4115,7 @@ function Dashboard({user,setUser,onShowAuth}){
   },[triggerFlashes]);
 
   const doHL=useCallback(async()=>{
+    setCryptoRefreshing(true);
     try{
       const data=await fetchHyperliquid();
       setCryptoPrices(prev=>{
@@ -4095,7 +4124,7 @@ function Dashboard({user,setUser,onShowAuth}){
           const oiH=[...(prev[sym]?.oiHistory||[]),d.oi].slice(-20);
           const vH=[...(prev[sym]?.volHistory||[]),d.volume||0].slice(-20);
           const fH=[...(prev[sym]?.fundHistory||[]),d.funding||0].slice(-20);
-          next[sym]={...prev[sym],...d,oiHistory:oiH,volHistory:vH,fundHistory:fH};
+          next[sym]={...prev[sym],...d,receivedAt:d.price>0?Date.now():prev[sym]?.receivedAt,oiHistory:oiH,volHistory:vH,fundHistory:fH};
           if(d.volume>0)checkVolumeSpike(sym,d.volume);
           checkFundingFlip(sym,d.funding||0);
         });
@@ -4103,6 +4132,7 @@ function Dashboard({user,setUser,onShowAuth}){
       });
       setHlStatus("live");
     }catch{setHlStatus("error");}
+    finally{setCryptoRefreshing(false);}
   },[triggerFlashes,checkVolumeSpike,checkFundingFlip]);
 
   useEffect(()=>{
@@ -4215,14 +4245,17 @@ function Dashboard({user,setUser,onShowAuth}){
 
   // ── Finnhub ──────────────────────────────────────────
   const doFH=useCallback(async()=>{
+    setFhRefreshing(true);
     try{
       const{stocks,metals,forex}=await fetchFinnhub();
-      setEquityPrices(prev=>{const n={...prev,...stocks};triggerFlashes(n);return n;});
-      setMetalPrices(prev=>{const n={...prev,...metals};triggerFlashes(n);return n;});
-      setForexPrices(prev=>{const n={...prev,...forex};triggerFlashes(n);return n;});
+      const mergeFresh=(prev,updates)=>{const n={...prev};Object.entries(updates).forEach(([sym,d])=>{n[sym]={...prev[sym],...d,receivedAt:d.price>0?Date.now():prev[sym]?.receivedAt};});triggerFlashes(n);return n;};
+      setEquityPrices(prev=>mergeFresh(prev,stocks));
+      setMetalPrices(prev=>mergeFresh(prev,metals));
+      setForexPrices(prev=>mergeFresh(prev,forex));
       const anyLive=[...Object.values(stocks),...Object.values(metals),...Object.values(forex)].some(p=>p.live);
       setFhStatus(anyLive?"live":"closed");
     }catch{setFhStatus("error");}
+    finally{setFhRefreshing(false);}
   },[triggerFlashes]);
   useEffect(()=>{doFH();const iv=setInterval(doFH,15000);return()=>clearInterval(iv);},[doFH]);
 
@@ -4234,9 +4267,9 @@ function Dashboard({user,setUser,onShowAuth}){
     if(!Object.keys(buf).length)return;
     const eqU={},mtU={},fxU={};
     Object.entries(buf).forEach(([sym,d])=>{
-      if(d.type==="equity")eqU[sym]={price:d.price,chg:d.chg,live:true};
-      else if(d.type==="metal")mtU[sym]={price:d.price,chg:d.chg,live:true};
-      else if(d.type==="forex")fxU[sym]={price:d.price,chg:d.chg,live:true};
+      if(d.type==="equity")eqU[sym]={price:d.price,chg:d.chg,live:true,receivedAt:Date.now()};
+      else if(d.type==="metal")mtU[sym]={price:d.price,chg:d.chg,live:true,receivedAt:Date.now()};
+      else if(d.type==="forex")fxU[sym]={price:d.price,chg:d.chg,live:true,receivedAt:Date.now()};
     });
     if(Object.keys(eqU).length)setEquityPrices(prev=>{const n={...prev,...eqU};triggerFlashes(n);return n;});
     if(Object.keys(mtU).length)setMetalPrices(prev=>{const n={...prev,...mtU};triggerFlashes(n);return n;});
@@ -4281,9 +4314,14 @@ function Dashboard({user,setUser,onShowAuth}){
   },[]);
 
   useEffect(()=>{
-    apiFetch("/api/prices").then(r=>r.json()).then(data=>{
-      if(data?.monthly&&data?.yearly)setStripePrices(data);
-    }).catch(()=>{});
+    apiFetch("/api/prices").then(async r=>{
+      const data=await r.json();
+      if(!r.ok)throw new Error(data.error || "Stripe CAD prices unavailable");
+      return data;
+    }).then(data=>{
+      setStripePrices(data);
+      setStripePriceError("");
+    }).catch(e=>setStripePriceError(e.message));
   },[]);
 
   const verifyAccessCode=useCallback(async(codeOverride)=>{
@@ -4321,9 +4359,9 @@ function Dashboard({user,setUser,onShowAuth}){
   useEffect(()=>{
     setShowBiometricSetup(false);
     if(!user||user?.guest)return;
-    try{if(localStorage.getItem(`${WA_DISMISS_KEY}_${user.id}`))return;}catch{}
+    if(biometricDismissed(user.id))return;
     if(!waSupported()||getStoredWACred())return;
-    const timer=setTimeout(()=>setShowBiometricSetup(true),2500);
+    const timer=setTimeout(()=>{if(!biometricDismissed(user.id))setShowBiometricSetup(true);},2500);
     return()=>clearTimeout(timer);
   },[user?.id,user?.guest]);
   const dismissBiometricSetup=()=>{
@@ -5025,6 +5063,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
     {k:"journal",icon:"📓",label:"JOURNAL"},
     {k:"about",icon:"📖",label:i18n.about},
     {k:"help",icon:"❓",label:"HELP"},
+    ...(!isGuest&&user&&!isPreview?[{k:"book",icon:"📅",label:"1-ON-1"}]:[]),
     {k:"account",icon:"⚙",label:i18n.account},
   ];
   const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
@@ -5032,9 +5071,9 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
   return(
     <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:isMobile?76:24,paddingTop:"env(safe-area-inset-top,0px)",paddingLeft:isMobile?0:sidebarW,maxWidth:isMobile?780:undefined,margin:isMobile?"0 auto":0,position:"relative"}}>
       {!isPreview&&<SessionSecurity onExpired={expireSession}/>}
-      {user&&!isPreview&&<ConciergeWidget user={user} C={C} isMobile={isMobile} MONO={MONO} SERIF={SERIF} openSignal={conciergeOpenSignal}/>}
+      {user&&!isPreview&&<ConciergeWidget user={user} C={C} isMobile={isMobile} MONO={MONO} SERIF={SERIF} openSignal={conciergeOpenSignal} bookingSignal={conciergeBookingSignal}/>}
       {isOwnerOnly&&<OwnerSupportAlert C={C} MONO={MONO} isMobile={isMobile} onOpen={()=>{setAcctTabReq("support");setTab("account");}} onNotify={(m)=>setToast(m)}/>}
-      {!isMobile&&<SideNav items={NAV} tab={tab} onTab={setTab} C={C} MONO={MONO} SERIF={SERIF} PRO_TABS_GATE2={PRO_TABS_GATE} isPro={isPro} isElite={isElite} isPreview={isPreview} upcomingCount={upcomingCount} isDark={isDark} toggleTheme={toggleTheme} wide={isDesktop}/>}
+      {!isMobile&&<SideNav items={NAV} tab={tab} onTab={setTab} onBook={()=>setConciergeBookingSignal(n=>n+1)} C={C} MONO={MONO} SERIF={SERIF} PRO_TABS_GATE2={PRO_TABS_GATE} isPro={isPro} isElite={isElite} isPreview={isPreview} upcomingCount={upcomingCount} isDark={isDark} toggleTheme={toggleTheme} wide={isDesktop}/>}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=IBM+Plex+Mono:wght@300;400;500;600&family=Barlow:wght@300;400;500;600;700&display=swap');
         *{-webkit-tap-highlight-color:transparent;box-sizing:border-box;}
@@ -5172,14 +5211,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       </aside>
 
       {/* ── EMAIL VERIFICATION BANNER ── */}
-      {user?.pendingVerification&&!verifyBannerDismissed&&(
+      {verificationLocked&&!verifyBannerDismissed&&(
         <div style={{background:"rgba(201,168,76,.08)",borderBottom:`1px solid rgba(201,168,76,.2)`,padding:"10px 16px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",position:"relative",zIndex:50}}>
           <span style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.06em",flex:1,minWidth:160}}>
-            {resendSent?"✓ Verification email sent — check your inbox":"✦ Please verify your email to activate your account"}
+            ✦ Please verify your email to activate your account
           </span>
-          {!resendSent&&(
-            <button onClick={handleResendVerification} disabled={resendLoading} style={{background:"rgba(201,168,76,.15)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:3,padding:"5px 12px",fontFamily:MONO,fontSize:9,color:C.gold2,cursor:"pointer",letterSpacing:"0.08em",whiteSpace:"nowrap"}}>
-              {resendLoading?"SENDING...":"RESEND EMAIL"}
+          {(
+            <button onClick={handleResendVerification} disabled={resendLoading||resendSeconds>0} style={{background:"rgba(201,168,76,.15)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:3,padding:"5px 12px",fontFamily:MONO,fontSize:9,color:C.gold2,cursor:"pointer",letterSpacing:"0.08em",whiteSpace:"nowrap"}}>
+              {resendLoading?"SENDING...":resendSeconds>0?`RESEND IN ${resendSeconds}s`:"RESEND EMAIL"}
             </button>
           )}
           <button onClick={()=>setVerifyBannerDismissed(true)} style={{background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:11,cursor:"pointer",padding:"2px 4px",lineHeight:1}}>✕</button>
@@ -5196,13 +5235,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             <div style={{fontFamily:MONO,fontSize:10,color:C.muted,lineHeight:1.7,letterSpacing:"0.04em"}}>A temporary password was issued.<br/>Please create a secure password to continue.</div>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            <input data-testid="input-new-password" type="password" placeholder="New password" value={newPwInput} onChange={e=>setNewPwInput(e.target.value)} style={{background:"rgba(255,255,255,.04)",border:`1px solid ${C.border2}`,borderRadius:8,padding:"11px 14px",fontFamily:MONO,fontSize:12,color:C.text,outline:"none",width:"100%",boxSizing:"border-box"}}/>
+            <input data-testid="input-new-password" type="password" placeholder="Min 10 characters" value={newPwInput} onChange={e=>setNewPwInput(e.target.value)} style={{background:"rgba(255,255,255,.04)",border:`1px solid ${C.border2}`,borderRadius:8,padding:"11px 14px",fontFamily:MONO,fontSize:12,color:C.text,outline:"none",width:"100%",boxSizing:"border-box"}}/>
+            <PasswordStrength password={newPwInput} requireMixedCaseAndNumber/>
             <input data-testid="input-confirm-password" type="password" placeholder="Confirm new password" value={newPwInput2} onChange={e=>setNewPwInput2(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")document.getElementById("btn-set-password")?.click();}} style={{background:"rgba(255,255,255,.04)",border:`1px solid ${C.border2}`,borderRadius:8,padding:"11px 14px",fontFamily:MONO,fontSize:12,color:C.text,outline:"none",width:"100%",boxSizing:"border-box"}}/>
             {changePwError&&<div style={{fontFamily:MONO,fontSize:10,color:C.red,textAlign:"center"}}>{changePwError}</div>}
-            <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.04em"}}>Must be 8+ chars with uppercase, lowercase, and a number.</div>
+            <div style={{fontFamily:MONO,fontSize:9,color:C.muted,letterSpacing:"0.04em"}}>Must be 10+ chars with uppercase, lowercase, and a number.</div>
             <button id="btn-set-password" data-testid="btn-set-password" disabled={changePwLoading} onClick={async()=>{
               setChangePwError("");
-              if(newPwInput.length<8)return setChangePwError("At least 8 characters required.");
+              if(newPwInput.length<10)return setChangePwError("At least 10 characters required.");
               if(newPwInput!==newPwInput2)return setChangePwError("Passwords don't match.");
               setChangePwLoading(true);
               try{
@@ -5221,7 +5261,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       </div>}
 
       {/* Face ID / Biometric setup prompt */}
-      {showBiometricSetup&&<div role="region" aria-label="Optional Face ID setup" style={{position:"fixed",right:16,bottom:16,zIndex:400,maxWidth:380,width:"calc(100% - 32px)",boxShadow:"0 12px 40px rgba(0,0,0,.55)"}}>
+      {showBiometricSetup&&!biometricDismissed(user?.id)&&<div role="region" aria-label="Optional Face ID setup" style={{position:"fixed",right:16,bottom:16,zIndex:400,maxWidth:380,width:"calc(100% - 32px)",boxShadow:"0 12px 40px rgba(0,0,0,.55)"}}>
         <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:12,width:"100%",padding:"16px 20px",position:"relative"}}>
           <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`,borderRadius:"12px 12px 0 0"}}/>
           <div style={{textAlign:"center",marginBottom:18}}>
@@ -5257,7 +5297,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           if(tierId==="elite"){price=isYearly?stripePrices.eliteYearly:stripePrices.eliteMonthly;}
           else{price=isYearly?stripePrices.yearly:stripePrices.monthly;}
           if(!price?.price_id){
-            setToast("Payment is loading — please try again in a moment");
+            setToast(stripePriceError || "Payment is loading — please try again in a moment");
             return;
           }
           const checkoutUrl=`/checkout?priceId=${encodeURIComponent(price.price_id)}&plan=${tierId}&cycle=${billing}`;
@@ -5326,14 +5366,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                     ))}
                   </div>
                   <div style={{display:"flex",gap:8,marginBottom:14}}>
-                    <button data-testid="btn-checkout-monthly" onClick={()=>proReady?handleCheckout(proM.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(201,168,76,.07)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer"}}>
-                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.gold2}}>${proM?((proM.unit_amount||2999)/100).toFixed(2):"29.99"}</div>
-                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER MONTH</div>
+                    <button data-testid="btn-checkout-monthly" onClick={()=>proReady?handleCheckout(proM.price_id):setToast(stripePriceError||"Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(201,168,76,.07)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer"}}>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.gold2}}>${(SUBSCRIPTION_PRICES.pro_monthly1.amount/100).toFixed(2)}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>CAD PER MONTH</div>
                     </button>
-                    <button data-testid="btn-checkout-yearly" onClick={()=>proReady?handleCheckout(proY.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
-                      <div style={{position:"absolute",top:-9,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:800}}>SAVE $60/yr</div>
-                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.green}}>${proY?((proY.unit_amount||29900)/100).toFixed(0):"299"}</div>
-                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER YEAR</div>
+                    <button data-testid="btn-checkout-yearly" onClick={()=>proReady?handleCheckout(proY.price_id):setToast(stripePriceError||"Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
+                      <div style={{position:"absolute",top:-9,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:800}}>SAVE 17%</div>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.green}}>${(SUBSCRIPTION_PRICES.pro_yearly1.amount/100).toFixed(0)}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>CAD PER YEAR</div>
                     </button>
                   </div>
                 </>}
@@ -5346,14 +5386,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                     ))}
                   </div>
                   <div style={{display:"flex",gap:8,marginBottom:14}}>
-                    <button data-testid="btn-checkout-elite-monthly" onClick={()=>elReady?handleCheckout(elM.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,229,255,.06)",border:`1px solid rgba(0,229,255,.35)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer"}}>
-                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:"#00e5ff"}}>${elM?((elM.unit_amount||12900)/100).toFixed(2):"129.00"}</div>
-                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER MONTH</div>
+                    <button data-testid="btn-checkout-elite-monthly" onClick={()=>elReady?handleCheckout(elM.price_id):setToast(stripePriceError||"Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,229,255,.06)",border:`1px solid rgba(0,229,255,.35)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer"}}>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:"#00e5ff"}}>${(SUBSCRIPTION_PRICES.elite_monthly.amount/100).toFixed(2)}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>CAD PER MONTH</div>
                     </button>
-                    <button data-testid="btn-checkout-elite-yearly" onClick={()=>elReady?handleCheckout(elY.price_id):setToast("Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
-                      <div style={{position:"absolute",top:-9,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:800}}>SAVE $349/yr</div>
-                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.green}}>${elY?((elY.unit_amount||119900)/100).toFixed(0):"1,199"}</div>
-                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>PER YEAR</div>
+                    <button data-testid="btn-checkout-elite-yearly" onClick={()=>elReady?handleCheckout(elY.price_id):setToast(stripePriceError||"Stripe loading, please try again")} disabled={checkoutLoading} style={{flex:1,padding:"14px 10px",background:"rgba(0,199,135,.06)",border:`1px solid rgba(0,199,135,.3)`,borderRadius:4,cursor:checkoutLoading?"not-allowed":"pointer",position:"relative"}}>
+                      <div style={{position:"absolute",top:-9,right:8,fontFamily:MONO,fontSize:7,color:C.bg,background:C.green,padding:"2px 8px",borderRadius:2,fontWeight:800}}>SAVE 23%</div>
+                      <div style={{fontFamily:SERIF,fontWeight:900,fontSize:24,color:C.green}}>${(SUBSCRIPTION_PRICES.elite_yearly.amount/100).toLocaleString("en-CA")}</div>
+                      <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>CAD PER YEAR</div>
                     </button>
                   </div>
                 </>}
@@ -5370,6 +5410,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,marginTop:6}}>{ACCESS_CODE_FORMATS}</div>
               {accessCodeMsg&&<div role="status" style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("activated")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
             </div>
+            {stripePriceError&&<div role="alert" style={{fontFamily:MONO,fontSize:9,color:C.red,marginTop:10}}>{stripePriceError}</div>}
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:10}}>Cancel anytime · Secure checkout via Stripe · CAD</div>
             <button onClick={()=>setShowUpgrade(false)} style={{marginTop:10,background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:9,cursor:"pointer",letterSpacing:"0.1em"}}>CLOSE</button>
           </div>
@@ -5492,22 +5533,30 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               if(eu?.price){
                 const dxy=(1.08/eu.price)*100;
                 const dxyChg=-(eu.chg||0);
-                d={price:dxy,chg:dxyChg,live:!!eu.live};
+                d={price:dxy,chg:dxyChg,live:!!eu.live,receivedAt:eu.receivedAt};
               }else d=null;
               flash=null; derived=true;
             }else{
               d=allPrices[sym]; flash=flashes[sym];
             }
+            const hasPrice=Number.isFinite(d?.price)&&d.price>0;
+            const cryptoTicker=["BTC","ETH","SOL"].includes(sym);
+            const refreshing=cryptoTicker?cryptoRefreshing:fhRefreshing;
+            const sourceError=(cryptoTicker?hlStatus:fhStatus)==="error";
+            const fresh=!!d?.receivedAt&&Date.now()-d.receivedAt<60000;
+            const livePrice=hasPrice&&!!d?.live&&fresh&&!sourceError&&!refreshing;
+            const priceState=refreshing?"↻ REFRESH · LAST":sourceError?"LAST · SOURCE ERROR":"LAST";
             const isUp=Number(d?.chg)>=0;
             const label=sym==="DXY"?"DXY*":sym;
             return(
               <div key={sym} data-testid={`ticker-${sym}`} title={derived?"DXY derived from EUR/USD inverse (proxy)":undefined}
                 onClick={()=>{setAiInput(`${sym==="DXY"?"DXY (Dollar Index)":sym} — long or short right now?`);setTab("ai");}}
                 style={{background:flash==="green"?"rgba(0,199,135,.08)":flash==="red"?"rgba(255,64,96,.06)":C.panel,
-                  border:`1px solid ${d?.live?"rgba(201,168,76,.18)":C.border}`,borderRadius:2,padding:"5px 9px",flexShrink:0,cursor:"pointer",minWidth:64,transition:"background .35s"}}>
-                <div style={{fontFamily:MONO,fontSize:8,color:d?.live?C.gold:C.muted,letterSpacing:"0.08em"}}>{label}</div>
-                <div className={flash?"motion-price-pulse":undefined} style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{d?.price!=null?(sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)):"—"}</div>
-                <div style={{fontFamily:MONO,fontSize:9,color:isUp?C.green:C.red}}>{pct(d?.chg)}</div>
+                  border:`1px solid ${livePrice?"rgba(201,168,76,.18)":C.border}`,borderRadius:2,padding:"5px 9px",flexShrink:0,cursor:"pointer",minWidth:64,transition:"background .35s"}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:livePrice?C.gold:C.muted,letterSpacing:"0.08em"}}>{label} {hasPrice&&!livePrice?`· ${priceState}`:""}</div>
+                {hasPrice?<><div className={flash?"motion-price-pulse":undefined} style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)}</div>
+                  <div style={{fontFamily:MONO,fontSize:9,color:isUp?C.green:C.red}}>{d?.chg!=null?pct(d.chg):"—"}</div></>
+                  :<div aria-label={`${label} ${sourceError?"price unavailable":"loading price"}`} style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>{sourceError?"Price unavailable":"↻ Loading…"}</div>}
               </div>
             );
           })}
@@ -5542,6 +5591,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           </div>
         )}
 
+        {gatedTab ? <section data-testid="email-verification-gate" style={{...panel,padding:"48px 20px",textAlign:"center",border:`1px solid ${C.gold}`}}>
+          <div style={{fontSize:32,marginBottom:14}}>✉</div>
+          <h2 style={{fontFamily:SERIF,color:C.gold,margin:"0 0 12px"}}>Verify your email to unlock</h2>
+          <p style={{fontFamily:SANS,color:C.muted2,fontSize:13,lineHeight:1.7}}>Signals, markets, macro and AI features are available after you confirm your email. Check your inbox for the verification link.</p>
+          <button type="button" onClick={handleResendVerification} disabled={resendLoading||resendSeconds>0} style={{background:C.gold,color:C.bg,border:0,borderRadius:4,padding:"10px 18px",fontFamily:MONO,marginTop:12,opacity:resendSeconds>0?0.5:1}}>
+            {resendLoading?"Sending...":resendSeconds>0?`Resend in ${resendSeconds}s`:"Resend verification email"}
+          </button>
+        </section> : <>
         {/* ── Free-user tab gates ── */}
         {/* Pro-tier gate for Pro-only tabs (free users) */}
         {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
@@ -6036,7 +6093,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                     <div style={{fontFamily:MONO,fontSize:10,color:C.muted,letterSpacing:"0.06em",marginBottom:14,lineHeight:1.6}}>
                       Upgrade to see today's top trade ideas — entry, stops, targets, confidence, and edge.
                     </div>
-                    <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowUpgrade && setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
+                    <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowPricingModal(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
                       Upgrade to Pro — $29.99/mo CAD
                     </button>
                   </div>
@@ -6095,7 +6152,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               <Badge label="6:00 AM daily" color="gold"/>
             </div>
             <div style={{padding:16}}>
-              <div style={{fontSize:11,color:C.muted2,lineHeight:1.8,fontStyle:"italic"}}>Daily briefs are delivered to your inbox every weekday at 6:00 AM ET. You can manage your subscription from your account settings or the unsubscribe link in any email.</div>
+              <div style={{fontSize:11,color:C.muted2,lineHeight:1.8,fontStyle:"italic"}}>{BRIEF_RULE} You can manage your subscription from your account settings or the unsubscribe link in any email.</div>
             </div>
           </div>
         </>}
@@ -6341,7 +6398,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                     <div style={{fontFamily:MONO,fontSize:10,color:C.muted,letterSpacing:"0.06em",marginBottom:14,lineHeight:1.6}}>
                       Upgrade to see today's top trade ideas — entry, stops, targets, confidence, and edge.
                     </div>
-                    <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowUpgrade && setShowUpgrade(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
+                    <button data-testid="btn-upgrade-trade-ideas" onClick={()=>setShowPricingModal(true)} style={{background:"rgba(201,168,76,.12)",border:"1px solid rgba(201,168,76,.4)",borderRadius:2,padding:"10px 22px",fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:13,color:C.gold2,cursor:"pointer",letterSpacing:"0.04em"}}>
                       Upgrade to Pro — $29.99/mo CAD
                     </button>
                   </div>
@@ -6411,7 +6468,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             <div data-testid="banner-signal-delay" style={{background:isDark?"rgba(255,140,0,.06)":"rgba(179,90,0,.05)",border:`1px solid ${isDark?"rgba(255,140,0,.25)":"rgba(179,90,0,.2)"}`,borderRadius:4,padding:"12px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               <div style={{flex:1,minWidth:160}}>
                 <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:C.orange,letterSpacing:"0.14em",marginBottom:3}}>⏱ SIGNALS DELAYED 30 MINUTES</div>
-                <div style={{fontFamily:MONO,fontSize:8,color:C.muted,lineHeight:1.6}}>Free accounts see signals with a 30-minute delay. Entry, TP & Stop-Loss prices are hidden. Upgrade to Pro for real-time alerts with full trade data.</div>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.muted,lineHeight:1.6}}>{SIGNAL_RULE}</div>
               </div>
               <button data-testid="btn-upgrade-from-delay-banner" onClick={onUpgrade} style={{padding:"9px 20px",background:"rgba(201,168,76,.14)",border:`1px solid rgba(201,168,76,.4)`,borderRadius:3,fontFamily:SERIF,fontStyle:"italic",fontWeight:700,fontSize:12,color:C.gold2,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Upgrade to Pro →</button>
             </div>
@@ -6891,7 +6948,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
 
           {[
             {cat:"Plans & Features (Current)",color:C.gold2,items:[
-              {q:"What do Free, Pro, and Elite include?",a:"Free: live prices, the macro calendar, and basic market data — no AI signals. Pro ($29.99/mo CAD): CLVR AI Trade Ideas (4 per run), the Quant Scanner, Ask AI chat, full signals, the sentiment feed, and custom alerts. Elite ($129/mo CAD): everything in Pro plus 6 trade ideas, the Kronos Forecast Engine, Chart AI, My Basket, SEC Insider Flow, the Squawk Box, whale tracking, and one free 30-min 1-on-1 session each month."},
+              {q:"What do Free, Pro, and Elite include?",a:`${SIGNAL_RULE} Free: live prices, macro calendar and delayed signals. Pro (${formatPrice(pricing.pro.monthlyPrice)}/mo ${pricing.pro.currency}; ${formatPrice(pricing.pro.yearlyPrice)}/yr) includes AI chat, real-time signals and price alerts. Elite (${formatPrice(pricing.elite.monthlyPrice)}/mo ${pricing.elite.currency}; ${formatPrice(pricing.elite.yearlyPrice)}/yr) includes everything in Pro plus Quant Engine, SEC Insider Flow, Basket Analysis and Squawk Box. ${BRIEF_RULE}`},
               {q:"How do AI Trade Ideas work?",a:"Pick a timeframe (Today / Mid / Long), a horizon (Quick / Hours / Full Day), an asset class, and PERP / SPOT / BOTH, then tap Generate. Everyone using the same filters sees the same batch. Elite members can tap '↻ Re-roll fresh' for a brand-new set."},
               {q:"What is Kronos? (Elite)",a:"Kronos is a 5-candle BULL / BASE / BEAR forecast with an EV-aligned headline. It's a forecast (mean-reversion aware), so it can differ from a pure trend read like Chart AI — they look at different horizons."},
               {q:"What is Chart AI? (Elite)",a:"Upload a chart, pick a horizon, and get a structured read built on real server-computed RSI and ATR — not a guess from the image alone."},
@@ -6918,7 +6975,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             {cat:"Getting Started",color:C.blue,items:[
               {q:"What is CLVRQuant?",a:"CLVRQuant is a mobile-first AI-powered market intelligence dashboard. It aggregates live prices across crypto, equities, commodities, and forex — combined with AI analysis, macro event tracking, and real-time signals — all in one clean app."},
               {q:"How do I create an account?",a:"Tap the Account tab (⚙) in the navigation bar, then choose Sign Up. Enter your email and password. That's it — you're in. Free accounts get access to all core market data, signals, and the daily brief."},
-              {q:"What's the difference between Free, Pro, and Elite?",a:"Free: live prices, macro calendar, basic signals, 1 morning brief idea. Pro ($29.99/mo CAD): CLVR AI Market Chat, 4 daily brief ideas, full signals, sentiment feed, and custom price alerts. Elite ($129/mo CAD): everything in Pro plus the exclusive ⚡ AI Quant Engine (MasterBrain 12-factor analysis), SEC Insider Flow, My Basket Analysis, Squawk Box live signal announcer, whale tracking, and Hyperliquid perpetuals data. The Squawk Box, SEC Insider tab, and Basket Analysis are Elite-only — Pro users see a locked preview with an upgrade prompt. Tap your tier badge in the header to upgrade."},
+              {q:"What's the difference between Free, Pro, and Elite?",a:`${SIGNAL_RULE} ${BRIEF_RULE} Pro (${formatPrice(pricing.pro.monthlyPrice)}/mo ${pricing.pro.currency}) adds AI Market Chat and custom alerts. Elite (${formatPrice(pricing.elite.monthlyPrice)}/mo ${pricing.elite.currency}) adds Quant Engine, SEC Insider Flow, Basket Analysis and Squawk Box. Tap your tier badge to upgrade.`},
               {q:"Can I use CLVRQuant on my phone?",a:"Yes — CLVRQuant is designed mobile-first. You can add it to your home screen as a PWA (Progressive Web App) for a native app experience. On iPhone, tap Share → Add to Home Screen. On Android, tap the browser menu → Install App."},
             ]},
             {cat:"Market Data & Signals",color:C.green,items:[
@@ -6936,19 +6993,19 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             ]},
             {cat:"CLVR AI",color:C.gold2,items:[
               {q:"What is CLVR AI?",a:"CLVR AI is your personal AI market analyst, powered by Anthropic's Claude model. It analyzes live prices, signals, macro events, and market regime data in real-time to answer your questions and suggest trade setups."},
-              {q:"Is CLVR AI available on the Free plan?",a:"Free users see the morning brief (1 trade idea). Pro unlocks CLVR AI Market Chat — ask Claude anything about markets, get trade ideas and analysis. Elite unlocks everything in Pro PLUS the ⚡ Quant Engine — MasterBrain runs a full 12-factor analysis generating precise entry, stop, and target levels with Kelly-sized position sizing. The Quant Engine is Elite exclusive."},
+              {q:"Is CLVR AI available on the Free plan?",a:`${BRIEF_RULE} Pro unlocks CLVR AI Market Chat. Elite unlocks the Quant Engine and everything in Pro.`},
               {q:"What is the AI Quant Engine and who can use it?",a:"The ⚡ Quant Engine is the most advanced feature in CLVRQuant, available exclusively to Elite members. It runs MasterBrain Analysis — a 12-factor confluence model across price action, funding rates, open interest, momentum, macro context, and sentiment — then generates a complete trade blueprint with entry, stop-loss, two profit targets, and an optimal position size. In the AI tab, tap ⚡ QUANT ENGINE to access it (Elite members only)."},
               {q:"Does the AI give financial advice?",a:"CLVRQuant and CLVR AI are for educational and informational purposes only. Nothing on this platform constitutes financial advice. Always do your own research and consult a licensed financial advisor before making investment decisions."},
             ]},
             {cat:"Alerts & Notifications",color:C.orange,items:[
               {q:"How do I set a price alert?",a:"Tap the 🔔 Alerts tab in the navigation bar. Enter the asset, price target, and direction (above/below). Tap Save. You'll get a push notification when the price hits your target — even if the app is closed."},
               {q:"Why aren't I receiving push notifications?",a:"First, make sure you've allowed notifications when prompted. On iPhone, go to Settings → Notifications → Safari (or your browser) and enable notifications for CLVRQuant. If you added the app to your home screen, you may need to re-enable notifications from Settings → CLVRQuant."},
-              {q:"What is the Morning Brief?",a:"The Morning Brief is a daily AI-generated market summary delivered every day at 6:00 AM ET. It covers overnight moves across crypto, equities, and commodities; key macro events for the day; and top trade setups. You can also receive it by email — subscribe in the Account tab."},
+              {q:"What is the Morning Brief?",a:`${BRIEF_RULE} It covers overnight moves, macro events and tier-dependent trade setups. Subscribe in the Account tab.`},
               {q:"What is the Squawk Box and who can use it?",a:"The Squawk Box (📣 in the header) is an Elite-only live signal announcer. When active, it uses your device's text-to-speech to call out new QuantBrain signals in real-time — hands-free market awareness while you work. Pro users see a locked 📣 icon with a 🔒 badge; tap it to upgrade. Enable SOUND first, then tap 📣 SQUAWK to go live."},
             ]},
             {cat:"Billing & Subscription",color:C.red,items:[
               {q:"Where do I redeem an access code?",a:"Go to Radar → LIVE ALERTS → SCAN ACCESS CODE → Manual, enter your issued code and tap ↵. You can also scan its QR code or use HAVE AN ACCESS CODE? in the plan selector. "+ACCESS_CODE_FORMATS+" Codes must be active and unused; the confirmation displays your actual plan and expiry."},
-              {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year, all in CAD (save $60). CLVR Elite is $129/month or $1,199/year, all in CAD (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
+              {q:"How much does it cost?",a:`CLVR Pro is ${formatPrice(pricing.pro.monthlyPrice)}/mo or ${formatPrice(pricing.pro.yearlyPrice)}/year ${pricing.pro.currency} (save ${annualDiscount(pricing.pro)}%). CLVR Elite is ${formatPrice(pricing.elite.monthlyPrice)}/mo or ${formatPrice(pricing.elite.yearlyPrice)}/year ${pricing.elite.currency} (save ${annualDiscount(pricing.elite)}%). Both plans can be cancelled anytime.`},
               {q:"How do I upgrade to Pro or Elite?",a:"Tap your tier badge in the top navigation bar (the one showing UPGRADE, PRO, or ELITE). Free users are taken directly to the plan selector. Pro users who tap their PRO badge are directed straight to the Elite upgrade. Elite users who tap their ELITE badge can view downgrade options. You can also go to Account → Upgrade. All payments are processed by Stripe."},
               {q:"How do I downgrade from Elite to Pro or Free?",a:"Tap your ELITE badge in the header — this opens the pricing modal where you can select Pro or Free. For billing changes mid-cycle, go to Account → Manage Subscription to access the Stripe billing portal where you can switch plans or cancel anytime."},
               {q:"Can I cancel my subscription?",a:"Yes, you can cancel anytime. Go to Account → Manage Subscription. Your Pro access continues until the end of your current billing period, then reverts to Free. No questions asked."},
@@ -6985,6 +7042,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
 
         {tab==="account"&&isPreview&&<PreviewPricingPage C2={C} MONO2={MONO} SERIF2={SERIF} onSignUp={()=>onShowAuth&&onShowAuth()} onSignIn={()=>onShowAuth&&onShowAuth()}/>}
         {tab==="account"&&!isPreview&&<AccountPage user={user} onSignOut={async()=>{try{await apiFetch("/api/auth/signout",{method:"POST"});}catch(e){}try{localStorage.removeItem("clvr_tier");localStorage.removeItem("clvr_code");localStorage.removeItem("clvr_auth_token");}catch(e){}publishSessionEvent("signout");setUser(null);}} isPro={isPro} setShowUpgrade={()=>setShowPricingModal(true)} onTestBell={triggerTestBell} requestedTab={acctTabReq}/>}
+        </>}
 
         <div style={{textAlign:"center",fontFamily:MONO,fontSize:8,color:C.muted,marginTop:6,letterSpacing:"0.1em"}}>
           BINANCE · HYPERLIQUID · FMP · PHANTOM · NOT FINANCIAL ADVICE · CLVRQUANT
@@ -7003,7 +7061,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           const proGatedTab=!isPreview&&PRO_TABS_GATE.includes(item.k)&&!isPro;
           const isTabLocked=(isPreview&&!previewFreeTab)||eliteGatedTab||proGatedTab;
           return(
-            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,minHeight:48,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"9px 4px 11px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s",cursor:"pointer"}}>
+            <button key={item.k} data-testid={`nav-${item.k}`} onClick={()=>{if(item.k==="book"){setConciergeBookingSignal(n=>n+1);return;}if(item.external){window.open(item.external,"_blank","noopener,noreferrer");return;}setTab(item.k);}} style={{flex:"0 0 auto",minWidth:52,minHeight:48,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"9px 4px 11px",background:"none",border:"none",borderTop:`2px solid ${active&&!item.external?C.gold:"transparent"}`,position:"relative",transition:"border-color .2s",cursor:"pointer"}}>
               <span style={{fontSize:item.k==="ai"?11:13,lineHeight:1,fontFamily:item.k==="ai"?SERIF:"inherit",fontWeight:item.k==="ai"?900:"inherit",color:active?C.gold:isTabLocked?C.muted:C.muted2}}>{item.icon}</span>
               {macroAlert&&!active&&!isPreview&&<div style={{position:"absolute",top:4,right:8,width:5,height:5,borderRadius:"50%",background:C.red}}/>}
               {isTabLocked&&!active&&<div style={{position:"absolute",top:3,right:6,fontSize:7,lineHeight:1}}>{isPreview?"🔐":"🔒"}</div>}

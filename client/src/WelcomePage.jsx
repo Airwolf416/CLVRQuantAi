@@ -1,5 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch } from "./lib/apiClient";
+import { LEGAL_ENTITY_NAME } from "./config/legal";
+import { TERMS_SECTIONS } from "./pages/Terms";
+import { TIER_ORDER, usePricing, annualDiscount, formatPrice, BRIEF_RULE, SIGNAL_RULE } from "./config/pricing.js";
+import PasswordStrength from "./components/PasswordStrength.jsx";
 // Auth/reset/verification endpoints are public by design, but use the same
 // same-origin transport for bearer compatibility and structured responses.
 import { SiInstagram, SiTiktok } from "react-icons/si";
@@ -41,7 +45,7 @@ function uint8ToB64(arr) {
   return btoa(String.fromCharCode(...arr)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide individualized financial advice or investment recommendations. All AI-generated trade ideas, signals, and analysis are educational decision-support content only. All content is for informational and educational purposes only. By using this platform you acknowledge that: (1) You are solely responsible for any trading decisions you make. (2) CLVRQuant, its founder Mike Claver, and any affiliated entities bear no liability for any financial losses incurred. (3) Trading involves substantial risk of loss and is not suitable for all individuals. (4) Past market data and AI-generated analysis do not guarantee future results. Use this platform entirely at your own risk.\n\nAI DISCLOSURE: CLVR AI uses the Claude API by Anthropic to power its AI analysis engine.`;
+const LEGAL = `CLVRQuant is a market information and education platform only. It does not provide individualized financial advice or investment recommendations. AI-generated trade ideas, signals and analysis are educational decision-support content, not instructions to trade. You are responsible for your own trading decisions and research. Trading involves substantial risk of loss and is not suitable for all individuals. Past market data and AI-generated analysis do not guarantee future results. Data may be delayed or inaccurate. Liability is limited only to the extent allowed by applicable law; nothing limits rights that cannot legally be waived.\n\nAI DISCLOSURE: CLVR AI uses the Claude API by Anthropic to power its AI analysis engine.`;
 
 const DARK_C = {
   bg: "#050709", panel: "#0c1220", border: "#141e35", border2: "#1c2b4a",
@@ -83,9 +87,55 @@ function Particles({ C }) {
   );
 }
 
-function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
+function SignupTurnstile({ siteKey, onToken, onError }) {
+  const mount = useRef(null);
+  useEffect(() => {
+    if (!siteKey || !mount.current) return;
+    let cancelled = false;
+    let widget;
+    const render = () => {
+      if (cancelled || !mount.current || !window.turnstile) return;
+      widget = window.turnstile.render(mount.current, {
+        sitekey: siteKey, theme: "dark",
+        callback: token => onToken(token),
+        "expired-callback": () => onToken(""),
+        "error-callback": () => { onToken(""); onError("Bot verification failed. Try again."); },
+      });
+    };
+    let script = document.querySelector('script[data-clvr-turnstile]');
+    const created = !script;
+    if (!script) {
+      script = document.createElement("script");
+      script.dataset.clvrTurnstile = "true";
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+    }
+    const loaded = () => {
+      script.dataset.clvrTurnstileLoaded = "true";
+      if (window.turnstile) render();
+      else onError("Bot verification could not initialize. Please retry.");
+    };
+    const fail = () => onError("Bot verification could not load. Please retry.");
+    if (window.turnstile) render();
+    else if (script.dataset.clvrTurnstileLoaded === "true") fail();
+    else script.addEventListener("load", loaded, { once: true });
+    script.addEventListener("error", fail);
+    // Attach listeners before starting a new script load (cached scripts can
+    // complete quickly); the widget also mounts when siteKey arrives later.
+    if (created) document.head.appendChild(script);
+    return () => {
+      cancelled = true;
+      script.removeEventListener("load", loaded);
+      script.removeEventListener("error", fail);
+      if (widget !== undefined && window.turnstile) window.turnstile.remove(widget);
+    };
+  }, [siteKey, onToken, onError]);
+  return <div ref={mount} data-testid="signup-turnstile" style={{ minHeight: 65 }} />;
+}
+
+function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose, onOpenDisclaimer }) {
   const [step, setStep] = useState(0);
-  const TOTAL = 5;
+  const tiers = usePricing();
   const STEPS = [
     {
       icon: "✦", label: "WELCOME",
@@ -94,7 +144,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
       content: (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 20 }}>
           {[
-            { icon: "⚡", t: "Live Signals", d: "Real-time quant signals with confidence scoring" },
+            { icon: "⚡", t: "Live Signals", d: "Real-time on Pro & Elite; delayed 30 minutes on Free" },
             { icon: "🤖", t: "CLVR AI", d: "Claude-powered market analyst at your fingertips" },
             { icon: "📈", t: "Transparent Method", d: "See the reasoning and risk levels behind every idea" },
             { icon: "📅", t: "Macro Calendar", d: "Fed meetings, CPI, earnings — never miss a catalyst" },
@@ -110,7 +160,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
     },
     {
       icon: "⚡", label: "SIGNALS",
-      title: "Real-Time Quant Signals",
+      title: "Quant Signals · Free delayed 30 min",
       sub: "AI-scored signals with risk management built-in.",
       content: (
         <div style={{ marginTop: 20, background: isDark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.03)", border: `1px solid rgba(201,168,76,.25)`, borderRadius: 10, padding: 16 }}>
@@ -152,7 +202,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
             <span style={{ fontFamily: MONO, fontSize: 9, color: C.gold, display: "block", marginBottom: 4 }}>✦ CLVR AI</span>
             BTC enters the week with FOMC minutes Wednesday and CPI Friday as the key catalysts. Positioning data shows risk appetite building, with the $96K area as the level traders are watching. The daily brief maps scenarios on both sides of each data print — so you plan around the calendar instead of reacting to it.
           </div>
-          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, textAlign: "center", letterSpacing: "0.1em" }}>POWERED BY CLAUDE · PRO & ELITE ONLY</div>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, textAlign: "center", letterSpacing: "0.1em" }}>POWERED BY CLAUDE · PRO & ELITE ONLY · {BRIEF_RULE}</div>
         </div>
       ),
     },
@@ -189,26 +239,16 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
       sub: "Start free. Upgrade anytime. Cancel anytime.",
       content: (
         <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
-          {[
-            {
-              tier: "FREE", price: "$0", sub: "Always free",
-              features: ["Signals with 30-min delay", "Macro Calendar", "Live Market Prices"],
-              locked: ["Real-time signals", "AI Chat & Morning Brief", "Price Alerts"],
-              highlight: false, cta: "Start Free", action: "free", color: C.muted,
-            },
-            {
-              tier: "PRO", price: "$29.99", sub: "per month (CAD) · save 17% yearly",
-              features: ["Real-time signals — zero delay", "CLVR AI Market Chat", "Price alerts & push notifications", "Signal history & PnL tracking", "Morning Brief · 4 ideas/day"],
-              locked: [],
-              highlight: true, cta: "Start Pro", action: "signup", color: C.gold,
-            },
-            {
-              tier: "ELITE", price: "$129", sub: "per month (CAD) · save 23% yearly",
-              features: ["Everything in Pro", "AI Quant Engine (12-factor)", "SEC Insider Flow & whale tracking", "Squawk Box live announcer", "Basket Analysis (3+ assets)", "Political Alpha correlation"],
-              locked: [],
-              highlight: false, cta: "Go Elite", action: "signup", color: "#00e5ff",
-            },
-          ].map(({ tier, price, sub, features, locked, highlight, cta, action, color }) => (
+          {TIER_ORDER.map(id => {
+            const plan = tiers[id];
+            const tier = id.toUpperCase(), price = formatPrice(plan.monthlyPrice);
+            const sub = id === "free" ? "Always free" : `per month (${plan.currency}) · ${formatPrice(plan.yearlyPrice)}/yr · save ${annualDiscount(plan)}%`;
+            const features = plan.features.filter(f => !f.locked).map(f => f.label);
+            const locked = plan.features.filter(f => f.locked).map(f => f.label);
+            const highlight = id === "pro", cta = id === "free" ? "Start Free" : id === "pro" ? "Start Pro" : "Go Elite";
+            const action = id === "free" ? "free" : "signup";
+            const color = id === "free" ? C.muted : id === "pro" ? C.gold : "#00e5ff";
+            return (
             <div key={tier} style={{ border: `1px solid ${highlight ? "rgba(201,168,76,.45)" : tier === "ELITE" ? "rgba(0,229,255,.3)" : C.border}`, borderRadius: 8, padding: "12px 14px", background: highlight ? "rgba(201,168,76,.05)" : tier === "ELITE" ? "rgba(0,229,255,.03)" : "transparent", position: "relative" }}>
               {highlight && <div style={{ position: "absolute", top: -1, left: "50%", transform: "translateX(-50%)", fontFamily: MONO, fontSize: 7, background: C.gold, color: "#0a0a0a", padding: "2px 10px", borderRadius: "0 0 4px 4px", fontWeight: 700, letterSpacing: "0.1em" }}>MOST POPULAR</div>}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
@@ -226,12 +266,13 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
                 {cta} →
               </button>
             </div>
-          ))}
+          ); })}
           <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, textAlign: "center", lineHeight: 1.6 }}>No credit card required for Free · Stripe-secured payments · Cancel anytime</div>
         </div>
       ),
     },
   ];
+  const TOTAL = STEPS.length;
   const s = STEPS[step];
   return (
     <div data-testid="walking-tour" style={{ position: "fixed", inset: 0, zIndex: 500, background: isDark ? "rgba(5,7,9,.97)" : "rgba(245,243,238,.97)", backdropFilter: "blur(20px)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
@@ -258,6 +299,7 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
 
         {/* Content */}
         {s.content}
+        <button type="button" onClick={onOpenDisclaimer} style={{ marginTop: 22, background: "none", border: "none", color: C.gold, textDecoration: "underline", cursor: "pointer", fontFamily: MONO, fontSize: 10 }}>Read full disclaimer →</button>
       </div>
 
       {/* Fixed bottom nav */}
@@ -285,13 +327,25 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose }) {
 
 export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTheme }) {
   const C = isDark ? DARK_C : LIGHT_C;
+  const tiers = usePricing();
   const [mode, setMode] = useState("welcome");
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false, referralCode: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showLegal, setShowLegal] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
   const [showSpam, setShowSpam] = useState(false);
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileError, setTurnstileError] = useState("");
+  const onTurnstileToken = useCallback(token => setTurnstileToken(token), []);
+  const onTurnstileError = useCallback(message => setTurnstileError(message), []);
+  useEffect(() => {
+    apiFetch("/api/auth/turnstile-config").then(r => r.json())
+      .then(d => { if (d.siteKey) setTurnstileSiteKey(d.siteKey); else setTurnstileError("Signup is temporarily unavailable: bot protection is not configured."); })
+      .catch(() => setTurnstileError("Signup is temporarily unavailable: bot protection could not load."));
+  }, []);
   const [checkingSession, setCheckingSession] = useState(true);
   const [signedUpUser, setSignedUpUser] = useState(null);
   const [resetToken, setResetToken] = useState("");
@@ -428,9 +482,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   };
 
   const handleSignUp = async () => {
+    if (!turnstileSiteKey || !turnstileToken) return setError(turnstileError || "Complete bot verification before creating an account.");
     if (!form.name.trim()) return setError("Please enter your name.");
     if (!form.email.includes("@")) return setError("Please enter a valid email.");
-    if (form.password.length < 8) return setError("Password must be at least 8 characters.");
+    if (form.password.length < 10) return setError("Password must be at least 10 characters.");
     if (form.password !== form.confirm) return setError("Passwords do not match.");
     if (!form.agreeTerms) return setError("You must agree to the terms to continue.");
     setLoading(true);
@@ -439,10 +494,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.name, email: form.email, password: form.password, dailyEmail: form.dailyEmail, referralCode: form.referralCode || undefined }),
+        body: JSON.stringify({ name: form.name, email: form.email, password: form.password, dailyEmail: form.dailyEmail, referralCode: form.referralCode || undefined, turnstileToken }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || "Signup failed"); setLoading(false); return; }
+      if (!res.ok) { setError(data.error || "Signup failed"); setTurnstileToken(""); if (window.turnstile) window.turnstile.reset(); setLoading(false); return; }
       // Cache the bearer-token fallback ONLY inside an iframe context. In
       // top-level tabs the httpOnly cookie works fine and we don't want to
       // expose the session ID to JS unnecessarily.
@@ -452,6 +507,8 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
       setMode("verify");
     } catch (e) {
       setError("Network error. Please try again.");
+      setTurnstileToken("");
+      if (window.turnstile) window.turnstile.reset();
       setLoading(false);
     }
   };
@@ -508,7 +565,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   };
 
   const handleResetPassword = async () => {
-    if (!newPassword || newPassword.length < 8) return setError("Password must be at least 8 characters.");
+    if (!newPassword || newPassword.length < 10) return setError("Password must be at least 10 characters.");
     if (newPassword !== newPasswordConfirm) return setError("Passwords do not match.");
     setLoading(true);
     setError("");
@@ -843,6 +900,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
 
       {mode === "tour" && (
         <WalkingTour
+          onOpenDisclaimer={() => setShowLegal(true)}
           C={C}
           isDark={isDark}
           onSignUp={() => setMode("signup")}
@@ -853,6 +911,10 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
 
       {mode === "welcome" && (
         <div data-testid="welcome-screen" style={{ textAlign: "center", maxWidth: 480, width: "100%", position: "relative", zIndex: 1 }}>
+          <nav aria-label="Public navigation" style={{ display:"flex",justifyContent:"center",flexWrap:"wrap",gap:16,marginBottom:32,fontFamily:MONO,fontSize:10 }}>
+            <a href="#features" style={{color:C.gold}}>Features</a><a href="#pricing" style={{color:C.gold}}>Pricing</a>
+            <a href="#faq" style={{color:C.gold}}>FAQ</a><button type="button" onClick={()=>setMode("signin")} style={{background:"none",border:0,color:C.gold,textDecoration:"underline",font:"inherit",cursor:"pointer",padding:0}}>Sign in</button>
+          </nav>
           {onBack && (
             <button data-testid="btn-back-preview" onClick={onBack}
               style={{ position:"absolute", top:-8, left:0, background:"none", border:"none", fontFamily:MONO, fontSize:10, color:C.muted, cursor:"pointer", letterSpacing:"0.06em", display:"flex", alignItems:"center", gap:5, padding:"4px 0" }}>
@@ -865,16 +927,50 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
           <div style={{ fontFamily: MONO, fontSize: 11, color: isDark ? C.gold : "#0d1b35", letterSpacing: "0.35em", marginBottom: 28, fontWeight: 600 }}>AI · MARKET INTELLIGENCE</div>
 
           <p style={{ fontFamily: SANS, fontSize: 14, color: C.muted2, lineHeight: 1.8, marginBottom: 10, maxWidth: 380, margin: "0 auto 20px" }}>
-            Your personal quantitative market intelligence terminal. Real-time signals, AI-powered analysis, macro calendar, and Phantom Wallet — all in one place.
+            Your personal quantitative market intelligence terminal. Real-time signals on Pro &amp; Elite (30-min delayed on Free), AI-powered analysis, macro calendar, and Phantom Wallet — all in one place.
           </p>
 
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: "14px 18px", marginBottom: 28, fontSize: 11, color: C.muted2, lineHeight: 1.7, textAlign: "left" }}>
+          <div id="features" style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: "14px 18px", marginBottom: 28, fontSize: 11, color: C.muted2, lineHeight: 1.7, textAlign: "left" }}>
             <span style={{ fontFamily: MONO, fontSize: 9, color: isDark ? C.gold : "#0d1b35", letterSpacing: "0.15em", fontWeight: 700 }}>EDUCATION & INFORMATION PLATFORM</span>
             <div style={{ marginTop: 6 }}>
               CLVRQuant does <strong style={{ color: C.white }}>not</strong> execute trades, manage funds, or provide financial advice.
               All content is for <strong style={{ color: C.white }}>informational and learning purposes only.</strong>
             </div>
           </div>
+          <button data-testid="btn-create-account-hero" onClick={() => setMode("signup")} style={{...btnGold,marginBottom:8}}>Create Free Account →</button>
+          <section id="pricing" aria-label="Pricing" style={{margin:"36px 0 28px",textAlign:"left"}}>
+            <h2 style={{fontFamily:SERIF,color:C.gold2,textAlign:"center"}}>Plans &amp; pricing</h2>
+            <p style={{fontFamily:MONO,fontSize:10,color:C.muted2,textAlign:"center"}}>All prices in CAD · Monthly or annual billing</p>
+            <div style={{display:"grid",gap:10}}>
+              {TIER_ORDER.map(id=>{
+                const plan=tiers[id];
+                return <div key={id} style={{background:C.panel,border:`1px solid ${id==="pro"?C.gold:C.border}`,borderRadius:8,padding:16}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontFamily:SERIF,fontSize:17,fontWeight:700,color:C.gold2}}>
+                    <span>{plan.name}</span><span>{formatPrice(plan.monthlyPrice)}<small style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>/mo {plan.currency}</small></span>
+                  </div>
+                  {id!=="free"&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginTop:5}}>{formatPrice(plan.yearlyPrice)}/year · Save {annualDiscount(plan)}%</div>}
+                  <ul style={{paddingLeft:18,margin:"12px 0 0",fontFamily:SANS,fontSize:11,lineHeight:1.8,color:C.text}}>
+                    {plan.features.map(f=><li key={f.label} style={{color:f.locked?C.muted:C.text}}>{f.locked?"✕ ":"✓ "}{f.label}</li>)}
+                  </ul>
+                </div>;
+              })}
+            </div>
+          </section>
+          <section id="faq" aria-label="Frequently asked questions" style={{textAlign:"left",background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:16,marginBottom:24,fontSize:12,lineHeight:1.7,color:C.muted2}}>
+            <h2 style={{fontFamily:SERIF,color:C.gold2,margin:"0 0 12px"}}>FAQ</h2>
+            <strong style={{color:C.text}}>What do the plans include?</strong><div>{SIGNAL_RULE} See the plan comparison above for all included features.</div>
+            <strong style={{color:C.text}}>Is the Morning Brief free?</strong><div>{BRIEF_RULE} Subscribe at signup or in Account settings.</div>
+            <strong style={{color:C.text}}>Can I cancel?</strong><div>Yes. Paid plans can be cancelled anytime.</div>
+          </section>
+          <section aria-label="Testimonials" style={{textAlign:"left",background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:16,marginBottom:16}}>
+            <h2 style={{fontFamily:SERIF,color:C.gold2,margin:"0 0 8px"}}>Testimonials</h2>
+            <p style={{fontFamily:SANS,fontSize:12,color:C.muted2,margin:0}}>No published testimonials yet. We only publish verified, permissioned feedback; private user comments are not displayed here.</p>
+          </section>
+          <section aria-label="Signal performance track record" style={{textAlign:"left",background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:16,marginBottom:24}}>
+            <h2 style={{fontFamily:SERIF,color:C.gold2,margin:"0 0 8px"}}>Signal performance track record</h2>
+            <p style={{fontFamily:SANS,fontSize:12,color:C.muted2,margin:"0 0 8px"}}>Publicly validated trading results are not available yet. No public hit rate or return is claimed. A publishable track record needs a defined sample window and sample size, timestamped signals, entry/stop/target and exit rules, fees and slippage, and independently checked outcomes including losses and unresolved signals.</p>
+            <p style={{fontFamily:MONO,fontSize:10,color:C.muted2,margin:0}}>Past performance does not guarantee future results. Education only; not financial advice. Trading involves risk of loss.</p>
+          </section>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
             <button data-testid="btn-create-account" onClick={() => setMode("signup")} style={btnGold}>
@@ -920,8 +1016,8 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
           )}
 
           <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, lineHeight: 1.8, maxWidth: 380, margin: "0 auto" }}>
-            By using CLVRQuant you agree that all market data and AI analysis is for informational purposes only. Trading involves substantial risk of loss. CLVRQuant, Mike Claver, and affiliated entities bear <strong style={{ color: C.muted2 }}>no liability</strong> for any financial decisions or losses.{" "}
-            <span data-testid="link-full-disclaimer" onClick={() => setShowLegal(true)} style={{ color: C.gold, cursor: "pointer", textDecoration: "underline" }}>Read full disclaimer →</span>
+            CLVRQuant market data and AI analysis are for informational purposes only, not financial advice. Trading involves substantial risk of loss. You are responsible for your own decisions.{" "}
+            <button type="button" data-testid="link-full-disclaimer" onClick={() => setShowLegal(true)} style={{ color: C.gold, cursor: "pointer", textDecoration: "underline", background: "none", border: 0, padding: 0, font: "inherit" }}>Read full disclaimer →</button>
           </div>
 
           {/* Social media links */}
@@ -974,7 +1070,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
           </div>
 
           <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 16, fontFamily: MONO, fontSize: 9, letterSpacing: "0.08em" }}>
-            <span data-testid="link-footer-terms" onClick={() => setShowLegal(true)} style={{ color: C.gold, cursor: "pointer" }}>Terms</span>
+            <a data-testid="link-footer-terms" href="/terms" style={{ color: C.gold, textDecoration: "none" }}>Terms</a>
             <span style={{ color: C.muted }}>·</span>
             <a data-testid="link-footer-privacy" href="/privacy" style={{ color: C.gold, textDecoration: "none" }}>Privacy</a>
           </div>
@@ -1005,7 +1101,8 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
             </div>
             <div>
               <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>PASSWORD</label>
-              <input data-testid="input-signup-password" type="password" value={form.password} onChange={e => set("password", e.target.value)} placeholder="Min 6 characters" style={inputStyle} />
+              <input data-testid="input-signup-password" type="password" value={form.password} onChange={e => set("password", e.target.value)} placeholder="Min 10 characters" style={inputStyle} />
+              <PasswordStrength password={form.password} />
             </div>
             <div>
               <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>CONFIRM PASSWORD</label>
@@ -1022,27 +1119,31 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
                   style={{ marginTop: 2, accentColor: C.gold, width: 16, height: 16, flexShrink: 0 }} />
                 <div>
                   <div style={{ fontFamily: SANS, fontSize: 13, color: C.white, fontWeight: 600 }}>Daily 6AM Market Brief</div>
-                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted2, marginTop: 3, lineHeight: 1.6 }}>Receive a daily morning email with key market signals, top setups, and QuantBrain insights before markets open.</div>
+                   <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted2, marginTop: 3, lineHeight: 1.6 }}>{BRIEF_RULE} Receive the market summary before markets open.</div>
                 </div>
               </label>
               <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 9, color: C.muted, lineHeight: 1.7, borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
                 We will <strong style={{ color: C.muted2 }}>never</strong> sell, share, or spam your email. Unsubscribe anytime.{" "}
-                <span data-testid="link-email-policy" onClick={() => setShowSpam(true)} style={{ color: C.gold, cursor: "pointer" }}>Email policy →</span>
+                <button type="button" data-testid="link-email-policy" onClick={() => setShowSpam(true)} style={{ color: C.gold, cursor: "pointer", background: "none", border: 0, padding: 0, font: "inherit" }}>Email policy →</button>
               </div>
             </div>
 
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
-              <input data-testid="checkbox-agree-terms" type="checkbox" checked={form.agreeTerms} onChange={e => set("agreeTerms", e.target.checked)}
-                style={{ marginTop: 2, accentColor: C.gold, width: 16, height: 16, flexShrink: 0 }} />
-              <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted2, lineHeight: 1.6 }}>
-                I understand CLVRQuant is for <strong style={{ color: C.white }}>education/information only</strong>, not financial advice. I accept all risks.{" "}
-                <span onClick={() => setShowLegal(true)} style={{ color: C.gold, cursor: "pointer" }}>Terms →</span>
-              </span>
-            </label>
+            <div>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+                <input data-testid="checkbox-agree-terms" type="checkbox" checked={form.agreeTerms} onChange={e => set("agreeTerms", e.target.checked)}
+                  style={{ marginTop: 2, accentColor: C.gold, width: 16, height: 16, flexShrink: 0 }} />
+                <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted2, lineHeight: 1.6 }}>
+                  I understand CLVRQuant is for <strong style={{ color: C.white }}>education/information only</strong>, not financial advice. I accept all risks.
+                </span>
+              </label>
+              <button type="button" data-testid="link-signup-terms" onClick={() => setShowTerms(true)} style={{ color: C.gold, cursor: "pointer", background: "none", border: 0, padding: "4px 0 0 26px", fontFamily: MONO, fontSize: 10 }}>Terms →</button>
+            </div>
 
+            {turnstileSiteKey && <SignupTurnstile siteKey={turnstileSiteKey} onToken={onTurnstileToken} onError={onTurnstileError} />}
+            {turnstileError && <div role="alert" style={{ fontFamily: MONO, fontSize: 10, color: C.red }}>{turnstileError}</div>}
             {error && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
 
-            <button data-testid="btn-submit-signup" onClick={handleSignUp} disabled={loading}
+            <button data-testid="btn-submit-signup" onClick={handleSignUp} disabled={loading || !turnstileSiteKey || !turnstileToken}
               style={{ ...btnGold, opacity: loading ? 0.5 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
               {loading ? "Creating Account..." : "Create Account →"}
             </button>
@@ -1173,7 +1274,8 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
               <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>NEW PASSWORD</label>
-              <input data-testid="input-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} placeholder="Min 6 characters" style={inputStyle} />
+              <input data-testid="input-new-password" type="password" value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }} placeholder="Min 10 characters" style={inputStyle} />
+              <PasswordStrength password={newPassword} />
             </div>
             <div>
               <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>CONFIRM NEW PASSWORD</label>
@@ -1222,20 +1324,35 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
         </div>
       )}
 
+      {showTerms && (
+        <div role="dialog" aria-modal="true" aria-label="Terms of Service" onClick={() => setShowTerms(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(8px)" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: 24, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto" }}>
+            <h2 style={{ fontFamily: SERIF, color: C.gold }}>Terms of Service</h2>
+            <p style={{ fontFamily: SANS, fontSize: 12, color: C.muted2 }}>CLVRQuant is operated by {LEGAL_ENTITY_NAME}.</p>
+            {TERMS_SECTIONS.map(([title, body], i) => <section key={title} style={{ marginBottom: 18 }}>
+              <strong style={{ fontFamily: MONO, fontSize: 11, color: C.gold }}>{i + 1}. {title}</strong>
+              <p style={{ fontFamily: SANS, fontSize: 12, color: C.muted2, lineHeight: 1.8 }}>{body}</p>
+            </section>)}
+            <button type="button" onClick={() => setShowTerms(false)} style={btnGhost}>Close</button>
+          </div>
+        </div>
+      )}
+
       {showLegal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(8px)" }}
+        <div role="dialog" aria-modal="true" aria-label="Full disclaimer" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(8px)" }}
           onClick={() => setShowLegal(false)}>
           <div style={{ background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: 24, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto" }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: C.orange, letterSpacing: "0.15em", marginBottom: 14 }}>FULL DISCLAIMER & TERMS OF USE</div>
+            <div style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: C.orange, letterSpacing: "0.15em", marginBottom: 14 }}>FULL DISCLAIMER</div>
             <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted2, lineHeight: 1.9, marginBottom: 16 }}>{LEGAL}</div>
             <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, lineHeight: 1.8, borderTop: `1px solid ${C.border}`, paddingTop: 12, marginBottom: 16 }}>
               <strong style={{ color: C.muted2 }}>Created by:</strong> Mike Claver<br />
-              <strong style={{ color: C.muted2 }}>Entity:</strong> CLVRQuant<br />
+              <strong style={{ color: C.muted2 }}>Operator:</strong> {LEGAL_ENTITY_NAME}<br />
               <strong style={{ color: C.muted2 }}>Purpose:</strong> Market education and information only<br />
               <strong style={{ color: C.muted2 }}>Not registered as:</strong> Investment advisor, broker, or financial institution<br />
               <strong style={{ color: C.muted2 }}>Jurisdiction:</strong> Users are responsible for compliance with local laws
             </div>
+            <a href="/terms" style={{ color: C.gold, display: "block", marginBottom: 12 }}>Read Terms of Service →</a>
             <button data-testid="btn-close-legal" onClick={() => setShowLegal(false)} style={btnGhost}>Close</button>
           </div>
         </div>

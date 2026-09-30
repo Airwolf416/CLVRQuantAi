@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { LEGAL_ENTITY_NAME, DATA_RETENTION_PERIOD, SUPPORT_EMAIL } from "../config/legal";
 
 const C = {
   bg: "#050709",
@@ -19,7 +20,7 @@ const SECTIONS = [
     n: 1,
     title: "Introduction",
     body: [
-      'This Privacy Policy explains how CLVRQuant / CLVRQuantAI ("CLVRQuant," "we," "us"), operated by [Legal Entity Name], 100 King St W, Toronto, ON, Canada, collects, uses, shares, and protects information when you use clvrquantai.com and related tools and services (the "Service"). By using the Service you agree to this Policy. If you do not agree, do not use the Service.',
+      `This Privacy Policy explains how CLVRQuant / CLVRQuantAI ("CLVRQuant," "we," "us"), operated by ${LEGAL_ENTITY_NAME}, collects, uses, shares, and protects information when you use clvrquantai.com and related tools and services (the "Service").`,
     ],
   },
   {
@@ -31,7 +32,7 @@ const SECTIONS = [
       "Usage and content data: tools you use, settings, watchlists/baskets, prompts and queries you submit, and interactions with AI features.",
       "Booking information: when you schedule a 1-on-1 session, the date, time, and time zone you select, and related scheduling details.",
       "Device and log data: IP address, browser type, device identifiers, and access timestamps collected automatically.",
-      "Communications: messages you send to support@clvrquantai.com.",
+      `Communications: messages you send to ${SUPPORT_EMAIL}.`,
     ],
   },
   {
@@ -95,7 +96,7 @@ const SECTIONS = [
     n: 10,
     title: "Data Retention",
     body: [
-      "We retain personal information for as long as your account is active or as needed to provide the Service, comply with legal obligations, resolve disputes, and enforce agreements. We delete or anonymize data when it is no longer needed. [Insert specific retention periods if applicable.]",
+      `We retain personal information for as long as your account is active or as needed to provide the Service, comply with legal obligations and resolve disputes. Specific retention schedule: ${DATA_RETENTION_PERIOD}. Contact us to request deletion, subject to applicable legal requirements.`,
     ],
   },
   {
@@ -109,7 +110,7 @@ const SECTIONS = [
     n: 12,
     title: "Your Rights and Choices",
     body: [
-      "Depending on your location (including under Canada's PIPEDA, the EU/UK GDPR, and the California CCPA/CPRA), you may have rights to access, correct, delete, export, or restrict processing of your personal information, and to withdraw consent. To exercise these rights, or to request account and data deletion, email support@clvrquantai.com. We will respond as required by applicable law.",
+      `Depending on your location (including under Canada's PIPEDA, the EU/UK GDPR, and the California CCPA/CPRA), you may have rights to access, correct, delete, export, or restrict processing of your personal information, and to withdraw consent. To exercise these rights, or to request account and data deletion, email ${SUPPORT_EMAIL}. We will respond as required by applicable law.`,
     ],
   },
   {
@@ -137,7 +138,7 @@ const SECTIONS = [
     n: 16,
     title: "Contact Us",
     body: [
-      "Questions or privacy requests: support@clvrquantai.com — CLVRQuant, 100 King St W, Toronto, ON, Canada.",
+      `Questions or privacy requests: ${SUPPORT_EMAIL} — ${LEGAL_ENTITY_NAME}.`,
     ],
   },
 ];
@@ -334,7 +335,7 @@ export default function PrivacyPage() {
             color: C.muted,
           }}
         >
-          © 2026 CLVRQuant · 100 King St W, Toronto, ON, Canada
+          © 2026 CLVRQuant · {LEGAL_ENTITY_NAME}
         </div>
       </div>
     </div>

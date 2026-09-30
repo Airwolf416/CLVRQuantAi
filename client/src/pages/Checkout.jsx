@@ -44,7 +44,11 @@ export default function CheckoutPage() {
         body: JSON.stringify({ bookingId }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.clientSecret) throw new Error(data?.error || "Failed to start checkout");
+      if (!res.ok || !data.clientSecret) {
+        const message = data?.error || "Failed to start checkout";
+        setLoadErr(message);
+        throw new Error(message);
+      }
       fetchedSecretRef.current = data.clientSecret;
       return data.clientSecret;
     }
@@ -55,7 +59,11 @@ export default function CheckoutPage() {
       body: JSON.stringify({ priceId }),
     });
     const data = await res.json();
-    if (!res.ok || !data.clientSecret) throw new Error(data?.error || "Failed to create session");
+    if (!res.ok || !data.clientSecret) {
+      const message = data?.error || "Failed to create session";
+      setLoadErr(message);
+      throw new Error(message);
+    }
     fetchedSecretRef.current = data.clientSecret;
     return data.clientSecret;
   }, [priceId, isConcierge, bookingId]);

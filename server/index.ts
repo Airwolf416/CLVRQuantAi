@@ -10,6 +10,7 @@ import { existsSync as _fsExistsSync } from "fs";
 import { WebhookHandlers } from "./webhookHandlers";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./stripeClient";
+import { stripePriceTier } from "./lib/stripePlan";
 import { startDailyBriefScheduler } from "./dailyBrief";
 import { startPositionEventScheduler } from "./positionEvents";
 import { startWeeklyUpdateScheduler } from "./weeklyUpdate";
@@ -172,26 +173,19 @@ app.post(
           const txDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
           const txId = (session.payment_intent || session.id || '').toString().substring(0, 20);
 
-          // Detect plan tier from amount
-          const isEliteSubscription = amountCents >= 11900; // Elite: $129/mo or $1199/yr
-          let planName = isEliteSubscription ? 'CLVRQuantAI Elite' : 'CLVRQuantAI Pro';
+          const receiptPrice = session.metadata?.priceId
+            ? await stripe.prices.retrieve(session.metadata.priceId)
+            : (await stripe.checkout.sessions.listLineItems(session.id, { limit: 1 })).data[0]?.price;
+          const receiptTier = await stripePriceTier(stripe, receiptPrice);
+          const isEliteSubscription = receiptTier === "elite";
+          const receiptCurrency = (session.currency || receiptPrice?.currency || "unknown").toUpperCase();
+          let planName = receiptTier ? `CLVRQuantAI ${isEliteSubscription ? "Elite" : "Pro"}` : "CLVRQuantAI subscription";
           let planInterval = '';
           let planColor = isEliteSubscription ? '#c9a84c' : '#e8c96d';
-          if (amountCents >= 119000) {
-            planName = 'Elite Plan — Annual';
-            planInterval = `$${(amountCents / 100).toFixed(2)} / year`;
-            planColor = '#00c787';
-          } else if (amountCents >= 11900) {
-            planName = 'Elite Plan — Monthly';
-            planInterval = `$${(amountCents / 100).toFixed(2)} / month`;
-          } else if (amountCents >= 25000) {
-            planName = 'Pro Plan — Annual';
-            planInterval = `$${(amountCents / 100).toFixed(2)} / year`;
-            planColor = '#00c787';
-          } else {
-            planName = 'Pro Plan — Monthly';
-            planInterval = `$${(amountCents / 100).toFixed(2)} / month`;
-          }
+          const receiptInterval = receiptPrice?.recurring?.interval;
+          if (receiptTier && receiptInterval) planName = `${isEliteSubscription ? "Elite" : "Pro"} Plan — ${receiptInterval === "year" ? "Annual" : "Monthly"}`;
+          planInterval = `$${(amountCents / 100).toFixed(2)} ${receiptCurrency}${receiptInterval ? ` / ${receiptInterval}` : ""}`;
+          if (receiptInterval === "year") planColor = '#00c787';
 
           if (toEmail) {
             const { getUncachableResendClient } = await import('./resendClient');
@@ -300,7 +294,7 @@ app.post(
           const toEmail   = invoice.customer_email;
           const custName  = invoice.customer_name || 'Valued Member';
           const amountCents = invoice.amount_paid || 0;
-          const currency  = (invoice.currency || 'usd').toUpperCase();
+          const currency  = (invoice.currency || 'unknown').toUpperCase();
           const amountFmt = `$${(amountCents / 100).toFixed(2)} ${currency}`;
           const invoiceNum = invoice.number || invoice.id?.slice(-8).toUpperCase() || '—';
           const periodEnd  = invoice.period_end
@@ -312,22 +306,25 @@ app.post(
           const txDate     = new Date((invoice.created || Date.now()/1000) * 1000).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
           const invoiceUrl = invoice.hosted_invoice_url || 'https://clvrquantai.com';
 
-          // Determine plan from amount
-          let planName = 'CLVRQuantAI Pro';
+          // Identify the plan by the actual invoice line price/product, not
+          // invoice total (discounts/tax/annual plans make thresholds unsafe).
+          const recurringLine = (invoice.lines?.data || []).find((l: any) =>
+            l?.plan?.interval || l?.price?.recurring?.interval);
+          const recurringPrice = recurringLine?.price;
+          const invoiceTier = await stripePriceTier(stripe, recurringPrice);
+          let planName = invoiceTier ? `${invoiceTier === "elite" ? "Elite" : "Pro"} Plan` : "CLVRQuantAI subscription";
           let planInterval = amountFmt;
           let planColor = '#e8c96d';
           let billingCycle = '';
-          const recurringLine = (invoice.lines?.data || []).find((l: any) =>
-            l?.plan?.interval || l?.price?.recurring?.interval);
           const isAnnual = (recurringLine?.plan?.interval
             || recurringLine?.price?.recurring?.interval) === 'year';
           if (isAnnual) {
-            planName = 'Pro Plan — Annual';
+            if (invoiceTier) planName += ' — Annual';
             planInterval = `${amountFmt}/year`;
             planColor = '#00c787';
             billingCycle = 'Annual subscription — next renewal in 12 months';
           } else {
-            planName = 'Pro Plan — Monthly';
+            if (invoiceTier) planName += ' — Monthly';
             planInterval = `${amountFmt}/month`;
             billingCycle = 'Monthly subscription — next renewal in 30 days';
           }
@@ -345,7 +342,7 @@ app.post(
                 'List-Unsubscribe': `<${unsubUrl}>`,
                 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
               },
-              text: `CLVRQuantAI — Billing Receipt\n\nHello ${custName},\n\nYour CLVRQuantAI subscription has been renewed successfully. Thank you!\n\nInvoice: ${invoiceNum}\nPlan: ${planName}\nAmount charged: ${planInterval}\nDate: ${txDate}\nPeriod end: ${periodEnd}\nNext billing: ${nextBill}\n\nView full invoice: ${invoiceUrl}\n\nYour Pro features:\n- CLVR AI — Full Claude-powered market analyst\n- Real-time signals with AI reasoning\n- Unlimited price alerts\n- Liquidation heatmap & whale tracker\n- Insider trading feed\n- Global asset basket (140+ assets)\n\nQuestions? Reply to this email or contact Support@clvrquantai.com\n\n© 2026 CLVRQuantAI · 1 Place Ville-Marie, Montréal, QC, Canada\nThis email was sent because you have an active CLVRQuantAI Pro subscription.\nTo unsubscribe from billing receipts: ${unsubUrl}`,
+              text: `CLVRQuantAI — Billing Receipt\n\nHello ${custName},\n\nYour CLVRQuantAI subscription has been renewed successfully. Thank you!\n\nInvoice: ${invoiceNum}\nPlan: ${planName}\nAmount charged: ${planInterval}\nDate: ${txDate}\nPeriod end: ${periodEnd}\nNext billing: ${nextBill}\n\nView full invoice: ${invoiceUrl}\n\nQuestions? Reply to this email or contact Support@clvrquantai.com\n\n© 2026 CLVRQuantAI · 1 Place Ville-Marie, Montréal, QC, Canada\nThis email was sent because you have an active CLVRQuantAI subscription.\nTo unsubscribe from billing receipts: ${unsubUrl}`,
               html: `
 <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:0;margin:0">
   <div style="max-width:600px;margin:0 auto;padding:32px 24px">
@@ -358,7 +355,7 @@ app.post(
 
     <p style="font-size:15px;color:#f0f4ff;margin-bottom:6px">Hello ${custName},</p>
     <p style="font-size:13px;color:#6b7fa8;line-height:1.8;margin-bottom:20px">
-      Your CLVRQuantAI Pro subscription has been renewed. Here is your receipt for your records.
+      Your CLVRQuantAI subscription has been renewed. Here is your receipt for your records.
     </p>
 
     <!-- Invoice table -->
@@ -396,19 +393,6 @@ app.post(
       <a href="https://clvrquantai.com" style="display:inline-block;background:transparent;border:1px solid #c9a84c;color:#c9a84c;font-family:'Courier New',monospace;font-size:10px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none">OPEN DASHBOARD</a>
     </div>
 
-    <!-- Pro features reminder -->
-    <div style="background:#0a1020;border:1px solid #1a2840;border-left:3px solid #e8c96d;border-radius:4px;padding:14px;margin-bottom:24px">
-      <div style="font-family:'Courier New',monospace;font-size:9px;color:#e8c96d;letter-spacing:0.2em;margin-bottom:10px">YOUR ACTIVE PRO FEATURES</div>
-      <div style="font-size:11px;color:#6b7fa8;line-height:2">
-        ✦ CLVR AI — Full Claude-powered market analyst<br>
-        ✦ Real-time signals with AI reasoning<br>
-        ✦ Unlimited price alerts &amp; push notifications<br>
-        ✦ Insider trading feed (SEC filings, $100K+ buys)<br>
-        ✦ Global asset basket — 140+ assets, Halal screened<br>
-        ✦ Daily 6 AM Morning Brief
-      </div>
-    </div>
-
     <p style="font-size:12px;color:#4a5d80;line-height:1.8;text-align:center;margin-bottom:20px">
       Questions about your billing? Reply to this email or contact<br>
       <a href="mailto:Support@clvrquantai.com" style="color:#c9a84c;text-decoration:none">Support@clvrquantai.com</a>
@@ -418,7 +402,7 @@ app.post(
     <div style="border-top:1px solid #141e35;padding-top:16px;text-align:center">
       <p style="font-size:10px;color:#2a3650;margin:0">© 2026 CLVRQuantAI · 1 Place Ville-Marie, Montréal, QC H3B 4A9, Canada</p>
       <p style="font-size:9px;color:#1e2c45;margin:6px 0 0;line-height:1.8">
-        You are receiving this billing receipt because you have an active CLVRQuantAI Pro subscription.<br>
+        You are receiving this billing receipt because you have an active CLVRQuantAI subscription.<br>
         To stop receiving billing receipts, cancel your subscription in the 
         <a href="https://clvrquantai.com" style="color:#2a3650;text-decoration:underline">Account</a> tab
         or <a href="${unsubUrl}" style="color:#2a3650;text-decoration:underline">Unsubscribe</a> from all emails.
@@ -611,62 +595,6 @@ app.use((req, res, next) => {
   next();
 });
 
-async function ensureStripeProducts() {
-  try {
-    const { getUncachableStripeClient } = await import('./stripeClient');
-    const stripe = await getUncachableStripeClient();
-
-    // Check if prices with the required lookup_keys already exist
-    const existing = await stripe.prices.list({
-      lookup_keys: ['pro_monthly1', 'pro_yearly1'],
-      active: true,
-    });
-    if (existing.data.length >= 2) {
-      log(`Stripe prices OK: found pro_monthly1 + pro_yearly1 by lookup_key`, 'stripe');
-      return;
-    }
-
-    // Find or create the product
-    const productSearch = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
-    let product = productSearch.data[0];
-    if (!product) {
-      product = await stripe.products.create({
-        name: 'CLVRQuant Pro',
-        description: 'Full access to CLVRQuant AI trading intelligence: AI analyst, trade ideas, morning briefs, unlimited alerts, signals, liquidation heatmap, volume & funding monitors.',
-        metadata: { tier: 'pro', app: 'clvrquant' },
-      });
-      log(`Created Stripe product ${product.id}`, 'stripe');
-    }
-
-    // Create missing prices with lookup_keys
-    const hasMonthly = existing.data.some(p => p.lookup_key === 'pro_monthly1');
-    const hasYearly  = existing.data.some(p => p.lookup_key === 'pro_yearly1');
-
-    if (!hasMonthly) {
-      await stripe.prices.create({
-        product: product.id, unit_amount: 2900, currency: 'usd',
-        recurring: { interval: 'month' },
-        lookup_key: 'pro_monthly1',
-        transfer_lookup_key: true,
-        metadata: { plan: 'pro_monthly1' },
-      });
-      log('Created price: pro_monthly1 ($29/month)', 'stripe');
-    }
-    if (!hasYearly) {
-      await stripe.prices.create({
-        product: product.id, unit_amount: 19900, currency: 'usd',
-        recurring: { interval: 'year' },
-        lookup_key: 'pro_yearly1',
-        transfer_lookup_key: true,
-        metadata: { plan: 'pro_yearly1' },
-      });
-      log('Created price: pro_yearly1 ($199/year)', 'stripe');
-    }
-  } catch (e: any) {
-    console.error('[stripe] Product setup error:', e.message);
-  }
-}
-
 async function initStripe() {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -690,7 +618,8 @@ async function initStripe() {
       log('No APP_URL or REPLIT_DOMAINS set — skipping webhook registration', 'stripe');
     }
 
-    await ensureStripeProducts();
+    // Catalog provisioning is manual (server/seed-products.ts). Never create
+    // prices or overwrite lookup keys during a normal production startup.
     await stripeSync.syncBackfill();
     log('Stripe sync complete', 'stripe');
   } catch (e: any) {

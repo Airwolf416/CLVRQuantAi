@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { TIERS, TIER_ORDER } from "../config/pricing.js";
+import { TIER_ORDER, usePricing, annualDiscount, annualSavings, formatPrice } from "../config/pricing.js";
 
 const MONO  = "'IBM Plex Mono', monospace";
 const SERIF = "'Playfair Display', Georgia, serif";
@@ -41,6 +41,7 @@ function LockIcon() {
 }
 
 export default function PricingModal({ isOpen, onClose, userTier = "free", onUpgrade, defaultTier }) {
+  const TIERS = usePricing();
   const [activeTier, setActiveTier] = useState(defaultTier || (userTier === "elite" ? "elite" : "pro"));
   const [yearly, setYearly] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -222,13 +223,13 @@ export default function PricingModal({ isOpen, onClose, userTier = "free", onUpg
                   }}
                 >
                   Yearly
-                  {tier.yearlySavings && (
+                    {annualSavings(tier) > 0 && (
                     <span style={{
                       marginLeft: 5, background: `${C.green}18`,
                       border: `1px solid ${C.green}40`,
                       borderRadius: 20, padding: "1px 5px",
                       fontSize: 7, color: C.green,
-                    }}>-${Math.round(tier.yearlySavings/tier.yearlyPrice*100)}%</span>
+                    }}>Save {annualDiscount(tier)}%</span>
                   )}
                 </button>
               </div>
@@ -239,11 +240,11 @@ export default function PricingModal({ isOpen, onClose, userTier = "free", onUpg
                   <div style={{ fontFamily: MONO, fontSize: 48, fontWeight: 900, color: C.white, lineHeight: 1, letterSpacing: "-0.03em" }}>
                     ${yearly ? yearlyTotal.toLocaleString() : (monthlyDisplay % 1 === 0 ? monthlyDisplay.toFixed(0) : monthlyDisplay.toFixed(2))}
                   </div>
-                  <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, marginBottom: 6 }}>{yearly ? "/yr" : "/mo"}</div>
+                   <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, marginBottom: 6 }}>{yearly ? "/yr" : "/mo"} {tier.currency}</div>
                 </div>
                 {yearly && (
                   <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 4 }}>
-                    <span style={{ color: C.green }}>Save ${tier.yearlySavings}</span>
+                    <span style={{ color: C.green }}>Save {formatPrice(annualSavings(tier))}/yr</span>
                     <span style={{ marginLeft: 6 }}> · ${(tier.yearlyPrice / 12).toFixed(2)}/mo equivalent</span>
                   </div>
                 )}
@@ -340,7 +341,7 @@ export default function PricingModal({ isOpen, onClose, userTier = "free", onUpg
         {/* Footer */}
         <div style={{ textAlign: "center", padding: "16px 20px 8px" }}>
           <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, lineHeight: 2 }}>
-            Cancel anytime · Secure checkout via Stripe · All prices in CAD
+            Cancel anytime · Secure checkout via Stripe · Billing currency shown per plan
           </div>
           <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginTop: 2 }}>
             CLVRQuant is informational only — not financial advice.

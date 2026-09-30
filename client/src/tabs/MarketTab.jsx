@@ -73,6 +73,7 @@ function fmtFx(price) {
   return price.toFixed(4);
 }
 function fmtChg(v) {
+  if (v == null) return "--";
   const n = Number(v);
   if (isNaN(n)) return "--";
   return (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
@@ -150,10 +151,10 @@ function FlashRow({ sym, label, price, chg, flash, isForex, children }) {
           fontFamily: MONO, fontSize: 14, fontWeight: 700,
           color: C.text, letterSpacing: "0.05em",
         }}>{label || sym}</span>
-        <span style={{
+        {price != null && price > 0 && <span style={{
           fontSize: 14, fontWeight: 900, display: "inline-block",
           color: arrowColor,
-        }}>{arrowUp ? "↑" : "↓"}</span>
+        }}>{arrowUp ? "↑" : "↓"}</span>}
       </div>
 
       {/* Right: price + change + badge */}
@@ -162,15 +163,15 @@ function FlashRow({ sym, label, price, chg, flash, isForex, children }) {
           fontFamily: MONO, fontSize: 15, fontWeight: 700,
           color: priceColor,
         }}>
-          {isForex ? fmtFx(price) : fmt(price, sym)}
+          {price == null || price <= 0 ? <span aria-label={`${label || sym} loading price`} style={{fontSize:10,color:C.muted}}>↻ Loading…</span> : isForex ? fmtFx(price) : fmt(price, sym)}
         </span>
 
-        <span style={{
+        {price != null && price > 0 && <span style={{
           fontFamily: MONO, fontSize: 10, fontWeight: 700,
           color: isUp ? C.green : C.red,
           background: isUp ? "rgba(0,199,135,0.1)" : "rgba(255,64,96,0.1)",
           borderRadius: 3, padding: "2px 6px",
-        }}>{fmtChg(chg)}</span>
+        }}>{fmtChg(chg)}</span>}
 
         {children}
       </div>

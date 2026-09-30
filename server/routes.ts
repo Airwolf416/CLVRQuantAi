@@ -2,6 +2,8 @@ import express, { type Express, type Response, type Request, type NextFunction }
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { BILLING_CURRENCY, BOOKING_PRICES, validatedSubscriptionPrices } from "../shared/billingPricing.js";
+import { ALLOWED_CHECKOUT_LOOKUP_KEYS, BillingCatalogError, resolveAllowedCheckoutPrice } from "./lib/checkoutPricing";
 import { pool, db } from "./db";
 import { signalHistory, aiSignalLog, adaptiveThresholds } from "@shared/schema";
 import { logSignal } from "./lib/signalLogger";
@@ -42,7 +44,11 @@ import { fetchInsiderData, startInsiderRefresh, getInsiderScanStatus } from "./i
 import QRCode from "qrcode";
 import rateLimit from "express-rate-limit";
 import { PostgresRateLimitStore } from "./lib/postgresRateLimitStore";
+import { requiresVerifiedEmail, verificationAccess } from "./lib/verificationGate";
+import { verifyTurnstile } from "./lib/turnstile";
+import { claimResendCooldown } from "./lib/resendCooldown";
 import { stripeResourceOwnedByUser } from "./lib/billingOwnership";
+import { stripePriceTier } from "./lib/stripePlan";
 import { rejectLegacyWebAuthnAuthentication } from "./lib/webauthnPolicy";
 import {
   initializeAuthenticatedSession,
@@ -130,22 +136,6 @@ function auditSecurityEvent(event: string, req: Request, success: boolean): void
     sessionIdHash: cryptoCreateHash("sha256").update(req.sessionID || "").digest("hex").slice(0, 12),
     at: new Date().toISOString(),
   }));
-}
-
-const ALLOWED_CHECKOUT_LOOKUP_KEYS = [
-  "pro_monthly1", "pro_yearly1", "elite_monthly", "elite_yearly",
-] as const;
-
-async function resolveAllowedCheckoutPrice(stripe: any, requested: unknown): Promise<any | null> {
-  if (typeof requested !== "string" || !requested) return null;
-  const prices = await stripe.prices.list({
-    lookup_keys: [...ALLOWED_CHECKOUT_LOOKUP_KEYS],
-    active: true,
-    limit: ALLOWED_CHECKOUT_LOOKUP_KEYS.length,
-  });
-  return prices.data.find((price: any) =>
-    price.id === requested || price.lookup_key === requested,
-  ) || null;
 }
 
 async function requireOwnedSubscription(stripe: any, user: any): Promise<any | null> {
@@ -2111,6 +2101,21 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  app.use("/api", async (req, res, next) => {
+    if (!requiresVerifiedEmail(req.path.startsWith("/api/") ? req.path : "/api" + req.path)) return next();
+    try {
+      const id = (req.session as any)?.userId;
+      const user = id ? (await storage.getUser(id) || null) : null;
+      const status = verificationAccess(user);
+      if (status !== 200) return res.status(status).json({
+        code: status === 403 ? "EMAIL_UNVERIFIED" : "UNAUTHENTICATED",
+        error: status === 403 ? "Verify your email to unlock market and AI data." : "Sign in required.",
+      });
+      next();
+    } catch {
+      res.status(503).json({ error: "Could not check email verification status." });
+    }
+  });
 
   // ── Earnings (Finnhub) — single calendar source for Reported/Upcoming ───
   registerEarningsRoute(app);
@@ -5395,11 +5400,11 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   const CONCIERGE_DAILY_CAP = 25;
   const ELITE_FREE_SESSIONS_PER_MONTH = 1;
 
-  // Resolve the booking price for THIS user. free=$49, pro=$19,
-  // elite=free while monthly allotment remains, else $19. Single source of
+  // Resolve the booking price for THIS user in CAD. free=$49 CAD, pro=$19 CAD,
+  // elite=free while monthly allotment remains, else $19 CAD. Single source of
   // truth shared by /pricing, /chat (prompt injection), and /book.
   async function resolveConciergePricing(user: any): Promise<{
-    tier: string; priceUsd: number; priceDisplay: string;
+    tier: string; priceCad: number; priceDisplay: string;
     mode: "free" | "checkout"; eliteFreeRemaining: number; durationMin: number;
   }> {
     const tier = await getEffectiveTier(user);
@@ -5419,15 +5424,15 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       } catch (_) { countOk = false; /* fail-closed: do not grant free on error */ }
       eliteFreeRemaining = countOk ? Math.max(0, ELITE_FREE_SESSIONS_PER_MONTH - used) : 0;
     }
-    let priceUsd: number;
-    if (tier === "elite" && eliteFreeRemaining > 0) priceUsd = 0;
-    else if (tier === "pro" || tier === "elite") priceUsd = 19;
-    else priceUsd = 49;
+    let priceCad: number;
+    if (tier === "elite" && eliteFreeRemaining > 0) priceCad = 0;
+    else if (tier === "pro" || tier === "elite") priceCad = BOOKING_PRICES.member / 100;
+    else priceCad = BOOKING_PRICES.standard / 100;
     return {
       tier,
-      priceUsd,
-      priceDisplay: priceUsd === 0 ? "Free" : `$${priceUsd} CAD`,
-      mode: priceUsd === 0 ? "free" : "checkout",
+      priceCad,
+      priceDisplay: priceCad === 0 ? "Free" : `$${priceCad} CAD`,
+      mode: priceCad === 0 ? "free" : "checkout",
       eliteFreeRemaining,
       durationMin: 30,
     };
@@ -5754,7 +5759,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
           return res.json({ mode: "free_confirmed", bookingId: booked, message: "Your free session is confirmed." });
         }
         // Allotment was just exhausted by a concurrent booking — re-price as paid.
-        pricing.priceUsd = pricing.tier === "pro" || pricing.tier === "elite" ? 19 : 49;
+        pricing.priceCad = (pricing.tier === "pro" || pricing.tier === "elite" ? BOOKING_PRICES.member : BOOKING_PRICES.standard) / 100;
         pricing.mode = "checkout";
       }
 
@@ -5769,7 +5774,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
 
       const r: any = await db.execute(dsql`
         INSERT INTO concierge_bookings (user_id, slot_date, slot_time, timezone, price_usd, tier, status)
-        VALUES (${user.id}, ${slotDate}, ${slotTime}, ${timezone}, ${pricing.priceUsd}, ${pricing.tier}, 'pending')
+        VALUES (${user.id}, ${slotDate}, ${slotTime}, ${timezone}, ${pricing.priceCad}, ${pricing.tier}, 'pending')
         RETURNING id`);
       const rows = Array.isArray(r) ? r : (r?.rows || []);
       const bookingId = rows?.[0]?.id;
@@ -5808,8 +5813,10 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       if (booking.status !== "pending") {
         return res.status(409).json({ error: "This booking is no longer awaiting payment." });
       }
-      const priceUsd = Number(booking.price_usd || 0);
-      if (!(priceUsd > 0)) return res.status(400).json({ error: "This booking does not require payment." });
+      // Legacy database column name; amounts stored here have always been
+      // charged as CAD by the booking checkout.
+      const priceCad = Number(booking.price_usd || 0);
+      if (!(priceCad > 0)) return res.status(400).json({ error: "This booking does not require payment." });
 
       let stripe: any;
       try { stripe = await getUncachableStripeClient(); }
@@ -5838,8 +5845,8 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         mode: "payment",
         line_items: [{
           price_data: {
-            currency: "cad",
-            unit_amount: priceUsd * 100,
+            currency: BILLING_CURRENCY,
+            unit_amount: priceCad * 100,
             product_data: { name: "CLVRQuant — 30-min 1-on-1 Platform Training (educational only)" },
           },
           quantity: 1,
@@ -11897,34 +11904,20 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
 
   app.get("/api/stripe/products", async (_req, res) => {
     try {
-      const result = await pool.query(`
-        SELECT p.id, p.name, p.description, p.metadata,
-               pr.id as price_id, pr.unit_amount, pr.currency,
-               pr.recurring->>'interval' as interval
-        FROM stripe.products p
-        JOIN stripe.prices pr ON pr.product = p.id
-        WHERE p.active = true AND pr.active = true
-        ORDER BY pr.unit_amount ASC
-      `);
-      if (result.rows.length > 0) {
-        return res.json(result.rows);
-      }
-
       const stripe = await getUncachableStripeClient();
-      const products = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
-      if (products.data.length === 0) return res.json([]);
-      const prices = await stripe.prices.list({ product: products.data[0].id, active: true });
-      const rows = prices.data.map(p => ({
-        id: products.data[0].id,
-        name: products.data[0].name,
-        description: products.data[0].description,
-        metadata: products.data[0].metadata,
-        price_id: p.id,
-        unit_amount: p.unit_amount,
-        currency: p.currency,
-        interval: p.recurring?.interval,
-      })).sort((a: any, b: any) => (a.unit_amount || 0) - (b.unit_amount || 0));
-      res.json(rows);
+      const { data } = await stripe.prices.list({
+        lookup_keys: ALLOWED_CHECKOUT_LOOKUP_KEYS, active: true,
+        expand: ["data.product"], limit: 100,
+      });
+      const prices = validatedSubscriptionPrices(data);
+      const missing = ALLOWED_CHECKOUT_LOOKUP_KEYS.filter(key => !prices[key]);
+      if (missing.length) return res.status(503).json({ error: `Stripe CAD catalog missing valid prices: ${missing.join(", ")}`, code: "BILLING_CATALOG_MISCONFIGURED", missing });
+      res.json(ALLOWED_CHECKOUT_LOOKUP_KEYS.map(key => {
+        const p = prices[key], product = p.product;
+        return { id: product.id, name: product.name, description: product.description,
+          metadata: product.metadata, price_id: p.id, unit_amount: p.unit_amount,
+          currency: p.currency, interval: p.recurring.interval };
+      }));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -11937,50 +11930,25 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
 
       // Fetch all tier prices in one request
       const { data: byKey } = await stripe.prices.list({
-        lookup_keys: ['pro_monthly1', 'pro_yearly1', 'elite_monthly', 'elite_yearly'],
+        lookup_keys: ALLOWED_CHECKOUT_LOOKUP_KEYS,
         active: true,
         expand: ['data.product'],
+        limit: 100,
       });
-
-      const proMonthly    = byKey.find(p => p.lookup_key === 'pro_monthly1');
-      const proYearly     = byKey.find(p => p.lookup_key === 'pro_yearly1');
-      const eliteMonthly  = byKey.find(p => p.lookup_key === 'elite_monthly');
-      const eliteYearly   = byKey.find(p => p.lookup_key === 'elite_yearly');
-
-      const toObj = (p: any) => p ? { price_id: p.id, unit_amount: p.unit_amount, interval: p.recurring?.interval, lookup_key: p.lookup_key } : null;
-
-      if (proMonthly && proYearly) {
-        return res.json({
-          monthly:       toObj(proMonthly),
-          yearly:        toObj(proYearly),
-          eliteMonthly:  toObj(eliteMonthly),
-          eliteYearly:   toObj(eliteYearly),
-        });
-      }
-
-      // Fallback: enumerate all products tagged for clvrquant
-      const products = await stripe.products.search({ query: "metadata['app']:'clvrquant'" });
-      if (products.data.length > 0) {
-        const result: Record<string,any> = {};
-        for (const prod of products.data) {
-          const { data: prices } = await stripe.prices.list({ product: prod.id, active: true });
-          const tier = (prod.metadata as any)?.tier || 'pro';
-          for (const p of prices) {
-            const key = `${tier}_${p.recurring?.interval === 'year' ? 'yearly' : 'monthly'}`;
-            result[key] = toObj(p);
-          }
-        }
-        if (result['pro_monthly1'] && result['pro_yearly1']) {
-          return res.json({
-            monthly:      result['pro_monthly1'],
-            yearly:       result['pro_yearly1'],
-            eliteMonthly: result['elite_monthly'] ?? null,
-            eliteYearly:  result['elite_yearly'] ?? null,
-          });
-        }
-      }
-
-      res.status(404).json({ error: 'No active prices found — ensure pro_monthly1, pro_yearly1, elite_monthly, elite_yearly lookup_keys exist in Stripe' });
+      const prices = validatedSubscriptionPrices(byKey);
+      const missing = ALLOWED_CHECKOUT_LOOKUP_KEYS.filter(key => !prices[key]);
+      if (missing.length) return res.status(503).json({
+        code: "BILLING_CATALOG_MISCONFIGURED",
+        error: `Stripe CAD catalog missing valid prices: ${missing.join(", ")}. Configure active CAD prices matching plan, amount, interval and product.`,
+        missing,
+      });
+      const toObj = (p: any) => ({ price_id: p.id, unit_amount: p.unit_amount, currency: p.currency, interval: p.recurring.interval, lookup_key: p.lookup_key });
+      res.json({
+        monthly: toObj(prices.pro_monthly1),
+        yearly: toObj(prices.pro_yearly1),
+        eliteMonthly: toObj(prices.elite_monthly),
+        eliteYearly: toObj(prices.elite_yearly),
+      });
     } catch (e: any) {
       console.error('[stripe] /api/prices error:', e.message);
       res.status(500).json({ error: e.message });
@@ -12025,6 +11993,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       res.json({ clientSecret: session.client_secret, sessionId: session.id });
     } catch (e: any) {
       console.error('[stripe] Checkout error:', e.message, e.type, e.code);
+      if (e instanceof BillingCatalogError) return res.status(503).json({ error: e.message, code: "BILLING_CATALOG_MISCONFIGURED" });
       res.status(502).json({ error: "Unable to create checkout", code: "BILLING_PROVIDER_ERROR" });
     }
   });
@@ -12048,10 +12017,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }
       const priceItem: any = (session as any).line_items?.data?.[0]?.price
         || (session as any).subscription?.items?.data?.[0]?.price;
-      const lookupKey = priceItem?.lookup_key || "";
-      const unitAmount = priceItem?.unit_amount || 0;
-      const isElitePlan = lookupKey.startsWith("elite") || unitAmount >= 11900;
-      const planLabel = isElitePlan ? "Elite" : "Pro";
+      const planTier = await stripePriceTier(stripe, priceItem);
+      const planLabel = planTier === "elite" ? "Elite" : planTier === "pro" ? "Pro" : "Unknown";
       res.json({
         status: session.status,
         payment_status: session.payment_status,
@@ -12087,20 +12054,17 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (session.payment_status === 'paid' && session.subscription) {
         const sub = await stripe.subscriptions.retrieve(session.subscription as string, { expand: ["items.data.price"] });
         if (!await stripeResourceOwnedByUser(stripe, sub.customer, user)) return billingNotOwned(res);
-        // Detect Elite plan by lookup_key or by price amount (Elite monthly ~$12900, yearly ~$119900)
         const priceItem = (sub as any).items?.data?.[0]?.price;
-        const lookupKey = priceItem?.lookup_key || "";
-        const unitAmount = priceItem?.unit_amount || 0;
-        const isElitePlan = lookupKey.startsWith("elite") || unitAmount >= 11900;
+        const tierToSet = await stripePriceTier(stripe, priceItem);
+        if (!tierToSet) return res.status(502).json({ error: "Subscription plan could not be verified", code: "BILLING_CATALOG_MISCONFIGURED" });
         // Store the tier in DB for the signed-in user
-        const tierToSet = isElitePlan ? "elite" : "pro";
         const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
         await pool.query(
           "UPDATE users SET tier = $1, stripe_subscription_id = $2, stripe_customer_id = COALESCE(stripe_customer_id, $3) WHERE id = $4",
           [tierToSet, sub.id, customerId, sessionUserId],
         );
         return res.json({
-          tier: isElitePlan ? "elite" : "pro",
+          tier: tierToSet,
           status: sub.status,
           currentPeriodEnd: (sub as any).current_period_end,
           cancelAtPeriodEnd: (sub as any).cancel_at_period_end,
@@ -12822,10 +12786,21 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
+  app.get("/api/auth/turnstile-config", (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ siteKey: process.env.TURNSTILE_SITE_KEY || null });
+  });
+
   app.post("/api/auth/signup", signupLimiter, async (req, res) => {
     const { name, email, password, dailyEmail, referralCode: refCode } = req.body;
+    if (!process.env.TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY) {
+      return res.status(503).json({ error: "Signup verification is not configured. Please contact support." });
+    }
+    if (!(await verifyTurnstile(req.body.turnstileToken, req.ip))) {
+      return res.status(403).json({ error: "Bot verification failed or expired. Please complete the challenge again.", code: "TURNSTILE_FAILED" });
+    }
     if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
-    if (!password || password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    if (!password || password.length < 10) return res.status(400).json({ error: "Password must be at least 10 characters" });
     if (!name || !name.trim()) return res.status(400).json({ error: "Name is required" });
     try {
       const existing = await storage.getUserByEmail(email.toLowerCase().trim());
@@ -12898,7 +12873,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                   "AI Market Analyst — Ask anything, get trade ideas (Pro)",
                   "Price alerts — Custom push notifications",
                   "Phantom Wallet — Solana integration",
-                  dailyEmail ? "📧 Daily 6AM Brief — Subscribed ✓" : "📧 Daily 6AM Brief — Available on Pro",
+                  dailyEmail ? "📧 Daily 6AM Brief — Subscribed ✓" : "📧 Daily 6AM Brief — Opt in from Account (all plans)",
                 ].map(f => `<div style="font-size:12px;color:#c8d4ee;padding:4px 0"><span style="color:#c9a84c">✦</span> ${f}</div>`).join("")}
               </div>
 
@@ -12967,7 +12942,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not signed in" });
     const { newPassword } = req.body;
-    if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    if (!newPassword || newPassword.length < 10) return res.status(400).json({ error: "Password must be at least 10 characters" });
     // Enforce strong password: at least 1 uppercase, 1 lowercase, 1 number
     if (!/[A-Z]/.test(newPassword) || !/[a-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
       return res.status(400).json({ error: "Password must include uppercase, lowercase, and a number" });
@@ -13092,12 +13067,19 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ error: "User not found" });
       if (user.emailVerified) return res.json({ ok: true, message: "Email already verified" });
+      // Atomic, shared across replicas. Existing rate_limit_entries table is
+      // used by the other authentication limiters.
+      const retryAfter = await claimResendCooldown(pool, user.id);
+      if (retryAfter) {
+        res.set("Retry-After", String(retryAfter));
+        return res.status(429).json({ error: "Please wait before requesting another email.", retryAfter });
+      }
       const crypto = await import("crypto");
       const token = crypto.randomBytes(24).toString("hex");
       await storage.setEmailVerificationToken(userId, token);
       const verifyUrl = `${getAppUrl()}?verify=${token}`;
       const { client: resend, fromEmail: resendFrom } = await getUncachableResendClient();
-      await resend.emails.send({
+      const delivery = await resend.emails.send({
         from: resendFrom,
         replyTo: "Support@clvrquantai.com",
         to: user.email,
@@ -13121,7 +13103,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
           <p style="font-size:10px;color:#3a4d68;text-align:center;margin-top:20px">© 2026 CLVRQuant · <a href="mailto:Support@clvrquantai.com" style="color:#4a5d80;text-decoration:none;">Support@clvrquantai.com</a></p>
         </div>`,
       });
-      res.json({ ok: true });
+      if (delivery.error) throw new Error("Email provider rejected verification email");
+      res.json({ ok: true, retryAfter: 60 });
     } catch (e: any) {
       console.error("[resend-verification]", e.message);
       res.status(500).json({ error: "Failed to send email. Try again later." });
@@ -13334,7 +13317,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
   app.post("/api/auth/reset-password", authLimiter, async (req, res) => {
     const { token, newPassword } = req.body;
     if (!token) return res.status(400).json({ error: "Reset token required" });
-    if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    if (!newPassword || newPassword.length < 10) return res.status(400).json({ error: "Password must be at least 10 characters" });
     try {
       const hashed = await bcrypt.hash(newPassword, 12);
       const tokenHash = cryptoCreateHash("sha256").update(String(token)).digest("hex");
