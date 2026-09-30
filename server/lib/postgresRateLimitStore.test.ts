@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PostgresRateLimitStore, type RateLimitQueryable } from "./postgresRateLimitStore";
+import { PostgresRateLimitStore, isAuthMeRead, type RateLimitQueryable } from "./postgresRateLimitStore";
+
+test("only GET /api/auth/me qualifies for the independent account-check budget", () => {
+  assert.equal(isAuthMeRead({ method: "GET", path: "/api/auth/me" }), true);
+  for (const req of [
+    { method: "POST", path: "/api/auth/me" },
+    { method: "HEAD", path: "/api/auth/me" },
+    { method: "GET", path: "/api/auth/signin" },
+    { method: "POST", path: "/api/auth/signin" },
+    { method: "POST", path: "/api/auth/signup" },
+    { method: "GET", path: "/api/auth/me/other" },
+  ]) assert.equal(isAuthMeRead(req), false);
+});
 
 test("rate store uses an atomic expiry-aware upsert with a namespaced key", async () => {
   const calls: Array<{ query: string; values?: unknown[] }> = [];

@@ -18,6 +18,7 @@ import { isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
 import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
 import { persistRecentNews } from "./lib/newsPersist";
 import { getUserTier } from "./lib/userTier";
+import { accessCodeTier, effectiveCodeTier, redemptionError } from "./lib/accessCodeEntitlement";
 import { getAppUrl } from "./lib/appUrl";
 import { userPromotedAssets, newsItems } from "@shared/schema";
 import { eq, and, lte, gt, gte, ne, desc, or, isNull, sql as dsql } from "drizzle-orm";
@@ -5930,6 +5931,8 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
 STRICT SCOPE — you may ONLY help with:
 1. Explaining CLVRQuant features and how to use them: QuantBrain AI signals, the AI Quant Engine (MasterBrain), Signals tab, AI Radar, Pulse (Unusual Activity), Earnings tab, Social Intelligence, Polymarket data, Morning Brief, Alerts, Squawk Box, SEC Insider Flow, Basket Analysis, the three plans (Free, Pro $29.99/mo CAD, Elite $129/mo CAD), and how to navigate the app.
 2. Helping the user book a paid 30-min 1-on-1 platform training session.
+
+ACCESS CODES: To redeem an issued code, open Radar → LIVE ALERTS → SCAN ACCESS CODE → Manual, enter the code, then submit. The plan selector also has a HAVE AN ACCESS CODE? entry. Do not send users to Account/Billing for a redemption field; there is none. Issued formats include CLVR-TRIAL-… (trial), CLVR-VIP-… (VIP), CLVR-FF-… (friends & family), and PRO-XXXXX-XXX (Pro). Never invent, issue, or disclose a live code. A trial/Pro code grants Pro, and VIP/FF grants Elite; actual access and expiry must be confirmed by the redemption result. Invalid, expired, and already-claimed codes produce distinct errors.
 
 YOU MUST REFUSE, politely and briefly, anything outside this scope. This includes: general knowledge, current events, web lookups, math/homework, coding help, medical/legal/tax questions, SPECIFIC FINANCIAL OR TRADING ADVICE ("should I buy X?", price predictions, what to invest in), personal opinions, or anything unrelated to using CLVRQuant. For off-topic requests say: "I can only help with using the CLVRQuant platform and booking a training session. Is there something about the platform I can help with?"
 
@@ -12262,15 +12265,16 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
   // Tier ordering for the no-downgrade rule. Owner stays Elite forever (per
   // getEffectiveTier hardcode), and anyone already on a higher paid tier
   // can still redeem successfully — they just won't be downgraded.
-  const TIER_RANK: Record<string, number> = { free: 0, pro: 1, elite: 2, vip_group: 3 };
-
   app.post("/api/verify-code", async (req: any, res) => {
     const rawCode = req.body?.code;
     const userId = (req.session as any)?.userId || null;
     const ipAddress = (req.ip || req.headers["x-forwarded-for"] || "").toString().slice(0, 45) || null;
     const userAgent = (req.headers["user-agent"] || "").toString().slice(0, 500) || null;
-    if (!rawCode) return res.status(400).json({ valid: false, error: "Code required" });
+    if (typeof rawCode !== "string" || !rawCode.trim()) return res.status(400).json({ valid: false, error: "Code required" });
     const code = rawCode.trim().toUpperCase();
+    if (code.length > 100 || !/^[A-Z0-9-]+$/.test(code)) {
+      return res.status(400).json({ valid: false, code: "invalid_format", error: "Invalid access code format" });
+    }
 
     // OWNER_CODE bypass — pure read, no state mutation, no audit row.
     if (code === OWNER_CODE) {
@@ -12331,26 +12335,35 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const acRes = await client.query("SELECT * FROM access_codes WHERE code = $1 FOR UPDATE", [code]);
       const ac = acRes.rows[0];
       if (!ac || !ac.active) {
+        const prior = ac ? await client.query("SELECT 1 FROM code_redemptions WHERE code = $1 AND user_id = $2", [code, userId]) : null;
         await client.query("ROLLBACK");
         await storage.logRedemptionAttempt(userId, code, ipAddress, ac ? "inactive" : "not_found");
-        return res.json({ valid: false, code: "not_found", error: "Code not found or no longer active" });
+        if (prior?.rowCount) return res.json(redemptionError("already_redeemed_user"));
+        if (ac && (ac.use_count || 0) > 0) return res.json(redemptionError("already_redeemed_global"));
+        return res.json(redemptionError("not_found"));
       }
       if (ac.expires_at && new Date(ac.expires_at) < new Date()) {
         await client.query("ROLLBACK");
         await storage.logRedemptionAttempt(userId, code, ipAddress, "expired");
-        return res.json({ valid: false, code: "expired", error: "This code has expired" });
+        return res.json(redemptionError("expired"));
       }
 
       const redemptionType = (ac.redemption_type || "single_use_per_user") as string;
-      const tierGranted = "elite"; // current product rule: every access code grants Elite
+      const tierGranted = accessCodeTier(ac.type);
+      if (!tierGranted) {
+        await client.query("ROLLBACK");
+        await storage.logRedemptionAttempt(userId, code, ipAddress, "invalid_type");
+        return res.json({ valid: false, code: "invalid_type", error: "This access code cannot be redeemed" });
+      }
       const useCount = ac.use_count || 0;
 
       if (redemptionType === "single_use_global") {
         // Hard cap: one total redemption ever. Once burned, the code is dead.
         if (useCount >= 1) {
+          const prior = await client.query("SELECT 1 FROM code_redemptions WHERE code = $1 AND user_id = $2", [code, userId]);
           await client.query("ROLLBACK");
           await storage.logRedemptionAttempt(userId, code, ipAddress, "already_redeemed");
-          return res.json({ valid: false, code: "already_redeemed_global", error: "This code has already been claimed" });
+          return res.json(redemptionError(prior.rowCount ? "already_redeemed_user" : "already_redeemed_global"));
         }
       } else {
         // single_use_per_user: optional global cap still applies (max_uses>0).
@@ -12376,7 +12389,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (insertRes.rowCount === 0) {
         await client.query("ROLLBACK");
         await storage.logRedemptionAttempt(userId, code, ipAddress, "already_redeemed");
-        return res.json({ valid: false, code: "already_redeemed_user", error: "You have already redeemed this code" });
+        return res.json(redemptionError("already_redeemed_user"));
       }
 
       // Bump use_count + (legacy) used_by/used_at for backward compat with
@@ -12396,15 +12409,24 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       // Tier upgrade with no-downgrade. Re-read the user row inside the txn
       // so we don't race a concurrent Stripe webhook that just bumped tier.
       const userRow = await client.query(
-        "SELECT tier, promo_code, promo_expires_at FROM users WHERE id = $1",
+        "SELECT tier, promo_code, promo_expires_at, stripe_subscription_id FROM users WHERE id = $1 FOR UPDATE",
         [userId],
       );
-      const currentTier = (userRow.rows[0]?.tier as string) || "free";
-      const currentPromoCode = (userRow.rows[0]?.promo_code as string | null) || null;
-      const currentExpiry = (userRow.rows[0]?.promo_expires_at as Date | null) || null;
+      let currentTier = (userRow.rows[0]?.tier as string) || "free";
+      let currentPromoCode = (userRow.rows[0]?.promo_code as string | null) || null;
+      let currentExpiry = (userRow.rows[0]?.promo_expires_at as Date | null) || null;
       const newExpiry = (ac.expires_at as Date | null) || null;
+      // An expired promo isn't a higher active entitlement. Clear it inside
+      // this transaction before applying the new code, unless Stripe owns the tier.
+      if (!userRow.rows[0]?.stripe_subscription_id && currentExpiry && new Date(currentExpiry) < new Date()) {
+        await client.query("UPDATE users SET tier = 'free', promo_code = NULL, promo_expires_at = NULL WHERE id = $1", [userId]);
+        currentTier = "free";
+        currentPromoCode = null;
+        currentExpiry = null;
+      }
 
-      if ((TIER_RANK[tierGranted] ?? 0) > (TIER_RANK[currentTier] ?? 0)) {
+      const effectiveTier = effectiveCodeTier(currentTier, tierGranted);
+      if (effectiveTier !== currentTier) {
         await client.query("UPDATE users SET tier = $1 WHERE id = $2", [tierGranted, userId]);
       }
 
@@ -12441,13 +12463,14 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       committed = true;
 
       // Post-commit side effects (fire-and-forget — never block the response).
-      await storage.logRedemptionAttempt(userId, code, ipAddress, "success");
+      try { await storage.logRedemptionAttempt(userId, code, ipAddress, "success"); }
+      catch (auditErr) { console.error("[verify-code] Post-commit audit failed:", auditErr); }
       checkAndGrantReferralReward(userId).catch(() => {});
       if (ac.type === "trial") getCurrentTrialCode().catch(() => {});
 
       console.log(`[verify-code] SUCCESS: ${code} redeemed by user ${userId}, type=${redemptionType}, tier=${tierGranted} (was ${currentTier}), expires ${promoExpiry}`);
 
-      // Elite activation email — now ONLY fires on first successful redemption
+      // Activation email — now ONLY fires on first successful redemption
       // per user/code pair (because re-redeems are blocked above).
       storage.getUser(userId).then(async (activatedUser) => {
         if (!activatedUser?.email) return;
@@ -12457,28 +12480,19 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             from: fromEmail,
             replyTo: "Support@clvrquantai.com",
             to: activatedUser.email,
-            subject: "✦ Your CLVRQuant Elite Access is Active",
-            text: `Welcome to CLVRQuant Elite, ${activatedUser.name || "Valued Member"}.\n\nYour exclusive Elite access is now active${promoExpiry ? ` through ${new Date(promoExpiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}` : ""}.\n\nAs an Elite member you have full access to:\n- Unlimited AI Market Analyst (Claude Sonnet)\n- Real-time CLVR Quant signals across all asset classes\n- Full Hyperliquid perpetuals data & funding rates\n- Morning Intelligence Brief delivered daily\n- Priority price alerts & push notifications\n- Phantom Wallet Solana integration\n- Macro calendar with AI event analysis\n\nTrade with precision — CLVRQuant is your edge.\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
+            subject: `✦ Your CLVRQuant ${effectiveTier === "pro" ? "Pro" : "Elite"} Access is Active`,
+            text: `Your CLVRQuant ${effectiveTier === "pro" ? "Pro" : "Elite"} access is active${promoExpiry ? ` through ${new Date(promoExpiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}` : ""}.\n\nOpen the terminal to use your plan's features.\n\nCLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
             html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
               <div style="text-align:center;margin-bottom:28px">
                 <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
-                <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">ELITE · MARKET INTELLIGENCE</div>
+                <div style="font-family:monospace;font-size:10px;color:#4a5d80;letter-spacing:0.3em;margin-top:4px">${effectiveTier === "pro" ? "PRO" : "ELITE"} · MARKET INTELLIGENCE</div>
               </div>
               <div style="border:1px solid rgba(201,168,76,.3);border-radius:4px;padding:20px 24px;margin-bottom:24px;background:rgba(201,168,76,.04)">
-                <p style="font-size:18px;color:#e8c96d;margin:0 0 6px;font-weight:700;letter-spacing:0.05em">✦ ELITE ACCESS ACTIVATED</p>
-                <p style="font-size:13px;color:#6b7fa8;margin:0">Welcome, <strong style="color:#f0f4ff">${activatedUser.name || "Valued Member"}</strong> — your exclusive Elite membership is now live.</p>
+                <p style="font-size:18px;color:#e8c96d;margin:0 0 6px;font-weight:700;letter-spacing:0.05em">✦ ${effectiveTier === "pro" ? "PRO" : "ELITE"} ACCESS ACTIVATED</p>
+                <p style="font-size:13px;color:#6b7fa8;margin:0">Welcome, <strong style="color:#f0f4ff">${activatedUser.name || "Valued Member"}</strong> — your access is now live.</p>
               </div>
               ${promoExpiry ? `<p style="font-family:monospace;font-size:11px;color:#4a5d80;margin-bottom:20px;letter-spacing:0.1em">ACCESS VALID THROUGH: <strong style="color:#e8c96d">${new Date(promoExpiry).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"}).toUpperCase()}</strong></p>` : ""}
-              <p style="font-size:13px;color:#6b7fa8;margin-bottom:16px">As an <strong style="color:#e8c96d">Elite member</strong>, you have full unrestricted access to every CLVRQuant capability:</p>
-              <ul style="font-size:13px;color:#c8d4ee;line-height:2;padding-left:20px">
-                <li>Unlimited AI Market Analyst — Claude Sonnet, unrestricted</li>
-                <li>Real-time signals across crypto, equities, commodities &amp; forex</li>
-                <li>Full Hyperliquid perpetuals data &amp; funding rate monitor</li>
-                <li>Daily Morning Intelligence Brief</li>
-                <li>Priority price alerts &amp; push notifications</li>
-                <li>Phantom Wallet Solana integration</li>
-                <li>Macro calendar with AI event-by-event analysis</li>
-              </ul>
+              <p style="font-size:13px;color:#6b7fa8;margin-bottom:16px">Your <strong style="color:#e8c96d">${effectiveTier === "pro" ? "Pro" : "Elite"} access</strong> is ready. Open the terminal to use the features included in your plan.</p>
               <div style="border-top:1px solid #141e35;padding-top:20px;margin-top:24px;text-align:center">
                 <a href="${getAppUrl()}" style="display:inline-block;background:#e8c96d;color:#050709;font-family:monospace;font-size:12px;font-weight:700;letter-spacing:0.15em;padding:12px 28px;border-radius:3px;text-decoration:none">OPEN TERMINAL →</a>
               </div>
@@ -12489,7 +12503,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
           console.error("[verify-code] Elite activation email failed:", emailErr.message);
         }
       }).catch(() => {});
-      return res.json({ valid: true, tier: "elite", type: ac.type, label: ac.label, expiresAt: promoExpiry });
+      return res.json({ valid: true, tier: effectiveTier, type: ac.type, label: ac.label, expiresAt: promoExpiry });
     } catch (err: any) {
       // Best-effort rollback so we don't hold the access_codes row lock past
       // the request lifecycle. release() in finally{} returns the connection
@@ -12979,7 +12993,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       try { recordLiveActivity(user.id, user.email || "", tier); } catch {}
       res.json({ user: { id: user.id, name: user.name, email: user.email, tier, emailVerified: user.emailVerified, pendingVerification, isAdmin: !!(user as any).isAdmin } });
     } catch {
-      res.json({ user: null });
+      res.status(503).json({ error: "Account status temporarily unavailable" });
     }
   });
 

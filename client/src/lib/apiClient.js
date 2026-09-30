@@ -102,3 +102,20 @@ export async function apiJson(input, init, options) {
   }
   return response.json();
 }
+
+// A failed session check is not proof that the visitor signed out. Only an
+// explicit 401 or a successful { user: null } response means unauthenticated.
+export async function readAuthSession(response) {
+  if (response.status === 401) return null;
+  if (!response.ok) throw new Error(`Account status unavailable (${response.status})`);
+  const data = await response.json();
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid account status response");
+  if (Object.hasOwn(data, "user")) {
+    if (data.user === null) return null;
+    if (data.user && typeof data.user === "object" && data.user.id) return data.user;
+  } else if (data.id) {
+    // Older servers returned the user fields at the top level.
+    return data;
+  }
+  throw new Error("Invalid account status response");
+}

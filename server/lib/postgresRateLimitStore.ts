@@ -5,6 +5,11 @@ export type RateLimitQueryable = {
   query(query: string, values?: unknown[]): Promise<{ rows: Array<{ hits?: number; reset_at?: Date | string }> }>;
 };
 
+/** Only this read may use the independent account-check budget. */
+export function isAuthMeRead(req: { method: string; path: string }): boolean {
+  return req.method === "GET" && req.path === "/api/auth/me";
+}
+
 /** Shared, atomic rate-limit store for all replica-safe security limiters. */
 export class PostgresRateLimitStore implements Store {
   localKeys = false;

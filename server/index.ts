@@ -20,7 +20,7 @@ import { startAdaptiveThresholds, suppressHistoricalBleeders } from "./lib/adapt
 import { startCalibration } from "./lib/calibration";
 import { startCircuitBreaker } from "./lib/circuitBreaker";
 import { initSocketIO } from "./socketServer";
-import { PostgresRateLimitStore } from "./lib/postgresRateLimitStore";
+import { PostgresRateLimitStore, isAuthMeRead } from "./lib/postgresRateLimitStore";
 import { isTrustedCookieMutation } from "./lib/csrfOrigin";
 
 let shuttingDown = false;
@@ -72,11 +72,23 @@ const globalLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => !req.path.startsWith("/api/") || (req.method === "GET" && req.path === "/api/macro"),
+  skip: (req) => !req.path.startsWith("/api/") || (req.method === "GET" && req.path === "/api/macro") || isAuthMeRead(req),
   message: { error: "Too many requests. Please slow down." },
   store: new PostgresRateLimitStore("global"),
 });
 app.use(globalLimiter);
+
+// Session checks have their own bounded allowance, independent of dashboard
+// polling. Sign-in, sign-up and other auth requests stay on their existing limits.
+app.get("/api/auth/me", rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method !== "GET",
+  message: { error: "Account check limit reached. Please retry shortly." },
+  store: new PostgresRateLimitStore("auth-me"),
+}));
 
 // Cached calendar reads have an independent bounded budget: dashboard polling
 // must not exhaust their allowance and make the schedule disappear on reload.

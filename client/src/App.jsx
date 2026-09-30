@@ -18,6 +18,7 @@ import PhantomWalletPanel from "./PhantomWallet";
 import WelcomePage from "./WelcomePage";
 import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
+import { accessCodeFeedback, ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedback";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import InsiderTab from "./tabs/InsiderTab";
@@ -31,9 +32,9 @@ import EarningsContent from "./components/EarningsContent.jsx";
 import useMarketData, { fmtPrice as mfmtPrice, fmtChange as mfmtChange, fmtFunding as mfmtFunding } from "./store/MarketDataStore.jsx";
 import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, TwitterMorningBrief, TwitterSignalPanel } from "./store/TwitterIntelligence.jsx";
 import { playMarketBell, unlockAudio, unlockSpeech, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
-import { macroWeekRange, filterMacroCalendar, createMacroLoader } from "./utils/macroCalendar.js";
+import { macroEventDate, macroEventInstant, selectUpcomingMacroEvents, etDateParts, filterMacroCalendar, createMacroLoader } from "./utils/macroCalendar.js";
 import { DataBusProvider, DataBusCtx, useDataBus, mapRegimeLabel, regimeMultiplier, fearGreedColor } from "./context/DataBusContext.jsx";
-import { apiFetch } from "./lib/apiClient";
+import { apiFetch, readAuthSession } from "./lib/apiClient";
 import SessionSecurity from "./components/SessionSecurity.jsx";
 import { publishSessionEvent } from "./components/SessionSecurity.jsx";
 import { useNewItemMotion, useStableResponseItemIds } from "./hooks/useNewItemMotion.js";
@@ -41,6 +42,7 @@ import { useNewItemMotion, useStableResponseItemIds } from "./hooks/useNewItemMo
 
 // ── WebAuthn helpers (Face ID setup after login) ───────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
+const WA_DISMISS_KEY = "clvr_wa_setup_dismissed";
 function waSupported() { return !!(window.PublicKeyCredential && navigator.credentials?.create); }
 function getStoredWACred() { try { const c = JSON.parse(localStorage.getItem(WA_STORE_KEY) || "null"); return (c && c.v >= 2) ? c : null; } catch { return null; } }
 function storeWACred(credentialId, userId) { try { localStorage.setItem(WA_STORE_KEY, JSON.stringify({ credentialId, userId, platform: true, v: 2, registeredAt: Date.now() })); } catch {} }
@@ -326,12 +328,10 @@ function AlertBanner({alerts,onDismiss,C:_C}){
 }
 
 // ─── COUNTDOWN TIMER ─────────────────────────────────────
-function getETtoUTCOffset(){try{const now=new Date();const utcMs=now.getTime();const etMs=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"})).getTime();return Math.round((utcMs-etMs)/3600000);}catch{return 5;}}
-function parseTimeET(timeStr){const tp=(timeStr||"12:00").match(/(\d+):(\d+)/);let h=tp?parseInt(tp[1]):12;const m=tp?parseInt(tp[2]):0;const isPM=timeStr&&timeStr.toLowerCase().includes("pm")&&h<12;if(isPM)h+=12;const isAM=timeStr&&timeStr.toLowerCase().includes("am")&&h===12;if(isAM)h=0;const isET=!timeStr||timeStr.includes("ET");return{h,m,offsetUTC:isET?getETtoUTCOffset():0};}
 function Countdown({dateStr,timeET,compact=false}){
   const[diff,setDiff]=useState(null);
   useEffect(()=>{
-    const calc=()=>{const{h,m,offsetUTC}=parseTimeET(timeET);const[y,mo,d]=dateStr.split("-").map(Number);const target=new Date(Date.UTC(y,mo-1,d,h+offsetUTC,m,0));setDiff(target-new Date());};
+    const calc=()=>{const target=macroEventInstant({date:dateStr,timeET});setDiff(target?target-new Date():null);};
     calc();const iv=setInterval(calc,1000);return()=>clearInterval(iv);
   },[dateStr,timeET]);
   if(diff===null)return null;
@@ -3551,6 +3551,8 @@ export default function App(){
     }catch{}
   };
   const [sessionChecked,setSessionChecked]=useState(false);
+  const [sessionError,setSessionError]=useState(false);
+  const [sessionRetry,setSessionRetry]=useState(0);
   const [isDark,setIsDark]=useState(()=>{try{return localStorage.getItem("clvr_theme")!=="light";}catch{return true;}});
   const toggleTheme=useCallback(()=>{setIsDark(d=>{const next=!d;try{localStorage.setItem("clvr_theme",next?"dark":"light");}catch{}return next;});},[]);
   const themeVal={C:isDark?DARK_C:LIGHT_C,isDark,toggle:toggleTheme};
@@ -3562,21 +3564,22 @@ export default function App(){
   },[isDark]);
 
   // Check for existing session on mount.
-  // The server returns either { user: { id, ..., isAdmin } } (current shape)
-  // or, in older code paths, the user fields directly at the top level.
-  // We accept both so admin flags propagate correctly on page reload —
-  // otherwise admin-only UI like the "Send to Telegram" button stays
-  // hidden after a refresh even though the user is signed in.
+  // Only explicit unauthenticated responses may show the welcome screen.
+  // Transient errors must not discard credentials or masquerade as sign-out.
   useEffect(()=>{
+    let active=true;
     apiFetch("/api/auth/me",{credentials:"include"})
-      .then(r=>r.ok?r.json():null)
-      .then(d=>{
-        const u = d?.user?.id ? d.user : (d?.id ? d : null);
-        if(u){ setUser(u); _checkPostLoginRedirect(); }
+      .then(readAuthSession)
+      .then(u=>{
+        if(!active)return;
+        setSessionError(false);
+        setUser(u);
+        if(u) _checkPostLoginRedirect();
       })
-      .catch(()=>{})
-      .finally(()=>setSessionChecked(true));
-  },[]);
+      .catch(()=>{if(active)setSessionError(true);})
+      .finally(()=>{if(active)setSessionChecked(true);});
+    return ()=>{active=false;};
+  },[sessionRetry]);
 
   // Brief splash while checking session
   if(!sessionChecked){
@@ -3585,6 +3588,16 @@ export default function App(){
         <div style={{fontFamily:"'Playfair Display',Georgia,serif",fontSize:28,fontWeight:900,color:"#c9a84c",letterSpacing:"-0.02em"}}>CLVRQuant</div>
         <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isDark?"#2a3650":LIGHT_C.muted,letterSpacing:"0.25em"}}>LOADING...</div>
       </div>
+    );
+  }
+
+  if(sessionError){
+    return(
+      <main role="main" aria-labelledby="account-status-title" style={{background:isDark?DARK_C.bg:LIGHT_C.bg,color:isDark?DARK_C.text:LIGHT_C.text,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24,textAlign:"center",fontFamily:SANS}}>
+        <h1 id="account-status-title" style={{fontFamily:SERIF,fontSize:28,margin:0}}>Account status unavailable</h1>
+        <p role="alert" style={{maxWidth:440,margin:0}}>We couldn’t verify your session right now. Your sign-in has not been cleared. Please try again.</p>
+        <button type="button" onClick={()=>{setSessionChecked(false);setSessionError(false);setSessionRetry(n=>n+1);}} style={{background:isDark?DARK_C.gold:LIGHT_C.gold,color:isDark?DARK_C.bg:"#fff",border:0,borderRadius:8,padding:"12px 20px",fontFamily:SANS,fontSize:16,fontWeight:700,cursor:"pointer"}}>Retry account check</button>
+      </main>
     );
   }
 
@@ -4275,29 +4288,48 @@ function Dashboard({user,setUser,onShowAuth}){
 
   const verifyAccessCode=useCallback(async(codeOverride)=>{
     const code=(codeOverride||accessCodeInput).trim();
-    if(!code)return;
+    if(!code){const message="Enter an access code.";setAccessCodeMsg(message);return {success:false,message};}
     if(codeOverride)setAccessCodeInput(codeOverride);
     try{
       const r=await apiFetch("/api/verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code})});
       const data=await r.json();
-      if(data.valid){
-        const grantedTier=data.tier||"elite";
-        setUserTier(grantedTier);
-        try{localStorage.setItem("clvr_tier",grantedTier);localStorage.setItem("clvr_code",code);}catch{}
-        const tierLabel=grantedTier==="elite"?"Elite":"Pro";
-        setAccessCodeMsg(`✦ ${data.label} — ${tierLabel} access activated`);
-        setToast(`✦ ${tierLabel} access activated!`);
-      } else{setAccessCodeMsg(data.error||"Invalid or expired code");}
-    }catch{setAccessCodeMsg("Verification failed");}
-  },[accessCodeInput]);
+      const feedback=accessCodeFeedback(data);
+      if(!r.ok||!feedback.success){
+        setAccessCodeMsg(feedback.message);
+        return feedback;
+      }
+      // Re-read the authoritative session entitlement immediately after redemption.
+      const me=await apiFetch("/api/auth/me",{credentials:"include",cache:"no-store"});
+      const session=me.ok?(await me.json())?.user:null;
+      if(!session?.id||!session.tier)throw new Error("Code accepted, but couldn't refresh your account. Reload to see your access.");
+      setUser(session);
+      setUserTier(session.tier);
+      try{localStorage.setItem("clvr_tier",session.tier);}catch{}
+      const confirmed=accessCodeFeedback({...data,tier:session.tier});
+      if(!confirmed.success){setAccessCodeMsg(confirmed.message);return confirmed;}
+      setAccessCodeMsg(confirmed.message);
+      setToast(confirmed.message);
+      return confirmed;
+    }catch(e){
+      const message=e?.message?.startsWith("Code accepted")?e.message:"Verification failed. Please try again.";
+      setAccessCodeMsg(message);
+      return {success:false,message};
+    }
+  },[accessCodeInput,setUser]);
 
   // Show biometric setup prompt if WebAuthn is supported and no credential stored yet
   useEffect(()=>{
+    setShowBiometricSetup(false);
     if(!user||user?.guest)return;
+    try{if(localStorage.getItem(`${WA_DISMISS_KEY}_${user.id}`))return;}catch{}
     if(!waSupported()||getStoredWACred())return;
     const timer=setTimeout(()=>setShowBiometricSetup(true),2500);
     return()=>clearTimeout(timer);
-  },[user]);
+  },[user?.id,user?.guest]);
+  const dismissBiometricSetup=()=>{
+    try{localStorage.setItem(`${WA_DISMISS_KEY}_${user.id}`,"1");}catch{}
+    setShowBiometricSetup(false);
+  };
 
   // Register Face ID / biometric credential
   const registerBiometric=useCallback(async()=>{
@@ -4324,11 +4356,11 @@ function Dashboard({user,setUser,onShowAuth}){
       const credentialId=uint8ToB64(cred.rawId);
       const r=await apiFetch("/api/auth/webauthn/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({credentialId})});
       if(r.ok){storeWACred(credentialId,user.id);setToast("✦ Face ID enabled — next login is one tap");}
-      else throw new Error("Server registration failed");
+      else {const data=await r.json().catch(()=>({}));throw new Error(data.error||"Server registration failed");}
     }catch(e){
       const msg=e?.message||"";
-      if(!msg.includes("cancel")&&!msg.includes("NotAllowed"))setToast("Biometric setup failed. Try again later.");
-    }finally{setBiometricRegistering(false);setShowBiometricSetup(false);}
+      if(!msg.includes("cancel")&&!msg.includes("NotAllowed"))setToast(msg||"Biometric setup failed. Try again later.");
+    }finally{setBiometricRegistering(false);dismissBiometricSetup();}
   },[user]);
 
   const handleCheckout=(priceId)=>{
@@ -4782,9 +4814,10 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
   const today=new Date();
   // Date string helpers: compare event dates as YYYY-MM-DD strings using ET timezone
   // This prevents the off-by-one day issue (e.g., "2026-03-12" at UTC midnight = March 11 7PM ET)
-  const todayETStr=new Date().toLocaleDateString("en-CA",{timeZone:"America/New_York"});
-  const tomorrowETStr=new Date(Date.now()+86400000).toLocaleDateString("en-CA",{timeZone:"America/New_York"});
+  const todayETStr=etDateParts(today).date;
+  const tomorrowETStr=etDateParts(new Date(today.getTime()+86400000)).date;
   const eventStatus=(dateStr)=>{
+    dateStr=macroEventDate(dateStr);
     if(!dateStr)return{label:"?",color:"muted"};
     if(dateStr<todayETStr)return{label:"PAST",color:"muted"};
     if(dateStr===todayETStr)return{label:"TODAY",color:"red"};
@@ -4857,14 +4890,14 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
   };
 
   // Use ET timezone for date comparisons so US economic events (e.g. 8:30 AM ET jobless claims) show on correct day
-  const macroTodayStr=macroWeekRange(new Date()).start;// YYYY-MM-DD in ET
-  const macroTodayEvents=macroEvents.filter(e=>e.date===macroTodayStr);
-  const macroAllFiltered=filterMacroCalendar(macroEvents,macroCalTab,macroRegionFilter,macroImpactFilter);
+  const macroTodayStr=todayETStr;// YYYY-MM-DD in ET
+  const macroTodayEvents=macroEvents.filter(e=>macroEventDate(e.date)===macroTodayStr);
+  const macroAllFiltered=filterMacroCalendar(macroEvents,macroCalTab,macroRegionFilter,macroImpactFilter,today);
   const macroReleasedCount=macroAllFiltered.filter(e=>e.released||e.isPast).length;
   const macroPendingCount=macroAllFiltered.filter(e=>!e.released&&!e.isPast).length;
   const macroHighCount=macroAllFiltered.filter(e=>e.impact==="HIGH").length;
-  const macroSortedForNext=[...macroEvents].filter(e=>!e.released&&!e.isPast&&e.date>=macroTodayStr).sort((a,b)=>{const da=new Date(a.date).getTime()-new Date(b.date).getTime();if(da!==0)return da;return(a.timeET||a.time||"00:00").localeCompare(b.timeET||b.time||"00:00");});
-  const macroNextPending=macroSortedForNext[0]||null;
+  const macroUpcomingEvents=selectUpcomingMacroEvents(macroEvents,today);
+  const macroNextPending=macroUpcomingEvents[0]||null;
 
   const requestPush=async()=>{
     // ── Already granted + active → DISABLE ──────────────────────────────────
@@ -4960,9 +4993,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
     }
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- clockTick forces periodic recompute so expired events disappear
-  const todayDate=new Date();
-  const nextEvents=macroEvents.map(e=>{const timeStr=e.timeET||e.time||"12:00";const{h,m,offsetUTC}=parseTimeET(timeStr);const[y,mo,d]=e.date.split("-").map(Number);const t=new Date(Date.UTC(y,mo-1,d,h+offsetUTC,m,0));return{...e,timeET:timeStr,target:t,diffMs:t-todayDate};}).filter(e=>e.diffMs>0).sort((a,b)=>a.diffMs-b.diffMs); // clockTick dependency: ${clockTick}
+  const nextEvents=macroUpcomingEvents; // Radar and Macro use identical upcoming-event rules.
   const macroBankColor={FED:C.blue,ECB:C.purple,BOJ:C.teal,BOC:C.gold,BOE:C.green,RBA:C.cyan,"US CPI":C.orange,NFP:C.red,PCE:C.orange};
 
   // Alerts are "active" when not paused AND the user has either granted OS push
@@ -5024,7 +5055,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       `}</style>
 
       {/* QR Scanner overlay */}
-      {showQRScanner&&<QRScanner onScan={async(raw)=>{setShowQRScanner(false);const code=raw.trim().toUpperCase();await verifyAccessCode(code);}} onClose={()=>setShowQRScanner(false)}/>}
+      {showQRScanner&&<QRScanner onScan={verifyAccessCode} onClose={()=>setShowQRScanner(false)}/>}
 
       {/* ── Slide-out Menu Drawer ─────────────────────────────────────── */}
       <div
@@ -5190,19 +5221,19 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       </div>}
 
       {/* Face ID / Biometric setup prompt */}
-      {showBiometricSetup&&<div style={{position:"fixed",inset:0,zIndex:400,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0 0 40px"}}>
-        <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:12,maxWidth:380,width:"100%",padding:"24px 20px",margin:"0 16px",position:"relative"}}>
+      {showBiometricSetup&&<div role="region" aria-label="Optional Face ID setup" style={{position:"fixed",right:16,bottom:16,zIndex:400,maxWidth:380,width:"calc(100% - 32px)",boxShadow:"0 12px 40px rgba(0,0,0,.55)"}}>
+        <div style={{background:C.panel,border:`1px solid ${C.border2}`,borderRadius:12,width:"100%",padding:"16px 20px",position:"relative"}}>
           <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`,borderRadius:"12px 12px 0 0"}}/>
           <div style={{textAlign:"center",marginBottom:18}}>
             <div style={{fontSize:42,marginBottom:8}}>🔒</div>
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:18,color:C.gold2,marginBottom:4}}>Enable Face ID</div>
-            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,lineHeight:1.7,letterSpacing:"0.05em"}}>Sign in instantly on future visits.<br/>No password required.</div>
+            <div style={{fontFamily:MONO,fontSize:10,color:C.muted,lineHeight:1.7,letterSpacing:"0.05em"}}>Optional biometric setup. Password sign-in remains available.</div>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             <button data-testid="btn-enable-faceid" onClick={registerBiometric} disabled={biometricRegistering} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:8,padding:"13px 16px",fontFamily:MONO,fontSize:11,color:C.gold2,cursor:biometricRegistering?"not-allowed":"pointer",letterSpacing:"0.1em",opacity:biometricRegistering?0.6:1}}>
               {biometricRegistering?"Setting up...":"Enable Face ID / Biometric →"}
             </button>
-            <button data-testid="btn-skip-faceid" onClick={()=>setShowBiometricSetup(false)} style={{background:"none",border:"none",fontFamily:MONO,fontSize:9,color:C.muted,cursor:"pointer",letterSpacing:"0.08em",padding:"8px 0"}}>
+            <button data-testid="btn-skip-faceid" onClick={dismissBiometricSetup} style={{background:"none",border:"none",fontFamily:MONO,fontSize:9,color:C.muted,cursor:"pointer",letterSpacing:"0.08em",padding:"8px 0"}}>
               Not now
             </button>
           </div>
@@ -5333,10 +5364,11 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>HAVE AN ACCESS CODE?</div>
               <div style={{display:"flex",gap:6}}>
                 <button data-testid="btn-scan-qr" onClick={()=>setShowQRScanner(true)} title="Scan QR code" style={{background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"8px 10px",cursor:"pointer",fontSize:15,display:"flex",alignItems:"center"}}>📷</button>
-                <input data-testid="input-access-code" value={accessCodeInput} onChange={e=>setAccessCodeInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&verifyAccessCode()} placeholder="CLVR-VIP-XXXX or CLVR-FF-XXXX" style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 10px",color:C.text,fontFamily:MONO,fontSize:10}}/>
+                <input data-testid="input-access-code" value={accessCodeInput} onChange={e=>setAccessCodeInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&verifyAccessCode()} placeholder="Enter access code" style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:2,padding:"8px 10px",color:C.text,fontFamily:MONO,fontSize:10}}/>
                 <button data-testid="btn-verify-code" onClick={()=>verifyAccessCode()} style={{background:"rgba(201,168,76,.1)",border:`1px solid rgba(201,168,76,.3)`,borderRadius:2,padding:"8px 14px",fontFamily:MONO,fontSize:9,color:C.gold,cursor:"pointer",letterSpacing:"0.1em"}}>VERIFY</button>
               </div>
-              {accessCodeMsg&&<div style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("✦")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
+              <div style={{fontFamily:MONO,fontSize:8,color:C.muted2,marginTop:6}}>{ACCESS_CODE_FORMATS}</div>
+              {accessCodeMsg&&<div role="status" style={{fontFamily:MONO,fontSize:9,color:accessCodeMsg.includes("activated")?C.green:C.red,marginTop:6}}>{accessCodeMsg}</div>}
             </div>
             <div style={{fontFamily:MONO,fontSize:7,color:C.muted,marginTop:10}}>Cancel anytime · Secure checkout via Stripe · CAD</div>
             <button onClick={()=>setShowUpgrade(false)} style={{marginTop:10,background:"none",border:"none",color:C.muted,fontFamily:MONO,fontSize:9,cursor:"pointer",letterSpacing:"0.1em"}}>CLOSE</button>
@@ -5514,7 +5546,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         {/* Pro-tier gate for Pro-only tabs (free users) */}
         {!isPreview&&!isPro&&PRO_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="pro" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={onUpgrade}/>}
         {/* Elite-tier gate for Elite-only tabs (free AND pro users) */}
-        {!isPreview&&!isElite&&ELITE_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {!isPreview&&!isElite&&tab!=="basket"&&ELITE_TABS_GATE.includes(tab)&&<TabUpgradeGate tab={tab} tier="elite" C2={C} MONO2={MONO} SERIF2={SERIF} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ RADAR ══ */}
         {tab==="radar"&&<>
@@ -5849,8 +5881,8 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           {nextEvents.length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:4,padding:"14px",marginBottom:12}}>
             <div style={{fontFamily:MONO,fontSize:10,color:C.gold,letterSpacing:"0.15em",marginBottom:10}}>{i18n.nextMacro}</div>
             <div style={{fontFamily:SERIF,fontWeight:900,fontSize:16,color:C.text,marginBottom:3}}>{nextEvents[0].bank}: {nextEvents[0].name}</div>
-            <div style={{fontFamily:MONO,fontSize:11,color:C.muted2,marginBottom:10}}>{nextEvents[0].date} {nextEvents[0].timeET} ET — Forecast: {nextEvents[0].forecast}</div>
-            <Countdown dateStr={nextEvents[0].date} timeET={nextEvents[0].timeET}/>
+            <div style={{fontFamily:MONO,fontSize:11,color:C.muted2,marginBottom:10}}>{macroEventDate(nextEvents[0].date)} {nextEvents[0].timeET||nextEvents[0].time} {nextEvents[0].timeET?"ET":""} — Forecast: {nextEvents[0].forecast}</div>
+            <Countdown dateStr={nextEvents[0].date} timeET={nextEvents[0].timeET||nextEvents[0].time}/>
             {nextEvents[0].assets&&<div style={{display:"flex",gap:4,marginTop:10,flexWrap:"wrap"}}>{nextEvents[0].assets.map(s=><span key={s} style={{fontFamily:MONO,fontSize:9,color:C.gold,background:"rgba(201,168,76,.08)",border:`1px solid rgba(201,168,76,.2)`,borderRadius:2,padding:"3px 8px"}}>{s}</span>)}</div>}
             <div style={{fontFamily:SANS,fontSize:12,color:C.muted2,marginTop:8,lineHeight:1.6}}>{nextEvents[0].desc}</div>
           </div>}
@@ -5864,7 +5896,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                   <div style={{fontFamily:SANS,fontSize:12,color:C.text}}>{evt.name}</div>
                   <div style={{fontFamily:MONO,fontSize:9,color:C.muted}}>{evt.date} — {evt.forecast}</div>
                 </div>
-                <Countdown dateStr={evt.date} timeET={evt.timeET} compact/>
+                <Countdown dateStr={evt.date} timeET={evt.timeET||evt.time} compact/>
               </div>
             );})}
           </div>}
@@ -6076,7 +6108,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           <div style={{marginBottom:14}}><SLabel>Macro Calendar</SLabel></div>
           {macroLoading&&<div role="status" style={{padding:20,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>Loading calendar...</div>}
           {(macroError||macroStale)&&!macroLoading&&<div role="alert" style={{padding:16,textAlign:"center",color:C.red,fontFamily:MONO,fontSize:10}}>
-            {macroError?"Couldn't load events — ":"Showing last known events (stale) — "}<button type="button" onClick={()=>macroLoaderRef.current?.fetch(true)} style={{background:"transparent",border:`1px solid ${C.red}`,color:C.red,cursor:"pointer",padding:"5px 10px",fontFamily:MONO}}>retry</button>
+            {macroError?`${macroError}${macroStale?" — showing last known events":""} — `:"Showing last known events (stale) — "}<button type="button" onClick={()=>macroLoaderRef.current?.fetch(true)} style={{background:"transparent",border:`1px solid ${C.red}`,color:C.red,cursor:"pointer",padding:"5px 10px",fontFamily:MONO}}>retry</button>
           </div>}
 
           {!macroLoading&&!macroError&&!macroStale&&<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:14}}>
@@ -6092,7 +6124,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             ))}
           </div>}
 
-          {!macroLoading&&macroNextPending&&(
+          {!macroLoading&&!macroError&&!macroStale&&macroNextPending&&(
             <div data-testid="macro-next-event" style={{background:"rgba(201,168,76,.04)",border:`1px solid ${C.border2}`,borderRadius:2,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
                 <div style={{fontFamily:MONO,fontSize:7,color:C.gold,letterSpacing:"0.18em",marginBottom:3}}>NEXT RELEASE</div>
@@ -6131,7 +6163,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           </div>
 
           {!macroLoading&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{(macroStale||macroError)&&macroAllFiltered.length===0?"Last known calendar unavailable":`${macroAllFiltered.length} events · ForexFactory weekly feed · 5m refresh`}</div>
+            <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{macroStale||macroError?"Calendar unavailable (last known events below)":`${macroAllFiltered.length} events · ForexFactory weekly feed · 5m refresh`}</div>
             {!macroStale&&!macroError&&<Badge label="LIVE" color="green" style={{fontSize:7}}/>}
           </div>}
 
@@ -6637,7 +6669,6 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         {/* ══ BASKET ══ */}
         {tab==="basket"&&<>
           <div style={{marginBottom:6}}><SLabel>My Basket</SLabel></div>
-          <ProGate feature="basket" tier="elite" isPro={isElite} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}>
           <MyBasket
             isPro={isElite}
             onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
@@ -6650,7 +6681,6 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             equityPrices={equityPrices}
             metalPrices={metalPrices}
           />
-          </ProGate>
         </>}
 
         {/* ══ GUIDE ══ */}
@@ -6917,6 +6947,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               {q:"What is the Squawk Box and who can use it?",a:"The Squawk Box (📣 in the header) is an Elite-only live signal announcer. When active, it uses your device's text-to-speech to call out new QuantBrain signals in real-time — hands-free market awareness while you work. Pro users see a locked 📣 icon with a 🔒 badge; tap it to upgrade. Enable SOUND first, then tap 📣 SQUAWK to go live."},
             ]},
             {cat:"Billing & Subscription",color:C.red,items:[
+              {q:"Where do I redeem an access code?",a:"Go to Radar → LIVE ALERTS → SCAN ACCESS CODE → Manual, enter your issued code and tap ↵. You can also scan its QR code or use HAVE AN ACCESS CODE? in the plan selector. "+ACCESS_CODE_FORMATS+" Codes must be active and unused; the confirmation displays your actual plan and expiry."},
               {q:"How much does it cost?",a:"CLVR Pro is $29.99/month or $299/year, all in CAD (save $60). CLVR Elite is $129/month or $1,199/year, all in CAD (save $349) — includes SEC insider flow, unlimited AI, basket analysis, forex & commodities, and whale tracking. Both plans can be cancelled anytime."},
               {q:"How do I upgrade to Pro or Elite?",a:"Tap your tier badge in the top navigation bar (the one showing UPGRADE, PRO, or ELITE). Free users are taken directly to the plan selector. Pro users who tap their PRO badge are directed straight to the Elite upgrade. Elite users who tap their ELITE badge can view downgrade options. You can also go to Account → Upgrade. All payments are processed by Stripe."},
               {q:"How do I downgrade from Elite to Pro or Free?",a:"Tap your ELITE badge in the header — this opens the pricing modal where you can select Pro or Free. For billing changes mid-cycle, go to Account → Manage Subscription to access the Stripe billing portal where you can switch plans or cancel anytime."},

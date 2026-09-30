@@ -674,13 +674,6 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
               </div>
             )}
 
-            {promotedTier !== "elite" && (
-              <button data-testid="btn-upgrade-promote" onClick={onUpgrade}
-                style={{ marginTop:4, padding:"5px 10px", borderRadius:2, border:`1px solid rgba(201,168,76,.55)`, background:"rgba(201,168,76,.1)", color:C.gold2, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.08em" }}>
-                UPGRADE TO ELITE ⚡
-              </button>
-            )}
-
             {promoteError && (
               <div data-testid="text-promote-error" style={{ marginTop:6, fontFamily:MONO, fontSize:8, color:C.red }}>
                 {promoteError}

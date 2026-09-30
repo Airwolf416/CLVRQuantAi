@@ -4,11 +4,33 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { createReauthCoordinator, isReauthReplayAllowed, isReplaySafe, responseCode } from "./apiClient.js";
+import { apiFetch, createReauthCoordinator, isReauthReplayAllowed, isReplaySafe, readAuthSession, responseCode } from "./apiClient.js";
 import { canSendHeartbeat, createSessionEventReceiver, sessionBroadcastPayload } from "../components/SessionSecurity.jsx";
 
 // apiClient intentionally uses the current origin only for relative URLs.
 (globalThis as any).window = { location: { origin: "https://app.example.test" } };
+
+test("account checks distinguish unauthenticated from transient or invalid responses", async () => {
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  assert.equal(await readAuthSession(json({ error: "Not signed in" }, 401)), null);
+  assert.equal(await readAuthSession(json({ user: null })), null);
+  assert.deepEqual(await readAuthSession(json({ user: { id: "123", isAdmin: true } })), { id: "123", isAdmin: true });
+  assert.deepEqual(await readAuthSession(json({ id: "legacy" })), { id: "legacy" });
+  for (const response of [
+    json({ error: "Slow down" }, 429),
+    json({ error: "Database down" }, 503),
+    json({ error: "Forbidden" }, 403),
+    json({}), json({ user: {} }),
+    new Response("not json", { status: 200 }),
+  ]) await assert.rejects(readAuthSession(response));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError("Network failed"); };
+  try {
+    await assert.rejects(apiFetch("/api/auth/me").then(readAuthSession), /Network failed/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("classifies structured session and subscription responses independently", async () => {
   const expired = new Response(JSON.stringify({ code: "SESSION_IDLE_EXPIRED" }), { status: 401 });
