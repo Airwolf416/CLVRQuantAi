@@ -1,6 +1,8 @@
 import { rGet, rSet } from "../../services/redis";
 import { ROTATION_CONFIG } from "../config";
-import type { CoinGeckoGlobal, CoinGeckoMarket, RotationSourceResult } from "../types";
+import type {
+  CoinGeckoGlobal, CoinGeckoMarket, CoinGeckoSourcePayload, RotationSourceResult, RotationSourceAdapter,
+} from "../types";
 
 type CacheRecord<T> = { data: T; asOf: string; storedAt: number };
 type SourceDeps = {
@@ -97,7 +99,7 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
   }
 
   const base = ROTATION_CONFIG.source.coinGeckoBaseUrl;
-  return {
+  const adapter: RotationSourceAdapter<CoinGeckoSourcePayload> & {
     fetchMarkets(date?: string) {
       assertCurrentDate(date);
       const url = `${base}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${ROTATION_CONFIG.source.topUniverseSize}&page=1&sparkline=false`;
@@ -138,8 +140,36 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       const valid = (value: unknown): value is { prices: [number, number][] } =>
         !!value && Array.isArray((value as any).prices)
         && (value as any).prices.every((point: any) => Array.isArray(point) && point.length >= 2
-          && Number.isFinite(point[0]) && Number.isFinite(point[1]) && point[1] > 0);
+          && Number.isFinite(point[0]) && point[0] >= from && point[0] <= end
+          && Number.isFinite(point[1]) && point[1] > 0);
       return cached(key, ROTATION_CONFIG.source.freshTtlSeconds.history, url, valid, () => asOfDate);
     },
   };
+  adapter.fetch = async (date?: string): Promise<RotationSourceResult<CoinGeckoSourcePayload>> => {
+    const capture = async <T>(fetcher: () => Promise<RotationSourceResult<T>>): Promise<RotationSourceResult<T>> => {
+      try { return await fetcher(); }
+      catch (error) {
+        return {
+          data: null, asOf: null, stale: true,
+          error: error instanceof Error ? error.message : "CoinGecko request failed",
+        };
+      }
+    };
+    const [markets, global, stablecoins, memes] = await Promise.all([
+      capture(() => adapter.fetchMarkets(date)),
+      capture(() => adapter.fetchGlobal(date)),
+      capture(() => adapter.fetchStablecoins(date)),
+      capture(() => adapter.fetchMemes(date)),
+    ]);
+    const data = { markets, global, stablecoins, memes };
+    const timestamps = Object.values(data).flatMap(result => result.asOf ? [result.asOf] : []);
+    const errors = Object.entries(data).flatMap(([name, result]) => result.error ? [`${name}: ${result.error}`] : []);
+    return {
+      data,
+      asOf: timestamps.sort().at(-1) || null,
+      stale: Object.values(data).some(result => result.stale || result.data == null),
+      ...(errors.length ? { error: errors.join("; ") } : {}),
+    };
+  };
+  return adapter;
 }

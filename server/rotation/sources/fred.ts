@@ -36,7 +36,7 @@ export function createFredSource() {
       if (!key) {
         return { data: null, asOf: null, stale: true, error: "FRED_API_KEY is not configured" };
       }
-      return cachedRotationSource({
+      const result = await cachedRotationSource({
         key: `rotation:source:fred:${endDate}`,
         ttlSeconds: ROTATION_CONFIG.source.freshTtlSeconds.fred,
         load: async () => {
@@ -69,6 +69,10 @@ export function createFredSource() {
         timestamp: payload => payload.series.flatMap(series => series.observations.map(point => point.date))
           .sort().at(-1) || null,
       });
+      const missing = result.data?.unavailableSeries.length || 0;
+      return missing
+        ? { ...result, stale: true, error: `${missing} configured FRED series are unavailable` }
+        : result;
     },
   };
 }

@@ -6,6 +6,10 @@ export interface RotationSourceResult<T> {
   error?: string;
 }
 
+export interface RotationSourceAdapter<T> {
+  fetch(date?: string): Promise<RotationSourceResult<T>>;
+}
+
 export interface CoinGeckoMarket {
   id: string;
   symbol: string;
@@ -90,3 +94,5 @@ export interface RotationAllSources extends RotationCryptoSources {
   fundingOi: RotationSourceResult<RotationPerpMarket[]>;
   fearGreed: RotationSourceResult<RotationFearGreed>;
 }
+
+export type CoinGeckoSourcePayload = RotationCryptoSources;

@@ -12,7 +12,9 @@ function validQuotes(value: unknown): value is RotationMacroQuotes {
       && typeof quote.asOf === "string");
 }
 
-function validQuoteRow(row: any): row is { price: number; changePercentage?: number; timestamp?: number } {
+function validQuoteRow(row: any): row is {
+  price: number; changePercentage?: number; changesPercentage?: number; timestamp?: number;
+} {
   return !!row && Number.isFinite(Number(row.price)) && Number(row.price) > 0;
 }
 
@@ -25,7 +27,7 @@ export function createFmpSource() {
       if (!key) {
         return { data: null, asOf: null, stale: true, error: "FMP_API_KEY is not configured" };
       }
-      return cachedRotationSource({
+      const result = await cachedRotationSource({
         key: "rotation:source:fmp:macro-quotes",
         ttlSeconds: ROTATION_CONFIG.source.freshTtlSeconds.fmp,
         load: async () => {
@@ -62,6 +64,10 @@ export function createFmpSource() {
         validate: validQuotes,
         timestamp: payload => payload.quotes.map(quote => quote.asOf).sort().at(-1) || null,
       });
+      const missing = result.data?.unavailableSymbols.length || 0;
+      return missing
+        ? { ...result, stale: true, error: `${missing} configured FMP quotes are unavailable` }
+        : result;
     },
   };
 }

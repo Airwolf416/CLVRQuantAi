@@ -18,8 +18,6 @@ export const ROTATION_CONFIG = {
     },
     staleCacheTtlSeconds: 7 * 24 * 60 * 60,
     requestTimeoutMs: 12_000,
-    maxRetries: 2,
-    retryBaseMs: 900,
     topUniverseSize: 100,
     stablecoinPageSize: 250,
     memeBasketSize: 20,

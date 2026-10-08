@@ -547,7 +547,7 @@ export async function initializeDatabase(): Promise<void> {
           ALTER TABLE ai_signal_log ADD CONSTRAINT ai_signal_log_market_state_snapshot_fk
             FOREIGN KEY (market_state_snapshot_id) REFERENCES rotation_snapshots(id) ON DELETE SET NULL;
         END IF;
-      END $$
+      END $$;
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_market_state_snapshot ON ai_signal_log (market_state_snapshot_id)`);
 

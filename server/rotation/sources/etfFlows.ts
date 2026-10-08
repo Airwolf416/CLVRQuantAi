@@ -58,7 +58,9 @@ export function createEtfFlowSource() {
   return {
     async fetch(date?: string): Promise<RotationSourceResult<RotationEtfFlows>> {
       const today = new Date().toISOString().slice(0, 10);
-      if (date && date > today) throw new Error("ETF flow date cannot be in the future");
+      if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today)) {
+        throw new Error("ETF flow date must be a valid date no later than today");
+      }
       const requestedDate = date || today;
       return cachedRotationSource({
         key: `rotation:source:etf-flows:${requestedDate}`,

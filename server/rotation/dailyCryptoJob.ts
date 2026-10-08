@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { pool } from "../db";
 import { createCoinGeckoSource } from "./sources/coingecko";
 import { createFmpSource } from "./sources/fmp";
