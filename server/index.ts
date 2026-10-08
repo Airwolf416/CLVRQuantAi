@@ -739,6 +739,8 @@ process.on("uncaughtException", (err) => {
   initSocketIO(httpServer);
   const { startDailyCryptoCollectionScheduler } = await import("./rotation/dailyCryptoJob");
   startDailyCryptoCollectionScheduler();
+  const { startIntradayMacroScheduler } = await import("./rotation/intradayMacroJob");
+  startIntradayMacroScheduler();
   // Daily 6 AM ET email brief + Saturday 10 AM ET weekly email update —
   // these go to subscribers and must keep firing automatically. Their inner
   // Telegram autoposter calls (dailyBrief.ts ~942) remain disabled per
