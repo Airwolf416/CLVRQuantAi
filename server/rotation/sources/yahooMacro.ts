@@ -34,11 +34,13 @@ export function createYahooMacroSource(deps: {
           const observations = candles
             .filter(candle => candle.t <= cutoff && Number.isFinite(candle.c) && candle.c > 0)
             .map(candle => ({ t: candle.t, value: candle.c }));
+          const latest = observations.at(-1)?.t;
+          const agedOut = latest == null || cutoff - latest > 5 * 86_400_000;
           return [symbol, {
             symbol,
             observations,
-            stale: observations.length === 0,
-            ...(observations.length ? {} : { error: "Yahoo returned no historical candles" }),
+            stale: agedOut,
+            ...(agedOut ? { error: "Yahoo historical candles are missing or older than five days" } : {}),
           }] as const;
         } catch {
           return [symbol, { symbol, observations: [], stale: true, error: "Yahoo historical request failed" }] as const;

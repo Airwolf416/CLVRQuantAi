@@ -73,12 +73,12 @@ export function usEquityMarketHolidays(year: number): Set<string> {
     nthWeekday(year, 1, 1, 3), // Martin Luther King Jr. Day
     nthWeekday(year, 2, 1, 3), // Washington's Birthday
     lastWeekday(year, 5, 1), // Memorial Day
-    observedFixedHoliday(year, 6, 19),
     observedFixedHoliday(year, 7, 4),
     nthWeekday(year, 9, 1, 1), // Labor Day
     nthWeekday(year, 11, 4, 4), // Thanksgiving
     observedFixedHoliday(year, 12, 25),
   ]);
+  if (year >= 2022) holidays.add(observedFixedHoliday(year, 6, 19));
   const goodFriday = easterSunday(year);
   goodFriday.setUTCDate(goodFriday.getUTCDate() - 2);
   holidays.add(goodFriday.toISOString().slice(0, 10));
@@ -96,7 +96,7 @@ export function isUsTradingDay(date: string): boolean {
 export function isIntradayMacroWindow(now: Date): boolean {
   const parts = torontoParts(now);
   return isUsTradingDay(parts.date)
-    && parts.hour >= 8 && parts.hour < 17
+    && parts.hour >= 8 && (parts.hour < 17 || (parts.hour === 17 && parts.minute === 0))
     && parts.minute % 15 === 0;
 }
 

@@ -14,6 +14,7 @@ function alignedFred(
   anchorId: string,
   requiredIds: string[],
   formula: (values: Record<string, number>) => number,
+  sourceStale: boolean,
 ): MacroSeries {
   if (!data) return { observations: [], stale: true, error: "FRED data unavailable" };
   const ids = [anchorId, ...requiredIds];
@@ -43,8 +44,10 @@ function alignedFred(
       if (Number.isFinite(value)) observations.push({ t: Date.parse(`${date}T00:00:00.000Z`), value });
     }
   }
+  const missingUsedSeries = ids.filter(id => data.unavailableSeries.includes(id));
+  const stale = sourceStale || missingUsedSeries.length > 0;
   return observations.length
-    ? { observations, stale: data.unavailableSeries.length > 0, error: data.unavailableSeries.length ? "Some FRED series are unavailable" : null }
+    ? { observations, stale, error: stale ? "Required FRED observations are stale or unavailable" : null }
     : { observations: [], stale: true, error: "No aligned FRED observations" };
 }
 
@@ -56,13 +59,13 @@ function yahooSeries(data: YahooMacroPayload | null, symbol: string): MacroSerie
 }
 
 function etfFlowSeries(flows: RotationEtfFlows | null, stale: boolean): MacroSeries {
-  const rows = flows?.rows.filter(row => row.totalNetFlowUsd != null).sort((a, b) => a.date.localeCompare(b.date)) ?? [];
+  const rows = flows?.rows.slice().sort((a, b) => a.date.localeCompare(b.date)) ?? [];
   const observations = rows.flatMap((row, index) => {
     const lastFive = rows.slice(Math.max(0, index - 4), index + 1);
-    if (lastFive.length < 5) return [];
+    if (lastFive.length < 5 || lastFive.some(item => item.totalNetFlowUsd == null)) return [];
     return [{
       t: Date.parse(`${row.date}T23:59:59.999Z`),
-      value: lastFive.reduce((sum, item) => sum + (item.totalNetFlowUsd ?? 0), 0),
+      value: lastFive.reduce((sum, item) => sum + item.totalNetFlowUsd!, 0),
     }];
   });
   return {
@@ -81,14 +84,14 @@ export function buildMacroInputs(input: {
   const yahoo = input.yahoo.data;
   const observations: MacroSeriesSet = {
     netLiquidity: alignedFred(fred, "DFF", ["WALCL", "WTREGEN", "RRPONTSYD"],
-      values => values.WALCL - values.WTREGEN - values.RRPONTSYD * 1000),
+      values => values.WALCL - values.WTREGEN - values.RRPONTSYD * 1000, input.fred.stale),
     dxy: yahooSeries(yahoo, "DX-Y.NYB"),
     treasury10y: yahooSeries(yahoo, "^TNX"),
     vix: yahooSeries(yahoo, "^VIX"),
     btcEtfFlows: etfFlowSeries(input.etfFlows.data, input.etfFlows.stale),
     nasdaq: yahooSeries(yahoo, "^NDX"),
     wti: yahooSeries(yahoo, "CL=F"),
-    fedPolicyProxy: alignedFred(fred, "DFF", ["DGS2"], values => values.DGS2 - values.DFF),
+    fedPolicyProxy: alignedFred(fred, "DFF", ["DGS2"], values => values.DGS2 - values.DFF, input.fred.stale),
     gold: yahooSeries(yahoo, "GC=F"),
   };
   const equitySeries: Record<string, RotationPriceSeries> = {};

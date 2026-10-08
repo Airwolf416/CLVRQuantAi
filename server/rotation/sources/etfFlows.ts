@@ -71,7 +71,7 @@ export function createEtfFlowSource() {
           const html = await fetchText(ROTATION_CONFIG.source.farsideBitcoinEtfUrl, "Farside");
           const allRows = parseFarsideHtml(html).filter(row => row.date <= requestedDate);
           if (!allRows.length) throw new Error("Farside has no ETF flow rows for the requested date");
-          return { provider: "farside", rows: allRows.slice(-90) } satisfies RotationEtfFlows;
+          return { provider: "farside", rows: allRows.slice(-500) } satisfies RotationEtfFlows;
         },
         validate: validFlows,
         timestamp: payload => payload.rows.map(row => row.date).sort().at(-1) || null,
