@@ -537,6 +537,7 @@ export async function initializeDatabase(): Promise<void> {
         dominance_ex_stables DOUBLE PRECISION
       )
     `);
+    await client.query(`ALTER TABLE dominance_history ADD COLUMN IF NOT EXISTS usdt_usdc_mcap DOUBLE PRECISION`);
     await client.query(`ALTER TABLE rotation_universe ADD COLUMN IF NOT EXISTS history_pending BOOLEAN NOT NULL DEFAULT TRUE`);
     await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS market_state_snapshot_id BIGINT`);
     await client.query(`

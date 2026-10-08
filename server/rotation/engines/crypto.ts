@@ -66,15 +66,15 @@ function asiLabel(value: number): AsiLabel {
   return "ALT_SEASON";
 }
 
-function stabilizeAsiLabel(value: number | null, previousLabels: (string | null)[]): {
+function stabilizeAsiLabel(value: number | null, previousLabels: (string | null)[], previousConfirmed: string | null): {
   candidate: AsiLabel | null; confirmed: string | null; consecutiveDays: number;
 } {
-  if (value == null) return { candidate: null, confirmed: previousLabels[0] ?? null, consecutiveDays: 0 };
+  if (value == null) return { candidate: null, confirmed: previousConfirmed, consecutiveDays: 0 };
   const candidate = asiLabel(value);
   const previous = previousLabels.slice(0, 2);
   const consecutiveDays = previous[0] === candidate
     ? 1 + (previous[1] === candidate ? 1 : 0) : 1;
-  const confirmed = consecutiveDays >= 3 ? candidate : (previousLabels[0] ?? null);
+  const confirmed = consecutiveDays >= 3 ? candidate : previousConfirmed;
   return { candidate, confirmed, consecutiveDays };
 }
 
@@ -242,6 +242,7 @@ export function computeCryptoRotation(input: {
   stablecoins: { id: string; symbol: string; marketCap: number | null }[];
   priorDominance: { btcExStables: number | null; stable: number | null } | null;
   previousAsiLabels?: (string | null)[];
+  previousConfirmedAsiLabel?: string | null;
   equitySeries?: Record<string, RotationPriceSeries>;
   memeIds?: string[];
   sentimentHistory?: SentimentComponentHistory;
@@ -286,7 +287,11 @@ export function computeCryptoRotation(input: {
     return { asi90: rows.length ? wins / rows.length * 100 : null, eligible: rows.length, wins };
   };
   const smallTier = tier(51, 100);
-  const labelState = stabilizeAsiLabel(composite, input.previousAsiLabels ?? []);
+  const labelState = stabilizeAsiLabel(
+    composite,
+    input.previousAsiLabels ?? [],
+    input.previousConfirmedAsiLabel ?? null,
+  );
   const btcMarketCap = btc?.marketCap ?? null;
   const usdtUsdcMcap = input.stablecoins
     .filter(coin => ["usdt", "usdc"].includes(coin.symbol.toLowerCase()) || ["tether", "usd-coin"].includes(coin.id))
@@ -413,6 +418,7 @@ export function computeCryptoRotation(input: {
       beatBtc90: row.ret90 > (btcReturns[90] ?? Infinity),
     })),
     btcReturns,
+    fundingOiCurrent: fundingRows.at(-1) ?? null,
     stableMcap: allStableMcap,
     btcMcap: btcMarketCap,
     totalMcap,
