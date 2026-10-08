@@ -44,7 +44,7 @@ export function createYahooMacroSource(deps: {
           return [symbol, { symbol, observations: [], stale: true, error: "Yahoo historical request failed" }] as const;
         }
       }));
-      const series = Object.fromEntries(entries);
+      const series: YahooMacroPayload["series"] = Object.fromEntries(entries);
       const available = Object.values(series).flatMap(row => row.observations.map(point => point.t));
       const result: RotationSourceResult<YahooMacroPayload> = available.length
         ? {

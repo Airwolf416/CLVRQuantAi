@@ -35,7 +35,7 @@ export const ROTATION_CONFIG = {
   dominanceThresholdPp: 3,
   macroWeights: {
     netLiquidity: 0.2, dxy: 0.15, treasury10y: 0.15, vix: 0.15,
-    btcEtfFlows: 0.15, nasdaq: 0.1, wti: 0.05, fedPolicy: 0.05,
+    btcEtfFlows: 0.15, nasdaq: 0.1, wti: 0.05, fedPolicyProxy: 0.05,
   },
   riskScoreClip: 3,
   sentimentBands: { panicMax: 20, fearMax: 40, normalMax: 60, greedMax: 80 },

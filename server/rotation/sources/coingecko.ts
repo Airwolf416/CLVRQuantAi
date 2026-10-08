@@ -137,7 +137,7 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
         validNonEmptyMarketRows, rows => rows.reduce((best, row) =>
           row.last_updated && row.last_updated > best ? row.last_updated : best, ""));
     },
-    async fetchHistory(coinId: string, asOfInput: string, days = ROTATION_CONFIG.windows.asiDays[2]) {
+    async fetchHistory(coinId: string, asOfInput: string, days: number = ROTATION_CONFIG.windows.asiDays[2]) {
       const requestedAsOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfInput)
         ? Date.parse(`${asOfInput}T23:59:59.999Z`)
         : Date.parse(asOfInput);
