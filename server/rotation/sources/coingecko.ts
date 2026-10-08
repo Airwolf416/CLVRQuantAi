@@ -20,6 +20,8 @@ const validMarketRows = (value: unknown): value is CoinGeckoMarket[] =>
     && (row.market_cap_rank == null || Number.isFinite(Number(row.market_cap_rank)))
     && (row.current_price == null || Number.isFinite(Number(row.current_price)))
     && (row.market_cap == null || Number.isFinite(Number(row.market_cap))));
+const validNonEmptyMarketRows = (value: unknown): value is CoinGeckoMarket[] =>
+  validMarketRows(value) && value.length > 0;
 
 const validGlobal = (value: unknown): value is CoinGeckoGlobal => {
   const row = (value as any)?.data;
@@ -100,7 +102,7 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       assertCurrentDate(date);
       const url = `${base}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${ROTATION_CONFIG.source.topUniverseSize}&page=1&sparkline=false`;
       return cached("rotation:source:coingecko:top100", ROTATION_CONFIG.source.freshTtlSeconds.markets,
-        url, validMarketRows, rows => rows.reduce((best, row) =>
+        url, validNonEmptyMarketRows, rows => rows.reduce((best, row) =>
           row.last_updated && row.last_updated > best ? row.last_updated : best, ""));
     },
     fetchGlobal(date?: string) {
@@ -113,7 +115,7 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       assertCurrentDate(date);
       return cached("rotation:source:coingecko:stablecoins", ROTATION_CONFIG.source.freshTtlSeconds.stablecoins,
         `${base}/coins/markets?vs_currency=usd&category=stablecoins&order=market_cap_desc&per_page=${ROTATION_CONFIG.source.stablecoinPageSize}&page=1&sparkline=false`,
-        validMarketRows, rows => rows.reduce((best, row) =>
+        url => false as never, rows => "");
           row.last_updated && row.last_updated > best ? row.last_updated : best, ""));
     },
     fetchMemes(date?: string) {
