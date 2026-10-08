@@ -59,6 +59,28 @@ test("crypto returns and ASI are null without complete BTC reference history", (
   assert.equal(state.status, "warming_up");
 });
 
+test("ASI band is not confirmed until it appears in three consecutive daily snapshots", () => {
+  const btc = priceSeries("bitcoin", "BTC", 1);
+  const alt = priceSeries("coin-a", "AAA", 2, 80);
+  alt.points = alt.points.map((point, index) => ({ ...point, price: 80 * (1 + index * 0.003) }));
+  const calculate = (labels: (string | null)[], confirmed: string | null) => computeCryptoRotation({
+    asOf: new Date(asOf).toISOString(),
+    coins: [btc, alt],
+    totalMarketCap: 100_000,
+    stablecoins: [],
+    priorDominance: null,
+    previousAsiLabels: labels,
+    previousConfirmedAsiLabel: confirmed,
+  });
+  const day1 = calculate([], null);
+  const day2 = calculate([day1.asi.candidateLabel], day1.asi.confirmedLabel);
+  const day3 = calculate([day2.asi.candidateLabel, day1.asi.candidateLabel], day2.asi.confirmedLabel);
+  assert.equal(day1.asi.candidateLabel, "ALT_SEASON");
+  assert.equal(day1.asi.confirmedLabel, null);
+  assert.equal(day2.asi.confirmedLabel, null);
+  assert.equal(day3.asi.confirmedLabel, "ALT_SEASON");
+});
+
 test("sentiment uses weighted empirical percentiles, inverts stable dominance, and reweights available factors", () => {
   const history = {
     fundingOiWeighted7d: Array.from({ length: 100 }, (_, i) => i),
