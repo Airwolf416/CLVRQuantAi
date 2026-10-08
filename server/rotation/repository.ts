@@ -11,14 +11,16 @@ export type UniverseEntry = {
 
 export function classifyRotationUniverse(
   coins: CoinGeckoMarket[],
-  stableIds: Set<string>,
+  stableIds: Set<string> | null,
 ): UniverseEntry[] {
   const exclusions = ROTATION_CONFIG.exclusions;
   return coins.map(coin => {
     const symbol = coin.symbol.toLowerCase();
     let exclusionReason: string | null = null;
     if (symbol === "btc" || coin.id === "bitcoin") exclusionReason = "BITCOIN";
-    else if (stableIds.has(coin.id) || exclusions.stableSymbols.includes(symbol as never)) exclusionReason = "STABLECOIN";
+    else if (exclusions.stableSymbols.includes(symbol as never)) exclusionReason = "STABLECOIN";
+    else if (stableIds === null) exclusionReason = "STABLECOIN_SOURCE_UNAVAILABLE";
+    else if (stableIds.has(coin.id)) exclusionReason = "STABLECOIN";
     else if (exclusions.peggedSymbols.includes(symbol as never)) exclusionReason = "PEGGED_COMMODITY";
     else if (exclusions.stakingSymbols.includes(symbol as never)) exclusionReason = "LIQUID_STAKING_DERIVATIVE";
     else if (exclusions.wrappedSymbols.includes(symbol as never)) exclusionReason = "WRAPPED_OR_BRIDGED";
