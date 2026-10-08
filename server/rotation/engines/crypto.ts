@@ -264,9 +264,10 @@ export function computeCryptoRotation(input: {
   const cleanCoins = input.coins.map(coin => ({ ...coin, points: validPoints(coin.points, asOf) }));
   const btc = cleanCoins.find(coin => coin.symbol.toLowerCase() === "btc" || coin.id === "bitcoin");
   const btcReturns = btc ? Object.fromEntries([30, 60, 90].map(days => [days, returnAt(btc, asOf, days)])) : {};
+  const hasBtcReference = [30, 60, 90].every(days => btcReturns[days] != null);
   const alts = cleanCoins.filter(coin => coin.rank != null && coin.rank >= 2 && coin.rank <= 100
     && coin.symbol.toLowerCase() !== "btc");
-  const eligibility = alts.flatMap(series => {
+  const eligibility = hasBtcReference ? alts.flatMap(series => {
     const returns = [30, 60, 90].map(days => returnAt(series, asOf, days));
     if (returns.some(value => value == null)) return [];
     return [{
@@ -276,7 +277,7 @@ export function computeCryptoRotation(input: {
       ret90: returns[2]!,
       excess90: returns[2]! - (btcReturns[90] ?? 0),
     }];
-  });
+  }) : [];
   const asi30 = tierAsi(eligibility.map(row => ({ series: row.series, ret30: row.ret30, btc30: btcReturns[30] ?? Infinity })));
   const asi60Wins = eligibility.filter(row => row.ret60 > (btcReturns[60] ?? Infinity)).length;
   const asi90Wins = eligibility.filter(row => row.ret90 > (btcReturns[90] ?? Infinity)).length;

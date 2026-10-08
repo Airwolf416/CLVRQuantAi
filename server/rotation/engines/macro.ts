@@ -30,7 +30,8 @@ function cleanSeries(series: MacroSeries, asOf: number): MacroObservation[] {
 }
 
 function rollingChanges(points: MacroObservation[], lookbackDays: number, cutoff: number): number[] {
-  const recent = points.filter(point => point.t <= cutoff).slice(-(252 + lookbackDays));
+  const recent = points.filter(point => point.t <= cutoff)
+    .slice(-(ROTATION_CONFIG.windows.macroZScoreDays + lookbackDays));
   const changes: number[] = [];
   for (let i = lookbackDays; i < recent.length; i++) {
     changes.push(recent[i].value - recent[i - lookbackDays].value);
@@ -56,7 +57,7 @@ function factor(
   const change20d = current && old20 ? current.value - old20.value : null;
   const history = rollingChanges(points, 20, asOf);
   const deviation = sampleStdDev(history);
-  const enough = history.length >= 252 && deviation != null && deviation > 0 && change20d != null;
+  const enough = history.length >= ROTATION_CONFIG.windows.macroZScoreDays && deviation != null && deviation > 0 && change20d != null;
   const stale = !source || source.stale === true || !enough;
   const rawZ = !stale && deviation ? sign * change20d! / deviation : null;
   const zscore = rawZ == null
