@@ -243,6 +243,7 @@ async function collect(date: string, snapshotAsOf: string): Promise<void> {
     previousConfirmedAsiLabel,
     equitySeries: macroInputs.equitySeries,
     memeIds,
+    memeSeries: memeIds.flatMap(id => seriesById.has(id) ? [seriesById.get(id)!] : []),
     sentimentHistory,
     fundingOiHistory,
     fearGreedHistory,

@@ -383,7 +383,7 @@ export function computeCryptoRotation(input: {
     memeExcess30d,
     fearGreed: input.fearGreedHistory?.at(-1) ?? null,
     stableDominanceChange30d,
-    smallCapAsi: smallTier.asi90,
+    smallCapAsi: smallTier.composite,
   };
   const sentimentHistory: SentimentComponentHistory = { ...(input.sentimentHistory ?? {}) };
   if (input.fearGreedHistory) sentimentHistory.fearGreed = input.fearGreedHistory.slice(0, -1);
