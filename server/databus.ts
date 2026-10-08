@@ -15,6 +15,7 @@ import { hlData, livePrices, priceHistory, sharedMacroCache } from "./state";
 import { calcRSI, calcMomentum } from "./services/ta";
 import { CRYPTO_SYMS, EQUITY_SYMS } from "./config/assets";
 import type { RotationFearGreed, RotationSourceResult } from "./rotation/types";
+import { rGet, rSet } from "./services/redis";
 
 // ── Bus state shape ────────────────────────────────────────────────────────────
 
@@ -72,6 +73,8 @@ const bus: DataBusState = {
 
 let fearGreedLastGood: RotationFearGreed | null = null;
 let fearGreedLastError: string | undefined;
+const FEAR_GREED_CACHE_KEY = "rotation:source:alternative-me:fng";
+const FEAR_GREED_CACHE_TTL_SECONDS = 6 * 60 * 60;
 
 // ── External setters (called by routes.ts when those caches update) ────────────
 
@@ -102,6 +105,19 @@ export function getDataBusStatus() {
 // ── Fear & Greed fetcher ───────────────────────────────────────────────────────
 
 async function fetchFearAndGreed(): Promise<BusFearGreed> {
+  const now = Date.now();
+  const freshInMemory = fearGreedLastGood
+    && now - Date.parse(fearGreedLastGood.asOf) < FEAR_GREED_CACHE_TTL_SECONDS * 1000;
+  if (freshInMemory) return bus.fearGreed;
+  const cached = await rGet<RotationFearGreed>(FEAR_GREED_CACHE_KEY);
+  if (cached && Number.isInteger(cached.value) && cached.value >= 0 && cached.value <= 100
+    && typeof cached.classification === "string" && Number.isFinite(Date.parse(cached.asOf))
+    && now - Date.parse(cached.asOf) < FEAR_GREED_CACHE_TTL_SECONDS * 1000) {
+    fearGreedLastGood = cached;
+    fearGreedLastError = undefined;
+    const signal = cached.value <= 25 ? "sentiment_extreme_fear" : cached.value >= 75 ? "sentiment_extreme_greed" : null;
+    return { value: cached.value, classification: cached.classification, signal };
+  }
   try {
     const r = await fetch("https://api.alternative.me/fng/", {
       signal: AbortSignal.timeout(4000),
@@ -128,6 +144,7 @@ async function fetchFearAndGreed(): Promise<BusFearGreed> {
         ? new Date(sourceTs * 1000).toISOString() : new Date().toISOString(),
     };
     fearGreedLastError = undefined;
+    await rSet(FEAR_GREED_CACHE_KEY, fearGreedLastGood, FEAR_GREED_CACHE_TTL_SECONDS);
     return { value, classification, signal };
   } catch {
     fearGreedLastError = "Alternative.me request failed";
@@ -139,15 +156,15 @@ export function getFearAndGreedRotationSnapshot(): RotationSourceResult<Rotation
   if (!fearGreedLastGood) {
     return { data: null, asOf: null, stale: true, error: fearGreedLastError || "Fear & Greed has not loaded yet" };
   }
-  const maxAgeMs = 36 * 60 * 60 * 1000;
+  const maxAgeMs = FEAR_GREED_CACHE_TTL_SECONDS * 1000;
   const age = Date.now() - Date.parse(fearGreedLastGood.asOf);
-  const stale = !Number.isFinite(age) || age > maxAgeMs;
+  const stale = !!fearGreedLastError || !Number.isFinite(age) || age > maxAgeMs;
   return {
     data: fearGreedLastGood,
     asOf: fearGreedLastGood.asOf,
     stale,
     ...(stale || fearGreedLastError
-      ? { lastGoodAt: fearGreedLastGood.asOf, error: fearGreedLastError || "Fear & Greed data is older than 36 hours" }
+      ? { lastGoodAt: fearGreedLastGood.asOf, error: fearGreedLastError || "Fear & Greed cache is older than 6 hours" }
       : {}),
   };
 }

@@ -40,19 +40,29 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
 
   async function requestJson(url: string): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
-      const headers: Record<string, string> = { "User-Agent": "CLVRQuantAI-RotationBrain/1.0" };
-      // Optional CoinGecko Demo API key; never required or emitted in logs.
-      if (process.env.COINGECKO_API_KEY) headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY;
-      const response = await request(url, { headers, signal: AbortSignal.timeout(ROTATION_CONFIG.source.timeoutMs) });
-      if (response.ok) return response.json();
-      if (attempt >= ROTATION_CONFIG.source.maxRetries || ![429, 500, 502, 503, 504].includes(response.status)) {
-        throw new Error(`CoinGecko returned HTTP ${response.status}`);
+      try {
+        const headers: Record<string, string> = { "User-Agent": "CLVRQuantAI-RotationBrain/1.0" };
+        // Optional CoinGecko Demo API key; never required or emitted in logs.
+        if (process.env.COINGECKO_API_KEY) headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY;
+        const response = await request(url, { headers, signal: AbortSignal.timeout(ROTATION_CONFIG.source.timeoutMs) });
+        if (response.ok) return response.json();
+        if (![429, 500, 502, 503, 504].includes(response.status)) {
+          throw new Error(`CoinGecko returned HTTP ${response.status}`);
+        }
+        if (attempt >= ROTATION_CONFIG.source.maxRetries) {
+          throw new Error(`CoinGecko returned HTTP ${response.status}`);
+        }
+        const retryHeader = Number(response.headers.get("retry-after"));
+        const retryMs = Number.isFinite(retryHeader) && retryHeader > 0
+          ? Math.min(retryHeader * 1000, 10_000)
+          : ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + random() * 0.5);
+        await sleep(retryMs);
+      } catch (error) {
+        if (error instanceof Error && /CoinGecko returned HTTP \d+/.test(error.message)) throw error;
+        if (attempt >= ROTATION_CONFIG.source.maxRetries) throw new Error("CoinGecko request failed");
+        const retryMs = ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + random() * 0.5);
+        await sleep(retryMs);
       }
-      const retryHeader = Number(response.headers.get("retry-after"));
-      const retryMs = Number.isFinite(retryHeader) && retryHeader > 0
-        ? Math.min(retryHeader * 1000, 10_000)
-        : ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + random() * 0.5);
-      await sleep(retryMs);
     }
   }
 

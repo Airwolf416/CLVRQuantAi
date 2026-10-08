@@ -72,36 +72,60 @@ export async function fetchJson(
   headers: Record<string, string> = {},
 ): Promise<unknown> {
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "CLVRQuantAI-RotationBrain/1.0", ...headers },
-      signal: AbortSignal.timeout(ROTATION_CONFIG.source.requestTimeoutMs),
-    });
-    if (response.ok) return response.json();
-    if (attempt >= ROTATION_CONFIG.source.maxRetries || ![429, 500, 502, 503, 504].includes(response.status)) {
-      throw new Error(`${sourceName} returned HTTP ${response.status}`);
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": "CLVRQuantAI-RotationBrain/1.0", ...headers },
+        signal: AbortSignal.timeout(ROTATION_CONFIG.source.requestTimeoutMs),
+      });
+      if (response.ok) return response.json();
+      if (![429, 500, 502, 503, 504].includes(response.status)) {
+        throw new Error(`${sourceName} returned HTTP ${response.status}`);
+      }
+      if (attempt >= ROTATION_CONFIG.source.maxRetries) {
+        throw new Error(`${sourceName} returned HTTP ${response.status}`);
+      }
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 10_000)
+        : ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + Math.random() * 0.5);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    } catch (error) {
+      if (error instanceof Error && /returned HTTP \d+/.test(error.message)) throw error;
+      if (attempt >= ROTATION_CONFIG.source.maxRetries) {
+        throw new Error(`${sourceName} request failed`);
+      }
+      const delay = ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + Math.random() * 0.5);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-    const retryAfter = Number(response.headers.get("retry-after"));
-    const delay = Number.isFinite(retryAfter) && retryAfter > 0
-      ? Math.min(retryAfter * 1000, 10_000)
-      : ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + Math.random() * 0.5);
-    await new Promise(resolve => setTimeout(resolve, delay));
   }
 }
 
 export async function fetchText(url: string, sourceName: string): Promise<string> {
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; CLVRQuantAI-RotationBrain/1.0)" },
-      signal: AbortSignal.timeout(ROTATION_CONFIG.source.requestTimeoutMs),
-    });
-    if (response.ok) return response.text();
-    if (attempt >= ROTATION_CONFIG.source.maxRetries || ![429, 500, 502, 503, 504].includes(response.status)) {
-      throw new Error(`${sourceName} returned HTTP ${response.status}`);
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; CLVRQuantAI-RotationBrain/1.0)" },
+        signal: AbortSignal.timeout(ROTATION_CONFIG.source.requestTimeoutMs),
+      });
+      if (response.ok) return response.text();
+      if (![429, 500, 502, 503, 504].includes(response.status)) {
+        throw new Error(`${sourceName} returned HTTP ${response.status}`);
+      }
+      if (attempt >= ROTATION_CONFIG.source.maxRetries) {
+        throw new Error(`${sourceName} returned HTTP ${response.status}`);
+      }
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 10_000)
+        : ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + Math.random() * 0.5);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    } catch (error) {
+      if (error instanceof Error && /returned HTTP \d+/.test(error.message)) throw error;
+      if (attempt >= ROTATION_CONFIG.source.maxRetries) {
+        throw new Error(`${sourceName} request failed`);
+      }
+      const delay = ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + Math.random() * 0.5);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-    const retryAfter = Number(response.headers.get("retry-after"));
-    const delay = Number.isFinite(retryAfter) && retryAfter > 0
-      ? Math.min(retryAfter * 1000, 10_000)
-      : ROTATION_CONFIG.source.retryBaseMs * (2 ** attempt) * (0.75 + Math.random() * 0.5);
-    await new Promise(resolve => setTimeout(resolve, delay));
   }
 }
