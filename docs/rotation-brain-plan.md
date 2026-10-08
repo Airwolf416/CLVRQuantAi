@@ -16,10 +16,14 @@ Scope is limited to Phase 1 (data layer) of the supplied Rotation Brain specific
 ### Add
 
 - `server/rotation/config.ts` — typed source cadence, timeouts, cache TTLs, retry/backoff limits, and explicit crypto exclusions.
-- `server/rotation/types.ts` — timestamped source result and CoinGecko market/global payload types.
+- `server/rotation/types.ts` — common timestamped source results and raw source payload types.
 - `server/rotation/sources/coingecko.ts` — batched top-market/universe and global-stat adapters, plus guarded historical-series adapter using CoinGecko's public API and the shared Redis cache.
+- `server/rotation/sources/fmp.ts` and `fred.ts` — raw cross-asset quotes and macroeconomic observations; unconfigured keys and partial feeds remain explicitly stale.
+- `server/rotation/sources/etfFlows.ts` — isolated Farside BTC ETF flow table adapter with a replaceable provider boundary.
+- `server/rotation/sources/hyperliquid.ts` and `fearGreed.ts` — adapters over the app's existing Hyperliquid and Alternative.me data paths, without parallel polling loops.
+- `server/rotation/sources/cache.ts` — shared Redis/in-process source cache with bounded retries and stale last-good results.
 - `server/rotation/repository.ts` — idempotent persistence of point-in-time source snapshots and daily universe membership/eligible status in PostgreSQL.
-- `server/rotation/dailyCryptoJob.ts` — UTC daily collection, bounded retries, validation, stale-source reporting, and logging of included/excluded universe membership.
+- `server/rotation/dailyCryptoJob.ts` — UTC daily collection, bounded retries, validation, stale-source reporting, and logging of included/excluded universe membership across source adapters.
 
 ### Modify
 
@@ -27,4 +31,4 @@ Scope is limited to Phase 1 (data layer) of the supplied Rotation Brain specific
 - `shared/schema.ts` — mirror the signal snapshot reference if consumed by typed Drizzle code.
 - `server/index.ts` — start the daily collection scheduler only after database initialization; retain the existing Redis/BullMQ pattern and a guarded no-Redis fallback.
 
-Later phases will add calculations, source adapters for remaining external series, APIs/UI, and shadow-only signal/AI/meta-labeler integrations. No live trading gates or invented history are in Phase 1.
+Later phases will add calculations, APIs/UI, and shadow-only signal/AI/meta-labeler integrations. No live trading gates or invented history are in Phase 1.

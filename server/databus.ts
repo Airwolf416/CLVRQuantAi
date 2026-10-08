@@ -14,6 +14,7 @@
 import { hlData, livePrices, priceHistory, sharedMacroCache } from "./state";
 import { calcRSI, calcMomentum } from "./services/ta";
 import { CRYPTO_SYMS, EQUITY_SYMS } from "./config/assets";
+import type { RotationFearGreed, RotationSourceResult } from "./rotation/types";
 
 // ── Bus state shape ────────────────────────────────────────────────────────────
 
@@ -69,6 +70,9 @@ const bus: DataBusState = {
   lastUpdated: 0,
 };
 
+let fearGreedLastGood: RotationFearGreed | null = null;
+let fearGreedLastError: string | undefined;
+
 // ── External setters (called by routes.ts when those caches update) ────────────
 
 export function setDataBusMacroNews(items: any[]): void {
@@ -103,15 +107,49 @@ async function fetchFearAndGreed(): Promise<BusFearGreed> {
       signal: AbortSignal.timeout(4000),
       headers: { "User-Agent": "CLVRQuant/2.0" },
     });
-    if (!r.ok) return bus.fearGreed; // keep last known value on error
+    if (!r.ok) {
+      fearGreedLastError = `Alternative.me returned HTTP ${r.status}`;
+      return bus.fearGreed; // keep last known value on error
+    }
     const d: any = await r.json();
-    const value = parseInt(d?.data?.[0]?.value || "50", 10);
-    const classification = d?.data?.[0]?.value_classification || "Neutral";
+    const point = d?.data?.[0];
+    const value = Number(point?.value);
+    const classification = point?.value_classification;
+    if (!Number.isInteger(value) || value < 0 || value > 100 || typeof classification !== "string") {
+      fearGreedLastError = "Alternative.me returned an invalid Fear & Greed payload";
+      return bus.fearGreed;
+    }
     const signal = value <= 25 ? "sentiment_extreme_fear" : value >= 75 ? "sentiment_extreme_greed" : null;
+    const sourceTs = Number(point.timestamp);
+    fearGreedLastGood = {
+      value,
+      classification,
+      asOf: Number.isFinite(sourceTs) && sourceTs > 0
+        ? new Date(sourceTs * 1000).toISOString() : new Date().toISOString(),
+    };
+    fearGreedLastError = undefined;
     return { value, classification, signal };
   } catch {
+    fearGreedLastError = "Alternative.me request failed";
     return bus.fearGreed; // keep last known value on network error
   }
+}
+
+export function getFearAndGreedRotationSnapshot(): RotationSourceResult<RotationFearGreed> {
+  if (!fearGreedLastGood) {
+    return { data: null, asOf: null, stale: true, error: fearGreedLastError || "Fear & Greed has not loaded yet" };
+  }
+  const maxAgeMs = 36 * 60 * 60 * 1000;
+  const age = Date.now() - Date.parse(fearGreedLastGood.asOf);
+  const stale = !Number.isFinite(age) || age > maxAgeMs;
+  return {
+    data: fearGreedLastGood,
+    asOf: fearGreedLastGood.asOf,
+    stale,
+    ...(stale || fearGreedLastError
+      ? { lastGoodAt: fearGreedLastGood.asOf, error: fearGreedLastError || "Fear & Greed data is older than 36 hours" }
+      : {}),
+  };
 }
 
 // ── Kill switch computation (mirrors checkMacroKillSwitch in routes.ts) ────────

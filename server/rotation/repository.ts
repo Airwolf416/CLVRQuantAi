@@ -1,7 +1,7 @@
 import { pool } from "../db";
 import { rSet } from "../services/redis";
 import { ROTATION_CONFIG } from "./config";
-import type { RotationCryptoSources, CoinGeckoMarket } from "./types";
+import type { RotationAllSources, CoinGeckoMarket } from "./types";
 
 export type UniverseEntry = {
   coin: CoinGeckoMarket;
@@ -31,7 +31,7 @@ export function classifyRotationUniverse(
 export type RotationSnapshotInput = {
   snapshotDate: string;
   asOf: string;
-  sources: RotationCryptoSources;
+  sources: RotationAllSources;
   universe: UniverseEntry[];
 };
 

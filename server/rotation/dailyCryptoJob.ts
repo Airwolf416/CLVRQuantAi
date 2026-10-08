@@ -1,8 +1,12 @@
-import type { PoolClient } from "pg";
 import { pool } from "../db";
 import { createCoinGeckoSource } from "./sources/coingecko";
+import { createFmpSource } from "./sources/fmp";
+import { createFredSource } from "./sources/fred";
+import { createEtfFlowSource } from "./sources/etfFlows";
+import { createHyperliquidSource } from "./sources/hyperliquid";
+import { createFearGreedSource } from "./sources/fearGreed";
 import { getLatestRotationSnapshot, rotationSnapshotExists, saveDailyRotationSnapshot, classifyRotationUniverse } from "./repository";
-import type { RotationCryptoSources, RotationSourceResult } from "./types";
+import type { RotationAllSources, RotationSourceResult } from "./types";
 
 const LOCK_NAME = "clvr-rotation-brain-daily-crypto-v1";
 const MINUTE_MS = 60_000;
@@ -13,7 +17,7 @@ function utcDate(now = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-function oldSource<T>(previous: any, name: keyof RotationCryptoSources, error: unknown): RotationSourceResult<T> {
+function oldSource<T>(previous: any, name: keyof RotationAllSources, error: unknown): RotationSourceResult<T> {
   const old = previous?.sources?.[name];
   if (old?.data != null && typeof old.asOf === "string") {
     return {
@@ -34,12 +38,12 @@ function oldSource<T>(previous: any, name: keyof RotationCryptoSources, error: u
 
 async function fetchOrRetain<T>(
   previous: any,
-  name: keyof RotationCryptoSources,
+  name: keyof RotationAllSources,
   fetcher: () => Promise<RotationSourceResult<T>>,
 ): Promise<RotationSourceResult<T>> {
   try {
     const result = await fetcher();
-    if (result.data == null || !result.asOf) throw new Error("Source returned no validated data");
+    if (result.data == null || !result.asOf) throw new Error(result.error || "Source returned no validated data");
     return result;
   } catch (error) {
     const retained = oldSource<T>(previous, name, error);
@@ -48,7 +52,7 @@ async function fetchOrRetain<T>(
   }
 }
 
-async function collect(date: string, lockClient: PoolClient): Promise<void> {
+async function collect(date: string): Promise<void> {
   if (await rotationSnapshotExists(date)) {
     console.log(`[rotation] Daily crypto snapshot already exists for ${date}`);
     return;
@@ -60,7 +64,14 @@ async function collect(date: string, lockClient: PoolClient): Promise<void> {
   const global = await fetchOrRetain(previous, "global", () => source.fetchGlobal(date));
   const stablecoins = await fetchOrRetain(previous, "stablecoins", () => source.fetchStablecoins(date));
   const memes = await fetchOrRetain(previous, "memes", () => source.fetchMemes(date));
-  const sources: RotationCryptoSources = { markets, global, stablecoins, memes };
+  const [fmp, fred, etfFlows, fundingOi, fearGreed] = await Promise.all([
+    fetchOrRetain(previous, "fmp", () => createFmpSource().fetch(date)),
+    fetchOrRetain(previous, "fred", () => createFredSource().fetch(date)),
+    fetchOrRetain(previous, "etfFlows", () => createEtfFlowSource().fetch(date)),
+    fetchOrRetain(previous, "fundingOi", () => createHyperliquidSource().fetch(date)),
+    fetchOrRetain(previous, "fearGreed", () => createFearGreedSource().fetch(date)),
+  ]);
+  const sources: RotationAllSources = { markets, global, stablecoins, memes, fmp, fred, etfFlows, fundingOi, fearGreed };
 
   const marketRows = markets.data ?? [];
   const stableIds = stablecoins.data == null ? null : new Set(stablecoins.data.map(coin => coin.id));
@@ -76,7 +87,6 @@ async function collect(date: string, lockClient: PoolClient): Promise<void> {
     `${universe.length} ranked coins, ${universe.length - excluded.length} eligible pending history check, ` +
     `${excluded.length} excluded (${excluded.map(row => `${row.coin.symbol}:${row.exclusionReason}`).join(", ") || "none"}); ` +
     `stale sources: ${Object.entries(sources).filter(([, result]) => result.stale).map(([name]) => name).join(", ") || "none"}`);
-  void lockClient;
 }
 
 export async function runDailyCryptoCollection(now = new Date()): Promise<boolean> {
@@ -91,7 +101,7 @@ export async function runDailyCryptoCollection(now = new Date()): Promise<boolea
     );
     locked = result.rows[0]?.locked === true;
     if (!locked) return false;
-    await collect(utcDate(now), client);
+    await collect(utcDate(now));
     return true;
   } catch (error) {
     console.error("[rotation] Daily crypto collection failed:", error instanceof Error ? error.message : error);

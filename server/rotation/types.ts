@@ -31,3 +31,62 @@ export interface RotationCryptoSources {
   stablecoins: RotationSourceResult<CoinGeckoMarket[]>;
   memes: RotationSourceResult<CoinGeckoMarket[]>;
 }
+
+export interface RotationMacroQuote {
+  symbol: string;
+  price: number;
+  changePercent: number | null;
+  asOf: string;
+}
+
+export interface RotationMacroQuotes {
+  quotes: RotationMacroQuote[];
+  unavailableSymbols: string[];
+}
+
+export interface RotationFredObservation {
+  date: string;
+  value: number | null;
+}
+
+export interface RotationFredSeries {
+  seriesId: string;
+  observations: RotationFredObservation[];
+}
+
+export interface RotationFredData {
+  series: RotationFredSeries[];
+  unavailableSeries: string[];
+}
+
+export interface RotationEtfFlowRow {
+  date: string;
+  totalNetFlowUsd: number | null;
+}
+
+export interface RotationEtfFlows {
+  provider: "farside" | "sosovalue";
+  rows: RotationEtfFlowRow[];
+}
+
+export interface RotationPerpMarket {
+  symbol: string;
+  fundingRatePct: number;
+  openInterestUsd: number;
+  price: number;
+  asOf: string;
+}
+
+export interface RotationFearGreed {
+  value: number;
+  classification: string;
+  asOf: string;
+}
+
+export interface RotationAllSources extends RotationCryptoSources {
+  fmp: RotationSourceResult<RotationMacroQuotes>;
+  fred: RotationSourceResult<RotationFredData>;
+  etfFlows: RotationSourceResult<RotationEtfFlows>;
+  fundingOi: RotationSourceResult<RotationPerpMarket[]>;
+  fearGreed: RotationSourceResult<RotationFearGreed>;
+}
