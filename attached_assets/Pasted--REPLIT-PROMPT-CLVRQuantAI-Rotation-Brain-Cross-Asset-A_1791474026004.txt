@@ -1,0 +1,326 @@
+# REPLIT PROMPT — CLVRQuantAI "Rotation Brain" (Cross-Asset Alt Season & Risk Rotation Engine)
+
+Paste everything below this line into Replit Agent. Build it in the PHASES listed at the bottom, one phase per run, and confirm each phase works before moving on.
+
+---
+
+## CONTEXT
+
+You are working on CLVRQuantAI, an AI-powered quant trading signal platform.
+Stack: Node.js/Express + React/TypeScript, PostgreSQL, Redis, deployed on Railway (repo flows Replit → GitHub → Railway).
+AI engine: Claude (model `claude-sonnet-4-6`), referred to internally as "Kronos AI".
+Existing systems you must integrate with (search the codebase for them first, do not duplicate):
+- RegimeDirection classifier
+- Signal pipeline with conviction scoring + conviction gating, macro kill switch, per-asset cooldowns, suppression logic
+- GBM meta-labeler (nightly retrain, champion/challenger promotion) and calibrated P(win)
+- Six-archetype taxonomy (BREAKOUT_RETEST, TREND_PULLBACK, RANGE_FADE, MEAN_REVERSION_EXHAUSTION, NEWS_MOMO, VWAP_RECLAIM)
+- TradeLifecycle + PostTradeAnalyzer
+- FMP API integration (already used for Earnings Radar)
+
+Before writing code: read the existing signal pipeline, regime classifier and macro kill switch, then write a short plan in `docs/rotation-brain-plan.md` describing exactly which files you will add and which you will modify. Do not refactor unrelated code.
+
+## GOAL
+
+Build a new module, the **Rotation Brain**, that answers five questions every day (and intraday for fast macro data):
+1. Is it Bitcoin Season or Altcoin Season?
+2. Is the macro environment Risk-On or Risk-Off for crypto?
+3. Is the crypto market in Euphoria, Normal, or Panic?
+4. Where is capital sitting on the risk curve (Cash → Bonds → Equities → Tech → BTC → ETH → Large alts → Mid alts → Small alts → Memes)?
+5. Given all of the above, what bias should the signal engine apply?
+
+Its outputs must (a) render as a dashboard, (b) feed the signal engine as gates/multipliers, (c) feed the GBM meta-labeler as features, and (d) be injected into the Kronos AI prompt context.
+
+---
+
+## GLOBAL RULES (apply everywhere)
+
+- **Point-in-time only.** Every metric is computed from data available at its timestamp and stored as a daily snapshot. No look-ahead. Backfill must recompute history using only data available on each historical date.
+- **Survivorship bias:** the alt universe must be the top 100 *as of each snapshot date*, not today's top 100 applied backward. Store daily universe membership.
+- **Normalize, don't eyeball.** Directional macro signals use z-scores of changes vs a trailing 252-day window, not raw "up/down".
+- **Every score is bounded and documented**: ASI 0–100, Macro Risk Score −100..+100, Euphoria/Panic Score 0–100, Ladder Slope −1..+1.
+- **Config-driven.** All thresholds, weights and windows live in `server/rotation/config.ts` so they can be tuned without code changes.
+- **Graceful degradation.** If a data source fails, mark that component `stale` with its last-good timestamp, re-weight the remaining components, and show a warning badge on the dashboard. Never silently return zeros.
+- **Cache** all external calls in Redis with TTLs matching the data frequency. Respect free-tier rate limits (CoinGecko especially): batch, back off, and retry with jitter.
+- API keys go in environment variables only.
+
+---
+
+## DATA SOURCES
+
+| Data | Source | Frequency |
+|---|---|---|
+| Top 100 coins, prices, market caps, history | CoinGecko API (`/coins/markets`, `/coins/{id}/market_chart`) | Daily close (00:00 UTC) |
+| Total crypto mkt cap, BTC dominance | CoinGecko `/global` (store daily, since history isn't provided) | Daily + hourly live |
+| Meme coin basket | CoinGecko category `meme-token` | Daily |
+| DXY, VIX, US 10Y, US 2Y, Gold, WTI Oil, Nasdaq-100 / NQ futures, SPY, QQQ, TLT, BIL | FMP API (already integrated) | Intraday every 15 min in US hours + daily close |
+| Fed net liquidity: WALCL, WTREGEN, RRPONTSYD | FRED API | Weekly/daily |
+| Fed funds effective rate: DFF | FRED | Daily |
+| Spot BTC ETF net flows | SoSoValue API if a key is available; otherwise a scraper for Farside's BTC ETF flow table, isolated behind an interface so the source can be swapped | Daily |
+| Perp funding rates + open interest (BTC, ETH, top alts) | Binance/Bybit public futures endpoints (or Hyperliquid if already integrated) | Hourly |
+| Crypto Fear & Greed | alternative.me `/fng/` | Daily |
+
+Create one adapter per source under `server/rotation/sources/` with a common interface: `fetch(date?) → { data, asOf, stale }`.
+
+---
+
+## PART 1 — ALTCOIN SEASON INDEX (ASI)
+
+**Universe:** top 100 by market cap on the snapshot date, excluding:
+- BTC
+- Stablecoins (CoinGecko `stablecoins` category + hardcoded list: USDT, USDC, DAI, FDUSD, TUSD, USDE, PYUSD, USDD, FRAX, etc.)
+- Wrapped / bridged assets (WBTC, WETH, cbBTC, tBTC, any symbol starting with "W" that maps to a base asset — maintain an explicit list)
+- Pegged / commodity-backed tokens (PAXG, XAUT)
+- Liquid staking / restaking derivatives (stETH, wstETH, rETH, cbETH, weETH, JitoSOL, mSOL, etc.)
+- Exchange-issued yield tokens and anything with < 90 days of price history (it can't be scored on ASI90)
+
+Store the exclusion list in config and log which coins were excluded each day.
+
+**Per window W ∈ {30, 60, 90}:**
+- `AltReturn_W = Price_t / Price_{t−W} − 1`
+- `BTCReturn_W = BTC_t / BTC_{t−W} − 1`
+- `Winner = 1 if AltReturn_W > BTCReturn_W else 0`
+- `ASI_W = (Σ Winners / Eligible count) × 100`
+
+**Composite:** `ASI_Composite = 0.40·ASI30 + 0.30·ASI60 + 0.30·ASI90`
+
+**Also compute (improvements):**
+- `ASI_CapWeighted_90`: same thing but each winner weighted by market cap — tells you whether it's the big alts or just small junk beating BTC.
+- `ASI_Momentum = ASI30 − ASI90` (positive = alt season building, negative = fading).
+- `MedianExcessReturn_90` = median of (AltReturn − BTCReturn). Shows magnitude, not just breadth.
+- Tier breakdown: ASI for ranks 2–10, 11–50, 51–100 separately. This drives the rotation ladder in Part 6.
+
+**Classification (applied to ASI_Composite):**
+| Range | Label |
+|---|---|
+| 0–24 | STRONG_BTC_SEASON |
+| 25–44 | BTC_BIAS |
+| 45–55 | NEUTRAL |
+| 56–74 | ALT_BIAS |
+| 75–100 | ALT_SEASON |
+
+Add hysteresis: a label only changes after the composite has been in the new band for 3 consecutive daily snapshots, to stop flickering at the edges.
+
+---
+
+## PART 2 — BTC DOMINANCE
+
+- `BTC_Dominance = BTC Market Cap / Total Crypto Market Cap`
+- `BTC_Dominance_exStables = BTC Market Cap / (Total − Stablecoin Market Cap)` — use this as the primary measure; raw dominance gets distorted when stablecoin supply grows.
+- `DomChange_30D = Dominance_t − Dominance_{t−30}` in **percentage points**.
+
+**Classification:**
+| 30D change | Label |
+|---|---|
+| > +3 pp | STRONG_BTC_LEADERSHIP |
+| −3 to +3 pp | NEUTRAL |
+| < −3 pp | ALT_ROTATION |
+
+Also compute **Stablecoin Dominance** (USDT + USDC mkt cap / total). Rising stablecoin dominance while prices fall = capital parked on the sidelines = risk-off inside crypto. Feed its 30D change into the Euphoria/Panic score (Part 5).
+
+**Confirmation rule:** ALT_SEASON is "confirmed" only when ASI_Composite ≥ 75 AND dominance label is ALT_ROTATION or NEUTRAL-falling. If ASI says alt season but dominance is rising, flag `DIVERGENCE` on the dashboard.
+
+---
+
+## PART 3 — ETH LEADERSHIP (ETH/BTC)
+
+ETH is the gateway between BTC and the rest of the alt market.
+- `ETHBTC = ETH price / BTC price`
+- Compute ETHBTC 30D return, and whether ETHBTC is above its 50-day and 200-day moving averages.
+- Labels: `ETH_LEADING` (30D return > +5% and above 50DMA), `ETH_LAGGING` (30D return < −5% and below 50DMA), else `ETH_NEUTRAL`.
+- Rule: a genuine broad alt season usually needs ETH_LEADING or ETH_NEUTRAL first. ALT_SEASON with ETH_LAGGING → flag `NARROW_ALT_RALLY` (a few coins pumping, not a real rotation).
+
+---
+
+## PART 4 — MACRO RISK SCORE (−100 to +100)
+
+For each factor compute: `z = (20-day change) / stdev(20-day changes over trailing 252 days)`, clip to [−3, +3], multiply by the sign below, then scale to a factor score in [−100, +100].
+
+| Factor | Bullish BTC when | Sign | Default weight |
+|---|---|---|---|
+| Net liquidity = WALCL − WTREGEN − RRPONTSYD | rising | + | 20% |
+| DXY | falling | − | 15% |
+| US 10Y yield | falling | − | 15% |
+| VIX | falling | − | 15% |
+| Spot BTC ETF flows (5-day rolling sum, z-scored) | inflows | + | 15% |
+| Nasdaq-100 / NQ | rising | + | 10% |
+| WTI Oil | falling (spikes hurt via inflation) | − | 5% |
+| Fed policy proxy: 2Y yield minus fed funds (market pricing cuts = negative spread) | 2Y below FFR | − | 5% |
+
+- Gold: display only, weight 0 by default. Its relationship to BTC flips between regimes.
+- `MacroRiskScore = Σ weight_i × score_i` (re-normalize weights over non-stale factors).
+
+**VIX shock override:** if VIX is up more than 25% in 5 days OR VIX > 30, set `VIX_SHOCK = true`. This forces macro regime to RISK_OFF regardless of the score.
+
+**Adaptive weighting (behind a config flag, off by default):** compute the 90-day rolling correlation of each factor's daily change with BTC daily returns. If a factor's correlation has the "wrong" sign for 90 days, halve its weight and show this on the dashboard. Macro-BTC correlations are unstable, and the engine should know when a relationship has broken down.
+
+**Classification:**
+| Score | Label |
+|---|---|
+| ≥ +30 | RISK_ON |
+| −30 to +30 | NEUTRAL |
+| ≤ −30 | RISK_OFF |
+
+Store every factor's raw value, change, z-score, contribution and staleness per snapshot so the dashboard can show *why* the score is what it is.
+
+---
+
+## PART 5 — EUPHORIA / PANIC SCORE (0 = panic, 100 = euphoria)
+
+Components (each percentile-ranked 0–100 over trailing 365 days, then averaged with weights):
+| Component | Weight |
+|---|---|
+| BTC + ETH perp funding rate (OI-weighted, 7-day avg) | 25% |
+| Aggregate open interest 30D change | 15% |
+| Meme basket 30D return minus BTC 30D return | 20% |
+| Crypto Fear & Greed index | 15% |
+| Stablecoin dominance 30D change (inverted: falling = euphoric) | 15% |
+| Small-cap alt ASI (ranks 51–100) | 10% |
+
+Labels: 0–20 `PANIC`, 21–40 `FEAR`, 41–60 `NORMAL`, 61–80 `GREED`, 81–100 `EUPHORIA`.
+
+---
+
+## PART 6 — CAPITAL ROTATION LADDER
+
+Define 10 rungs, in risk order:
+1. Cash (BIL)
+2. Bonds (TLT)
+3. Large-cap equities (SPY)
+4. Tech (QQQ)
+5. BTC
+6. ETH
+7. Large-cap alts (equal-weight basket, ranks 2–10 excl. ETH and exclusions)
+8. Mid-cap alts (ranks 11–50)
+9. Small-cap alts (ranks 51–100)
+10. Memes (CoinGecko meme category, top 20 by mkt cap)
+
+For each rung compute 20-day return and 20-day risk-adjusted return (return / realized vol).
+
+Outputs:
+- **Ladder Slope** = Spearman rank correlation between rung index (1–10) and 20D risk-adjusted return. +1 = capital flowing out the risk curve (risk appetite expanding). −1 = flight to safety.
+- **Leadership Rung** = rung with the highest 20D risk-adjusted return.
+- **Rotation Depth** = the furthest rung, counting outward from BTC, where each consecutive rung beats the one before it (e.g. BTC < ETH < Large alts but Large alts > Mid alts → depth = "Large-cap alts"). This is the "how far down the chain has money reached" number.
+- Historical chart: Leadership Rung over time as a colored band.
+
+---
+
+## PART 7 — FINAL REGIME & SIGNAL BIAS
+
+Combine into a single `MarketState` object:
+
+```ts
+interface MarketState {
+  asOf: string;                // ISO timestamp
+  asi: { asi30, asi60, asi90, composite, capWeighted90, momentum, tiers, label };
+  dominance: { raw, exStables, change30d, label, stableDominance, divergence: boolean };
+  eth: { ethbtc, ret30d, aboveMA50, aboveMA200, label, narrowAltRally: boolean };
+  macro: { score, label, vixShock: boolean, factors: FactorDetail[] };
+  sentiment: { score, label, components };
+  ladder: { slope, leadershipRung, rotationDepth, rungs };
+  regime: RegimeLabel;
+  bias: SignalBias;
+  staleSources: string[];
+  explanation: string;         // 3–5 sentence plain-English summary, generated deterministically from rules (not LLM)
+}
+```
+
+**Regime rules (evaluate top to bottom, first match wins):**
+1. VIX_SHOCK or (macro RISK_OFF and sentiment PANIC) → `CAPITULATION` — no new longs on alts; BTC longs only at A+ conviction; no new shorts into panic lows (mean-reversion risk).
+2. macro RISK_OFF → `RISK_OFF` — block alt longs, allow BTC longs only above conviction threshold +15, allow alt shorts.
+3. sentiment EUPHORIA and ASI ALT_SEASON → `LATE_CYCLE_EUPHORIA` — allow longs but cut position size 50%, tighten stops, favour MEAN_REVERSION_EXHAUSTION shorts on memes/small caps.
+4. macro RISK_ON and ASI ≥ ALT_BIAS and ETH not lagging → `ALT_SEASON_RISK_ON` — favour alt longs (mid/large caps), boost conviction on TREND_PULLBACK and BREAKOUT_RETEST for alts.
+5. macro RISK_ON and ASI ≤ BTC_BIAS → `BTC_LED_RISK_ON` — favour BTC/ETH longs, penalise small-cap alt longs.
+6. otherwise → `NEUTRAL_CHOP` — favour RANGE_FADE and VWAP_RECLAIM, reduce trend-archetype conviction.
+
+**SignalBias** output per asset bucket (BTC, ETH, large alts, mid alts, small alts, memes) and direction (long/short):
+`{ allowed: boolean, convictionMultiplier: number (0.5–1.3), sizeMultiplier: number (0.25–1.0), reason: string }`
+
+All multipliers live in config.
+
+---
+
+## PART 8 — INTEGRATION WITH THE EXISTING BRAIN
+
+1. **Signal gating:** in the signal pipeline, after archetype classification and before conviction gating, call `getMarketState()` (from Redis cache) and apply SignalBias. Blocked signals are suppressed with reason code `ROTATION_BRAIN_<REGIME>` so PostTradeAnalyzer and admin views can see why.
+2. **Macro kill switch:** merge, don't duplicate. The existing macro kill switch should read `macro.vixShock` and `regime === 'CAPITULATION'` as additional triggers.
+3. **Counter-trend guard:** previous analysis found a counter-trend short bias in resolved signals. In RISK_ON regimes with Ladder Slope > +0.5, apply an extra 0.7 conviction multiplier to shorts on assets above their 50DMA.
+4. **Meta-labeler features:** add these columns to the feature set used by the GBM meta-labeler, snapshotted at signal creation time: `asi_composite, asi_momentum, dom_change_30d, ethbtc_ret30d, macro_score, vix_shock, sentiment_score, ladder_slope, rotation_depth_index, regime (one-hot)`. They must be point-in-time (read from the snapshot table, never recomputed later). The challenger model trains with them; the champion/challenger promotion decides whether they stay.
+5. **Kronos AI context:** prepend a compact `MARKET STATE` block (≤ 200 tokens: regime, ASI composite + label, dominance label, macro score + top 2 contributing factors, sentiment label, rotation depth) to every Kronos AI analysis prompt, and instruct the model to state whether a setup aligns with or fights the regime.
+6. **Validation report (important):** build an admin endpoint `GET /api/admin/rotation/backtest` that joins all resolved signals with the MarketState snapshot at signal time and returns win rate, avg R, and count (with Wilson lower confidence bound) grouped by regime × asset bucket × direction. This tells us whether the Rotation Brain actually improves results before we trust its gates. Show it as a table in the admin panel.
+
+---
+
+## PART 9 — DATABASE
+
+PostgreSQL tables (with migrations):
+- `rotation_snapshots` (id, as_of, granularity ['daily','intraday'], market_state JSONB, created_at) — index on as_of.
+- `rotation_universe` (date, coin_id, symbol, rank, market_cap, included BOOLEAN, exclusion_reason).
+- `rotation_coin_returns` (date, coin_id, ret30, ret60, ret90, beat_btc30, beat_btc60, beat_btc90).
+- `macro_factor_values` (as_of, factor, raw_value, change_20d, zscore, contribution, stale BOOLEAN).
+- `dominance_history` (date, btc_mcap, total_mcap, stable_mcap, dominance, dominance_ex_stables).
+- Add a `market_state_snapshot_id` foreign key on the signals table.
+
+Redis: `rotation:market_state:latest` (TTL 15 min), per-source caches.
+
+---
+
+## PART 10 — JOBS
+
+- **Daily crypto job** 00:15 UTC: universe, returns, ASI, dominance, ETH/BTC, ladder, sentiment → full snapshot.
+- **Intraday macro job** every 15 min, 08:00–17:00 America/Toronto on US trading days: refresh FMP macro data, recompute macro score + regime, write intraday snapshot.
+- **Morning brief job** 07:30 America/Toronto: generate the "30-second Morning Bias" (see dashboard) and push to Telegram via the existing bot.
+- **Backfill script** `npm run rotation:backfill -- --days 730`: reconstruct historical snapshots point-in-time, throttled for API limits, resumable.
+
+Use the existing job scheduler in the codebase if one exists.
+
+---
+
+## PART 11 — API
+
+- `GET /api/rotation/state` — latest MarketState (tier-gated: Free sees regime label only; Pro sees all scores; Elite sees factor breakdown, ladder and history).
+- `GET /api/rotation/history?metric=asi_composite&days=365`
+- `GET /api/rotation/asi/coins?window=90` — per-coin winners/losers table.
+- `GET /api/rotation/morning-brief`
+- `GET /api/admin/rotation/backtest`
+
+---
+
+## PART 12 — DASHBOARD UI (React/TS)
+
+Brand: pure black background, gold #D4AF37 primary accent, mint #00FF88 secondary/bullish, muted red for bearish, IBM Plex Mono throughout. Mobile-first; must work at 375px width.
+
+Sections, top to bottom:
+1. **Regime banner:** big regime label, one-line `explanation`, last-updated time, stale-source warning badges.
+2. **30-Second Morning Bias card:** row of 7 chips — DXY, 10Y, VIX, Gold, NQ, ETF Flows, Oil — each showing value, 1-day change and an arrow colored by whether it's bullish or bearish for BTC. Underneath: "Macro: RISK_ON (+42)" style summary.
+3. **Altcoin Season gauge:** semicircle gauge 0–100 for ASI_Composite with the 5 colored bands; small multiples for ASI30/60/90 and tier ASIs; momentum arrow.
+4. **BTC Dominance panel:** line chart (raw and ex-stables), 30D change, label, DIVERGENCE flag.
+5. **ETH/BTC panel:** chart with 50/200 DMA, label.
+6. **Macro Risk Score:** horizontal bar −100..+100 plus a waterfall/contribution chart showing each factor's contribution.
+7. **Euphoria/Panic meter:** 0–100 with component breakdown.
+8. **Rotation Ladder:** vertical ladder of the 10 rungs, each colored by 20D risk-adjusted return, leadership rung highlighted in gold, rotation depth marker, slope value.
+9. **History:** 1-year chart of ASI composite with regime bands shaded behind it.
+10. **Coin table (Elite):** sortable list of eligible coins with 30/60/90 returns vs BTC.
+
+Use whichever chart library the project already uses.
+
+---
+
+## PART 13 — TESTS
+
+- Unit tests for: ASI calculation (including the 100-coin / 72-winners → 72 example), exclusion filtering, dominance classification boundaries (exactly ±3 pp), hysteresis, z-score scaling and clipping, regime rule ordering, Ladder Slope on synthetic data (monotonic up → +1, down → −1).
+- Integration test: with all sources mocked, `getMarketState()` returns a valid object; with one source failing, it returns `staleSources` populated and re-normalized weights.
+- A no-look-ahead test: computing a snapshot for date D must not read any price with timestamp > D.
+
+---
+
+## BUILD PHASES (do one per Replit run)
+
+1. **Phase 1 — Data layer:** source adapters, DB migrations, Redis caching, daily crypto job. Verify by logging today's universe and exclusions.
+2. **Phase 2 — Crypto engines:** ASI (all windows + extras), dominance, ETH/BTC, sentiment, ladder. Unit tests.
+3. **Phase 3 — Macro engine:** factor z-scores, Macro Risk Score, VIX shock, intraday job. Unit tests.
+4. **Phase 4 — Regime + SignalBias:** MarketState object, regime rules, API endpoints.
+5. **Phase 5 — Dashboard UI** + morning brief to Telegram.
+6. **Phase 6 — Brain integration:** signal gating, kill-switch merge, counter-trend guard, Kronos AI context block, meta-labeler features. Ship gating behind a feature flag `ROTATION_BRAIN_GATING=shadow|on|off` — start in `shadow` mode (log what it *would* have blocked without blocking).
+7. **Phase 7 — Backfill + validation report.** Only switch gating from `shadow` to `on` after the backtest report shows the regime filters improve win rate / avg R with a meaningful sample.
+
+At the end of each phase, list: files changed, env vars needed, how to verify it works, and any assumptions you made.
