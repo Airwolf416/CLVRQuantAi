@@ -167,12 +167,11 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
         };
       }
     };
-    const [markets, global, stablecoins, memes] = await Promise.all([
-      capture(() => methods.fetchMarkets(date)),
-      capture(() => methods.fetchGlobal(date)),
-      capture(() => methods.fetchStablecoins(date)),
-      capture(() => methods.fetchMemes(date)),
-    ]);
+    // Keep calls sequential so a public CoinGecko tier is not hit with a burst.
+    const markets = await capture(() => methods.fetchMarkets(date));
+    const global = await capture(() => methods.fetchGlobal(date));
+    const stablecoins = await capture(() => methods.fetchStablecoins(date));
+    const memes = await capture(() => methods.fetchMemes(date));
     const data = { markets, global, stablecoins, memes };
     const timestamps = Object.values(data).flatMap(result => result.asOf ? [result.asOf] : []);
     const errors = Object.entries(data).flatMap(([name, result]) => result.error ? [`${name}: ${result.error}`] : []);

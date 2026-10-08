@@ -73,6 +73,7 @@ const bus: DataBusState = {
 
 let fearGreedLastGood: RotationFearGreed | null = null;
 let fearGreedLastError: string | undefined;
+let fearGreedFetchedAt = 0;
 const FEAR_GREED_CACHE_KEY = "rotation:source:alternative-me:fng";
 const FEAR_GREED_CACHE_TTL_SECONDS = 6 * 60 * 60;
 
@@ -106,17 +107,18 @@ export function getDataBusStatus() {
 
 async function fetchFearAndGreed(): Promise<BusFearGreed> {
   const now = Date.now();
-  const freshInMemory = fearGreedLastGood
-    && now - Date.parse(fearGreedLastGood.asOf) < FEAR_GREED_CACHE_TTL_SECONDS * 1000;
+  const freshInMemory = fearGreedLastGood && now - fearGreedFetchedAt < FEAR_GREED_CACHE_TTL_SECONDS * 1000;
   if (freshInMemory) return bus.fearGreed;
-  const cached = await rGet<RotationFearGreed>(FEAR_GREED_CACHE_KEY);
-  if (cached && Number.isInteger(cached.value) && cached.value >= 0 && cached.value <= 100
-    && typeof cached.classification === "string" && Number.isFinite(Date.parse(cached.asOf))
-    && now - Date.parse(cached.asOf) < FEAR_GREED_CACHE_TTL_SECONDS * 1000) {
-    fearGreedLastGood = cached;
+  const cached = await rGet<{ data: RotationFearGreed; fetchedAt: number }>(FEAR_GREED_CACHE_KEY);
+  if (cached?.data && Number.isInteger(cached.data.value) && cached.data.value >= 0 && cached.data.value <= 100
+    && typeof cached.data.classification === "string" && Number.isFinite(Date.parse(cached.data.asOf))
+    && Number.isFinite(cached.fetchedAt) && now - cached.fetchedAt < FEAR_GREED_CACHE_TTL_SECONDS * 1000) {
+    fearGreedLastGood = cached.data;
+    fearGreedFetchedAt = cached.fetchedAt;
     fearGreedLastError = undefined;
-    const signal = cached.value <= 25 ? "sentiment_extreme_fear" : cached.value >= 75 ? "sentiment_extreme_greed" : null;
-    return { value: cached.value, classification: cached.classification, signal };
+    const signal = cached.data.value <= 25 ? "sentiment_extreme_fear"
+      : cached.data.value >= 75 ? "sentiment_extreme_greed" : null;
+    return { value: cached.data.value, classification: cached.data.classification, signal };
   }
   try {
     const r = await fetch("https://api.alternative.me/fng/", {
@@ -143,8 +145,9 @@ async function fetchFearAndGreed(): Promise<BusFearGreed> {
       asOf: Number.isFinite(sourceTs) && sourceTs > 0
         ? new Date(sourceTs * 1000).toISOString() : new Date().toISOString(),
     };
+    fearGreedFetchedAt = Date.now();
     fearGreedLastError = undefined;
-    await rSet(FEAR_GREED_CACHE_KEY, fearGreedLastGood, FEAR_GREED_CACHE_TTL_SECONDS);
+    await rSet(FEAR_GREED_CACHE_KEY, { data: fearGreedLastGood, fetchedAt: fearGreedFetchedAt }, FEAR_GREED_CACHE_TTL_SECONDS);
     return { value, classification, signal };
   } catch {
     fearGreedLastError = "Alternative.me request failed";
@@ -156,7 +159,7 @@ export function getFearAndGreedRotationSnapshot(): RotationSourceResult<Rotation
   if (!fearGreedLastGood) {
     return { data: null, asOf: null, stale: true, error: fearGreedLastError || "Fear & Greed has not loaded yet" };
   }
-  const maxAgeMs = FEAR_GREED_CACHE_TTL_SECONDS * 1000;
+  const maxAgeMs = 36 * 60 * 60 * 1000;
   const age = Date.now() - Date.parse(fearGreedLastGood.asOf);
   const stale = !!fearGreedLastError || !Number.isFinite(age) || age > maxAgeMs;
   return {
@@ -164,7 +167,7 @@ export function getFearAndGreedRotationSnapshot(): RotationSourceResult<Rotation
     asOf: fearGreedLastGood.asOf,
     stale,
     ...(stale || fearGreedLastError
-      ? { lastGoodAt: fearGreedLastGood.asOf, error: fearGreedLastError || "Fear & Greed cache is older than 6 hours" }
+      ? { lastGoodAt: fearGreedLastGood.asOf, error: fearGreedLastError || "Fear & Greed data is older than 36 hours" }
       : {}),
   };
 }
