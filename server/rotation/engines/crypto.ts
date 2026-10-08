@@ -257,6 +257,7 @@ export function computeCryptoRotation(input: {
   sentimentHistory?: SentimentComponentHistory;
   fundingOiHistory?: { timestamp: string; fundingOiWeighted: number | null; aggregateOi: number | null }[];
   fearGreedHistory?: number[];
+  currentFearGreed?: number | null;
 }) {
   const asOf = Date.parse(input.asOf);
   if (!Number.isFinite(asOf)) throw new Error("Crypto rotation requires a valid as-of timestamp");
@@ -387,12 +388,12 @@ export function computeCryptoRotation(input: {
     fundingOiWeighted7d,
     aggregateOiChange30d,
     memeExcess30d,
-    fearGreed: input.fearGreedHistory?.at(-1) ?? null,
+    fearGreed: input.currentFearGreed ?? null,
     stableDominanceChange30d,
     smallCapAsi: smallTier.composite,
   };
   const sentimentHistory: SentimentComponentHistory = { ...(input.sentimentHistory ?? {}) };
-  if (input.fearGreedHistory) sentimentHistory.fearGreed = input.fearGreedHistory.slice(0, -1);
+  if (input.fearGreedHistory) sentimentHistory.fearGreed = input.fearGreedHistory;
   const sentiment = computeSentiment(asOf, currentSentiment, sentimentHistory);
   const ladder = computeLadder({
     coins: cleanCoins,

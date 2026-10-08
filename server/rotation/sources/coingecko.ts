@@ -149,7 +149,7 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       if (!Number.isFinite(end) || end > now()) throw new Error("Historical query date must not be in the future");
       const from = end - days * 24 * 60 * 60 * 1000;
       const url = `${base}/coins/${encodeURIComponent(coinId)}/market_chart/range?vs_currency=usd&from=${Math.floor(from / 1000)}&to=${Math.floor(end / 1000)}`;
-      const endKey = new Date(end).toISOString().replace(/[:.]/g, "-");
+      const endKey = `${new Date(end).toISOString().slice(0, 10)}:${days}`;
       const key = `rotation:source:coingecko:history:${coinId}:${endKey}:${days}`;
       const valid = (value: unknown): value is { prices: [number, number][] } =>
         !!value && Array.isArray((value as any).prices)
