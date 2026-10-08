@@ -296,8 +296,13 @@ async function collect(date: string): Promise<void> {
   };
   await updateDailyMacroState(snapshotId, macroState);
   const excluded = baseUniverse.filter(entry => !entry.included);
+  const exclusionsByReason = excluded.reduce<Record<string, number>>((counts, entry) => {
+    const reason = entry.exclusionReason ?? "UNKNOWN";
+    counts[reason] = (counts[reason] ?? 0) + 1;
+    return counts;
+  }, {});
   console.log(`[rotation] Phase 2/3 daily snapshot ${date} stored (#${snapshotId}); ` +
-    `${cryptoCalculation.asi.eligible} ASI eligible, ${excluded.length} excluded, ` +
+    `${cryptoCalculation.asi.eligible} ASI eligible, exclusions ${JSON.stringify(exclusionsByReason)}, ` +
     `${historyFailures.length} history requests pending; macro ${macroState.status} ` +
     `(${macroState.activeFactorCount}/8 factors).`);
 }

@@ -45,7 +45,8 @@ function alignedFred(
     }
   }
   const missingUsedSeries = ids.filter(id => data.unavailableSeries.includes(id));
-  const stale = sourceStale || missingUsedSeries.length > 0;
+  const partialUnrelatedFailure = data.unavailableSeries.length > 0 && missingUsedSeries.length === 0;
+  const stale = (sourceStale && !partialUnrelatedFailure) || missingUsedSeries.length > 0;
   return observations.length
     ? { observations, stale, error: stale ? "Required FRED observations are stale or unavailable" : null }
     : { observations: [], stale: true, error: "No aligned FRED observations" };
