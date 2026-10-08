@@ -102,7 +102,7 @@ async function fetchMacroInputs(asOf: string, sources: RotationAllSources) {
   return buildMacroInputs({ fred: sources.fred, etfFlows: sources.etfFlows, yahoo: yahooMacro });
 }
 
-async function collect(date: string, snapshotAsOf: string): Promise<void> {
+async function collect(date: string): Promise<void> {
   const existing = await getDailyRotationSnapshot(date);
   if (existing?.market_state?.crypto?.engineVersion === "phase2-v1"
     && existing?.market_state?.macro?.engineVersion === "phase3-v1") {
@@ -118,14 +118,17 @@ async function collect(date: string, snapshotAsOf: string): Promise<void> {
   const global = await fetchOrRetain(previous, "global", () => source.fetchGlobal(date));
   const stablecoins = await fetchOrRetain(previous, "stablecoins", () => source.fetchStablecoins(date));
   const memes = await fetchOrRetain(previous, "memes", () => source.fetchMemes(date));
+  const fredEndDate = new Date(Date.parse(`${date}T00:00:00.000Z`) - 86_400_000).toISOString().slice(0, 10);
   const [fmp, fred, etfFlows, fundingOi, fearGreed] = await Promise.all([
     fetchOrRetain(previous, "fmp", () => createFmpSource().fetch(date)),
-    fetchOrRetain(previous, "fred", () => createFredSource().fetch(date)),
+    fetchOrRetain(previous, "fred", () => createFredSource().fetch(fredEndDate)),
     fetchOrRetain(previous, "etfFlows", () => createEtfFlowSource().fetch(date)),
     fetchOrRetain(previous, "fundingOi", () => createHyperliquidSource().fetch(date)),
     fetchOrRetain(previous, "fearGreed", () => createFearGreedSource().fetch(date)),
   ]);
   const sources: RotationAllSources = { markets, global, stablecoins, memes, fmp, fred, etfFlows, fundingOi, fearGreed };
+  // Take the point-in-time cutoff after live reads and before historical requests.
+  const snapshotAsOf = new Date().toISOString();
   const macroInputs = await fetchMacroInputs(snapshotAsOf, sources);
 
   const marketRows = (markets.data ?? []).filter(coin => coin.market_cap_rank == null || Number(coin.market_cap_rank) <= 100);
@@ -197,7 +200,7 @@ async function collect(date: string, snapshotAsOf: string): Promise<void> {
   const btcMarket = marketRows.find(row => String(row.symbol).toLowerCase() === "btc" || row.id === "bitcoin");
   const totalMarketCap = global.data?.data?.total_market_cap?.usd ?? null;
   const stableRows = stablecoins.data ?? [];
-  const fundingCurrent = fundingOi.data?.length
+  const fundingCurrent = !fundingOi.stale && fundingOi.data?.length
     ? (() => {
         const oi = fundingOi.data!.reduce((sum, row) => sum + Math.max(0, row.openInterestUsd), 0);
         const weighted = oi > 0
@@ -207,7 +210,8 @@ async function collect(date: string, snapshotAsOf: string): Promise<void> {
       })()
     : null;
   const fundingOiHistory = [
-    ...previousMarketStates.flatMap(state => state.crypto?.fundingOiCurrent ? [state.crypto.fundingOiCurrent] : []),
+    ...previousMarketStates.flatMap(state => state.crypto?.sources?.fundingOi?.stale !== true
+      && state.crypto?.fundingOiCurrent ? [state.crypto.fundingOiCurrent] : []),
     ...(fundingCurrent ? [fundingCurrent] : []),
   ];
   const sentimentKeys: (keyof SentimentComponentHistory)[] = [
@@ -217,16 +221,17 @@ async function collect(date: string, snapshotAsOf: string): Promise<void> {
   const sentimentHistory: SentimentComponentHistory = Object.fromEntries(sentimentKeys.map(key => [
     key,
     historical.flatMap(row => {
+      if (key === "fearGreed" && row.market_state?.crypto?.sources?.fearGreed?.stale === true) return [];
       const value = row.market_state?.crypto?.currentSentiment?.[key];
       return typeof value === "number" && Number.isFinite(value) ? [value] : [];
     }),
   ])) as SentimentComponentHistory;
   const fearGreedHistory = [
     ...historical.flatMap(row => {
+      if (row.market_state?.crypto?.sources?.fearGreed?.stale === true) return [];
       const value = row.market_state?.crypto?.currentSentiment?.fearGreed;
       return typeof value === "number" && Number.isFinite(value) ? [value] : [];
     }),
-    ...(fearGreed.data?.value == null ? [] : [fearGreed.data.value]),
   ];
   const previousAsiLabels = previousMarketStates.slice(0, 2).map(state => state.crypto?.asi?.candidateLabel ?? null);
   const previousConfirmedAsiLabel = previousMarketStates[0]?.crypto?.asi?.confirmedLabel ?? null;
@@ -247,6 +252,8 @@ async function collect(date: string, snapshotAsOf: string): Promise<void> {
     sentimentHistory,
     fundingOiHistory,
     fearGreedHistory,
+    currentFearGreed: !fearGreed.stale && fearGreed.data?.value != null
+      && Date.parse(fearGreed.asOf ?? "") <= asOfMs ? fearGreed.data.value : null,
   });
   // Meme-category coins outside the top 100 are included in the risk ladder
   // and excess-return basket, without admitting them into ASI membership.
@@ -307,7 +314,7 @@ export async function runDailyCryptoCollection(now = new Date()): Promise<boolea
     );
     locked = result.rows[0]?.locked === true;
     if (!locked) return false;
-    await collect(utcDate(now), now.toISOString());
+    await collect(utcDate(now));
     return true;
   } catch (error) {
     console.error("[rotation] Daily crypto/macro collection failed:", error instanceof Error ? error.message : error);
