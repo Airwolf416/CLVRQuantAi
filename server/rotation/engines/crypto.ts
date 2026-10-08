@@ -66,7 +66,7 @@ function asiLabel(value: number): AsiLabel {
   return "ALT_SEASON";
 }
 
-function stabilizeAsiLabel(value: number | null, previousLabels: (string | null)[], previousConfirmed: string | null): {
+export function stabilizeAsiLabel(value: number | null, previousLabels: (string | null)[], previousConfirmed: string | null): {
   candidate: AsiLabel | null; confirmed: string | null; consecutiveDays: number;
 } {
   if (value == null) return { candidate: null, confirmed: previousConfirmed, consecutiveDays: 0 };
