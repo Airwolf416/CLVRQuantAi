@@ -1,6 +1,6 @@
 import { ROTATION_CONFIG } from "../config";
 import type { RotationFredData, RotationFredSeries, RotationSourceResult } from "../types";
-import { cachedRotationSource, fetchJson } from "./cache";
+import { cachedRotationSource, fetchJson, fetchText } from "./cache";
 
 function validFredData(value: unknown): value is RotationFredData {
   return !!value && Array.isArray((value as any).series)
@@ -24,6 +24,21 @@ function parseSeries(seriesId: string, payload: any): RotationFredSeries | null 
   return { seriesId, observations };
 }
 
+function parseFredCsv(seriesId: string, csv: string): RotationFredSeries | null {
+  const lines = csv.trim().split(/\r?\n/);
+  if (lines.length < 2 || !/^observation_date,/i.test(lines[0])) return null;
+  const observations = lines.slice(1).flatMap(line => {
+    const comma = line.indexOf(",");
+    if (comma < 0) return [];
+    const date = line.slice(0, comma).replace(/^"|"$/g, "");
+    const raw = line.slice(comma + 1).replace(/^"|"$/g, "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+    const value = raw === "" || raw === "." ? null : Number(raw);
+    return value === null || Number.isFinite(value) ? [{ date, value }] : [];
+  });
+  return observations.length ? { seriesId, observations } : null;
+}
+
 export function createFredSource() {
   return {
     async fetch(date?: string): Promise<RotationSourceResult<RotationFredData>> {
@@ -32,30 +47,39 @@ export function createFredSource() {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate > today) {
         throw new Error("FRED end date must be a valid date no later than today");
       }
-      const key = process.env.FRED_API_KEY;
-      if (!key) {
-        return { data: null, asOf: null, stale: true, error: "FRED_API_KEY is not configured" };
-      }
+       const key = process.env.FRED_API_KEY;
       const result = await cachedRotationSource({
         key: `rotation:source:fred:${endDate}`,
         ttlSeconds: ROTATION_CONFIG.source.freshTtlSeconds.fred,
         load: async () => {
-          const startDate = new Date(Date.parse(`${endDate}T00:00:00Z`) - 370 * 86_400_000)
+           // Keep enough calendar days for 252 trading-day rolling z-score inputs.
+           const startDate = new Date(Date.parse(`${endDate}T00:00:00Z`) - 600 * 86_400_000)
             .toISOString().slice(0, 10);
           const series: RotationFredSeries[] = [];
           const unavailableSeries: string[] = [];
           for (const seriesId of ROTATION_CONFIG.source.fredSeries) {
             try {
-              const params = new URLSearchParams({
-                series_id: seriesId,
-                api_key: key,
-                file_type: "json",
-                observation_start: startDate,
-                observation_end: endDate,
-                sort_order: "asc",
-              });
-              const payload = await fetchJson(`https://api.stlouisfed.org/fred/series/observations?${params}`, "FRED");
-              const parsed = parseSeries(seriesId, payload);
+               let parsed: RotationFredSeries | null = null;
+               if (key) {
+                 const params = new URLSearchParams({
+                   series_id: seriesId,
+                   api_key: key,
+                   file_type: "json",
+                   observation_start: startDate,
+                   observation_end: endDate,
+                   sort_order: "asc",
+                 });
+                 const payload = await fetchJson(`https://api.stlouisfed.org/fred/series/observations?${params}`, "FRED");
+                 parsed = parseSeries(seriesId, payload);
+               } else {
+                 const params = new URLSearchParams({
+                   id: seriesId,
+                   cosd: startDate,
+                   coed: endDate,
+                 });
+                 const csv = await fetchText(`https://fred.stlouisfed.org/graph/fredgraph.csv?${params}`, "FRED");
+                 parsed = parseFredCsv(seriesId, csv);
+               }
               if (parsed) series.push(parsed);
               else unavailableSeries.push(seriesId);
             } catch {
