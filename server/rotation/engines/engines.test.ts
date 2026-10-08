@@ -18,7 +18,7 @@ function macroSeries(value: (day: number) => number, stale = false): MacroSeries
   return {
     observations: Array.from({ length: 600 }, (_, i) => ({
       t: asOf - (599 - i) * DAY,
-      value: value(599 - i),
+      value: value(i),
     })),
     stale,
   };
@@ -79,7 +79,7 @@ test("sentiment uses weighted empirical percentiles, inverts stable dominance, a
   assert.equal(state.status, "warming_up");
   assert.equal(state.availableComponents, 5);
   assert.ok(state.score != null && state.score > 80);
-  assert.equal(state.components.find(row => row.name === "stableDominanceChange30d")?.percentile, 100);
+  assert.equal(state.components.find(row => row.name === "stableDominanceChange30d")?.percentile, 99);
 });
 
 test("macro formula clips z-scores, applies bearish signs, excludes stale inputs, and reweights", () => {

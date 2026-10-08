@@ -403,7 +403,7 @@ export function computeCryptoRotation(input: {
   }, asOf);
 
   return {
-    status: eligibility.length ? "partial" : "warming_up",
+    status: composite != null ? "partial" : "warming_up",
     asOf: new Date(asOf).toISOString(),
     asi: {
       day30: asi30,

@@ -58,8 +58,11 @@ function factor(
   const deviation = sampleStdDev(history);
   const enough = history.length >= 252 && deviation != null && deviation > 0 && change20d != null;
   const stale = !source || source.stale === true || !enough;
-  const zscore = !stale && deviation ? sign * change20d! / deviation : null;
-  const clippedZ = zscore == null ? null : Math.max(-ROTATION_CONFIG.riskScoreClip, Math.min(ROTATION_CONFIG.riskScoreClip, zscore));
+  const rawZ = !stale && deviation ? sign * change20d! / deviation : null;
+  const zscore = rawZ == null
+    ? null
+    : Math.max(-ROTATION_CONFIG.riskScoreClip, Math.min(ROTATION_CONFIG.riskScoreClip, rawZ));
+  const clippedZ = zscore;
   const scaledScore = clippedZ == null ? null : clippedZ / ROTATION_CONFIG.riskScoreClip * 100;
   const weight = name === "gold" ? 0 : FACTOR_WEIGHTS[name];
   return {

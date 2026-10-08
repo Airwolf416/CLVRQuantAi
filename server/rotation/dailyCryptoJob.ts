@@ -259,8 +259,8 @@ async function collect(date: string): Promise<void> {
   // and excess-return basket, without admitting them into ASI membership.
   const cryptoState: Record<string, any> = {
     ...cryptoCalculation,
-    status: historyFailures.length ? (cryptoCalculation.asi.eligible ? "partial" : "warming_up")
-      : cryptoCalculation.asi.eligible ? "ready" : "warming_up",
+    status: historyFailures.length ? (cryptoCalculation.asi.composite != null ? "partial" : "warming_up")
+      : cryptoCalculation.asi.composite != null ? "ready" : "warming_up",
     engineVersion: "phase2-v1",
     historyFailures: historyFailures.length,
     historyFailureCoinIds: historyFailures,
