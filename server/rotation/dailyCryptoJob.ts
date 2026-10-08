@@ -116,8 +116,7 @@ export function startDailyCryptoCollectionScheduler(): void {
     const now = new Date();
     const date = utcDate(now);
     if (!utcCollectionWindow(now) || date === lastRunDate) return;
-    lastRunDate = date;
-    await runDailyCryptoCollection(now);
+    if (await runDailyCryptoCollection(now)) lastRunDate = date;
   };
   scheduler = setInterval(() => { void tick(); }, MINUTE_MS);
   scheduler.unref?.();

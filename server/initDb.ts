@@ -470,6 +470,87 @@ export async function initializeDatabase(): Promise<void> {
         created_at         TIMESTAMP DEFAULT NOW()
       )
     `);
+
+    // ── Rotation Brain Phase 1 data layer ───────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rotation_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        snapshot_date DATE NOT NULL,
+        as_of TIMESTAMPTZ NOT NULL,
+        granularity VARCHAR(16) NOT NULL CHECK (granularity IN ('daily', 'intraday')),
+        market_state JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_rotation_daily_snapshot_date
+      ON rotation_snapshots (snapshot_date) WHERE granularity = 'daily'
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rotation_snapshots_as_of ON rotation_snapshots (as_of DESC)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rotation_universe (
+        snapshot_date DATE NOT NULL,
+        coin_id TEXT NOT NULL,
+        symbol VARCHAR(24) NOT NULL,
+        rank INTEGER,
+        market_cap DOUBLE PRECISION,
+        included BOOLEAN NOT NULL,
+        exclusion_reason VARCHAR(64),
+        history_pending BOOLEAN NOT NULL DEFAULT TRUE,
+        PRIMARY KEY (snapshot_date, coin_id)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rotation_universe_date_rank ON rotation_universe (snapshot_date, rank)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rotation_coin_returns (
+        snapshot_date DATE NOT NULL,
+        coin_id TEXT NOT NULL,
+        ret30 DOUBLE PRECISION,
+        ret60 DOUBLE PRECISION,
+        ret90 DOUBLE PRECISION,
+        beat_btc30 BOOLEAN,
+        beat_btc60 BOOLEAN,
+        beat_btc90 BOOLEAN,
+        PRIMARY KEY (snapshot_date, coin_id)
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS macro_factor_values (
+        as_of TIMESTAMPTZ NOT NULL,
+        factor VARCHAR(48) NOT NULL,
+        raw_value DOUBLE PRECISION,
+        change_20d DOUBLE PRECISION,
+        zscore DOUBLE PRECISION,
+        contribution DOUBLE PRECISION,
+        stale BOOLEAN NOT NULL DEFAULT FALSE,
+        PRIMARY KEY (as_of, factor)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_macro_factor_values_as_of ON macro_factor_values (as_of DESC)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS dominance_history (
+        date DATE PRIMARY KEY,
+        btc_mcap DOUBLE PRECISION,
+        total_mcap DOUBLE PRECISION,
+        stable_mcap DOUBLE PRECISION,
+        dominance DOUBLE PRECISION,
+        dominance_ex_stables DOUBLE PRECISION
+      )
+    `);
+    await client.query(`ALTER TABLE rotation_universe ADD COLUMN IF NOT EXISTS history_pending BOOLEAN NOT NULL DEFAULT TRUE`);
+    await client.query(`ALTER TABLE ai_signal_log ADD COLUMN IF NOT EXISTS market_state_snapshot_id BIGINT`);
+    await client.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'ai_signal_log_market_state_snapshot_fk'
+        ) THEN
+          ALTER TABLE ai_signal_log ADD CONSTRAINT ai_signal_log_market_state_snapshot_fk
+            FOREIGN KEY (market_state_snapshot_id) REFERENCES rotation_snapshots(id) ON DELETE SET NULL;
+        END IF;
+      END $$
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_market_state_snapshot ON ai_signal_log (market_state_snapshot_id)`);
+
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_outcome ON ai_signal_log (outcome)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_source ON ai_signal_log (source)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_signal_log_created ON ai_signal_log (created_at DESC)`);

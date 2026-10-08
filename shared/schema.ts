@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, serial, integer, decimal, jsonb, doublePrecision, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, serial, integer, decimal, jsonb, doublePrecision, index, uniqueIndex, bigint } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -200,6 +200,7 @@ export const aiSignalLog = pgTable("ai_signal_log", {
   // { hasConflict, severity, bearishCount, bullishCount, neutralCount,
   //   confidenceAdjustment, topHeadlines:[...] }
   newsContext: jsonb("news_context"),
+  marketStateSnapshotId: bigint("market_state_snapshot_id", { mode: "number" }),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
