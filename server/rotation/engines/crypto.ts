@@ -133,23 +133,25 @@ function avgNonNull(values: (number | null)[]): number | null {
 function computeLadder(
   input: {
     coins: RotationPriceSeries[];
+    memeSeries: RotationPriceSeries[];
     equity: Record<string, RotationPriceSeries>;
     memeIds: Set<string>;
   },
   asOf: number,
 ) {
-  const coinById = new Map(input.coins.map(coin => [coin.id, coin]));
+  const allCoins = [...new Map([...input.coins, ...input.memeSeries].map(coin => [coin.id, coin])).values()];
+  const coinById = new Map(allCoins.map(coin => [coin.id, coin]));
   const named = (symbol: string) => Object.values(input.equity).find(row => row.symbol.toUpperCase() === symbol);
   const assets = [
     { name: "BIL", series: named("BIL") ? [named("BIL")!] : [] },
     { name: "TLT", series: named("TLT") ? [named("TLT")!] : [] },
     { name: "SPY", series: named("SPY") ? [named("SPY")!] : [] },
     { name: "QQQ", series: named("QQQ") ? [named("QQQ")!] : [] },
-    { name: "BTC", series: input.coins.filter(row => row.symbol.toLowerCase() === "btc") },
-    { name: "ETH", series: input.coins.filter(row => row.symbol.toLowerCase() === "eth") },
-    { name: "LARGE_ALTS", series: input.coins.filter(row => row.rank != null && row.rank >= 2 && row.rank <= 10 && row.symbol.toLowerCase() !== "eth") },
-    { name: "MID_ALTS", series: input.coins.filter(row => row.rank != null && row.rank >= 11 && row.rank <= 50) },
-    { name: "SMALL_ALTS", series: input.coins.filter(row => row.rank != null && row.rank >= 51 && row.rank <= 100) },
+    { name: "BTC", series: allCoins.filter(row => row.symbol.toLowerCase() === "btc") },
+    { name: "ETH", series: allCoins.filter(row => row.symbol.toLowerCase() === "eth") },
+    { name: "LARGE_ALTS", series: allCoins.filter(row => row.rank != null && row.rank >= 2 && row.rank <= 10 && row.symbol.toLowerCase() !== "eth") },
+    { name: "MID_ALTS", series: allCoins.filter(row => row.rank != null && row.rank >= 11 && row.rank <= 50) },
+    { name: "SMALL_ALTS", series: allCoins.filter(row => row.rank != null && row.rank >= 51 && row.rank <= 100) },
     { name: "MEMES_TOP20", series: [...input.memeIds].flatMap(id => coinById.has(id) ? [coinById.get(id)!] : []) },
   ];
   const rungs = assets.map((asset, index) => {
@@ -245,6 +247,7 @@ export function computeCryptoRotation(input: {
   previousConfirmedAsiLabel?: string | null;
   equitySeries?: Record<string, RotationPriceSeries>;
   memeIds?: string[];
+  memeSeries?: RotationPriceSeries[];
   sentimentHistory?: SentimentComponentHistory;
   fundingOiHistory?: { timestamp: string; fundingOiWeighted: number | null; aggregateOi: number | null }[];
   fearGreedHistory?: number[];
@@ -283,8 +286,19 @@ export function computeCryptoRotation(input: {
   const btcMomentum = asi30.asi != null && asi90.asi != null ? asi30.asi - asi90.asi : null;
   const tier = (min: number, max: number) => {
     const rows = eligibility.filter(row => row.series.rank! >= min && row.series.rank! <= max);
-    const wins = rows.filter(row => row.ret90 > (btcReturns[90] ?? Infinity)).length;
-    return { asi90: rows.length ? wins / rows.length * 100 : null, eligible: rows.length, wins };
+    const byWindow = ([30, 60, 90] as const).map(days => {
+      const wins = rows.filter(row => row[`ret${days}`] > (btcReturns[days] ?? Infinity)).length;
+      return { asi: rows.length && btcReturns[days] != null ? wins / rows.length * 100 : null, wins };
+    });
+    const composite = byWindow.every(row => row.asi != null)
+      ? byWindow[0].asi! * ROTATION_CONFIG.asiWeights.day30
+        + byWindow[1].asi! * ROTATION_CONFIG.asiWeights.day60
+        + byWindow[2].asi! * ROTATION_CONFIG.asiWeights.day90
+      : null;
+    return {
+      asi30: byWindow[0].asi, asi60: byWindow[1].asi, asi90: byWindow[2].asi,
+      composite, eligible: rows.length, wins: byWindow[2].wins,
+    };
   };
   const smallTier = tier(51, 100);
   const labelState = stabilizeAsiLabel(
@@ -355,9 +369,13 @@ export function computeCryptoRotation(input: {
   const oi30 = fundingRows.length >= 31 ? fundingRows.at(-31)?.aggregateOi ?? null : null;
   const aggregateOiChange30d = oiCurrent != null && oi30 != null && oi30 > 0 ? oiCurrent / oi30 - 1 : null;
   const memeIds = new Set(input.memeIds ?? []);
-  const memeExcess30dValues = eligibility
-    .filter(row => memeIds.has(row.series.id))
-    .map(row => row.ret30 - (btcReturns[30] ?? 0));
+  const memeSeries = [...new Map((input.memeSeries ?? []).map(row => [row.id, row])).values()];
+  const memeExcess30dValues = memeSeries
+    .filter(row => memeIds.has(row.id))
+    .flatMap(row => {
+      const ret = returnAt(row, asOf, 30);
+      return ret != null && btcReturns[30] != null ? [ret - btcReturns[30]!] : [];
+    });
   const memeExcess30d = avgNonNull(memeExcess30dValues);
   const currentSentiment: SentimentComponents = {
     fundingOiWeighted7d,
@@ -372,6 +390,7 @@ export function computeCryptoRotation(input: {
   const sentiment = computeSentiment(asOf, currentSentiment, sentimentHistory);
   const ladder = computeLadder({
     coins: cleanCoins,
+    memeSeries,
     equity: input.equitySeries ?? {},
     memeIds,
   }, asOf);
