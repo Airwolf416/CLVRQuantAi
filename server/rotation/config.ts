@@ -52,6 +52,11 @@ export const ROTATION_CONFIG = {
       "wavax", "wsol", "wftm",
     ],
     peggedSymbols: ["paxg", "xaut"],
+    commodityPeggedSymbols: ["paxg", "xaut", "dgld", "kag", "kinesis-gold", "kinesis-silver"],
+    exchangeIssuedYieldSymbols: [
+      "bnb", "okb", "cro", "leo", "gt", "kcs", "ht", "mx", "bit", "wbt",
+      "ftt", "bgb", "gate-token", "kucoin-shares", "huobi-token",
+    ],
     stakingSymbols: [
       "steth", "wsteth", "reth", "cbeth", "weeth", "jitosol", "msol", "sfrxeth",
       "ankreth", "oseth", "sweth", "ezeth", "rsweth", "meth", "rseth",

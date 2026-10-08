@@ -17,14 +17,20 @@ export function classifyRotationUniverse(
   const exclusions = ROTATION_CONFIG.exclusions;
   return coins.map(coin => {
     const symbol = coin.symbol.toLowerCase();
+    const identity = `${coin.id} ${coin.name} ${coin.symbol}`.toLowerCase();
     let exclusionReason: string | null = null;
     if (symbol === "btc" || coin.id === "bitcoin") exclusionReason = "BITCOIN";
     else if (exclusions.stableSymbols.includes(symbol as never)) exclusionReason = "STABLECOIN";
     else if (stableIds === null) exclusionReason = "STABLECOIN_SOURCE_UNAVAILABLE";
     else if (stableIds.has(coin.id)) exclusionReason = "STABLECOIN";
-    else if (exclusions.peggedSymbols.includes(symbol as never)) exclusionReason = "PEGGED_COMMODITY";
-    else if (exclusions.stakingSymbols.includes(symbol as never)) exclusionReason = "LIQUID_STAKING_DERIVATIVE";
-    else if (exclusions.wrappedSymbols.includes(symbol as never)) exclusionReason = "WRAPPED_OR_BRIDGED";
+    else if (exclusions.peggedSymbols.includes(symbol as never)
+      || exclusions.commodityPeggedSymbols.includes(coin.id as never)) exclusionReason = "PEGGED_COMMODITY";
+    else if (exclusions.stakingSymbols.includes(symbol as never)
+      || /\b(liquid staking|liquid staked|restaking|restaked|staked)\b/.test(identity)) exclusionReason = "LIQUID_STAKING_DERIVATIVE";
+    else if (exclusions.wrappedSymbols.includes(symbol as never)
+      || /\b(wrapped|bridged|wormhole|multichain)\b/.test(identity)) exclusionReason = "WRAPPED_OR_BRIDGED";
+    else if (exclusions.exchangeIssuedYieldSymbols.includes(symbol as never)
+      || exclusions.exchangeIssuedYieldSymbols.includes(coin.id as never)) exclusionReason = "EXCHANGE_ISSUED_YIELD_TOKEN";
     return { coin, included: exclusionReason === null, exclusionReason };
   });
 }

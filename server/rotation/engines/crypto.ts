@@ -82,6 +82,9 @@ function tierAsi(
   coins: { series: RotationPriceSeries; ret30: number; btc30: number }[],
 ): { asi: number | null; eligible: number; wins: number } {
   const eligible = coins.filter(({ series }) => series.rank != null);
+  if (!eligible.length || !Number.isFinite(eligible[0]?.btc30)) {
+    return { asi: null, eligible: eligible.length, wins: 0 };
+  }
   const wins = eligible.filter(({ ret30, btc30 }) => ret30 > btc30).length;
   return { asi: eligible.length ? (wins / eligible.length) * 100 : null, eligible: eligible.length, wins };
 }
@@ -156,13 +159,16 @@ function computeLadder(
   ];
   const rungs = assets.map((asset, index) => {
     const metrics = asset.series.map(series => assetRiskMetrics(series, asOf));
+    const return20d = avgNonNull(metrics.map(row => row.ret20));
+    const realizedVol = avgNonNull(metrics.map(row => row.realizedVol));
     return {
       index,
       name: asset.name,
       constituentCount: asset.series.length,
-      return20d: avgNonNull(metrics.map(row => row.ret20)),
-      realizedVol: avgNonNull(metrics.map(row => row.realizedVol)),
-      riskAdjustedReturn: avgNonNull(metrics.map(row => row.riskAdjustedReturn)),
+      return20d,
+      realizedVol,
+      riskAdjustedReturn: return20d != null && realizedVol != null && realizedVol > 1e-9
+        ? return20d / realizedVol : null,
     };
   });
   const valid = rungs.filter(rung => rung.riskAdjustedReturn != null);

@@ -30,7 +30,7 @@ function cleanSeries(series: MacroSeries, asOf: number): MacroObservation[] {
 }
 
 function rollingChanges(points: MacroObservation[], lookbackDays: number, cutoff: number): number[] {
-  const recent = points.filter(point => point.t <= cutoff && point.t >= cutoff - 252 * DAY);
+  const recent = points.filter(point => point.t <= cutoff).slice(-(252 + lookbackDays));
   const changes: number[] = [];
   for (let i = lookbackDays; i < recent.length; i++) {
     changes.push(recent[i].value - recent[i - lookbackDays].value);
@@ -52,7 +52,7 @@ function factor(
 ) {
   const points = source ? cleanSeries(source, asOf) : [];
   const current = points.at(-1) ?? null;
-  const old20 = points.filter(point => point.t <= asOf - 20 * DAY).at(-1) ?? null;
+  const old20 = points.length >= 21 ? points.at(-21)! : null;
   const change20d = current && old20 ? current.value - old20.value : null;
   const history = rollingChanges(points, 20, asOf);
   const deviation = sampleStdDev(history);
@@ -98,8 +98,8 @@ export function computeMacroState(input: MacroSeriesSet, asOfInput: string | num
     : null;
   const vixPoints = cleanSeries(input.vix ?? { observations: [], stale: true }, asOf);
   const vixCurrent = vixPoints.at(-1)?.value ?? null;
-  const vixFiveDaysAgo = vixPoints.filter(point => point.t <= asOf - 5 * DAY).at(-1)?.value ?? null;
-  const vixShock = vixCurrent != null && (vixCurrent > 30
+  const vixFiveDaysAgo = vixPoints.length >= 6 ? vixPoints.at(-6)?.value ?? null : null;
+  const vixShock = input.vix?.stale || vixCurrent == null ? null : (vixCurrent > 30
     || (vixFiveDaysAgo != null && vixFiveDaysAgo > 0 && vixCurrent / vixFiveDaysAgo - 1 > 0.25));
   return {
     asOf: new Date(asOf).toISOString(),
