@@ -115,14 +115,14 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       assertCurrentDate(date);
       return cached("rotation:source:coingecko:stablecoins", ROTATION_CONFIG.source.freshTtlSeconds.stablecoins,
         `${base}/coins/markets?vs_currency=usd&category=stablecoins&order=market_cap_desc&per_page=${ROTATION_CONFIG.source.stablecoinPageSize}&page=1&sparkline=false`,
-        url => false as never, rows => "");
+        validNonEmptyMarketRows, rows => rows.reduce((best, row) =>
           row.last_updated && row.last_updated > best ? row.last_updated : best, ""));
     },
     fetchMemes(date?: string) {
       assertCurrentDate(date);
       return cached("rotation:source:coingecko:memes", ROTATION_CONFIG.source.freshTtlSeconds.memes,
         `${base}/coins/markets?vs_currency=usd&category=meme-token&order=market_cap_desc&per_page=${ROTATION_CONFIG.source.memeBasketSize}&page=1&sparkline=false`,
-        validMarketRows, rows => rows.reduce((best, row) =>
+        validNonEmptyMarketRows, rows => rows.reduce((best, row) =>
           row.last_updated && row.last_updated > best ? row.last_updated : best, ""));
     },
     async fetchHistory(coinId: string, asOfDate: string, days = ROTATION_CONFIG.windows.asiDays[2]) {
