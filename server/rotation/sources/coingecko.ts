@@ -137,22 +137,26 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
         validNonEmptyMarketRows, rows => rows.reduce((best, row) =>
           row.last_updated && row.last_updated > best ? row.last_updated : best, ""));
     },
-    async fetchHistory(coinId: string, asOfDate: string, days = ROTATION_CONFIG.windows.asiDays[2]) {
-      if (!/^[a-z0-9-]+$/i.test(coinId) || !/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)
+    async fetchHistory(coinId: string, asOfInput: string, days = ROTATION_CONFIG.windows.asiDays[2]) {
+      const requestedAsOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfInput)
+        ? Date.parse(`${asOfInput}T23:59:59.999Z`)
+        : Date.parse(asOfInput);
+      if (!/^[a-z0-9-]+$/i.test(coinId) || !Number.isFinite(requestedAsOf)
         || !Number.isInteger(days) || days < 1 || days > 730) {
         throw new Error("Invalid CoinGecko history request");
       }
-      const end = Date.parse(`${asOfDate}T23:59:59.999Z`);
+      const end = Math.min(requestedAsOf, now());
       if (!Number.isFinite(end) || end > now()) throw new Error("Historical query date must not be in the future");
       const from = end - days * 24 * 60 * 60 * 1000;
       const url = `${base}/coins/${encodeURIComponent(coinId)}/market_chart/range?vs_currency=usd&from=${Math.floor(from / 1000)}&to=${Math.floor(end / 1000)}`;
-      const key = `rotation:source:coingecko:history:${coinId}:${asOfDate}:${days}`;
+      const endKey = new Date(end).toISOString().replace(/[:.]/g, "-");
+      const key = `rotation:source:coingecko:history:${coinId}:${endKey}:${days}`;
       const valid = (value: unknown): value is { prices: [number, number][] } =>
         !!value && Array.isArray((value as any).prices)
         && (value as any).prices.every((point: any) => Array.isArray(point) && point.length >= 2
           && Number.isFinite(point[0]) && point[0] >= from && point[0] <= end
           && Number.isFinite(point[1]) && point[1] > 0);
-      return cached(key, ROTATION_CONFIG.source.freshTtlSeconds.history, url, valid, () => asOfDate);
+      return cached(key, ROTATION_CONFIG.source.freshTtlSeconds.history, url, valid, () => new Date(end).toISOString());
     },
   };
   const adapter: RotationSourceAdapter<CoinGeckoSourcePayload> & typeof methods = {

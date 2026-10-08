@@ -25,7 +25,7 @@ export const ROTATION_CONFIG = {
       "DX-Y.NYB", "^VIX", "^TNX", "^IRX", "GCUSD", "CLUSD",
       "^NDX", "NQ=F", "SPY", "QQQ", "TLT", "BIL",
     ],
-    fredSeries: ["WALCL", "WTREGEN", "RRPONTSYD", "DFF"],
+      fredSeries: ["WALCL", "WTREGEN", "RRPONTSYD", "DFF", "DGS2"],
     perpSymbols: ["BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK"],
     farsideBitcoinEtfUrl: "https://farside.co.uk/btc/",
   },
