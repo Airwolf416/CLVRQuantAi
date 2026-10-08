@@ -99,7 +99,7 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
   }
 
   const base = ROTATION_CONFIG.source.coinGeckoBaseUrl;
-  const adapter: RotationSourceAdapter<CoinGeckoSourcePayload> & {
+  const methods = {
     fetchMarkets(date?: string) {
       assertCurrentDate(date);
       const url = `${base}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${ROTATION_CONFIG.source.topUniverseSize}&page=1&sparkline=false`;
@@ -145,7 +145,9 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       return cached(key, ROTATION_CONFIG.source.freshTtlSeconds.history, url, valid, () => asOfDate);
     },
   };
-  adapter.fetch = async (date?: string): Promise<RotationSourceResult<CoinGeckoSourcePayload>> => {
+  const adapter: RotationSourceAdapter<CoinGeckoSourcePayload> & typeof methods = {
+    ...methods,
+    async fetch(date?: string): Promise<RotationSourceResult<CoinGeckoSourcePayload>> {
     const capture = async <T>(fetcher: () => Promise<RotationSourceResult<T>>): Promise<RotationSourceResult<T>> => {
       try { return await fetcher(); }
       catch (error) {
@@ -156,10 +158,10 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       }
     };
     const [markets, global, stablecoins, memes] = await Promise.all([
-      capture(() => adapter.fetchMarkets(date)),
-      capture(() => adapter.fetchGlobal(date)),
-      capture(() => adapter.fetchStablecoins(date)),
-      capture(() => adapter.fetchMemes(date)),
+      capture(() => methods.fetchMarkets(date)),
+      capture(() => methods.fetchGlobal(date)),
+      capture(() => methods.fetchStablecoins(date)),
+      capture(() => methods.fetchMemes(date)),
     ]);
     const data = { markets, global, stablecoins, memes };
     const timestamps = Object.values(data).flatMap(result => result.asOf ? [result.asOf] : []);
@@ -170,6 +172,7 @@ export function createCoinGeckoSource(deps: SourceDeps = {}) {
       stale: Object.values(data).some(result => result.stale || result.data == null),
       ...(errors.length ? { error: errors.join("; ") } : {}),
     };
+    },
   };
   return adapter;
 }
