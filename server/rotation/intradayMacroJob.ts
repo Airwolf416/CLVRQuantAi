@@ -97,5 +97,5 @@ export function startIntradayMacroScheduler(): void {
   scheduler = setInterval(() => { void tick(); }, MINUTE_MS);
   scheduler.unref?.();
   void tick();
-  console.log("[rotation] Intraday macro refresh scheduled every 15 minutes, 08:00–16:45 America/Toronto on US trading days.");
+  console.log("[rotation] Intraday macro refresh scheduled every 15 minutes, 08:00–17:00 America/Toronto on US trading days.");
 }

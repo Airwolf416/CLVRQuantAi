@@ -73,7 +73,7 @@ export function stabilizeAsiLabel(value: number | null, previousLabels: (string 
   const candidate = asiLabel(value);
   const previous = previousLabels.slice(0, 2);
   const consecutiveDays = previous[0] === candidate
-    ? 1 + (previous[1] === candidate ? 1 : 0) : 1;
+    ? (previous[1] === candidate ? 3 : 2) : 1;
   const confirmed = consecutiveDays >= 3 ? candidate : previousConfirmed;
   return { candidate, confirmed, consecutiveDays };
 }
@@ -331,8 +331,10 @@ export function computeCryptoRotation(input: {
   const dominanceRegime = dominanceChange30Pp == null ? "WARMING_UP"
     : dominanceChange30Pp > ROTATION_CONFIG.dominanceThresholdPp ? "STRONG_BTC"
     : dominanceChange30Pp < -ROTATION_CONFIG.dominanceThresholdPp ? "ALT_ROTATION" : "NEUTRAL";
-  const confirmedAltSeason = labelState.confirmed === "ALT_SEASON"
-    && (dominanceRegime === "ALT_ROTATION" || (dominanceRegime === "NEUTRAL" && dominanceChange30Pp! < 0));
+  const dominanceSupportsAlt = dominanceRegime === "ALT_ROTATION"
+    || (dominanceRegime === "NEUTRAL" && dominanceChange30Pp! < 0);
+  const highComposite = composite != null && composite > ROTATION_CONFIG.asiBands.altBiasMax;
+  const confirmedAltSeason = highComposite && labelState.confirmed === "ALT_SEASON" && dominanceSupportsAlt;
 
   const eth = cleanCoins.find(coin => coin.symbol.toLowerCase() === "eth" || coin.id === "ethereum");
   let ethBtc: any = { ratio: null, return30d: null, above50d: null, above200d: null, leadership: "UNAVAILABLE", narrowRally: false };
@@ -437,7 +439,7 @@ export function computeCryptoRotation(input: {
       usdtUsdcShare: stableDominance,
       stableShareChange30dPp: stableDominanceChange30d,
       altSeasonConfirmed: confirmedAltSeason,
-      divergence: labelState.confirmed === "ALT_SEASON" && !confirmedAltSeason,
+      divergence: highComposite && !dominanceSupportsAlt,
     },
     ethBtc,
     ladder,

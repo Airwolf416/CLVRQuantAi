@@ -77,8 +77,13 @@ test("ASI band is not confirmed until it appears in three consecutive daily snap
   const day3 = calculate([day2.asi.candidateLabel, day1.asi.candidateLabel], day2.asi.confirmedLabel);
   assert.equal(day1.asi.candidateLabel, "ALT_SEASON");
   assert.equal(day1.asi.confirmedLabel, null);
+  assert.equal(day1.asi.candidateConsecutiveDays, 1);
   assert.equal(day2.asi.confirmedLabel, null);
+  assert.equal(day2.asi.candidateConsecutiveDays, 2);
   assert.equal(day3.asi.confirmedLabel, "ALT_SEASON");
+  assert.equal(day3.asi.candidateConsecutiveDays, 3);
+  assert.equal(day1.dominance.altSeasonConfirmed, false);
+  assert.equal(day1.dominance.divergence, true);
 });
 
 test("sentiment uses weighted empirical percentiles, inverts stable dominance, and reweights available factors", () => {
