@@ -221,6 +221,7 @@ async function collect(date: string): Promise<void> {
   const sentimentHistory: SentimentComponentHistory = Object.fromEntries(sentimentKeys.map(key => [
     key,
     historical.flatMap(row => {
+      if (row.market_state?.crypto?.sources?.coinGecko?.stale === true) return [];
       if (key === "fearGreed" && row.market_state?.crypto?.sources?.fearGreed?.stale === true) return [];
       const value = row.market_state?.crypto?.currentSentiment?.[key];
       return typeof value === "number" && Number.isFinite(value) ? [value] : [];
@@ -259,7 +260,8 @@ async function collect(date: string): Promise<void> {
   // and excess-return basket, without admitting them into ASI membership.
   const cryptoState: Record<string, any> = {
     ...cryptoCalculation,
-    status: historyFailures.length ? (cryptoCalculation.asi.composite != null ? "partial" : "warming_up")
+    status: historyFailures.length || markets.stale || global.stale || stablecoins.stale
+      ? (cryptoCalculation.asi.composite != null ? "partial" : "warming_up")
       : cryptoCalculation.asi.composite != null ? "ready" : "warming_up",
     engineVersion: "phase2-v1",
     historyFailures: historyFailures.length,

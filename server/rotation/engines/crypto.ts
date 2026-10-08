@@ -191,7 +191,7 @@ function computeLadder(
   return {
     rungs,
     slope,
-    appetite: slope == null ? "UNAVAILABLE" : slope > 0 ? "EXPANDING_RISK" : "FLIGHT_TO_SAFETY",
+    appetite: slope == null ? "UNAVAILABLE" : slope > 0 ? "EXPANDING_RISK" : slope < 0 ? "FLIGHT_TO_SAFETY" : "MIXED",
     leadership: leader ? { rung: leader.name, riskAdjustedReturn: leader.riskAdjustedReturn } : null,
     rotationDepthFromBtc: rotationDepth,
   };
@@ -371,10 +371,18 @@ export function computeCryptoRotation(input: {
     .filter(row => Date.parse(row.timestamp) <= asOf && Number.isFinite(Date.parse(row.timestamp)))
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
   const fundingLast7 = fundingRows.slice(-7);
-  const fundingOiWeighted7d = fundingLast7.length === 7 && fundingLast7.every(row => row.fundingOiWeighted != null)
+  const fundingOiWeighted7d = fundingLast7.length === 7
+    && asOf - Date.parse(fundingLast7.at(-1)!.timestamp) <= 2 * DAY
+    && asOf - Date.parse(fundingLast7[0].timestamp) <= 8 * DAY
+    && fundingLast7.every(row => row.fundingOiWeighted != null)
     ? fundingLast7.reduce((sum, row) => sum + row.fundingOiWeighted!, 0) / 7 : null;
   const oiCurrent = fundingRows.at(-1)?.aggregateOi ?? null;
-  const oi30 = fundingRows.length >= 31 ? fundingRows.at(-31)?.aggregateOi ?? null : null;
+  const oiTarget = fundingRows.length ? Date.parse(fundingRows.at(-1)!.timestamp) - 30 * DAY : null;
+  const oiBaseline = oiTarget == null ? null
+    : fundingRows.filter(row => Date.parse(row.timestamp) <= oiTarget).at(-1) ?? null;
+  const oi30 = oiBaseline && oiTarget != null
+    && oiTarget - Date.parse(oiBaseline.timestamp) <= 2 * DAY
+    ? oiBaseline.aggregateOi : null;
   const aggregateOiChange30d = oiCurrent != null && oi30 != null && oi30 > 0 ? oiCurrent / oi30 - 1 : null;
   const memeIds = new Set(input.memeIds ?? []);
   const memeSeries = [...new Map((input.memeSeries ?? []).map(row => [row.id, row])).values()];
