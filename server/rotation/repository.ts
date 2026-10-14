@@ -49,6 +49,40 @@ export async function getLatestRotationSnapshot(): Promise<any | null> {
   return rows[0] ?? null;
 }
 
+export async function getLatestRotationDashboardState(): Promise<{
+  crypto: any | null;
+  macro: any | null;
+  cryptoSnapshotDate: string | null;
+  cryptoAsOf: string | null;
+  macroSnapshotDate: string | null;
+  macroAsOf: string | null;
+}> {
+  const [dailyResult, macroResult] = await Promise.all([
+    pool.query(
+      `SELECT snapshot_date, as_of, market_state->'crypto' AS crypto
+       FROM rotation_snapshots
+       WHERE granularity = 'daily'
+       ORDER BY as_of DESC LIMIT 1`,
+    ),
+    pool.query(
+      `SELECT snapshot_date, as_of, market_state->'macro' AS macro
+       FROM rotation_snapshots
+       WHERE market_state ? 'macro'
+       ORDER BY as_of DESC LIMIT 1`,
+    ),
+  ]);
+  const daily = dailyResult.rows[0] ?? null;
+  const macroRow = macroResult.rows[0] ?? null;
+  return {
+    crypto: daily?.crypto ?? null,
+    macro: macroRow?.macro ?? null,
+    cryptoSnapshotDate: daily?.snapshot_date ?? null,
+    cryptoAsOf: daily?.as_of ?? null,
+    macroSnapshotDate: macroRow?.snapshot_date ?? null,
+    macroAsOf: macroRow?.as_of ?? null,
+  };
+}
+
 export async function getDailyRotationSnapshot(snapshotDate: string): Promise<any | null> {
   const { rows } = await pool.query(
     `SELECT id, snapshot_date, as_of, market_state FROM rotation_snapshots

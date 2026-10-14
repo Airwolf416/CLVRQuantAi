@@ -8750,6 +8750,24 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
+  app.get("/api/rotation-brain/latest", async (_req, res) => {
+    try {
+      const { getLatestRotationDashboardState } = await import("./rotation/repository");
+      const latest = await getLatestRotationDashboardState();
+      const cryptoStatus = latest.crypto?.status ?? "warming_up";
+      const macroStatus = latest.macro?.status ?? "warming_up";
+      const statuses = [cryptoStatus, macroStatus];
+      const status = statuses.every(value => value === "ready") ? "ready"
+        : statuses.every(value => value === "warming_up" || value === "unavailable") ? "warming_up"
+        : "partial";
+      res.set("Cache-Control", "no-store");
+      res.json({ ...latest, status });
+    } catch (error) {
+      console.error("[rotation-brain] latest state lookup failed:", error);
+      res.status(500).json({ error: "Could not load Rotation Brain data" });
+    }
+  });
+
   app.post("/api/admin/weekly-update", async (req, res) => {
     try {
       const uid = (req.session as any)?.userId;

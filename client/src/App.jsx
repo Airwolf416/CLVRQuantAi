@@ -9,7 +9,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo, createContext, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SiInstagram, SiTiktok } from "react-icons/si";
-import { Menu, X, LogOut, Languages, QrCode, ScanLine } from "lucide-react";
+import { Menu, X, LogOut, Languages, QrCode, ScanLine, Activity } from "lucide-react";
 import ChartAITab from "./tabs/ChartAITab.jsx";
 import CheckoutPage from "./pages/Checkout.jsx";
 import PaymentSuccessPage from "./pages/PaymentSuccess.jsx";
@@ -23,6 +23,7 @@ import QRScanner from "./QRScanner";
 import { accessCodeFeedback, ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedback";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
+import RotationBrainPage from "./components/rotation-brain/RotationBrainPage.jsx";
 import InsiderTab from "./tabs/InsiderTab";
 import PositionMonitor from "./PositionMonitor";
 import KronosPanel from "./components/KronosPanel";
@@ -3751,15 +3752,37 @@ function Dashboard({user,setUser,onShowAuth}){
   const {isMobile,isTablet,isDesktop}=useWindowSize();
   const sidebarW=isDesktop?180:isTablet?64:0;
   const [tab,setTab]=useState("radar");
+  const [rotationBrainData,setRotationBrainData]=useState(null);
+  const [rotationBrainLoading,setRotationBrainLoading]=useState(false);
+  const [rotationBrainError,setRotationBrainError]=useState("");
+  const refreshRotationBrain=useCallback(async()=>{
+    setRotationBrainLoading(true);
+    try {
+      const response=await apiFetch("/api/rotation-brain/latest",{cache:"no-store"});
+      if(!response.ok) throw new Error("Rotation Brain data could not be loaded.");
+      setRotationBrainData(await response.json());
+      setRotationBrainError("");
+    } catch(error) {
+      setRotationBrainError(error?.message||"Rotation Brain data could not be loaded.");
+    } finally {
+      setRotationBrainLoading(false);
+    }
+  },[]);
+  useEffect(()=>{
+    if(tab!=="rotation")return;
+    void refreshRotationBrain();
+    const timer=setInterval(()=>void refreshRotationBrain(),60_000);
+    return()=>clearInterval(timer);
+  },[tab,refreshRotationBrain]);
   const expireSession = useCallback(() => {
-    try { sessionStorage.setItem("clvr_return_tab", ["radar","markets","macro","brief","signals","ai","account"].includes(tab) ? tab : "radar"); } catch {}
+    try { sessionStorage.setItem("clvr_return_tab", ["radar","markets","macro","rotation","brief","signals","ai","account"].includes(tab) ? tab : "radar"); } catch {}
     setUser(null);
     onShowAuth();
   }, [tab, setUser, onShowAuth]);
   useEffect(() => {
     try {
       const returnTab = sessionStorage.getItem("clvr_return_tab");
-      if (returnTab && ["radar","markets","macro","brief","signals","ai","account"].includes(returnTab)) {
+      if (returnTab && ["radar","markets","macro","rotation","brief","signals","ai","account"].includes(returnTab)) {
         setTab(returnTab); sessionStorage.removeItem("clvr_return_tab");
       }
     } catch {}
@@ -5044,11 +5067,12 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
   // Owner-only diagnostic gate: even stricter than isAdmin. Used for the
   // Telegram autoposter status banner so no other admin/staff sees it.
   const isOwnerOnly=(user?.email||"").toLowerCase()==="mikeclaver@gmail.com";
-  const GUEST_TABS=["radar","prices","macro","about","help"];
+  const GUEST_TABS=["radar","prices","macro","rotation","about","help"];
   const NAV_ALL=[
     {k:"radar",icon:"📡",label:i18n.radar},
     {k:"prices",icon:"💹",label:i18n.markets},
     {k:"macro",icon:"🏦",label:i18n.macro},
+    {k:"rotation",icon:<Activity size={14}/>,label:"ROTATION"},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"earnings",icon:"📅",label:"EARNINGS"},
     {k:"signals",icon:"⚡",label:i18n.signals},
@@ -6159,6 +6183,13 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
 
         {/* ══ PRICES ══ */}
         {tab==="prices"&&<MarketTab cryptoPrices={cryptoPrices} equityPrices={equityPrices} metalPrices={metalPrices} forexPrices={forexPrices} flashes={flashes}/>}
+
+        {tab==="rotation"&&<RotationBrainPage
+          data={rotationBrainData}
+          loading={rotationBrainLoading}
+          error={rotationBrainError}
+          onRetry={()=>void refreshRotationBrain()}
+        />}
 
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>
