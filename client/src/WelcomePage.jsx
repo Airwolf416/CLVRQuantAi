@@ -330,6 +330,8 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const tiers = usePricing();
   const [mode, setMode] = useState("welcome");
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false, referralCode: "" });
+  const [showSigninPassword, setShowSigninPassword] = useState(false);
+  const [showVerifyPassword, setShowVerifyPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -687,15 +689,21 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
         /* Password re-entry to sign in (we know the email) */
         <div style={{ animation: "fadeUp .4s ease 1s both", width: "100%", maxWidth: 340 }}>
           <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted2, letterSpacing: "0.12em", marginBottom: 12, textAlign: "center" }}>ENTER YOUR PASSWORD TO CONTINUE</div>
-          <input
-            type="password"
-            placeholder="Your password"
-            value={verifyPassword}
-            onChange={e => { setVerifyPassword(e.target.value); setError(""); }}
-            onKeyDown={e => e.key === "Enter" && handleVerifySignIn()}
-            autoFocus
-            style={{ width: "100%", background: C.inputBg, border: `1px solid ${error ? "#f87171" : C.border}`, borderRadius: 6, padding: "13px 14px", color: C.white, fontSize: 14, fontFamily: SANS, boxSizing: "border-box", outline: "none", marginBottom: 10 }}
-          />
+          <div style={{ position: "relative", marginBottom: 10 }}>
+            <input
+              type={showVerifyPassword ? "text" : "password"}
+              placeholder="Your password"
+              value={verifyPassword}
+              onChange={e => { setVerifyPassword(e.target.value); setError(""); }}
+              onKeyDown={e => e.key === "Enter" && handleVerifySignIn()}
+              autoFocus
+              style={{ width: "100%", background: C.inputBg, border: `1px solid ${error ? "#f87171" : C.border}`, borderRadius: 6, padding: "13px 62px 13px 14px", color: C.white, fontSize: 14, fontFamily: SANS, boxSizing: "border-box", outline: "none" }}
+            />
+            <button type="button" aria-label={showVerifyPassword ? "Hide password" : "Show password"} aria-pressed={showVerifyPassword} onClick={() => setShowVerifyPassword(value => !value)}
+              style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", border: 0, background: "transparent", color: C.gold, fontFamily: MONO, fontSize: 10, cursor: "pointer", padding: 6 }}>
+              {showVerifyPassword ? "Hide" : "Show"}
+            </button>
+          </div>
           {error && <div style={{ fontFamily: MONO, fontSize: 11, color: "#f87171", marginBottom: 10, textAlign: "center" }}>{error}</div>}
           <button
             onClick={handleVerifySignIn}
@@ -811,16 +819,22 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
                 </div>
                 <div>
                   <label style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 9, color: C.muted, marginBottom: 4, display: "block", letterSpacing: "0.12em" }}>PASSWORD</label>
-                  <input
-                    data-testid="input-cancelled-password"
-                    type="password"
-                    autoComplete="current-password"
-                    value={form.password}
-                    onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                    placeholder="Your password"
-                    onKeyDown={e => e.key === "Enter" && handleSignIn()}
-                    style={{ width: "100%", background: "#080d18", border: `1px solid ${C.border}`, borderRadius: 6, padding: "11px 12px", color: C.white, fontSize: 13, fontFamily: SANS, outline: "none", WebkitAppearance: "none" }}
-                  />
+                  <div style={{ position: "relative" }}>
+                    <input
+                      data-testid="input-cancelled-password"
+                      type={showSigninPassword ? "text" : "password"}
+                      autoComplete="current-password"
+                      value={form.password}
+                      onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                      placeholder="Your password"
+                      onKeyDown={e => e.key === "Enter" && handleSignIn()}
+                      style={{ width: "100%", background: "#080d18", border: `1px solid ${C.border}`, borderRadius: 6, padding: "11px 58px 11px 12px", color: C.white, fontSize: 13, fontFamily: SANS, outline: "none", WebkitAppearance: "none" }}
+                    />
+                    <button type="button" aria-label={showSigninPassword ? "Hide password" : "Show password"} aria-pressed={showSigninPassword} onClick={() => setShowSigninPassword(value => !value)}
+                      style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", border: 0, background: "transparent", color: C.gold, fontFamily: MONO, fontSize: 10, cursor: "pointer", padding: 6 }}>
+                      {showSigninPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
                 </div>
                 {error && <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: C.red, padding: "7px 10px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
                 <button
@@ -1174,8 +1188,14 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
             </div>
             <div>
               <label style={{ fontFamily: MONO, fontSize: 9, color: C.muted, marginBottom: 5, display: "block", letterSpacing: "0.12em" }}>PASSWORD</label>
-              <input data-testid="input-signin-password" type="password" value={form.password} onChange={e => set("password", e.target.value)} placeholder="Your password"
-                style={inputStyle} onKeyDown={e => e.key === "Enter" && handleSignIn()} />
+              <div style={{ position: "relative" }}>
+                <input data-testid="input-signin-password" type={showSigninPassword ? "text" : "password"} value={form.password} onChange={e => set("password", e.target.value)} placeholder="Your password"
+                  style={{ ...inputStyle, paddingRight: 64 }} onKeyDown={e => e.key === "Enter" && handleSignIn()} />
+                <button type="button" aria-label={showSigninPassword ? "Hide password" : "Show password"} aria-pressed={showSigninPassword} onClick={() => setShowSigninPassword(value => !value)}
+                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", border: 0, background: "transparent", color: C.gold, fontFamily: MONO, fontSize: 10, cursor: "pointer", padding: 6 }}>
+                  {showSigninPassword ? "Hide" : "Show"}
+                </button>
+              </div>
             </div>
 
             {error && error !== "__network__" && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
