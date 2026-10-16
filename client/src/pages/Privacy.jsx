@@ -230,20 +230,12 @@ export default function PrivacyPage() {
           Privacy Policy
         </h1>
 
-        <div
-          style={{
-            fontFamily: MONO,
-            fontSize: 12,
-            letterSpacing: "0.08em",
-            color: C.muted,
-            marginTop: 18,
-            paddingBottom: 28,
-            borderBottom: `1px solid ${C.border}`,
-          }}
+        <p
+          style={{ marginTop: 18, marginBottom: 28 }}
           data-testid="text-last-updated"
         >
-          Effective date: October 16, 2026 · Last updated: October 16, 2026
-        </div>
+          Effective date: October 16, 2026. Last updated: October 16, 2026.
+        </p>
 
         <div style={{ marginTop: 8 }}>
           {SECTIONS.map((s) => (
