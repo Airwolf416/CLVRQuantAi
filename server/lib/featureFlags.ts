@@ -117,7 +117,7 @@ export function convictionCapEnabled(): boolean {
 
 /**
  * Phase A — gate the user-facing Journal chips. Default false: the Journal
- * page renders a "coming soon" placeholder until we've spot-checked 30
+ * page renders a disabled-state message until we've spot-checked 30
  * tagged signals manually for accuracy (per session-plan cadence).
  */
 export function ptaJournalDisplayEnabled(): boolean {

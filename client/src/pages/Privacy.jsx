@@ -27,9 +27,11 @@ const SECTIONS = [
     n: 2,
     title: "Information We Collect",
     bullets: [
-      "Account information: name, email address, and credentials you provide when registering.",
-      "Payment information: processed by our payment processor (Stripe). We receive limited billing details (such as subscription status and the last four digits of your card) but do NOT collect or store full card numbers.",
-      "Usage and content data: tools you use, settings, watchlists/baskets, prompts and queries you submit, and interactions with AI features.",
+      "Account information: name, email address, password credentials stored as a protected hash, and account or subscription status.",
+      "Payment information: processed by Stripe. We receive billing and subscription status information, but we do not store full payment-card numbers; Stripe handles card entry and processing.",
+      "Usage and preferences: pages and features used, market-data preferences, watchlists, baskets, alerts, settings, and technical logs needed to operate and protect the Service.",
+      "Phantom wallet information: if you connect a wallet, its public address and view-only balance or position data may be read to display your portfolio. CLVRQuant does not request or store wallet seed phrases or private keys and does not initiate transactions.",
+      "AI content: prompts and queries you submit to AI features and the responses generated for you.",
       "Booking information: when you schedule a 1-on-1 session, the date, time, and time zone you select, and related scheduling details.",
       "Device and log data: IP address, browser type, device identifiers, and access timestamps collected automatically.",
       `Communications: messages you send to ${SUPPORT_EMAIL}.`,
@@ -73,9 +75,9 @@ const SECTIONS = [
   },
   {
     n: 7,
-    title: "Service Providers and Third Parties",
+    title: "Third-Party Services",
     body: [
-      "We share information with vendors who process it on our behalf, under contractual confidentiality and data-protection obligations, including: Stripe (payments), Resend (transactional email), Railway (hosting and database), Google (calendar/scheduling), and Anthropic (AI processing). Market data is sourced from third parties including Finnhub, Binance, Hyperliquid, CryptoPanic, and RapidAPI. We do not sell your personal information.",
+      "We may share information with service providers to operate features you use, including Stripe (payments), Resend (transactional email), Railway (hosting and database), Google (calendar/scheduling), and Anthropic (AI processing). Market data is sourced from third parties including Finnhub, Binance, Hyperliquid, CryptoPanic, Yahoo Finance, and RapidAPI. We do not sell your personal information. The Service does not currently use third-party analytics or advertising trackers.",
     ],
   },
   {
@@ -89,14 +91,14 @@ const SECTIONS = [
     n: 9,
     title: "Cookies and Tracking",
     body: [
-      "We use cookies and similar technologies for authentication, session management, security, and to remember preferences. You can control cookies through your browser settings, though some features may not function without them.",
+      "Essential cookies and local storage support sign-in sessions, security, and saved preferences. The Service does not currently load third-party advertising or analytics trackers. A consent choice is stored locally so the banner does not reappear; declining leaves non-essential tracking disabled. Blocking essential cookies may prevent sign-in or other features from working.",
     ],
   },
   {
     n: 10,
     title: "Data Retention",
     body: [
-      `We retain personal information for as long as your account is active or as needed to provide the Service, comply with legal obligations and resolve disputes. Specific retention schedule: ${DATA_RETENTION_PERIOD}. Contact us to request deletion, subject to applicable legal requirements.`,
+      DATA_RETENTION_PERIOD,
     ],
   },
   {
@@ -108,7 +110,7 @@ const SECTIONS = [
   },
   {
     n: 12,
-    title: "Your Rights and Choices",
+    title: "Your Rights",
     body: [
       `Depending on your location (including under Canada's PIPEDA, the EU/UK GDPR, and the California CCPA/CPRA), you may have rights to access, correct, delete, export, or restrict processing of your personal information, and to withdraw consent. To exercise these rights, or to request account and data deletion, email ${SUPPORT_EMAIL}. We will respond as required by applicable law.`,
     ],
@@ -240,7 +242,7 @@ export default function PrivacyPage() {
           }}
           data-testid="text-last-updated"
         >
-          Last Updated: June 8, 2026
+          Effective date: October 16, 2026 · Last updated: October 16, 2026
         </div>
 
         <div style={{ marginTop: 8 }}>

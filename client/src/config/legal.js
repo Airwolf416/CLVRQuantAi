@@ -1,6 +1,5 @@
-// Owner must provide the registered legal entity and actual retention schedule.
-// Do not replace these markers with a trading name or guessed duration.
-export const LEGAL_ENTITY_NAME = "TODO_OWNER_LEGAL_ENTITY_NAME";
-export const DATA_RETENTION_PERIOD = "TODO_OWNER_DATA_RETENTION_PERIOD";
+export const LEGAL_ENTITY_NAME = "Mike Claver, operating as CLVRQuant";
+export const DATA_RETENTION_PERIOD =
+  "We retain account information while an account is active and as reasonably needed afterward for service operation, backups, dispute resolution, fraud prevention, and legal or accounting obligations. When deletion is requested, we delete or de-identify information within a reasonable operational period, except records we must retain by law.";
 // Verified in existing support UI and outgoing transactional emails.
-export const SUPPORT_EMAIL = "support@clvrquantai.com";
+export const SUPPORT_EMAIL = "Support@CLVRQuantAI.com";

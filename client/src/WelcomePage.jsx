@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch } from "./lib/apiClient";
 import { LEGAL_ENTITY_NAME } from "./config/legal";
-import { TERMS_SECTIONS } from "./pages/Terms";
 import { TIER_ORDER, usePricing, annualDiscount, formatPrice, BRIEF_RULE, SIGNAL_RULE } from "./config/pricing.js";
 import PasswordStrength from "./components/PasswordStrength.jsx";
 // Auth/reset/verification endpoints are public by design, but use the same
@@ -336,7 +335,6 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showLegal, setShowLegal] = useState(false);
-  const [showTerms, setShowTerms] = useState(false);
   const [showSpam, setShowSpam] = useState(false);
   const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
   const [turnstileToken, setTurnstileToken] = useState("");
@@ -1083,13 +1081,6 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
             </div>
           </div>
 
-          <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 16, fontFamily: MONO, fontSize: 9, letterSpacing: "0.08em" }}>
-            <a data-testid="link-footer-terms" href="/terms" style={{ color: C.gold, textDecoration: "none" }}>Terms</a>
-            <span style={{ color: C.muted }}>·</span>
-            <a data-testid="link-footer-privacy" href="/privacy" style={{ color: C.gold, textDecoration: "none" }}>Privacy</a>
-          </div>
-
-          <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 8, color: C.muted }}>© 2026 CLVRQuant · Mike Claver · Not a registered financial advisor</div>
         </div>
       )}
 
@@ -1143,14 +1134,17 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
             </div>
 
             <div>
-              <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
-                <input data-testid="checkbox-agree-terms" type="checkbox" checked={form.agreeTerms} onChange={e => set("agreeTerms", e.target.checked)}
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <input aria-label="Agree to the Terms of Service and Privacy Policy" data-testid="checkbox-agree-terms" type="checkbox" checked={form.agreeTerms} onChange={e => set("agreeTerms", e.target.checked)}
                   style={{ marginTop: 2, accentColor: C.gold, width: 16, height: 16, flexShrink: 0 }} />
                 <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted2, lineHeight: 1.6 }}>
-                  I understand CLVRQuant is for <strong style={{ color: C.white }}>education/information only</strong>, not financial advice. I accept all risks.
+                  I agree to the Terms of Service and Privacy Policy. CLVRQuant is for information and education only, not financial advice.
                 </span>
-              </label>
-              <button type="button" data-testid="link-signup-terms" onClick={() => setShowTerms(true)} style={{ color: C.gold, cursor: "pointer", background: "none", border: 0, padding: "4px 0 0 26px", fontFamily: MONO, fontSize: 10 }}>Terms →</button>
+              </div>
+              <div style={{ display: "flex", gap: 12, padding: "5px 0 0 26px", fontFamily: MONO, fontSize: 10 }}>
+                <a data-testid="link-signup-terms" href="/terms" style={{ color: C.gold }}>Terms of Service</a>
+                <a data-testid="link-signup-privacy" href="/privacy" style={{ color: C.gold }}>Privacy Policy</a>
+              </div>
             </div>
 
             {turnstileSiteKey && <SignupTurnstile siteKey={turnstileSiteKey} onToken={onTurnstileToken} onError={onTurnstileError} />}
@@ -1341,20 +1335,6 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
           }} style={btnGold}>
             Enter CLVRQuant →
           </button>
-        </div>
-      )}
-
-      {showTerms && (
-        <div role="dialog" aria-modal="true" aria-label="Terms of Service" onClick={() => setShowTerms(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(8px)" }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: 24, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto" }}>
-            <h2 style={{ fontFamily: SERIF, color: C.gold }}>Terms of Service</h2>
-            <p style={{ fontFamily: SANS, fontSize: 12, color: C.muted2 }}>CLVRQuant is operated by {LEGAL_ENTITY_NAME}.</p>
-            {TERMS_SECTIONS.map(([title, body], i) => <section key={title} style={{ marginBottom: 18 }}>
-              <strong style={{ fontFamily: MONO, fontSize: 11, color: C.gold }}>{i + 1}. {title}</strong>
-              <p style={{ fontFamily: SANS, fontSize: 12, color: C.muted2, lineHeight: 1.8 }}>{body}</p>
-            </section>)}
-            <button type="button" onClick={() => setShowTerms(false)} style={btnGhost}>Close</button>
-          </div>
         </div>
       )}
 

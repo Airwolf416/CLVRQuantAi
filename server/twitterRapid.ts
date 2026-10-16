@@ -114,6 +114,6 @@ export async function getRapidTwitterPosts(): Promise<TwitterPost[]> {
   }
 }
 
-// TODO: Reddit feed - needs RapidAPI Reddit endpoint (e.g. reddit34.p.rapidapi.com).
+// Reddit is not currently configured; the social feed uses the available RapidAPI endpoint.
 // When the user subscribes, add a parallel fetcher here returning the same shape
 // with a "reddit" source tag so the news feed can include it.

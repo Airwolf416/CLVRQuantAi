@@ -40,6 +40,48 @@ import { useTwitterIntelligence, TwitterSentimentBadge, TwitterMarketModeStrip, 
 import { playMarketBell, unlockAudio, unlockSpeech, getET as getBellET, getNYSEStatus as getBellNYSEStatus } from "./utils/marketBell.js";
 import { macroEventDate, macroEventInstant, selectUpcomingMacroEvents, etDateParts, filterMacroCalendar, createMacroLoader } from "./utils/macroCalendar.js";
 import { DataBusProvider, DataBusCtx, useDataBus, mapRegimeLabel, regimeMultiplier, fearGreedColor } from "./context/DataBusContext.jsx";
+
+function LegalFooter() {
+  return (
+    <footer aria-label="Legal and support links" style={{ background: "#050709", color: "#7d8aa6", borderTop: "1px solid rgba(201,168,76,.16)", padding: "18px 16px calc(18px + env(safe-area-inset-bottom, 0px))", textAlign: "center", fontFamily: "'IBM Plex Mono',monospace", fontSize: 10 }}>
+      <nav aria-label="Legal links" style={{ display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap" }}>
+        <a href="/privacy" data-testid="site-footer-privacy" style={{ color: "#e8c96d" }}>Privacy Policy</a>
+        <a href="/terms" data-testid="site-footer-terms" style={{ color: "#e8c96d" }}>Terms of Service</a>
+        <a href="mailto:Support@CLVRQuantAI.com" style={{ color: "#e8c96d" }}>Contact</a>
+      </nav>
+      <div style={{ marginTop: 10 }}>© 2026 CLVRQuant · Educational and informational purposes only</div>
+    </footer>
+  );
+}
+
+function CookieConsentBanner() {
+  const [choice, setChoice] = useState(() => {
+    try { return localStorage.getItem("clvr_cookie_consent"); } catch { return null; }
+  });
+  useEffect(() => {
+    window.__clvrCookieConsent = choice === "accepted" ? "accepted" : choice === "declined" ? "declined" : "unset";
+    window.dispatchEvent(new CustomEvent("clvr-cookie-consent", { detail: { choice: window.__clvrCookieConsent } }));
+  }, [choice]);
+  if (choice === "accepted" || choice === "declined") return null;
+  const decide = (value) => {
+    try { localStorage.setItem("clvr_cookie_consent", value); } catch {}
+    setChoice(value);
+  };
+  return (
+    <aside role="dialog" aria-label="Cookie preferences" data-testid="cookie-consent-banner" style={{ position: "fixed", zIndex: 1200, left: 16, right: 16, bottom: "calc(16px + env(safe-area-inset-bottom, 0px))", maxWidth: 760, margin: "0 auto", background: "#0c1220", color: "#c8d4ee", border: "1px solid rgba(201,168,76,.35)", borderRadius: 10, boxShadow: "0 16px 50px rgba(0,0,0,.55)", padding: "16px 18px", fontFamily: "'Barlow',system-ui,sans-serif" }}>
+      <div style={{ fontWeight: 700, color: "#e8c96d", marginBottom: 5 }}>Cookie preferences</div>
+      <p style={{ fontSize: 13, lineHeight: 1.55, margin: "0 0 12px" }}>We use essential storage for sign-in, security, and preferences. We do not currently load non-essential advertising or analytics trackers. You can accept or decline non-essential tracking; declining keeps it disabled. <a href="/privacy" style={{ color: "#e8c96d" }}>Privacy Policy</a></p>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+        <button type="button" data-testid="cookie-decline" onClick={() => decide("declined")} style={{ background: "transparent", border: "1px solid #34415a", color: "#c8d4ee", borderRadius: 6, padding: "8px 14px", cursor: "pointer" }}>Decline</button>
+        <button type="button" data-testid="cookie-accept" onClick={() => decide("accepted")} style={{ background: "#c9a84c", border: 0, color: "#050709", borderRadius: 6, padding: "8px 14px", fontWeight: 700, cursor: "pointer" }}>Accept</button>
+      </div>
+    </aside>
+  );
+}
+
+function SiteShell({ children }) {
+  return <>{children}<LegalFooter/><CookieConsentBanner/></>;
+}
 import { apiFetch, readAuthSession } from "./lib/apiClient";
 import SessionSecurity from "./components/SessionSecurity.jsx";
 import { publishSessionEvent } from "./components/SessionSecurity.jsx";
@@ -2055,7 +2097,7 @@ function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
 // ─── Module 3 T05 — Signals Diagnosis Panel ─────────────────────────────────
 // Renders the per-signal post-trade diagnosis chip-table when
 // VITE_PTA_JOURNAL_DISPLAY_ENABLED is "1". Otherwise short-circuits to a
-// "coming soon" card so the nav entry never 404s while the tagger warms up.
+// clear disabled-state card so users know diagnoses are not currently shown.
 function SignalsDiagnosisPanel(){
   const{C}=useContext(ThemeCtx);
   const displayEnabled=String(import.meta.env.VITE_PTA_JOURNAL_DISPLAY_ENABLED||"").trim()==="1";
@@ -2077,8 +2119,8 @@ function SignalsDiagnosisPanel(){
   if(!displayEnabled&&!data.displayEnabled){
     return(
       <div data-testid="diagnosis-coming-soon" style={{margin:"12px 0 18px",padding:"14px 16px",border:`1px solid ${C.muted2}33`,borderRadius:10,background:`${C.muted2}10`}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:4}}>Signal Diagnoses — coming soon</div>
-        <div style={{fontSize:12,color:C.muted2,lineHeight:1.5}}>Every closed signal is being tagged in the background. Diagnoses will appear here once we've spot-checked the first batch for accuracy.</div>
+        <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:4}}>Signal diagnoses are currently disabled</div>
+        <div style={{fontSize:12,color:C.muted2,lineHeight:1.5}}>Closed signals continue to be recorded. Diagnosis summaries will appear here after the accuracy review is complete.</div>
       </div>
     );
   }
@@ -3543,10 +3585,10 @@ function ConciergeWidget({ user, C, isMobile, MONO, SERIF, openSignal, bookingSi
 export default function App(){
   // ── Path-based routing for embedded Stripe Checkout (no router dependency) ──
   const _path = typeof window !== "undefined" ? window.location.pathname : "/";
-  if (_path === "/checkout" || _path.startsWith("/checkout?")) return <CheckoutPage/>;
-  if (_path === "/payment-success" || _path.startsWith("/payment-success?")) return <PaymentSuccessPage/>;
-  if (_path === "/privacy" || _path.startsWith("/privacy?")) return <PrivacyPage/>;
-  if (_path === "/terms" || _path.startsWith("/terms?")) return <TermsPage/>;
+  if (_path === "/checkout" || _path.startsWith("/checkout?")) return <SiteShell><CheckoutPage/></SiteShell>;
+  if (_path === "/payment-success" || _path.startsWith("/payment-success?")) return <SiteShell><PaymentSuccessPage/></SiteShell>;
+  if (_path === "/privacy" || _path.startsWith("/privacy?")) return <SiteShell><PrivacyPage/></SiteShell>;
+  if (_path === "/terms" || _path.startsWith("/terms?")) return <SiteShell><TermsPage/></SiteShell>;
 
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
@@ -3590,48 +3632,48 @@ export default function App(){
 
   // Brief splash while checking session
   if(!sessionChecked){
-    return(
+    return <SiteShell>
       <div style={{background:isDark?"#050709":LIGHT_C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
         <div style={{fontFamily:"'Playfair Display',Georgia,serif",fontSize:28,fontWeight:900,color:"#c9a84c",letterSpacing:"-0.02em"}}>CLVRQuant</div>
         <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isDark?"#2a3650":LIGHT_C.muted,letterSpacing:"0.25em"}}>LOADING...</div>
       </div>
-    );
+    </SiteShell>;
   }
 
   if(sessionError){
-    return(
+    return <SiteShell>
       <main role="main" aria-labelledby="account-status-title" style={{background:isDark?DARK_C.bg:LIGHT_C.bg,color:isDark?DARK_C.text:LIGHT_C.text,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24,textAlign:"center",fontFamily:SANS}}>
         <h1 id="account-status-title" style={{fontFamily:SERIF,fontSize:28,margin:0}}>Account status unavailable</h1>
         <p role="alert" style={{maxWidth:440,margin:0}}>We couldn’t verify your session right now. Your sign-in has not been cleared. Please try again.</p>
         <button type="button" onClick={()=>{setSessionChecked(false);setSessionError(false);setSessionRetry(n=>n+1);}} style={{background:isDark?DARK_C.gold:LIGHT_C.gold,color:isDark?DARK_C.bg:"#fff",border:0,borderRadius:8,padding:"12px 20px",fontFamily:SANS,fontSize:16,fontWeight:700,cursor:"pointer"}}>Retry account check</button>
       </main>
-    );
+    </SiteShell>;
   }
 
   // Sign-up / sign-in screen (triggered from locked-tab CTA while in preview)
   if(showAuth){
-    return(
+    return <SiteShell>
       <ThemeCtx.Provider value={themeVal}>
         <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);setShowAuth(false);_checkPostLoginRedirect();}} onBack={()=>setShowAuth(false)}/>
       </ThemeCtx.Provider>
-    );
+    </SiteShell>;
   }
 
   if(!user){
-    return(
+    return <SiteShell>
       <ThemeCtx.Provider value={themeVal}>
         <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);_checkPostLoginRedirect();}}/>
       </ThemeCtx.Provider>
-    );
+    </SiteShell>;
   }
 
-  return(
+  return <SiteShell>
     <DataBusProvider>
       <ThemeCtx.Provider value={themeVal}>
         <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>
       </ThemeCtx.Provider>
     </DataBusProvider>
-  );
+  </SiteShell>;
 }
 
 function TradeIdeasDisplay({raw,C,MONO,SERIF}){
