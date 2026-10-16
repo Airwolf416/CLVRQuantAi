@@ -1,0 +1,13 @@
+The signup page on this CLVRQuant web app currently shows "Signup is temporarily unavailable: bot protection is not configured." — new user signups are completely blocked. Fix this properly.
+
+RULES: Do not skip anything. Work through the items in order, 1 to 5. For EACH item, end with either DONE (with evidence: file paths changed + what was done + how it was tested) or BLOCKED (with the exact reason and what you need from me).
+
+1. BOT PROTECTION ON SIGNUP — Integrate Cloudflare Turnstile (free tier) into the signup form at /signup: add the client-side widget AND verify the token server-side on the signup endpoint before creating any account. Store the keys as environment secrets named TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY. I (Mike) will generate the actual keys in the Cloudflare dashboard and add them as Replit secrets — implement everything so it works as soon as the keys are present, and clearly document in your report exactly which two secrets I must add and where.
+
+2. RE-ENABLE SIGNUP — Remove the "temporarily unavailable" block so the signup flow works end-to-end once a valid Turnstile token is verified. If verification fails (missing, invalid, or expired token), reject the signup with a clear user-facing error message — never a silent failure, never a bypass.
+
+3. SERVER-SIDE ENFORCEMENT — The CAPTCHA check must happen on the server, never trust the client alone. Also add basic rate limiting on the signup endpoint per IP address as a second layer of abuse protection.
+
+4. NO REGRESSIONS — Do not break anything fixed earlier: the Terms/Privacy consent checkbox must still behave correctly (clicking the "Terms of Service" link text opens /terms WITHOUT toggling the checkbox; clicking the box itself toggles it), and the cookie consent banner must be unaffected. Verify both after your changes.
+
+5. VERIFICATION REPORT — Describe exactly how you tested: (a) a signup attempt WITH a valid token proceeds past bot protection, (b) an attempt with a missing/invalid token is rejected with an error message, (c) the consent checkbox and cookie banner still behave correctly. Do NOT leave test user accounts in the database — clean up any test data. List every file created or modified.

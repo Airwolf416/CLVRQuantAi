@@ -12806,7 +12806,9 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
 
   app.get("/api/auth/turnstile-config", (_req, res) => {
     res.set("Cache-Control", "no-store");
-    res.json({ siteKey: process.env.TURNSTILE_SITE_KEY || null });
+    const siteKey = process.env.TURNSTILE_SITE_KEY;
+    const isConfigured = Boolean(siteKey && process.env.TURNSTILE_SECRET_KEY);
+    res.json({ siteKey: isConfigured ? siteKey : null, configured: isConfigured });
   });
 
   app.post("/api/auth/signup", signupLimiter, async (req, res) => {

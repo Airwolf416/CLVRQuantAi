@@ -343,8 +343,11 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const onTurnstileError = useCallback(message => setTurnstileError(message), []);
   useEffect(() => {
     apiFetch("/api/auth/turnstile-config").then(r => r.json())
-      .then(d => { if (d.siteKey) setTurnstileSiteKey(d.siteKey); else setTurnstileError("Signup is temporarily unavailable: bot protection is not configured."); })
-      .catch(() => setTurnstileError("Signup is temporarily unavailable: bot protection could not load."));
+      .then(d => {
+        if (d.siteKey && d.configured) setTurnstileSiteKey(d.siteKey);
+        else setTurnstileError("Signup bot protection needs configuration. Add TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY in Replit Secrets.");
+      })
+      .catch(() => setTurnstileError("Could not load signup bot protection. Please reload and try again."));
   }, []);
   const [checkingSession, setCheckingSession] = useState(true);
   const [signedUpUser, setSignedUpUser] = useState(null);
