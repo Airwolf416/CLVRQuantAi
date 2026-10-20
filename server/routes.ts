@@ -12833,6 +12833,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         name: name.trim(),
         subscribeToBrief: !!dailyEmail,
       });
+      await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
       const crypto = await import("crypto");
       const myRefCode = "CLVR-REF-" + crypto.randomBytes(3).toString("hex").toUpperCase();
       await storage.updateUserReferralCode(user.id, myRefCode);
@@ -12939,6 +12940,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if (!user) return res.status(401).json({ error: "Invalid email or password" });
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) return res.status(401).json({ error: "Invalid email or password" });
+      await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
       const ownerMatch = user.email === OWNER_EMAIL;
       if (ownerMatch && user.tier !== "elite") {
         await pool.query("UPDATE users SET tier = 'elite' WHERE id = $1", [user.id]);

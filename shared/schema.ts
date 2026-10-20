@@ -24,6 +24,7 @@ export const users = pgTable("users", {
   emailVerificationToken: text("email_verification_token"),
   isAdmin: boolean("is_admin").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
+  lastLoginAt: timestamp("last_login_at"),
 });
 
 export const accessCodes = pgTable("access_codes", {

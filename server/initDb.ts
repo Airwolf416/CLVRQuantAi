@@ -32,11 +32,16 @@ export async function initializeDatabase(): Promise<void> {
         email_verified           BOOLEAN NOT NULL DEFAULT false,
         email_verification_token TEXT,
         is_admin                 BOOLEAN NOT NULL DEFAULT false,
-        created_at               TIMESTAMP DEFAULT NOW()
+        created_at               TIMESTAMP DEFAULT NOW(),
+        last_login_at            TIMESTAMP
       )
     `);
     // Idempotent migration for existing DBs
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false`);
+    // Nullable by design: legacy accounts with no durable login history are
+    // excluded from inactivity deletion rather than guessed from created_at.
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_users_last_login_at ON users (last_login_at)`);
     // Promote owner to admin (idempotent)
     await client.query(`UPDATE users SET is_admin = true WHERE LOWER(email) = LOWER('mikeclaver@gmail.com') AND is_admin = false`);
 
