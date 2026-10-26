@@ -689,8 +689,8 @@ function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
 
 function TabUpgradeGate({tab,tier,onUpgrade,C2,MONO2,SERIF2}){
   const isElite=tier==="elite";
-  const labels={brief:"Morning Brief",signals:"Quant AI Signals",alerts:"Alerts & Anomalies",wallet:"Phantom Wallet",ai:"AI Market Analyst",insider:"SEC Insider Flow"};
-  const features={brief:"Daily AI-generated market brief · 4 curated trade ideas · macro risk scoring",signals:"Full pattern library · Bayesian signal scoring · funding rate anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI Market Chat · real-time context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow"};
+    const labels={brief:"Morning Brief",signals:"Quant AI Signals",alerts:"Alerts & Anomalies",wallet:"Phantom Wallet",ai:"AI Market Analyst",insider:"SEC Insider Flow",alphaDesk:"Alpha Desk"};
+    const features={brief:"Daily AI-generated market brief · 4 curated trade ideas · macro risk scoring",signals:"Full pattern library · Bayesian signal scoring · funding rate anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI Market Chat · real-time context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",alphaDesk:"Cross-asset risk, technical levels, volatility, correlations, and volume-flow context."};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:380,padding:"32px 24px",textAlign:"center"}}>
       <div style={{fontSize:32,marginBottom:16}}>🔒</div>
@@ -6253,7 +6253,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           error={rotationBrainError}
           onRetry={()=>void refreshRotationBrain()}
         />}
-        {tab==="alphaDesk"&&<AlphaDeskPage isElite={isElite} tier={isElite?"elite":user?.tier} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
+        {tab==="alphaDesk"&&isElite&&<AlphaDeskPage isElite={isElite} tier={isElite?"elite":user?.tier} isAdmin={user?.isAdmin} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>

@@ -35,10 +35,23 @@ async function dailyBars(symbol: string): Promise<YfCandle[]> {
   return bars;
 }
 
-function correlation(a: number[], b: number[]): number | null {
-  const n = Math.min(a.length, b.length);
+function dailyReturns(bars: DailyBar[]): Map<string, number> {
+  const validBars = bars.filter(bar => Number.isFinite(bar.c) && bar.c > 0 && Number.isFinite(bar.t)).sort((a, b) => a.t - b.t);
+  const result = new Map<string, number>();
+  for (let i = 1; i < validBars.length; i++) {
+    const previous = validBars[i - 1], current = validBars[i];
+    result.set(new Date(current.t).toISOString().slice(0, 10), current.c / previous.c - 1);
+  }
+  return result;
+}
+
+function correlation(aBars: DailyBar[], bBars: DailyBar[], days: number): number | null {
+  const aReturns = dailyReturns(aBars), bReturns = dailyReturns(bBars);
+  const dates = [...aReturns.keys()].filter(date => bReturns.has(date)).sort().slice(-days);
+  const n = dates.length;
   if (n < 2) return null;
-  const x = a.slice(-n), y = b.slice(-n);
+  const x = dates.map(date => aReturns.get(date)!);
+  const y = dates.map(date => bReturns.get(date)!);
   const mx = x.reduce((s, v) => s + v, 0) / n;
   const my = y.reduce((s, v) => s + v, 0) / n;
   const cov = x.reduce((s, v, i) => s + (v - mx) * (y[i] - my), 0);
@@ -46,11 +59,28 @@ function correlation(a: number[], b: number[]): number | null {
   return denom > 0 ? cov / denom : null;
 }
 
-function returns(bars: DailyBar[], days: number): number[] {
-  const closes = bars.map(b => b.c).filter(v => Number.isFinite(v) && v > 0);
-  const result: number[] = [];
-  for (let i = 1; i < closes.length; i++) result.push(closes[i] / closes[i - 1] - 1);
-  return result.slice(-days);
+export function signedDollarVolume(bars: YfCandle[], days = 30) {
+  const sample = bars.slice(-days - 1);
+  let upVolume = 0, downVolume = 0, observations = 0;
+  for (let i = 1; i < sample.length; i++) {
+    const previous = sample[i - 1].c, current = sample[i];
+    if (!(previous > 0 && current.c > 0 && current.v > 0)) continue;
+    const dollarVolume = current.c * current.v;
+    if (!Number.isFinite(dollarVolume)) continue;
+    if (current.c >= previous) upVolume += dollarVolume;
+    else downVolume += dollarVolume;
+    observations++;
+  }
+  const total = upVolume + downVolume;
+  return {
+    periodDays: days,
+    upDayDollarVolume: observations ? upVolume : null,
+    downDayDollarVolume: observations ? downVolume : null,
+    netSignedDollarVolume: observations ? upVolume - downVolume : null,
+    netSharePct: total > 0 ? (upVolume - downVolume) / total * 100 : null,
+    observations,
+    methodology: "Directional daily dollar-volume proxy; not exchange order flow or investor capital flows.",
+  };
 }
 
 export async function loadAlphaDeskOverview() {
@@ -85,6 +115,8 @@ export async function loadAlphaDeskOverview() {
       priceSource: Number.isFinite(liveQuote) ? "data-bus" : null,
       livePriceStale: !bus.lastUpdated || Date.now() - bus.lastUpdated > 5 * 60_000,
       historyStale: !bars.at(-1) || Date.now() - bars.at(-1)!.t > 24 * 60 * 60_000,
+      moneyFlow30: signedDollarVolume(bars),
+      chartHistory: bars.slice(-90).map(bar => ({ t: bar.t, c: bar.c })),
       bars,
     };
   }));
@@ -95,7 +127,7 @@ export async function loadAlphaDeskOverview() {
       symbol: left,
       values: Object.fromEntries(rows.map(right => [
         right.symbol,
-        correlation(returns(rows.find(r => r.symbol === left)?.bars || [], days), returns(right.bars, days)),
+        correlation(rows.find(r => r.symbol === left)?.bars || [], right.bars, days),
       ])),
     })),
   ]));
@@ -121,6 +153,11 @@ export async function loadAlphaDeskOverview() {
     riskTone,
     correlationMatrix,
     correlationWindows,
+    moneyFlow: {
+      fx: rows.filter(r => ["USDCAD", "EURUSD"].includes(r.symbol)).map(r => ({ symbol: r.symbol, ...r.moneyFlow30 })),
+      crypto: rows.filter(r => ["BTC", "ETH", "XRP", "ZEC", "HYPE", "SOL", "AVAX", "DOGE"].includes(r.symbol)).map(r => ({ symbol: r.symbol, ...r.moneyFlow30 })),
+      methodology: "Directional daily dollar-volume proxy; not exchange order flow or investor capital flows.",
+    },
     sourceStatus: { livePricesUpdatedAt: bus.lastUpdated || null },
     disclaimer: "Levels are informational, not financial advice.",
   };

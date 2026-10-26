@@ -56,6 +56,9 @@ export function calculateAlphaAsset(
   const supportBars = bars.slice(-30);
   const support = supportBars.length ? Math.min(...supportBars.map(bar => bar.l)) : null;
   const resistance = supportBars.length ? Math.max(...supportBars.map(bar => bar.h)) : null;
+  const yearBars = bars.slice(-252);
+  const high52Week = yearBars.length ? Math.max(...yearBars.map(bar => bar.h)) : null;
+  const low52Week = yearBars.length ? Math.min(...yearBars.map(bar => bar.l)) : null;
   const ma = (period: number) => closes.length >= period ? average(closes.slice(-period)) : null;
   const ma20 = ma(20), ma50 = ma(50), ma200 = ma(200);
   const stopMult = options.stopMult ?? 1;
@@ -103,6 +106,7 @@ export function calculateAlphaAsset(
     atr14: atr, ma20, ma50, ma200, trend,
     realizedVol30: annualizedVol(30), realizedVol90: annualizedVol(90),
     support, resistance, supportBars: supportBars.length, supportLimited: supportBars.length < 30,
+    high52Week, low52Week,
     direction, stop, risk, targets,
     rrTargets: targets.map(target => risk ? Math.abs(target - price!) / risk : null),
     rrStructural: structuralReward != null && risk ? structuralReward / risk : null,

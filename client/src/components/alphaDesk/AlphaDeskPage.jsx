@@ -83,6 +83,13 @@ function MiniChart({ assets }) {
 }
 
 function LevelChart({ asset }) {
+  const history = safeArray(asset.chartHistory).filter(point => valid(point?.c));
+  const valuesForChart = history.map(point => Number(point.c));
+  const chartLow = valuesForChart.length ? Math.min(...valuesForChart) : null;
+  const chartHigh = valuesForChart.length ? Math.max(...valuesForChart) : null;
+  const chartSpan = chartHigh != null && chartLow != null ? chartHigh - chartLow || Math.abs(chartHigh) * 0.01 || 1 : 1;
+  const points = valuesForChart.map((value, index) =>
+    `${(index / Math.max(1, valuesForChart.length - 1)) * 100},${96 - ((value - (chartLow ?? 0)) / chartSpan) * 88}`).join(" ");
   const entries = [
     { label: "Resistance", value: asset.resistance, color: C.red },
     { label: "MA 200", value: asset.ma200, color: "#8A7B56" },
@@ -93,11 +100,18 @@ function LevelChart({ asset }) {
     { label: "Stop", value: asset.stop, color: C.red },
     { label: "TP3", value: safeArray(asset.targets)[2], color: C.mint },
   ].filter(item => valid(item.value));
-  if (!entries.length) return <div className="ad-chart-empty">Price and moving-average levels are unavailable.</div>;
+  if (!entries.length && !history.length) return <div className="ad-chart-empty">Price and moving-average levels are unavailable.</div>;
   const values = entries.map(item => Number(item.value));
   const low = Math.min(...values), high = Math.max(...values);
   const span = high - low || Math.max(Math.abs(high) * 0.02, 1);
-  return <div className="ad-level-plot">
+  return <div>
+    {history.length > 1 && <div className="ad-history-chart" style={{ height: 150, position: "relative", border: "1px solid #29251b", background: "repeating-linear-gradient(to bottom,transparent 0,transparent 36px,rgba(212,175,55,.07) 37px)", marginBottom: 10, padding: 8 }}>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`${asset.symbol} daily closing price history`} style={{ width: "100%", height: 120, overflow: "visible" }}>
+        <polyline points={points} fill="none" stroke={C.mint} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div className="ad-history-label" style={{ position: "absolute", bottom: 4, left: 8, right: 8, display: "flex", justifyContent: "space-between", fontSize: 7, color: C.muted }}><span>{stamp(history[0].t)}</span><b>90 daily closes</b><span>{stamp(history.at(-1).t)}</span></div>
+    </div>}
+    {!entries.length ? null : <div className="ad-level-plot">
     <div className="ad-level-scale"><span>{displayPrice(high, asset.symbol)}</span><span>{displayPrice(low, asset.symbol)}</span></div>
     <div className="ad-level-track">
       {[...entries].sort((a, b) => Number(b.value) - Number(a.value)).map((item, index) => {
@@ -107,7 +121,8 @@ function LevelChart({ asset }) {
         </div>;
       })}
     </div>
-    <p className="ad-chart-caption">Snapshot levels only · no intraday price history supplied</p>
+    <p className="ad-chart-caption">Snapshot levels from daily data; historical line uses supplied daily closes.</p>
+  </div>}
   </div>;
 }
 
@@ -122,7 +137,7 @@ function AssetDrawer({ asset, onClose }) {
     ["Day change", valid(asset.dayChange) ? `${Number(asset.dayChange) > 0 ? "+" : ""}${fmt(asset.dayChange, priceDigits(asset.symbol))}` : NA],
     ["Day change %", signedPct(asset.dayChangePct)],
     ["Previous close", displayPrice(asset.previousClose, asset.symbol)],
-    ["52-week high", NA], ["52-week low", NA],
+    ["52-week high", displayPrice(asset.high52Week, asset.symbol)], ["52-week low", displayPrice(asset.low52Week, asset.symbol)],
     ["ATR 14", displayPrice(asset.atr14, asset.symbol)],
     ["Support", displayPrice(asset.support, asset.symbol)],
     ["Resistance", displayPrice(asset.resistance, asset.symbol)],
@@ -153,17 +168,19 @@ function UpgradeCard({ onUpgrade }) {
   return <main className="ad-shell"><style>{STYLES}</style>
     <div className="ad-upgrade">
       <span className="ad-mark">CQ</span><span className="ad-kicker">CLVRQUANT / ELITE ACCESS</span>
-      <h1>Alpha Desk</h1><p>Cross-asset risk, live market context, and evidence-led technical levels are reserved for Elite traders.</p>
-      <button className="ad-button ad-button-primary" onClick={() => onUpgrade?.()}>Explore Elite access</button>
+      <h1>Alpha Desk</h1><p>Alpha Desk is an Elite feature. Upgrade your Free or Pro plan to access cross-asset risk, live market context, and technical levels.</p>
+      <button className="ad-button ad-button-primary" onClick={() => onUpgrade?.()}>Upgrade to Elite</button>
     </div>
   </main>;
 }
 
-export default function AlphaDeskPage({ isElite, tier, onUpgrade }) {
+export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
   const elite = isElite !== false && (!tier || String(tier).toLowerCase() === "elite");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [requiresElite, setRequiresElite] = useState(false);
+  const [adminHealth, setAdminHealth] = useState(null);
   const [lastSuccess, setLastSuccess] = useState(null);
   const [selected, setSelected] = useState(null);
   const [sort, setSort] = useState({ key: "symbol", dir: 1 });
@@ -175,6 +192,11 @@ export default function AlphaDeskPage({ isElite, tier, onUpgrade }) {
     if (isInitial) setLoading(true);
     try {
       const response = await apiFetch("/api/alpha-desk/overview", { method: "GET", credentials: "include" });
+      if (response.status === 403) {
+        setRequiresElite(true);
+        setError("");
+        return;
+      }
       if (!response.ok) throw new Error(`Overview request failed (${response.status})`);
       const payload = await response.json();
       if (!payload || typeof payload !== "object") throw new Error("Market overview response was invalid");
@@ -194,6 +216,22 @@ export default function AlphaDeskPage({ isElite, tier, onUpgrade }) {
     const interval = window.setInterval(() => load(false), 45_000);
     return () => window.clearInterval(interval);
   }, [elite, load]);
+  useEffect(() => {
+    if (!isAdmin) return undefined;
+    let active = true;
+    const check = async () => {
+      try {
+        const response = await apiFetch("/api/alpha-desk/admin-health", { credentials: "include" });
+        if (response.ok) {
+          const result = await response.json();
+          if (active) setAdminHealth(result);
+        }
+      } catch { /* the admin panel remains absent when health is unavailable */ }
+    };
+    check();
+    const timer = window.setInterval(check, 60_000);
+    return () => { active = false; clearInterval(timer); };
+  }, [isAdmin]);
 
   const assets = safeArray(data?.assets);
   const macro = safeArray(data?.macro);
@@ -224,10 +262,10 @@ export default function AlphaDeskPage({ isElite, tier, onUpgrade }) {
   }, [data?.correlationMatrix, data?.correlationWindows, corrWindow]);
   const correlationMap = useMemo(() => new Map(safeArray(data?.correlationWindows?.[corrWindow] || data?.correlationMatrix).map(row => [row.symbol, row.values || {}])), [data?.correlationMatrix, data?.correlationWindows, corrWindow]);
 
-  if (!elite) return <UpgradeCard onUpgrade={onUpgrade} />;
+  if (!elite || requiresElite) return <UpgradeCard onUpgrade={onUpgrade} />;
 
   const toggleSort = key => setSort(current => current.key === key ? { key, dir: -current.dir } : { key, dir: 1 });
-  const corrValue = (left, right) => corrWindow === 60 ? correlationMap.get(left)?.[right] : null;
+  const corrValue = (left, right) => correlationMap.get(left)?.[right] ?? null;
   const corrColor = value => {
     if (!valid(value)) return "rgba(212,175,55,.045)";
     const magnitude = Math.abs(Number(value));
@@ -325,15 +363,20 @@ export default function AlphaDeskPage({ isElite, tier, onUpgrade }) {
       <div className="ad-flow-grid">
         <section className="ad-panel ad-flow-panel">
           <SectionTitle kicker="FOREIGN EXCHANGE / POSITIONING">FX money flow</SectionTitle>
-          <div className="ad-flow-callout"><span className="ad-flow-mark">FX</span><div><strong>Flow data not supplied</strong><p>This snapshot contains prices and technical measures, not capital-flow or positioning observations.</p></div></div>
-          <div className="ad-flow-assets">{assets.filter(asset => ["USDCAD", "EURUSD"].includes(asset.symbol)).map(asset => <div key={asset.symbol}><span>{asset.symbol}</span><b className={valid(asset.dayChangePct) ? Number(asset.dayChangePct) >= 0 ? "is-positive" : "is-negative" : ""}>{signedPct(asset.dayChangePct)}</b><small>session change</small></div>)}</div>
+          <div className="ad-flow-callout"><span className="ad-flow-mark">FX</span><div><strong>Directional volume proxy</strong><p>Signed up-day versus down-day dollar-volume proxy; not institutional positioning or actual capital flow.</p></div></div>
+          <div className="ad-flow-assets">{safeArray(data.moneyFlow?.fx).map(flow => <div key={flow.symbol}><span>{flow.symbol}</span><b className={valid(flow.netSharePct) ? Number(flow.netSharePct) >= 0 ? "is-positive" : "is-negative" : ""}>{valid(flow.netSharePct) ? signedPct(flow.netSharePct) : NA}</b><small>{flow.observations ? `${flow.observations} observations · 30D` : "Volume unavailable"}</small></div>)}</div>
         </section>
         <section className="ad-panel ad-flow-panel">
           <SectionTitle kicker="DIGITAL ASSETS / POSITIONING">Crypto money flow</SectionTitle>
-          <div className="ad-flow-callout"><span className="ad-flow-mark">CR</span><div><strong>Flow data not supplied</strong><p>No exchange flow, ETF flow, or order-book measurements are present in the overview.</p></div></div>
-          <div className="ad-flow-assets">{assets.filter(asset => ["BTC", "ETH", "SOL"].includes(asset.symbol)).map(asset => <div key={asset.symbol}><span>{asset.symbol}</span><b className={valid(asset.dayChangePct) ? Number(asset.dayChangePct) >= 0 ? "is-positive" : "is-negative" : ""}>{signedPct(asset.dayChangePct)}</b><small>{asset.trend || NA} trend</small></div>)}</div>
+          <div className="ad-flow-callout"><span className="ad-flow-mark">CR</span><div><strong>Directional volume proxy</strong><p>Uses Yahoo daily volume and close direction. Not exchange netflows, ETF flows, or order-book data.</p></div></div>
+          <div className="ad-flow-assets">{safeArray(data.moneyFlow?.crypto).filter(flow => ["BTC", "ETH", "SOL"].includes(flow.symbol)).map(flow => <div key={flow.symbol}><span>{flow.symbol}</span><b className={valid(flow.netSharePct) ? Number(flow.netSharePct) >= 0 ? "is-positive" : "is-negative" : ""}>{valid(flow.netSharePct) ? signedPct(flow.netSharePct) : NA}</b><small>{flow.observations ? `${flow.observations} observations · 30D` : "Volume unavailable"}</small></div>)}</div>
         </section>
       </div>
+
+      {isAdmin && <section className="ad-panel ad-source-panel" data-testid="alpha-desk-admin-health">
+        <div><span className="ad-kicker">ADMIN ONLY</span><h2>Source health</h2><p>Operational coverage only; no credentials or secrets are exposed.</p></div>
+        {adminHealth ? <div className="ad-source-cells"><div><span>LIVE QUOTES</span><b>{adminHealth.liveQuoteCount} available</b></div><div><span>MISSING LIVE SYMBOLS</span><b>{adminHealth.liveQuoteMissing?.join(", ") || "None"}</b></div><div><span>STALE HISTORY</span><b>{adminHealth.staleHistory?.join(", ") || "None"}</b></div><div><span>HISTORY SERIES</span><b>{adminHealth.historyAvailable}</b></div></div> : <div className="ad-source-cells"><div><span>HEALTH CHECK</span><b>Unavailable</b></div></div>}
+      </section>}
 
       <section className="ad-panel ad-source-panel">
         <div><span className="ad-kicker">DATA PROVENANCE</span><h2>Source & freshness</h2><p>Market readings are presented as received. Missing history and unavailable fields are not backfilled.</p></div>

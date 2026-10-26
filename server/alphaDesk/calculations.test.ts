@@ -18,6 +18,8 @@ test("Alpha Desk computes trend, Wilder ATR, structural levels and directional t
   });
   assert.equal(result.trend, "Bullish");
   assert.ok(result.atr14 != null && result.atr14 > 0);
+  assert.equal(result.high52Week, 341);
+  assert.equal(result.low52Week, 98);
   assert.ok(result.stop != null && result.stop < result.price!);
   assert.equal(result.targets.length, 3);
   assert.notEqual(result.rrStructural, null);

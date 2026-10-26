@@ -3980,7 +3980,10 @@ export async function registerRoutes(
       const dbUser = await storage.getUser(userId);
       if (!dbUser) { res.status(401).json({ error: "User not found" }); return null; }
       const tier = await getEffectiveTier(dbUser);
-      if (tier !== "elite") { res.status(403).json({ error: "Requires Elite tier" }); return null; }
+      if (tier !== "elite") {
+        res.status(403).json({ error: "This feature requires Elite.", code: "ELITE_UPGRADE_REQUIRED", requiredTier: "elite" });
+        return null;
+      }
       return userId;
     } catch { res.status(500).json({ error: "Auth check failed" }); return null; }
   }
@@ -4003,6 +4006,35 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[alpha-desk] overview failed:", error?.message || error);
       return res.status(503).json({ error: "Alpha Desk market data is temporarily unavailable." });
+    }
+  });
+
+  app.get("/api/alpha-desk/admin-health", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Sign in required" });
+    const user = await storage.getUser(userId).catch(() => null);
+    if (!user) return res.status(401).json({ error: "Sign in required" });
+    if (!(user as any).isAdmin && String(user.email || "").toLowerCase() !== OWNER_EMAIL) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    try {
+      const data = await loadAlphaDeskOverview();
+      const rows = [...data.assets, ...data.macro];
+      return res.json({
+        checkedAt: Date.now(),
+        dataBusUpdatedAt: data.sourceStatus.livePricesUpdatedAt,
+        liveQuoteCount: rows.filter(row => row.priceSource && !row.livePriceStale).length,
+        liveQuoteMissing: rows.filter(row => !row.priceSource).map(row => row.symbol),
+        staleHistory: rows.filter(row => row.historyStale).map(row => row.symbol),
+        historyAvailable: rows.filter(row => row.updatedAt).length,
+        correlationWindowsAvailable: Object.keys(data.correlationWindows),
+        moneyFlowObservations: Object.fromEntries(
+          [...data.moneyFlow.fx, ...data.moneyFlow.crypto].map(row => [row.symbol, row.observations]),
+        ),
+      });
+    } catch (error: any) {
+      console.error("[alpha-desk] admin health failed:", error?.message || error);
+      return res.status(503).json({ error: "Alpha Desk health checks unavailable." });
     }
   });
 
