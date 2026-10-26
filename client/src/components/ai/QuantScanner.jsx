@@ -124,6 +124,22 @@ export default function QuantScanner({ mode, isPro, isElite }) {
   }, [hlUniverse]);
 
   const { regime, killSwitch, macroEvents: macroEvts, prices, funding, oi } = useDataBus();
+  const [alphaDeskSnapshot, setAlphaDeskSnapshot] = useState(null);
+  useEffect(() => {
+    if (!isElite) { setAlphaDeskSnapshot(null); return; }
+    let active = true;
+    const loadContext = async () => {
+      try {
+        const response = await apiFetch("/api/alpha-desk/overview", { credentials: "include" });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (active) setAlphaDeskSnapshot(data);
+      } catch { /* Quant Scanner remains available if supplemental context is down. */ }
+    };
+    loadContext();
+    const timer = setInterval(loadContext, 60_000);
+    return () => { active = false; clearInterval(timer); };
+  }, [isElite]);
 
   const toggle = useCallback((t) => {
     setSelected(prev => {
@@ -214,6 +230,14 @@ export default function QuantScanner({ mode, isPro, isElite }) {
           MASTERBRAIN · BAYESIAN SCORING · MULTI-TF CONFLUENCE
         </div>
       </div>
+      {alphaDeskSnapshot && <div data-testid="quant-alpha-desk-context" style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", background: "rgba(212,175,55,.05)", border: "1px solid rgba(212,175,55,.2)", borderRadius: 8, padding: "8px 10px", marginBottom: 12, fontFamily: MONO, fontSize: 9 }}>
+        <b style={{ color: "#D4AF37" }}>ALPHA DESK CONTEXT</b>
+        <span>Risk: {alphaDeskSnapshot.riskTone || "N/A"}</span>
+        <span>VIX: {alphaDeskSnapshot.macro?.find(x => x.symbol === "VIX")?.price ?? "N/A"}</span>
+        <span>DXY: {alphaDeskSnapshot.macro?.find(x => x.symbol === "DXY")?.trend ?? "N/A"}</span>
+        <span>Source updated: {alphaDeskSnapshot.sourceStatus?.livePricesUpdatedAt ? new Date(alphaDeskSnapshot.sourceStatus.livePricesUpdatedAt).toLocaleTimeString() : "N/A"}</span>
+        <span style={{ color: "rgba(255,255,255,.5)" }}>Supplemental only; scanner scoring is unchanged.</span>
+      </div>}
 
       <div style={{ background: "#0c1220", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 12, padding: 14, marginBottom: 14 }}>
         <div style={{ position: "relative", marginBottom: 10 }}>

@@ -324,10 +324,10 @@ function WalkingTour({ C, isDark, onSignUp, onEnterFree, onClose, onOpenDisclaim
   );
 }
 
-export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTheme }) {
+export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTheme, initialMode = "welcome" }) {
   const C = isDark ? DARK_C : LIGHT_C;
   const tiers = usePricing();
-  const [mode, setMode] = useState("welcome");
+  const [mode, setMode] = useState(initialMode);
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false, referralCode: "" });
   const [showSigninPassword, setShowSigninPassword] = useState(false);
   const [showVerifyPassword, setShowVerifyPassword] = useState(false);

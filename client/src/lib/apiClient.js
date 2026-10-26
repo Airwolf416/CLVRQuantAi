@@ -1,6 +1,15 @@
 // Same-origin API client.  This is deliberately not a fetch monkey-patch:
 // third-party APIs and static assets must retain their normal fetch behavior.
 const SESSION_EXPIRY_CODES = new Set(["SESSION_IDLE_EXPIRED", "SESSION_MAX_AGE"]);
+const PUBLIC_AUTH_PATHS = new Set([
+  "/api/auth/me",
+  "/api/auth/verify-email",
+  "/api/auth/webauthn/authenticate",
+  "/api/auth/signup",
+  "/api/auth/signin",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password",
+]);
 const REAUTH_REPLAY_PATHS = new Set([
   "/api/auth/change-password", "/api/account", "/api/stripe/portal",
   "/api/stripe/pause", "/api/stripe/resume", "/api/stripe/cancel", "/api/stripe/downgrade",
@@ -38,6 +47,16 @@ export async function responseCode(response) {
     const payload = await response.clone().json();
     return payload?.code || payload?.error?.code || null;
   } catch { return null; }
+}
+
+export function shouldRedirectToSignIn(response, code, input) {
+  if (SESSION_EXPIRY_CODES.has(code)) return true;
+  if (response.status !== 401) return false;
+  try {
+    const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    const url = new URL(input instanceof Request ? input.url : String(input), origin);
+    return url.origin === origin && !PUBLIC_AUTH_PATHS.has(url.pathname);
+  } catch { return false; }
 }
 
 export function isReplaySafe(method = "GET", options = {}) {
@@ -79,8 +98,8 @@ export async function apiFetch(input, init = {}, options = {}) {
   const response = await fetch(input, requestInit);
   const code = await responseCode(response);
 
-  if (SESSION_EXPIRY_CODES.has(code)) {
-    handlers.onSessionExpired?.(code);
+  if (shouldRedirectToSignIn(response, code, input)) {
+    handlers.onSessionExpired?.(code || "SESSION_REVOKED");
     return response;
   }
   if (code === "REAUTH_REQUIRED" && !options.skipReauth) {

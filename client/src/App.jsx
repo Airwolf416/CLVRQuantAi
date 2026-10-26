@@ -24,6 +24,7 @@ import { accessCodeFeedback, ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedbac
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
 import RotationBrainPage from "./components/rotation-brain/RotationBrainPage.jsx";
+import AlphaDeskPage from "./components/alphaDesk/AlphaDeskPage.jsx";
 import InsiderTab from "./tabs/InsiderTab";
 import PositionMonitor from "./PositionMonitor";
 import KronosPanel from "./components/KronosPanel";
@@ -82,7 +83,7 @@ function CookieConsentBanner() {
 function SiteShell({ children }) {
   return <>{children}<LegalFooter/><CookieConsentBanner/></>;
 }
-import { apiFetch, readAuthSession } from "./lib/apiClient";
+import { apiFetch, readAuthSession, responseCode } from "./lib/apiClient";
 import SessionSecurity from "./components/SessionSecurity.jsx";
 import { publishSessionEvent } from "./components/SessionSecurity.jsx";
 import { useNewItemMotion, useStableResponseItemIds } from "./hooks/useNewItemMotion.js";
@@ -529,7 +530,7 @@ function ProGate({feature,isPro,onUpgrade,children,tier}){
 // Tabs that require Pro (fully locked for free users)
 const PRO_TABS_GATE=["brief","alerts","wallet","ai"];
 // Tabs that require Elite (locked for both free AND pro users)
-const ELITE_TABS_GATE=["insider","basket","chartai","earnings","pulse","monitor"];
+const ELITE_TABS_GATE=["insider","basket","chartai","earnings","pulse","monitor","alphaDesk"];
 
 function UnusualPulse({ data, C, MONO }) {
   const signals = data?.signals || [];
@@ -3592,6 +3593,7 @@ export default function App(){
 
   const [user,setUser]=useState(null);
   const [showAuth,setShowAuth]=useState(false);
+  const [authInitialMode,setAuthInitialMode]=useState("welcome");
   // After login, if a checkout URL was stashed before auth, navigate to it now
   const _checkPostLoginRedirect=()=>{
     try{
@@ -3618,7 +3620,20 @@ export default function App(){
   useEffect(()=>{
     let active=true;
     apiFetch("/api/auth/me",{credentials:"include"})
-      .then(readAuthSession)
+      .then(async response=>{
+        if(response.status===401){
+          const code=await responseCode(response);
+          setAuthInitialMode("signin");
+          try{
+            sessionStorage.setItem("clvr_session_notice",code==="SESSION_MAX_AGE"
+              ?"For your security, please sign in again."
+              :code==="SESSION_IDLE_EXPIRED"
+                ?"Your session ended after inactivity. Please sign in again."
+                :"Your session expired. Please sign in again.");
+          }catch{}
+        }
+        return readAuthSession(response);
+      })
       .then(u=>{
         if(!active)return;
         setSessionError(false);
@@ -3654,7 +3669,7 @@ export default function App(){
   if(showAuth){
     return <SiteShell>
       <ThemeCtx.Provider value={themeVal}>
-        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);setShowAuth(false);_checkPostLoginRedirect();}} onBack={()=>setShowAuth(false)}/>
+        <WelcomePage isDark={isDark} initialMode={authInitialMode} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);setShowAuth(false);_checkPostLoginRedirect();}} onBack={()=>setShowAuth(false)}/>
       </ThemeCtx.Provider>
     </SiteShell>;
   }
@@ -3662,7 +3677,7 @@ export default function App(){
   if(!user){
     return <SiteShell>
       <ThemeCtx.Provider value={themeVal}>
-        <WelcomePage isDark={isDark} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);_checkPostLoginRedirect();}}/>
+        <WelcomePage isDark={isDark} initialMode={authInitialMode} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);_checkPostLoginRedirect();}}/>
       </ThemeCtx.Provider>
     </SiteShell>;
   }
@@ -3670,7 +3685,7 @@ export default function App(){
   return <SiteShell>
     <DataBusProvider>
       <ThemeCtx.Provider value={themeVal}>
-        <Dashboard user={user} setUser={setUser} onShowAuth={()=>setShowAuth(true)}/>
+        <Dashboard user={user} setUser={setUser} onShowAuth={(mode="welcome")=>{setAuthInitialMode(mode);setShowAuth(true);}}/>
       </ThemeCtx.Provider>
     </DataBusProvider>
   </SiteShell>;
@@ -3793,7 +3808,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const {regime:dbRegime,fearGreed:dbFearGreed,killSwitch:dbKillSwitch}=useDataBus();
   const {isMobile,isTablet,isDesktop}=useWindowSize();
   const sidebarW=isDesktop?180:isTablet?64:0;
-  const [tab,setTab]=useState("radar");
+  const [tab,setTab]=useState(()=>window.location.pathname==="/alpha-desk"?"alphaDesk":"radar");
   const [rotationBrainData,setRotationBrainData]=useState(null);
   const [rotationBrainLoading,setRotationBrainLoading]=useState(false);
   const [rotationBrainError,setRotationBrainError]=useState("");
@@ -3816,10 +3831,15 @@ function Dashboard({user,setUser,onShowAuth}){
     const timer=setInterval(()=>void refreshRotationBrain(),60_000);
     return()=>clearInterval(timer);
   },[tab,refreshRotationBrain]);
+  useEffect(()=>{
+    if(typeof window==="undefined")return;
+    const path=tab==="alphaDesk"?"/alpha-desk":window.location.pathname==="/alpha-desk"?"/":window.location.pathname;
+    if(window.location.pathname!==path)window.history.replaceState({}, "", `${path}${window.location.search}`);
+  },[tab]);
   const expireSession = useCallback(() => {
     try { sessionStorage.setItem("clvr_return_tab", ["radar","markets","macro","rotation","brief","signals","ai","account"].includes(tab) ? tab : "radar"); } catch {}
     setUser(null);
-    onShowAuth();
+    onShowAuth("signin");
   }, [tab, setUser, onShowAuth]);
   useEffect(() => {
     try {
@@ -5115,6 +5135,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
     {k:"prices",icon:"💹",label:i18n.markets},
     {k:"macro",icon:"🏦",label:i18n.macro},
     {k:"rotation",icon:<Activity size={14}/>,label:"ROTATION"},
+    {k:"alphaDesk",icon:"AD",label:"ALPHA DESK"},
     {k:"brief",icon:"📰",label:i18n.brief},
     {k:"earnings",icon:"📅",label:"EARNINGS"},
     {k:"signals",icon:"⚡",label:i18n.signals},
@@ -6232,6 +6253,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           error={rotationBrainError}
           onRetry={()=>void refreshRotationBrain()}
         />}
+        {tab==="alphaDesk"&&<AlphaDeskPage isElite={isElite} tier={isElite?"elite":user?.tier} onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}/>}
 
         {/* ══ MACRO ══ */}
         {tab==="macro"&&<>

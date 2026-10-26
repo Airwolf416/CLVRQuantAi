@@ -54,9 +54,12 @@ export default function SessionSecurity({ onExpired }) {
   const clearSession = useCallback((code) => {
     try {
       localStorage.removeItem("clvr_auth_token");
-      sessionStorage.setItem("clvr_session_notice", code === "SESSION_MAX_AGE"
+      const notice = code === "SESSION_MAX_AGE"
         ? "For your security, please sign in again."
-        : "Your session ended after inactivity. Please sign in again.");
+        : code === "SESSION_IDLE_EXPIRED"
+          ? "Your session ended after inactivity. Please sign in again."
+          : "Your session expired. Please sign in again.";
+      sessionStorage.setItem("clvr_session_notice", notice);
     } catch {}
     onExpired?.(code);
   }, [onExpired]);

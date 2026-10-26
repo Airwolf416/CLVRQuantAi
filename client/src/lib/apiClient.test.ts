@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { apiFetch, createReauthCoordinator, isReauthReplayAllowed, isReplaySafe, readAuthSession, responseCode } from "./apiClient.js";
+import { apiFetch, createReauthCoordinator, isReauthReplayAllowed, isReplaySafe, readAuthSession, responseCode, shouldRedirectToSignIn } from "./apiClient.js";
 import { canSendHeartbeat, createSessionEventReceiver, sessionBroadcastPayload } from "../components/SessionSecurity.jsx";
 
 // apiClient intentionally uses the current origin only for relative URLs.
@@ -124,4 +124,12 @@ test("client has no native same-origin API fetch outside public auth allowlist",
     }
   }
   assert.deepEqual(violations, []);
+});
+
+test("expired protected requests return to sign-in but public auth and tier denials do not", () => {
+  assert.equal(shouldRedirectToSignIn(new Response(null, { status: 401 }), null, "/api/ai/analyze"), true);
+  assert.equal(shouldRedirectToSignIn(new Response(null, { status: 401 }), null, "/api/auth/signin"), false);
+  assert.equal(shouldRedirectToSignIn(new Response(null, { status: 401 }), null, "/api/auth/me"), false);
+  assert.equal(shouldRedirectToSignIn(new Response(null, { status: 403 }), null, "/api/chart-ai/analyze"), false);
+  assert.equal(shouldRedirectToSignIn(new Response(null, { status: 401 }), "SESSION_IDLE_EXPIRED", "/api/auth/signin"), true);
 });
