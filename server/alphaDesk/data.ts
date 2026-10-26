@@ -1,8 +1,8 @@
 import { getDataBusStatus } from "../databus";
-import { getYahooCandles, type YfCandle } from "../services/yahoo";
+import { getYahooCandles, yahooQuoteBatch, type YfCandle } from "../services/yahoo";
 import { rGet, rSet } from "../services/redis";
 import { calculateAlphaAsset, type DailyBar } from "./calculations";
-import { liveSignals } from "../state";
+import { livePrices, liveSignals, priceHistory } from "../state";
 
 export const ALPHA_ASSETS = {
   USDCAD: "USDCAD=X", EURUSD: "EURUSD=X", BTC: "BTC-USD", WTI: "CL=F",
@@ -12,6 +12,10 @@ export const ALPHA_ASSETS = {
 export const ALPHA_MACRO = {
   VIX: "^VIX", DXY: "DX-Y.NYB", US10Y: "^TNX", SPX: "^GSPC", GOLD: "GC=F",
 } as const;
+const FX_FLOW_FUTURES: Record<string, { ticker: string; invert: boolean }> = {
+  USDCAD: { ticker: "6C=F", invert: true },
+  EURUSD: { ticker: "6E=F", invert: false },
+};
 
 type CachedBars = { bars: YfCandle[]; fetchedAt: number };
 const fallbackCache = new Map<string, CachedBars>();
@@ -59,27 +63,31 @@ function correlation(aBars: DailyBar[], bBars: DailyBar[], days: number): number
   return denom > 0 ? cov / denom : null;
 }
 
-export function signedDollarVolume(bars: YfCandle[], days = 30) {
+export function signedDollarVolume(bars: YfCandle[], days = 30, invert = false) {
   const sample = bars.slice(-days - 1);
-  let upVolume = 0, downVolume = 0, observations = 0;
+  let positiveFlow = 0, negativeFlow = 0, volumeTotal = 0, observations = 0;
   for (let i = 1; i < sample.length; i++) {
     const previous = sample[i - 1].c, current = sample[i];
-    if (!(previous > 0 && current.c > 0 && current.v > 0)) continue;
-    const dollarVolume = current.c * current.v;
-    if (!Number.isFinite(dollarVolume)) continue;
-    if (current.c >= previous) upVolume += dollarVolume;
-    else downVolume += dollarVolume;
+    if (!(current.h > current.l && current.v > 0)) continue;
+    let multiplier = ((current.c - current.l) - (current.h - current.c)) / (current.h - current.l);
+    if (invert) multiplier *= -1;
+    const flow = multiplier * current.v;
+    if (!Number.isFinite(flow)) continue;
+    if (flow >= 0) positiveFlow += flow;
+    else negativeFlow += -flow;
+    volumeTotal += current.v;
     observations++;
   }
-  const total = upVolume + downVolume;
+  const totalFlow = positiveFlow + negativeFlow;
   return {
     periodDays: days,
-    upDayDollarVolume: observations ? upVolume : null,
-    downDayDollarVolume: observations ? downVolume : null,
-    netSignedDollarVolume: observations ? upVolume - downVolume : null,
-    netSharePct: total > 0 ? (upVolume - downVolume) / total * 100 : null,
+    positiveFlowVolume: observations ? positiveFlow : null,
+    negativeFlowVolume: observations ? negativeFlow : null,
+    netFlowVolume: observations ? positiveFlow - negativeFlow : null,
+    netSharePct: totalFlow > 0 ? (positiveFlow - negativeFlow) / totalFlow * 100 : null,
+    volumeTotal: observations ? volumeTotal : null,
     observations,
-    methodology: "Directional daily dollar-volume proxy; not exchange order flow or investor capital flows.",
+    methodology: "30-day Chaikin money-flow proxy from daily OHLCV; not investor capital flows.",
   };
 }
 
@@ -88,13 +96,21 @@ export async function loadAlphaDeskOverview() {
   if (cached?.data && Date.now() - cached.fetchedAt < LIVE_TTL_MS) return cached.data;
   if (fallbackOverview && Date.now() - fallbackOverview.fetchedAt < LIVE_TTL_MS) return fallbackOverview.data;
   const bus = getDataBusStatus();
+  const macroQuotes = await yahooQuoteBatch(Object.values(ALPHA_MACRO));
+  const fxFlowBars = Object.fromEntries(await Promise.all(
+    Object.entries(FX_FLOW_FUTURES).map(async ([symbol, source]) => [symbol, await dailyBars(source.ticker)] as const),
+  ));
   const definitions = [
     ...Object.entries(ALPHA_ASSETS).map(([symbol, yahoo]) => ({ symbol, yahoo, group: "asset" as const })),
     ...Object.entries(ALPHA_MACRO).map(([symbol, yahoo]) => ({ symbol, yahoo, group: "macro" as const })),
   ];
   const rows = await Promise.all(definitions.map(async item => {
     const bars = await dailyBars(item.yahoo);
-    const liveQuote = bus.prices[item.symbol]?.price;
+    const directYahooQuote = macroQuotes[item.yahoo];
+    const fallbackVix = priceHistory.VIX?.at(-1)?.price;
+    const liveQuote = directYahooQuote?.live ? directYahooQuote.price
+      : bus.prices[item.symbol]?.price ?? livePrices[item.symbol]?.price
+        ?? (item.symbol === "VIX" && Number.isFinite(fallbackVix) ? fallbackVix : undefined);
     const signal = liveSignals.find((candidate: any) =>
       candidate.token === item.symbol && ["LONG", "SHORT"].includes(String(candidate.dir).toUpperCase())
       && Date.now() - Number(candidate.ts || 0) <= 24 * 60 * 60 * 1000
@@ -115,7 +131,16 @@ export async function loadAlphaDeskOverview() {
       priceSource: Number.isFinite(liveQuote) ? "data-bus" : null,
       livePriceStale: !bus.lastUpdated || Date.now() - bus.lastUpdated > 5 * 60_000,
       historyStale: !bars.at(-1) || Date.now() - bars.at(-1)!.t > 24 * 60 * 60_000,
-      moneyFlow30: signedDollarVolume(bars),
+      moneyFlow30: item.group === "asset"
+        ? signedDollarVolume(
+            FX_FLOW_FUTURES[item.symbol] ? fxFlowBars[item.symbol] : bars,
+            30,
+            FX_FLOW_FUTURES[item.symbol]?.invert ?? false,
+          )
+        : null,
+      moneyFlowSource: FX_FLOW_FUTURES[item.symbol]?.ticker || (item.group === "asset" ? "Yahoo OHLCV" : null),
+      quoteSource: directYahooQuote?.live ? "Yahoo Finance" : bus.prices[item.symbol] ? "CLVR data bus"
+        : item.symbol === "VIX" && Number.isFinite(fallbackVix) ? "UVXY-derived VIX proxy" : null,
       chartHistory: bars.slice(-90).map(bar => ({ t: bar.t, c: bar.c })),
       bars,
     };
@@ -154,9 +179,9 @@ export async function loadAlphaDeskOverview() {
     correlationMatrix,
     correlationWindows,
     moneyFlow: {
-      fx: rows.filter(r => ["USDCAD", "EURUSD"].includes(r.symbol)).map(r => ({ symbol: r.symbol, ...r.moneyFlow30 })),
-      crypto: rows.filter(r => ["BTC", "ETH", "XRP", "ZEC", "HYPE", "SOL", "AVAX", "DOGE"].includes(r.symbol)).map(r => ({ symbol: r.symbol, ...r.moneyFlow30 })),
-      methodology: "Directional daily dollar-volume proxy; not exchange order flow or investor capital flows.",
+      fx: rows.filter(r => ["USDCAD", "EURUSD"].includes(r.symbol)).map(r => ({ symbol: r.symbol, ...r.moneyFlow30, source: r.moneyFlowSource })),
+      crypto: rows.filter(r => ["BTC", "ETH", "XRP", "ZEC", "HYPE", "SOL", "AVAX", "DOGE"].includes(r.symbol)).map(r => ({ symbol: r.symbol, ...r.moneyFlow30, source: r.moneyFlowSource })),
+      methodology: "Chaikin money-flow proxy from daily OHLCV. FX uses CME currency-futures volume; crypto uses Yahoo OHLCV. Not actual investor net flows.",
     },
     sourceStatus: { livePricesUpdatedAt: bus.lastUpdated || null },
     disclaimer: "Levels are informational, not financial advice.",
