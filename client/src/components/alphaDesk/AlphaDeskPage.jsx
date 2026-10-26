@@ -363,13 +363,13 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
       <div className="ad-flow-grid">
         <section className="ad-panel ad-flow-panel">
           <SectionTitle kicker="FOREIGN EXCHANGE / POSITIONING">FX money flow</SectionTitle>
-          <div className="ad-flow-callout"><span className="ad-flow-mark">FX</span><div><strong>Directional volume proxy</strong><p>Signed up-day versus down-day dollar-volume proxy; not institutional positioning or actual capital flow.</p></div></div>
-          <div className="ad-flow-assets">{safeArray(data.moneyFlow?.fx).map(flow => <div key={flow.symbol}><span>{flow.symbol}</span><b className={valid(flow.netSharePct) ? Number(flow.netSharePct) >= 0 ? "is-positive" : "is-negative" : ""}>{valid(flow.netSharePct) ? signedPct(flow.netSharePct) : NA}</b><small>{flow.observations ? `${flow.observations} observations · 30D` : "Volume unavailable"}</small></div>)}</div>
+          <div className="ad-flow-callout"><span className="ad-flow-mark">FX</span><div><strong>CME currency-futures money-flow proxy</strong><p>Chaikin money flow from 6E/6C futures OHLCV; it is not a direct measure of investor positioning or cash flows.</p></div></div>
+          <div className="ad-flow-assets">{safeArray(data.moneyFlow?.fx).map(flow => <div key={flow.symbol}><span>{flow.symbol}</span><b className={valid(flow.netSharePct) ? Number(flow.netSharePct) >= 0 ? "is-positive" : "is-negative" : ""}>{valid(flow.netSharePct) ? signedPct(flow.netSharePct) : NA}</b><small>{flow.observations ? `${flow.observations} observations · 30D · ${flow.source}` : "Futures volume unavailable"}</small></div>)}</div>
         </section>
         <section className="ad-panel ad-flow-panel">
           <SectionTitle kicker="DIGITAL ASSETS / POSITIONING">Crypto money flow</SectionTitle>
-          <div className="ad-flow-callout"><span className="ad-flow-mark">CR</span><div><strong>Directional volume proxy</strong><p>Uses Yahoo daily volume and close direction. Not exchange netflows, ETF flows, or order-book data.</p></div></div>
-          <div className="ad-flow-assets">{safeArray(data.moneyFlow?.crypto).filter(flow => ["BTC", "ETH", "SOL"].includes(flow.symbol)).map(flow => <div key={flow.symbol}><span>{flow.symbol}</span><b className={valid(flow.netSharePct) ? Number(flow.netSharePct) >= 0 ? "is-positive" : "is-negative" : ""}>{valid(flow.netSharePct) ? signedPct(flow.netSharePct) : NA}</b><small>{flow.observations ? `${flow.observations} observations · 30D` : "Volume unavailable"}</small></div>)}</div>
+          <div className="ad-flow-callout"><span className="ad-flow-mark">CR</span><div><strong>Crypto OHLCV money-flow proxy</strong><p>Chaikin money flow from Yahoo daily OHLCV. Not exchange netflows, ETF flows, or order-book data.</p></div></div>
+          <div className="ad-flow-assets">{safeArray(data.moneyFlow?.crypto).filter(flow => ["BTC", "ETH", "SOL"].includes(flow.symbol)).map(flow => <div key={flow.symbol}><span>{flow.symbol}</span><b className={valid(flow.netSharePct) ? Number(flow.netSharePct) >= 0 ? "is-positive" : "is-negative" : ""}>{valid(flow.netSharePct) ? signedPct(flow.netSharePct) : NA}</b><small>{flow.observations ? `${flow.observations} observations · 30D · ${flow.source}` : "Volume unavailable"}</small></div>)}</div>
         </section>
       </div>
 

@@ -63,7 +63,7 @@ function correlation(aBars: DailyBar[], bBars: DailyBar[], days: number): number
   return denom > 0 ? cov / denom : null;
 }
 
-export function signedDollarVolume(bars: YfCandle[], days = 30, invert = false) {
+export function calculateChaikinMoneyFlow(bars: YfCandle[], days = 30, invert = false) {
   const sample = bars.slice(-days - 1);
   let positiveFlow = 0, negativeFlow = 0, volumeTotal = 0, observations = 0;
   for (let i = 1; i < sample.length; i++) {
@@ -78,13 +78,12 @@ export function signedDollarVolume(bars: YfCandle[], days = 30, invert = false) 
     volumeTotal += current.v;
     observations++;
   }
-  const totalFlow = positiveFlow + negativeFlow;
   return {
     periodDays: days,
     positiveFlowVolume: observations ? positiveFlow : null,
     negativeFlowVolume: observations ? negativeFlow : null,
     netFlowVolume: observations ? positiveFlow - negativeFlow : null,
-    netSharePct: totalFlow > 0 ? (positiveFlow - negativeFlow) / totalFlow * 100 : null,
+    netSharePct: volumeTotal > 0 ? (positiveFlow - negativeFlow) / volumeTotal * 100 : null,
     volumeTotal: observations ? volumeTotal : null,
     observations,
     methodology: "30-day Chaikin money-flow proxy from daily OHLCV; not investor capital flows.",
@@ -96,21 +95,28 @@ export async function loadAlphaDeskOverview() {
   if (cached?.data && Date.now() - cached.fetchedAt < LIVE_TTL_MS) return cached.data;
   if (fallbackOverview && Date.now() - fallbackOverview.fetchedAt < LIVE_TTL_MS) return fallbackOverview.data;
   const bus = getDataBusStatus();
-  const macroQuotes = await yahooQuoteBatch(Object.values(ALPHA_MACRO));
-  const fxFlowBars = Object.fromEntries(await Promise.all(
-    Object.entries(FX_FLOW_FUTURES).map(async ([symbol, source]) => [symbol, await dailyBars(source.ticker)] as const),
-  ));
   const definitions = [
     ...Object.entries(ALPHA_ASSETS).map(([symbol, yahoo]) => ({ symbol, yahoo, group: "asset" as const })),
     ...Object.entries(ALPHA_MACRO).map(([symbol, yahoo]) => ({ symbol, yahoo, group: "macro" as const })),
   ];
+  const directQuoteSymbols = [...new Set(definitions
+    .filter(item => !bus.prices[item.symbol] && !livePrices[item.symbol])
+    .map(item => item.yahoo))];
+  const publicQuotes = directQuoteSymbols.length ? await yahooQuoteBatch(directQuoteSymbols) : {};
+  const publicQuotesFetchedAt = Date.now();
+  const fxFlowBars = Object.fromEntries(await Promise.all(
+    Object.entries(FX_FLOW_FUTURES).map(async ([symbol, source]) => [symbol, await dailyBars(source.ticker)] as const),
+  ));
   const rows = await Promise.all(definitions.map(async item => {
     const bars = await dailyBars(item.yahoo);
-    const directYahooQuote = macroQuotes[item.yahoo];
+    const directYahooQuote = publicQuotes[item.yahoo];
     const fallbackVix = priceHistory.VIX?.at(-1)?.price;
     const liveQuote = directYahooQuote?.live ? directYahooQuote.price
       : bus.prices[item.symbol]?.price ?? livePrices[item.symbol]?.price
         ?? (item.symbol === "VIX" && Number.isFinite(fallbackVix) ? fallbackVix : undefined);
+    const quoteSource = directYahooQuote?.live ? "Yahoo Finance"
+      : bus.prices[item.symbol] || livePrices[item.symbol] ? "CLVR data bus"
+        : item.symbol === "VIX" && Number.isFinite(fallbackVix) ? "UVXY-derived VIX proxy" : null;
     const signal = liveSignals.find((candidate: any) =>
       candidate.token === item.symbol && ["LONG", "SHORT"].includes(String(candidate.dir).toUpperCase())
       && Date.now() - Number(candidate.ts || 0) <= 24 * 60 * 60 * 1000
@@ -128,19 +134,21 @@ export async function loadAlphaDeskOverview() {
       signalConfidence: Number.isFinite(Number(signal?.conf)) ? Number(signal.conf) : null,
       signalUpdatedAt: signal?.ts ?? null,
       group: item.group,
-      priceSource: Number.isFinite(liveQuote) ? "data-bus" : null,
-      livePriceStale: !bus.lastUpdated || Date.now() - bus.lastUpdated > 5 * 60_000,
+      priceSource: Number.isFinite(liveQuote) ? quoteSource : null,
+      livePriceStale: directYahooQuote?.live ? false
+        : item.symbol === "VIX" && priceHistory.VIX?.at(-1)
+          ? Date.now() - priceHistory.VIX.at(-1)!.ts > 5 * 60_000
+          : !bus.lastUpdated || Date.now() - bus.lastUpdated > 5 * 60_000,
       historyStale: !bars.at(-1) || Date.now() - bars.at(-1)!.t > 24 * 60 * 60_000,
       moneyFlow30: item.group === "asset"
-        ? signedDollarVolume(
+        ? calculateChaikinMoneyFlow(
             FX_FLOW_FUTURES[item.symbol] ? fxFlowBars[item.symbol] : bars,
             30,
             FX_FLOW_FUTURES[item.symbol]?.invert ?? false,
           )
         : null,
       moneyFlowSource: FX_FLOW_FUTURES[item.symbol]?.ticker || (item.group === "asset" ? "Yahoo OHLCV" : null),
-      quoteSource: directYahooQuote?.live ? "Yahoo Finance" : bus.prices[item.symbol] ? "CLVR data bus"
-        : item.symbol === "VIX" && Number.isFinite(fallbackVix) ? "UVXY-derived VIX proxy" : null,
+      quoteSource,
       chartHistory: bars.slice(-90).map(bar => ({ t: bar.t, c: bar.c })),
       bars,
     };
@@ -171,7 +179,7 @@ export async function loadAlphaDeskOverview() {
     return summary;
   };
   const data = {
-    asOf: bus.lastUpdated || null,
+    asOf: Math.max(bus.lastUpdated || 0, Object.values(publicQuotes).some(quote => quote.live) ? publicQuotesFetchedAt : 0) || null,
     macro: rows.filter(r => r.group === "macro").map(rowSummary),
     assets: rows.filter(r => r.group === "asset").map(rowSummary),
     vixRegime,
@@ -183,7 +191,10 @@ export async function loadAlphaDeskOverview() {
       crypto: rows.filter(r => ["BTC", "ETH", "XRP", "ZEC", "HYPE", "SOL", "AVAX", "DOGE"].includes(r.symbol)).map(r => ({ symbol: r.symbol, ...r.moneyFlow30, source: r.moneyFlowSource })),
       methodology: "Chaikin money-flow proxy from daily OHLCV. FX uses CME currency-futures volume; crypto uses Yahoo OHLCV. Not actual investor net flows.",
     },
-    sourceStatus: { livePricesUpdatedAt: bus.lastUpdated || null },
+    sourceStatus: {
+      livePricesUpdatedAt: bus.lastUpdated || null,
+      macroQuotesUpdatedAt: Object.values(publicQuotes).some(quote => quote.live) ? publicQuotesFetchedAt : null,
+    },
     disclaimer: "Levels are informational, not financial advice.",
   };
   fallbackOverview = { data, fetchedAt: Date.now() };

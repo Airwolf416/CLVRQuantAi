@@ -8810,6 +8810,7 @@ Every level must be technically defensible. Return JSON only.`;
     }
   });
 
+  let rotationYahooEthBtcCache: { data: any; fetchedAt: number } | null = null;
   app.get("/api/rotation-brain/latest", async (_req, res) => {
     try {
       const { getLatestRotationDashboardState } = await import("./rotation/repository");
@@ -8817,31 +8818,36 @@ Every level must be technically defensible. Return JSON only.`;
       const response = { ...latest, crypto: { ...(latest.crypto || {}) } };
       if (response.crypto.ethBtc?.ratio == null) {
         try {
-          const [btcBars, ethBars] = await Promise.all([
-            getYahooCandles("BTC-USD", "1d", 220),
-            getYahooCandles("ETH-USD", "1d", 220),
-          ]);
-          const byDate = (bars: any[]) => new Map(bars.filter(b => b.c > 0).map(b => [new Date(b.t).toISOString().slice(0, 10), b.c]));
-          const btc = byDate(btcBars), eth = byDate(ethBars);
-          const ratioPoints = [...btc.keys()].filter(date => eth.has(date)).sort()
-            .map(date => ({ date, ratio: Number(eth.get(date)) / Number(btc.get(date)) }));
-          const latestPoint = ratioPoints.at(-1);
-          const point30 = ratioPoints.slice(-31)[0];
-          const avg = (days: number) => ratioPoints.length >= days
-            ? ratioPoints.slice(-days).reduce((sum, row) => sum + row.ratio, 0) / days : null;
-          if (latestPoint && point30 && ratioPoints.length >= 30) {
-            const return30d = latestPoint.ratio / point30.ratio - 1;
-            const avg50 = avg(50), avg200 = avg(200);
-            const above50d = avg50 == null ? null : latestPoint.ratio > avg50;
-            const above200d = avg200 == null ? null : latestPoint.ratio > avg200;
-            const leadership = return30d > 0.05 && above50d === true ? "LEADING"
-              : return30d < -0.05 && above50d === false ? "LAGGING" : "NEUTRAL";
-            response.crypto.ethBtc = {
-              ...(response.crypto.ethBtc || {}),
-              ratio: latestPoint.ratio, return30d, above50d, above200d, leadership,
-              source: "Yahoo Finance daily fallback",
-              asOf: latestPoint.date,
-            };
+          if (rotationYahooEthBtcCache && Date.now() - rotationYahooEthBtcCache.fetchedAt < 60_000) {
+            response.crypto.ethBtc = rotationYahooEthBtcCache.data;
+          } else {
+            const [btcBars, ethBars] = await Promise.all([
+              getYahooCandles("BTC-USD", "1d", 220),
+              getYahooCandles("ETH-USD", "1d", 220),
+            ]);
+            const byDate = (bars: any[]) => new Map(bars.filter(b => b.c > 0).map(b => [new Date(b.t).toISOString().slice(0, 10), b.c]));
+            const btc = byDate(btcBars), eth = byDate(ethBars);
+            const ratioPoints = [...btc.keys()].filter(date => eth.has(date)).sort()
+              .map(date => ({ date, ratio: Number(eth.get(date)) / Number(btc.get(date)) }));
+            const latestPoint = ratioPoints.at(-1);
+            const point30 = ratioPoints.slice(-31)[0];
+            const avg = (days: number) => ratioPoints.length >= days
+              ? ratioPoints.slice(-days).reduce((sum, row) => sum + row.ratio, 0) / days : null;
+            if (latestPoint && point30 && ratioPoints.length >= 30) {
+              const return30d = latestPoint.ratio / point30.ratio - 1;
+              const avg50 = avg(50), avg200 = avg(200);
+              const above50d = avg50 == null ? null : latestPoint.ratio > avg50;
+              const above200d = avg200 == null ? null : latestPoint.ratio > avg200;
+              const leadership = return30d > 0.05 && above50d === true ? "LEADING"
+                : return30d < -0.05 && above50d === false ? "LAGGING" : "NEUTRAL";
+              rotationYahooEthBtcCache = { fetchedAt: Date.now(), data: {
+                ...(response.crypto.ethBtc || {}),
+                ratio: latestPoint.ratio, return30d, above50d, above200d, leadership,
+                source: "Yahoo Finance daily fallback",
+                asOf: latestPoint.date,
+              }};
+              response.crypto.ethBtc = rotationYahooEthBtcCache.data;
+            }
           }
         } catch (error: any) {
           console.warn("[rotation-brain] ETH/BTC Yahoo fallback unavailable:", error?.message || error);
