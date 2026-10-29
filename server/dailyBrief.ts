@@ -19,6 +19,7 @@ import { applyEmissionPolicy } from "./lib/emissionPolicy";
 import { exposureCapMode } from "./lib/featureFlags";
 import { selectExposureCapped } from "./lib/exposureSelector";
 import { correlationToBtc } from "./lib/hourlyCloseHistory";
+import { fetchBinancePrices, fetchForex, fetchMetals, fetchEnergyCommodities, quoteSafe } from "./services/marketData";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -145,82 +146,96 @@ interface MarketData {
 
 async function fetchMarketData(): Promise<MarketData> {
   const data: MarketData = { crypto: [], forex: [], metals: [], equities: [] };
-  const LOCAL = "http://localhost:5000";
-
-  try {
-    const res = await fetch(`${LOCAL}/api/crypto`).then(r => r.json());
-    if (res && typeof res === "object") {
-      const topSyms = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", "TRUMP", "HYPE", "BNB"];
-      for (const s of topSyms) {
-        const d = res[s];
-        if (d && d.price) {
-          const p = d.price;
-          const c = d.chg || 0;
-          data.crypto.push({
-            symbol: `${s}/USD`,
-            price: p >= 100 ? `$${p.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : p >= 1 ? `$${p.toFixed(2)}` : `$${p.toFixed(6)}`,
-            change: `${c >= 0 ? "+" : ""}${c.toFixed(2)}%`,
-            changeNum: c,
-          });
-        }
-      }
+  const safeFetch = async <T>(name: string, fetcher: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await fetcher();
+    } catch (e: any) {
+      console.warn(`[daily-brief] ${name} source failed: ${e?.message || e}`);
+      return fallback;
     }
-  } catch (e: any) { console.log("[daily-brief] Crypto fetch error:", e.message); }
+  };
+  const [crypto, forex, preciousMetals, energy, equities] = await Promise.all([
+    safeFetch("crypto", fetchBinancePrices, {} as Record<string, any>),
+    safeFetch("forex", fetchForex, {} as Record<string, any>),
+    safeFetch("metals", fetchMetals, {} as Record<string, any>),
+    safeFetch("energy", fetchEnergyCommodities, {} as Record<string, any>),
+    safeFetch("equities", async () => {
+      const symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "AMZN", "META"];
+      const quotes = await Promise.all(symbols.map(async symbol => [symbol, await quoteSafe(symbol)] as const));
+      return Object.fromEntries(quotes);
+    }, {} as Record<string, any>),
+  ]);
 
-  try {
-    const res = await fetch(`${LOCAL}/api/finnhub`).then(r => r.json());
-    if (res && typeof res === "object") {
-      const fx = res.forex || {};
-      const fxPairs = ["EURUSD", "USDCAD", "USDJPY", "GBPUSD", "AUDUSD", "USDCHF"];
-      const fxLabels: Record<string, string> = { EURUSD: "EUR/USD", USDCAD: "USD/CAD", USDJPY: "USD/JPY", GBPUSD: "GBP/USD", AUDUSD: "AUD/USD", USDCHF: "USD/CHF" };
-      for (const pair of fxPairs) {
-        const d = fx[pair];
-        if (d && d.price) {
-          data.forex.push({
-            pair: fxLabels[pair] || pair,
-            price: d.price.toFixed(4),
-            change: d.chg != null ? `${d.chg >= 0 ? "+" : ""}${d.chg.toFixed(2)}%` : "—",
-            changeNum: d.chg || 0,
-          });
-        }
-      }
+  const usableQuote = (quote: any) =>
+    quote && Number.isFinite(Number(quote.price)) && Number(quote.price) > 0 && quote.live !== false;
+  const pct = (value: unknown) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const price = (n: number) =>
+    n >= 100 ? `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+      : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(6)}`;
 
-      const metals = res.metals || {};
-      const metalSyms: [string, string][] = [
-        ["XAU", "Gold XAU/USD"],
-        ["XAG", "Silver XAG/USD"],
-        ["WTI", "WTI Crude Oil"],
-        ["BRENT", "Brent Crude Oil"],
-        ["NATGAS", "Natural Gas"],
-        ["COPPER", "Copper"],
-      ];
-      for (const [sym, label] of metalSyms) {
-        const d = metals[sym];
-        if (d && d.price) {
-          data.metals.push({
-            symbol: label,
-            price: `$${d.price.toFixed(2)}`,
-            change: d.chg != null ? `${d.chg >= 0 ? "+" : ""}${d.chg.toFixed(2)}%` : "—",
-            changeNum: d.chg || 0,
-          });
-        }
-      }
+  for (const symbol of ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", "TRUMP", "HYPE", "BNB"]) {
+    const quote = crypto[symbol];
+    if (!usableQuote(quote)) continue;
+    const changeNum = pct(quote.chg);
+    data.crypto.push({
+      symbol: `${symbol}/USD`,
+      price: price(Number(quote.price)),
+      change: `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%`,
+      changeNum,
+    });
+  }
 
-      const stocks = res.stocks || {};
-      const eqSyms = ["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "AMZN", "META"];
-      for (const s of eqSyms) {
-        const d = stocks[s];
-        if (d && d.price) {
-          data.equities.push({
-            symbol: s,
-            price: `$${d.price.toFixed(2)}`,
-            change: d.chg != null ? `${d.chg >= 0 ? "+" : ""}${d.chg.toFixed(2)}%` : "—",
-            changeNum: d.chg || 0,
-          });
-        }
-      }
-    }
-  } catch (e: any) { console.log("[daily-brief] Finnhub fetch error:", e.message); }
+  const fxLabels: Record<string, string> = {
+    EURUSD: "EUR/USD", USDCAD: "USD/CAD", USDJPY: "USD/JPY",
+    GBPUSD: "GBP/USD", AUDUSD: "AUD/USD", USDCHF: "USD/CHF",
+  };
+  for (const [symbol, label] of Object.entries(fxLabels)) {
+    const quote = forex[symbol];
+    if (!usableQuote(quote)) continue;
+    const changeNum = pct(quote.chg);
+    data.forex.push({
+      pair: label,
+      price: Number(quote.price).toFixed(4),
+      change: quote.chg != null ? `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%` : "—",
+      changeNum,
+    });
+  }
+
+  const metalLabels: [string, string][] = [
+    ["XAU", "Gold XAU/USD"], ["XAG", "Silver XAG/USD"], ["WTI", "WTI Crude Oil"],
+    ["BRENT", "Brent Crude Oil"], ["NATGAS", "Natural Gas"], ["COPPER", "Copper"],
+  ];
+  const metals = { ...preciousMetals, ...energy };
+  for (const [symbol, label] of metalLabels) {
+    const quote = metals[symbol];
+    if (!usableQuote(quote)) continue;
+    const changeNum = pct(quote.chg);
+    data.metals.push({
+      symbol: label,
+      price: `$${Number(quote.price).toFixed(2)}`,
+      change: quote.chg != null ? `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%` : "—",
+      changeNum,
+    });
+  }
+
+  for (const symbol of ["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "AMZN", "META"]) {
+    const quote = equities[symbol];
+    if (!usableQuote(quote)) continue;
+    const changeNum = pct(quote.chg);
+    data.equities.push({
+      symbol,
+      price: `$${Number(quote.price).toFixed(2)}`,
+      change: quote.chg != null ? `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%` : "—",
+      changeNum,
+    });
+  }
+
+  console.log(
+    `[daily-brief] Market data fetched directly: ${data.crypto.length} crypto, ${data.forex.length} FX, ${data.metals.length} metals/energy, ${data.equities.length} equities`,
+  );
 
   return data;
 }
