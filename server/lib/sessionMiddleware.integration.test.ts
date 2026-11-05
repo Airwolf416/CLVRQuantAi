@@ -60,3 +60,16 @@ test("isolated heartbeat updates cookie session activity", async () => {
     assert.ok(status.idleExpiresAt > Date.now() + 7 * 60 * 60 * 1000);
   });
 });
+
+test("expired browser navigation redirects to sign-in rather than displaying JSON", async () => {
+  await withApp(async base => {
+    for (const kind of ["idle", "absolute"]) {
+      const { cookie } = await seeded(base, kind);
+      const response = await fetch(`${base}/probe`, { headers: { cookie, accept: "text/html" }, redirect: "manual" });
+      assert.equal(response.status, 303);
+      assert.equal(response.headers.get("location"), "/?session=expired");
+      const after = await fetch(`${base}/probe`, { headers: { cookie } });
+      assert.equal((await after.json()).authenticated, false);
+    }
+  });
+});

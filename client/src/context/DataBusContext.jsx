@@ -80,15 +80,18 @@ export function DataBusProvider({ children }) {
   const abortRef = useRef(null);
 
   const fetchBus = useCallback(async () => {
-    if (abortRef.current) abortRef.current.abort();
-    abortRef.current = new AbortController();
+    if (abortRef.current) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 12_000);
     try {
       const res = await apiFetch("/api/databus/status", {
         credentials: "include",
-        signal: AbortSignal.timeout(12_000),
+        signal: controller.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json();
+      if (controller.signal.aborted) return;
 
       if (d.regime)      setRegime(d.regime);
       if (d.fearGreed)   setFearGreed(d.fearGreed);
@@ -105,6 +108,8 @@ export function DataBusProvider({ children }) {
     } catch (e) {
       if (e.name !== "AbortError") setError(e.message);
     } finally {
+      clearTimeout(timeout);
+      if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
   }, []);
@@ -115,6 +120,7 @@ export function DataBusProvider({ children }) {
     return () => {
       clearInterval(iv);
       if (abortRef.current) abortRef.current.abort();
+      abortRef.current = null;
     };
   }, [fetchBus]);
 

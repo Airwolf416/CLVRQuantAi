@@ -164,6 +164,12 @@ export async function sessionPolicyMiddleware(req: Request, res: Response, next:
       : null;
   if (code) {
     try { await revokeCanonicalSession(req, context); } catch { /* expiry remains fail-closed */ }
+    // Browser document navigation must reach the sign-in UI, not a JSON error.
+    // API clients keep the 401 contract and handle reauthentication themselves.
+    if (req.method === "GET" && !req.path.startsWith("/api/")
+      && req.headers?.accept?.includes("text/html")) {
+      return res.redirect(303, "/?session=expired");
+    }
     return res.status(401).json({ error: "Session expired", code });
   }
   next();

@@ -98,7 +98,11 @@ export function calculateAlphaAsset(
     : !atr || (atr50Average != null && atr > atr50Average * 2) ? "WAIT ATR"
       : !support || !resistance ? "WAIT SUPPORT"
         : !direction ? "WAIT SIGNAL"
-          : aligned && nearEntry && !options.regimeConflict ? "READY" : "WAIT PRICE";
+          : options.regimeConflict ? "REGIME CONFLICT"
+            : trend === "N/A" ? "WAIT HISTORY"
+              : !aligned ? "TREND CONFLICT"
+                : !valid(options.entryZone) ? "WAIT ENTRY"
+                  : nearEntry ? "READY" : "WAIT ENTRY";
   return {
     symbol, price, previousClose,
     dayChange: price != null && previousClose ? price - previousClose : null,
@@ -111,6 +115,17 @@ export function calculateAlphaAsset(
     rrTargets: targets.map(target => risk ? Math.abs(target - price!) / risk : null),
     rrStructural: structuralReward != null && risk ? structuralReward / risk : null,
     status,
+    statusReason: ({
+      "WAIT PRICE": "A current price is required.",
+      "WAIT ATR": "ATR history is missing or volatility exceeds twice its recent average.",
+      "WAIT SUPPORT": "Structural support and resistance are required.",
+      "WAIT SIGNAL": "No active directional signal exists; market readings alone are not a trade setup.",
+      "REGIME CONFLICT": "The active signal conflicts with the market regime.",
+      "WAIT HISTORY": "More history is needed to establish the trend.",
+      "TREND CONFLICT": "The signal direction does not align with the observed trend.",
+      "WAIT ENTRY": "A valid entry is required and price must be within half an ATR of it.",
+      "READY": "The active signal aligns with trend and price is within half an ATR of entry.",
+    } as Record<string, string>)[status],
     updatedAt: bars.at(-1)?.t ?? null,
     disclaimer: "Levels are informational, not financial advice.",
   };

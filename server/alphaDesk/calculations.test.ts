@@ -44,3 +44,12 @@ test("structural reward is separate from target-multiple reward/risk", () => {
   });
   assert.notEqual(result.rrStructural, result.rrTargets[0]);
 });
+
+test("setup status distinguishes signal, trend, regime and entry conditions", () => {
+  const bars = risingBars();
+  assert.equal(calculateAlphaAsset("TEST", bars, null, { livePrice: 340 }).status, "WAIT SIGNAL");
+  assert.equal(calculateAlphaAsset("TEST", bars, "SHORT", { livePrice: 340, entryZone: 340 }).status, "TREND CONFLICT");
+  assert.equal(calculateAlphaAsset("TEST", bars, "LONG", { livePrice: 340, entryZone: 340, regimeConflict: true }).status, "REGIME CONFLICT");
+  assert.equal(calculateAlphaAsset("TEST", bars, "LONG", { livePrice: 340 }).status, "WAIT ENTRY");
+  assert.equal(calculateAlphaAsset("TEST", bars, "LONG", { livePrice: 340, entryZone: 300 }).status, "WAIT ENTRY");
+});

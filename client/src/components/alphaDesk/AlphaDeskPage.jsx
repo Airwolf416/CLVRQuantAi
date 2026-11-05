@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../../lib/apiClient";
 
 const C = {
@@ -187,8 +187,11 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [corrWindow, setCorrWindow] = useState(60);
   const [query, setQuery] = useState("");
+  const inFlight = useRef(false);
 
   const load = useCallback(async (isInitial = false) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     if (isInitial) setLoading(true);
     try {
       const response = await apiFetch("/api/alpha-desk/overview", { method: "GET", credentials: "include" });
@@ -206,6 +209,7 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
     } catch (requestError) {
       setError(requestError?.message || "Market data could not be refreshed.");
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   }, []);
@@ -334,7 +338,11 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
             <td className={valid(asset.dayChangePct) ? Number(asset.dayChangePct) >= 0 ? "is-positive" : "is-negative" : ""}>{signedPct(asset.dayChangePct)}</td>
             <td><span className="ad-trend" style={{ color: toneFor(asset.trend) }}>{asset.trend || NA}</span></td>
             <td>{displayPrice(asset.atr14, asset.symbol)}</td><td>{displayPrice(asset.support, asset.symbol)}</td><td>{displayPrice(asset.resistance, asset.symbol)}</td>
-            <td><Badge>{asset.status || NA}</Badge></td>
+            <td><Badge>{asset.livePriceStale ? "STALE PRICE" : asset.status || NA}</Badge>
+              <small style={{ display: "block", maxWidth: 230, minHeight: 32, color: C.muted, marginTop: 5 }}>
+                {asset.livePriceStale ? "Waiting for a fresh price; this setup is not confirmed." : asset.statusReason}
+              </small>
+            </td>
           </tr>)}
           {!filteredAssets.length && <tr><td colSpan="8" className="ad-no-rows">{assets.length ? "No instruments match these filters." : "Asset readings are not available."}</td></tr>}</tbody>
         </table></div>

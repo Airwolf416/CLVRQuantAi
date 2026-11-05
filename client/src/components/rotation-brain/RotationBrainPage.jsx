@@ -201,7 +201,7 @@ export default function RotationBrainPage({ data, loading = false, error, onRetr
     </div>
 
     {error && data && <div className="rb-inline-alert" role="status"><strong>Refresh issue</strong> Showing the last available snapshot. {typeof error === "string" ? error : error.message || ""}{onRetry && <button onClick={onRetry}>Retry</button>}</div>}
-    {loading && data && <div className="rb-refresh-line"><span /> Updating snapshot · last data remains visible</div>}
+    <div className="rb-refresh-line" style={{ visibility: loading && data ? "visible" : "hidden" }}><span /> Updating snapshot · last data remains visible</div>
     {isPartial && <div className="rb-quality-note"><span className="rb-note-mark">i</span><span><strong>Coverage is incomplete.</strong> Some indicators are warming up, stale, or missing source history. Unavailable readings are shown as dashes and are not counted as zero.</span></div>}
 
     <header className="rb-page-head">
@@ -311,17 +311,26 @@ export default function RotationBrainPage({ data, loading = false, error, onRetr
     <Panel title="Risk appetite" eyebrow="POSITIONING & SENTIMENT" aside={<Badge tone={statusColor(crypto.sentiment?.status)}>{labelize(crypto.sentiment?.status || "unavailable")}</Badge>}>
       <div className="rb-sentiment-row">
         <div className="rb-sentiment-score">
-          <span className="rb-metric-label">NORMALIZED SCORE</span>
-          <strong>{finite(crypto.sentiment?.score) ? num(crypto.sentiment.score, 1) : "—"}</strong>
-          <Badge tone={C.gold}>{labelize(crypto.sentiment?.label || "unavailable")}</Badge>
+          <span className="rb-metric-label">CROSS-ASSET LADDER APPETITE</span>
+          <strong style={{ fontSize: 18, lineHeight: 1.25 }}>{labelize(crypto.ladder?.appetite || "unavailable")}</strong>
+          {finite(crypto.ladder?.slope) && <span className="rb-sentiment-weight">Ladder slope: {num(crypto.ladder.slope, 2)}</span>}
+          {Array.isArray(crypto.ladder?.rungs) && <span className="rb-sentiment-weight">{crypto.ladder.rungs.filter(r => finite(r.riskAdjustedReturn)).length}/{crypto.ladder.rungs.length} ladder groups have observed returns.</span>}
+          <span className="rb-metric-label" style={{ marginTop: 10 }}>HISTORICAL SENTIMENT SCORE</span>
+          <strong>{finite(crypto.sentiment?.score) ? num(crypto.sentiment.score, 1) : "Warming up"}</strong>
+          {finite(crypto.sentiment?.score)
+            ? <Badge tone={C.gold}>{labelize(crypto.sentiment?.label || "unavailable")}</Badge>
+            : <span className="rb-sentiment-weight">{crypto.sentiment?.availableComponents ?? 0}/6 components ready; each percentile needs 30 daily observations.</span>}
         </div>
         <div className="rb-sentiment-factors">
-          {Array.isArray(crypto.sentiment?.factors) && crypto.sentiment.factors.length
+          {Array.isArray(crypto.sentiment?.components) && crypto.sentiment.components.length
            ? crypto.sentiment.components.map((f, i) => <div className="rb-sentiment-factor" key={`${f.name || f.factor || i}`}>
-              <span>{labelize(f.name || f.factor)}</span><strong>{finite(f.percentile) ? `${num(f.percentile, 0)}th pct` : finite(f.value) ? num(f.value, 2) : "—"}</strong>
-              <span className="rb-sentiment-weight">{finite(f.weight) ? `${(Number(f.weight) * 100).toFixed(0)}% weight` : f.stale ? "stale" : "unavailable"}</span>
-            </div>)
-            : <div className="rb-empty-inline">Sentiment component history is still accumulating.</div>}
+               <span>{labelize(f.name || f.factor)}</span><strong>{finite(f.percentile) ? `${num(f.percentile, 0)}th pct` : finite(f.value) ? Number(f.value).toPrecision(4) : "—"}</strong>
+               <span className="rb-sentiment-weight">
+                 {f.percentile != null ? "percentile ready" : f.reason === "history_warming" ? "history warming" : "source unavailable"}
+                 {finite(f.weight) ? ` · ${(Number(f.weight) * 100).toFixed(0)}% weight` : ""}
+               </span>
+             </div>)
+            : <div className="rb-empty-inline">No sentiment components were returned by the data service.</div>}
         </div>
       </div>
     </Panel>

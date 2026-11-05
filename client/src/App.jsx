@@ -3619,6 +3619,16 @@ export default function App(){
   // Transient errors must not discard credentials or masquerade as sign-out.
   useEffect(()=>{
     let active=true;
+    if(new URLSearchParams(window.location.search).get("session")==="expired"){
+      setAuthInitialMode("signin");
+      try{
+        localStorage.removeItem("clvr_auth_token");
+        sessionStorage.setItem("clvr_session_notice","Your session expired. Please sign in again.");
+      }catch{}
+      const cleanUrl=new URL(window.location.href);
+      cleanUrl.searchParams.delete("session");
+      window.history.replaceState({}, "", cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);
+    }
     apiFetch("/api/auth/me",{credentials:"include"})
       .then(async response=>{
         if(response.status===401){
@@ -3812,16 +3822,20 @@ function Dashboard({user,setUser,onShowAuth}){
   const [rotationBrainData,setRotationBrainData]=useState(null);
   const [rotationBrainLoading,setRotationBrainLoading]=useState(false);
   const [rotationBrainError,setRotationBrainError]=useState("");
+  const rotationRequestPending=useRef(false);
   const refreshRotationBrain=useCallback(async()=>{
+    if(rotationRequestPending.current)return;
+    rotationRequestPending.current=true;
     setRotationBrainLoading(true);
     try {
-      const response=await apiFetch("/api/rotation-brain/latest",{cache:"no-store"});
+      const response=await apiFetch("/api/rotation-brain/latest",{cache:"no-store",signal:AbortSignal.timeout(15000)});
       if(!response.ok) throw new Error("Rotation Brain data could not be loaded.");
       setRotationBrainData(await response.json());
       setRotationBrainError("");
     } catch(error) {
       setRotationBrainError(error?.message||"Rotation Brain data could not be loaded.");
     } finally {
+      rotationRequestPending.current=false;
       setRotationBrainLoading(false);
     }
   },[]);

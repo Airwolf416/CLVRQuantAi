@@ -60,17 +60,16 @@ interface SignalRow {
   created_at: Date | null;
   archetype: string | null;
   conviction: number | null;
-  asset_class: string | null;
 }
 
-async function processOne(signalId: number): Promise<void> {
+export async function processOne(signalId: number, executor: Pick<typeof db, "execute"> = db): Promise<void> {
   // Load the signal row + any joined context we need. Defensive selects —
   // ai_signal_log column list has shifted over the modules so we keep this
   // SELECT minimal and let the analyzer tolerate nulls.
-  const r: any = await db.execute(sql`
+  const r: any = await executor.execute(sql`
     SELECT s.id, s.token, s.direction, s.entry_price, s.tp1_price, s.tp2_price,
            s.tp3_price, s.stop_loss, s.outcome, s.pnl_pct, s.resolved_at,
-           s.created_at, s.archetype, s.conviction, s.asset_class
+           s.created_at, s.archetype, s.conviction
     FROM ai_signal_log s
     WHERE s.id = ${signalId}
     LIMIT 1
@@ -79,7 +78,7 @@ async function processOne(signalId: number): Promise<void> {
   const signal = rows[0];
   if (!signal) {
     // Signal vanished — mark UNCLASSIFIED so we don't keep re-trying.
-    await db.execute(sql`
+    await executor.execute(sql`
       UPDATE post_trade_analysis
       SET primary_tag='UNCLASSIFIED',
           analyzed_at=NOW(),
@@ -96,17 +95,17 @@ async function processOne(signalId: number): Promise<void> {
   } catch (err: any) {
     console.warn("[ptaWorker] collectAnalysisInputs threw for signal", signalId, err?.message);
     // Leave PENDING for retry on transient feed errors.
-    return;
+    throw err;
   }
 
   const diag = diagnose(inputs);
   const secondary = secondaryChecks(inputs);
   const allSecondary = Array.from(new Set([...(diag.secondaryTags || []), ...secondary]));
 
-  await db.execute(sql`
+  await executor.execute(sql`
     UPDATE post_trade_analysis
     SET primary_tag=${diag.primaryTag},
-        secondary_tags=${allSecondary as any},
+        secondary_tags=ARRAY[${sql.join(allSecondary.map(tag => sql`${tag}`), sql`, `)}]::text[],
         assigned_archetype=${inputs.assignedArchetype || null},
         actual_archetype=${diag.actualArchetype || inputs.reclassifiedArchetype || null},
         mfe_r=${Number.isFinite(diag.mfeR) ? diag.mfeR : null},

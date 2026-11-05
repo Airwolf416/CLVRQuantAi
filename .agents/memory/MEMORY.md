@@ -25,3 +25,4 @@
 - [Dynamic universe authority](dynamic-universe-authority.md) — market discovery is not scoring or emission authorization; every server sink must re-check durable eligibility and explicit scorer support.
 - [Macro feed failure semantics](macro-feed-reliability.md) — absent actuals must not bypass cache TTL; distinguish upstream failures from dashboard request-budget exhaustion.
 - [Inactive-account cleanup](inactive-account-cleanup.md) — never infer a legacy account's inactivity from creation date when durable login history is missing.
+- [Market context policy](market-context-policy.md) — real cross-asset evidence should inform AI tools without overriding safety gates or inventing readiness.
