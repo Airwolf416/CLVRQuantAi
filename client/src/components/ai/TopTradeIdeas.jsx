@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import TradeIdeaCard from "./TradeIdeaCard.jsx";
+import TradeIdeasThinking from "./TradeIdeasThinking.jsx";
 import MacroPreFlight from "./MacroPreFlight.jsx";
 import { buildMarketSnapshot, buildMacroPreflightContext } from "../../utils/marketDataSnapshot.js";
 import { apiFetch } from "../../lib/apiClient";
@@ -433,14 +434,7 @@ ${snap.sections}`;
         </div>
       )}
 
-      {loading && (
-        <div aria-busy="true" aria-live="polite" aria-label="Loading trade ideas" style={{ padding: "16px 0" }}>
-          <span className="sr-only">Loading trade ideas</span>
-          {[0, 1, 2].map(i => (
-            <div key={i} aria-hidden="true" className="motion-shimmer" style={{ height: 138, marginBottom: 12, borderRadius: 12, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(201,168,76,0.12)" }} />
-          ))}
-        </div>
-      )}
+      {loading && <TradeIdeasThinking />}
 
       {tradesList.length > 0 && (
         <div className="motion-tab-content" key={`${timeframe}:${todayMode}:${assetClass}:${marketTypeFilter}`} style={{ display: "flex", flexDirection: "column", gap: 12 }}>

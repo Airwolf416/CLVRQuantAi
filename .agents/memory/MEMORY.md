@@ -26,3 +26,4 @@
 - [Macro feed failure semantics](macro-feed-reliability.md) — absent actuals must not bypass cache TTL; distinguish upstream failures from dashboard request-budget exhaustion.
 - [Inactive-account cleanup](inactive-account-cleanup.md) — never infer a legacy account's inactivity from creation date when durable login history is missing.
 - [Market context policy](market-context-policy.md) — real cross-asset evidence should inform AI tools without overriding safety gates or inventing readiness.
+- [Dashboard motion policy](ui-motion-policy.md) — live updates must not shift layout; Trade Ideas should show honest, professional thinking feedback.

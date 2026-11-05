@@ -5650,12 +5650,15 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             const isUp=Number(d?.chg)>=0;
             const label=sym==="DXY"?"DXY*":sym;
             return(
-              <div key={sym} data-testid={`ticker-${sym}`} title={derived?"DXY derived from EUR/USD inverse (proxy)":undefined}
+              <div key={sym} data-testid={`ticker-${sym}`} title={`${label}: ${livePrice?"Live price":priceState}${derived?" · DXY derived from EUR/USD inverse (proxy)":""}`}
                 onClick={()=>{setAiInput(`${sym==="DXY"?"DXY (Dollar Index)":sym} — long or short right now?`);setTab("ai");}}
                 style={{background:flash==="green"?"rgba(0,199,135,.08)":flash==="red"?"rgba(255,64,96,.06)":C.panel,
-                  border:`1px solid ${livePrice?"rgba(201,168,76,.18)":C.border}`,borderRadius:2,padding:"5px 9px",flexShrink:0,cursor:"pointer",minWidth:64,transition:"background .35s"}}>
-                <div style={{fontFamily:MONO,fontSize:8,color:livePrice?C.gold:C.muted,letterSpacing:"0.08em"}}>{label} {hasPrice&&!livePrice?`· ${priceState}`:""}</div>
-                {hasPrice?<><div className={flash?"motion-price-pulse":undefined} style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,marginTop:1,display:"flex",alignItems:"center",gap:2}}>{flash==="green"?"↑":flash==="red"?"↓":""}{sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)}</div>
+                  border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 7px",boxSizing:"border-box",flex:"0 0 90px",width:90,minWidth:90,height:62,overflow:"hidden",cursor:"pointer",transition:"background .35s",fontVariantNumeric:"tabular-nums"}}>
+                <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.02em",display:"flex",alignItems:"center",justifyContent:"space-between",whiteSpace:"nowrap",height:12}}>
+                  <span>{label}</span>
+                  <span style={{width:26,textAlign:"right",fontSize:6,color:C.muted}}>{sourceError?"ERROR":refreshing?"SYNC":livePrice?"LIVE":hasPrice?"LAST":"WAIT"}</span>
+                </div>
+                {hasPrice?<><div style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,marginTop:1,height:16,lineHeight:"16px",whiteSpace:"nowrap"}}>{sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)}</div>
                   <div style={{fontFamily:MONO,fontSize:9,color:isUp?C.green:C.red}}>{d?.chg!=null?pct(d.chg):"—"}</div></>
                   :<div aria-label={`${label} ${sourceError?"price unavailable":"loading price"}`} style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:2}}>{sourceError?"Price unavailable":"↻ Loading…"}</div>}
               </div>
