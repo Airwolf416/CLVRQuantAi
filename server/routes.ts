@@ -48,6 +48,7 @@ import rateLimit from "express-rate-limit";
 import { PostgresRateLimitStore } from "./lib/postgresRateLimitStore";
 import { requiresVerifiedEmail, verificationAccess } from "./lib/verificationGate";
 import { verifyTurnstile } from "./lib/turnstile";
+import { signupProtectionRequired } from "./lib/signupProtection";
 import { claimResendCooldown } from "./lib/resendCooldown";
 import { stripeResourceOwnedByUser } from "./lib/billingOwnership";
 import { stripePriceTier } from "./lib/stripePlan";
@@ -12929,16 +12930,19 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     res.set("Cache-Control", "no-store");
     const siteKey = process.env.TURNSTILE_SITE_KEY;
     const isConfigured = Boolean(siteKey && process.env.TURNSTILE_SECRET_KEY);
-    res.json({ siteKey: isConfigured ? siteKey : null, configured: isConfigured });
+    const required = signupProtectionRequired();
+    res.json({ siteKey: required && isConfigured ? siteKey : null, configured: isConfigured, required });
   });
 
   app.post("/api/auth/signup", signupLimiter, async (req, res) => {
     const { name, email, password, dailyEmail, referralCode: refCode } = req.body;
+    if (signupProtectionRequired()) {
     if (!process.env.TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY) {
       return res.status(503).json({ error: "Signup verification is not configured. Please contact support." });
     }
     if (!(await verifyTurnstile(req.body.turnstileToken, req.ip))) {
       return res.status(403).json({ error: "Bot verification failed or expired. Please complete the challenge again.", code: "TURNSTILE_FAILED" });
+    }
     }
     if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
     if (!password || password.length < 10) return res.status(400).json({ error: "Password must be at least 10 characters" });

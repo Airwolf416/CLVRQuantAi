@@ -339,13 +339,21 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileError, setTurnstileError] = useState("");
+  const [turnstileRequired, setTurnstileRequired] = useState(true);
   const onTurnstileToken = useCallback(token => setTurnstileToken(token), []);
   const onTurnstileError = useCallback(message => setTurnstileError(message), []);
   useEffect(() => {
-    apiFetch("/api/auth/turnstile-config").then(r => r.json())
+    apiFetch("/api/auth/turnstile-config").then(r => {
+      if (!r.ok) throw new Error("Signup configuration unavailable");
+      return r.json();
+    })
       .then(d => {
-        if (d.siteKey && d.configured) setTurnstileSiteKey(d.siteKey);
-        else setTurnstileError("Signup bot protection needs configuration. Add TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY in Replit Secrets.");
+        if (d.required === false) {
+          setTurnstileRequired(false);
+          setTurnstileSiteKey("");
+          setTurnstileError("");
+        } else if (d.siteKey && d.configured) setTurnstileSiteKey(d.siteKey);
+        else setTurnstileError("Account creation is temporarily unavailable because security verification could not start. Please try again shortly or contact support. Your details have not been submitted.");
       })
       .catch(() => setTurnstileError("Could not load signup bot protection. Please reload and try again."));
   }, []);
@@ -485,7 +493,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   };
 
   const handleSignUp = async () => {
-    if (!turnstileSiteKey || !turnstileToken) return setError(turnstileError || "Complete bot verification before creating an account.");
+    if (turnstileRequired && (!turnstileSiteKey || !turnstileToken)) return setError(turnstileError || "Complete bot verification before creating an account.");
     if (!form.name.trim()) return setError("Please enter your name.");
     if (!form.email.includes("@")) return setError("Please enter a valid email.");
     if (form.password.length < 10) return setError("Password must be at least 10 characters.");
@@ -1154,7 +1162,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
             {turnstileError && <div role="alert" style={{ fontFamily: MONO, fontSize: 10, color: C.red }}>{turnstileError}</div>}
             {error && <div data-testid="text-auth-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, padding: "8px 12px", background: "rgba(255,64,96,.06)", border: `1px solid rgba(255,64,96,.2)`, borderRadius: 4 }}>{error}</div>}
 
-            <button data-testid="btn-submit-signup" onClick={handleSignUp} disabled={loading || !turnstileSiteKey || !turnstileToken}
+            <button data-testid="btn-submit-signup" onClick={handleSignUp} disabled={loading || (turnstileRequired && (!turnstileSiteKey || !turnstileToken))}
               style={{ ...btnGold, opacity: loading ? 0.5 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
               {loading ? "Creating Account..." : "Create Account →"}
             </button>
