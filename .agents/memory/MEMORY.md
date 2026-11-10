@@ -28,3 +28,4 @@
 - [Market context policy](market-context-policy.md) — real cross-asset evidence should inform AI tools without overriding safety gates or inventing readiness.
 - [Dashboard motion policy](ui-motion-policy.md) — live updates must not shift layout; Trade Ideas should show honest, professional thinking feedback.
 - [Local morning briefs](brief-delivery-policy.md) — subscriber-local 6 AM delivery, editable time zones, weekend-aware summaries, and conservative Eastern defaults.
+- [AI request Unicode failures](ai-request-unicode.md) — truncated emoji can pass Node JSON parsing but trigger Anthropic “unexpected end of hex escape”; validate Unicode at transport.

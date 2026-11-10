@@ -36,6 +36,7 @@ import { recordActivity as recordLiveActivity, getLiveStats, getLiveUserList } f
 import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
 import { isBriefTimeZone } from "@shared/briefTimeZones";
 import { shouldCacheAiAnalysis } from "./lib/aiAnalysisCache";
+import { clampAiText, serializeAiRequest, describeAiProviderFailure } from "./lib/aiRequestEncoding";
 import multerLib from "multer";
 import sharpLib from "sharp";
 import { createHash as cryptoCreateHash, createHmac, timingSafeEqual } from "crypto";
@@ -9980,7 +9981,7 @@ Every level must be technically defensible. Return JSON only.`;
     // macro rows). Treated strictly as untrusted data — fenced when injected,
     // never as instructions. Clamped before concatenation.
     const contextRaw = typeof req.body.context === "string" ? req.body.context : "";
-    const contextClamped = contextRaw.slice(0, 30000);
+    const contextClamped = clampAiText(contextRaw, 30000);
     // Optional multi-turn history — DATA ONLY, never merged into the system
     // prompt. Strict validation: array, ≤12 items, each must be
     // { role: "user" | "assistant", content: string }; invalid items are
@@ -9989,13 +9990,13 @@ Every level must be technically defensible. Return JSON only.`;
       ? req.body.history
           .slice(0, 12)
           .filter((m: any) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-          .map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content.slice(0, 4000) }))
+          .map((m: any) => ({ role: m.role as "user" | "assistant", content: clampAiText(m.content, 4000) }))
       : [];
     // userMessage is clamped to 16k chars — big enough for the morning-brief
     // payload (largest legitimate caller, with its full JSON output schema),
     // small enough to bound abuse.
     const userMessageInput = req.body.userMessage || req.body.prompt || "";
-    const userMessageRaw = typeof userMessageInput === "string" ? userMessageInput.slice(0, 16000) : "";
+    const userMessageRaw = typeof userMessageInput === "string" ? clampAiText(userMessageInput, 16000) : "";
     if (!userMessageRaw) return res.status(400).json({ error: "userMessage is required" });
     const basketMarketType = featureKey === "basketAI"
       ? canonicalMarketType(req.body.marketType || "BOTH") : null;
@@ -10337,7 +10338,7 @@ Every level must be technically defensible. Return JSON only.`;
           "anthropic-version": "2023-06-01",
           "x-api-key": apiKey,
         },
-        body: JSON.stringify(body),
+        body: serializeAiRequest(body),
       });
       return r;
     };
@@ -10348,10 +10349,11 @@ Every level must be technically defensible. Return JSON only.`;
 
       if (!response.ok) {
         const errorText = await response.text();
-        if (errorText.includes("credit balance") || errorText.includes("credit_balance") || response.status === 529) {
-          return res.status(503).json({ error: "__MAINTENANCE__" });
-        }
-        return res.status(response.status).json({ error: `API Error ${response.status}: ${errorText}` });
+        const failure = describeAiProviderFailure(response.status, errorText);
+        console.warn("[ai/analyze] Provider request failed", {
+          status: response.status, code: failure.code, requestId: response.headers.get("request-id"),
+        });
+        return res.status(failure.status).json({ error: failure.error, code: failure.code });
       }
 
       // ── PROMPT_V2 shadow run (fire-and-forget; AI Analyst surface) ────────
@@ -10415,7 +10417,11 @@ Every level must be technically defensible. Return JSON only.`;
         response = await callClaude(messages, false); // no tools on follow-up — get final answer
         if (!response.ok) {
           const errorText = await response.text();
-          return res.status(response.status).json({ error: `API Error ${response.status}: ${errorText}` });
+          const failure = describeAiProviderFailure(response.status, errorText);
+          console.warn("[ai/analyze] Tool follow-up failed", {
+            status: response.status, code: failure.code, requestId: response.headers.get("request-id"),
+          });
+          return res.status(failure.status).json({ error: failure.error, code: failure.code });
         }
         data = await response.json();
         if (data.error) return res.status(400).json({ error: data.error.message || "AI error" });
