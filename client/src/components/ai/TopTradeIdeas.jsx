@@ -483,15 +483,29 @@ ${snap.sections}`;
           headline = "NO SETUPS MET QUALITY GATES";
           body = `${er?.evaluated ?? 0} candidates were evaluated this run; none met the quality thresholds.`;
           chips = Array.isArray(er?.top_rejections) && er.top_rejections.length > 0 ? er.top_rejections : null;
+        } else if (type === "NO_CANDIDATES") {
+          icon = "🔎";
+          headline = "NO CANDIDATES RETURNED THIS RUN";
+          body = "The AI returned zero candidate trade plans for this request. No trade-idea quality gate rejected a candidate; this does not prove there were no market opportunities.";
         }
+        const runTime = er?.generated_at && Number.isFinite(Date.parse(er.generated_at))
+          ? new Date(er.generated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+          : null;
+        const perRunNote = type === "ALL_REJECTED" || type === "NO_CANDIDATES";
+        const displayedChips = chips?.map(item => typeof item === "string"
+          ? item
+          : `${item.reason}${Number.isFinite(item.count) ? ` × ${item.count}` : ""}`);
         return (
           <div data-testid="card-empty-trade-ideas" style={{ textAlign: "center", padding: "32px 16px", background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10 }}>
             <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
             <div data-testid="text-empty-headline" style={{ fontSize: 12, fontWeight: 700, color: "#ef4444", fontFamily: MONO, marginBottom: 6 }}>{headline}</div>
             <div data-testid="text-empty-body" style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", fontFamily: SANS }}>{body}</div>
-            {chips && (
+            {perRunNote && <div data-testid="text-empty-run-scope" style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", fontFamily: MONO, marginTop: 7 }}>
+              This request only{runTime ? ` · checked ${runTime}` : ""}
+            </div>}
+            {displayedChips && displayedChips.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 6, marginTop: 10 }}>
-                {chips.map((r, i) => (
+                {displayedChips.map((r, i) => (
                   <span key={i} data-testid={`chip-rejection-${i}`} style={{ fontSize: 9, fontFamily: MONO, color: "rgba(255,255,255,0.55)", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: "3px 8px" }}>{r}</span>
                 ))}
               </div>

@@ -83,6 +83,7 @@ export function renderDailyBriefEmail(
   subscriberEmail = "",
   tieredTrades?: TieredTradeIdea[],         // when present → tiered v1 path
   heldSlotNote?: string,                    // e.g. "1 slot held — no setup met threshold"
+  marketSessionNote?: string,
 ): string {
   const template = getTemplate("daily_brief");
 
@@ -204,6 +205,7 @@ export function renderDailyBriefEmail(
   const data = {
     dateStr,
     headline:    briefJson.headline || "Markets in Motion",
+    marketSessionNote: marketSessionNote || "",
     sentimentColor,
     sentimentLabel,
     macroRegime:    macroRegimeStr,

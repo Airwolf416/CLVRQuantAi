@@ -34,6 +34,8 @@ import { buildEnrichedReasoning } from "./lib/buildEnrichedReasoning";
 import { computeRegimeGate } from "./lib/regimeGate";
 import { recordActivity as recordLiveActivity, getLiveStats, getLiveUserList } from "./liveUsers";
 import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
+import { isBriefTimeZone } from "@shared/briefTimeZones";
+import { shouldCacheAiAnalysis } from "./lib/aiAnalysisCache";
 import multerLib from "multer";
 import sharpLib from "sharp";
 import { createHash as cryptoCreateHash, createHmac, timingSafeEqual } from "crypto";
@@ -9909,17 +9911,19 @@ Every level must be technically defensible. Return JSON only.`;
   async function buildTradeIdeasEmptyReason(
     evaluated: number,
     rejectionTally: Record<string, number>,
-  ): Promise<{ type: string; detail: string; evaluated: number; top_rejections: string[] }> {
+  ): Promise<{ type: string; detail: string; evaluated: number; generated_at: string; top_rejections: Array<{ reason: string; count: number }> }> {
     const top_rejections = Object.entries(rejectionTally)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
-      .map(([reason]) => reason);
+      .map(([reason, count]) => ({ reason, count }));
+    const generated_at = new Date().toISOString();
     if (isHalted() || isProbation()) {
       const cb = getCircuitState();
       return {
         type: "CIRCUIT_BREAKER",
         detail: cb.reason || "Signal engine paused for quality protection",
         evaluated,
+        generated_at,
         top_rejections,
       };
     }
@@ -9930,6 +9934,7 @@ Every level must be technically defensible. Return JSON only.`;
           type: "MACRO_RISK_OFF",
           detail: macro.reason || (typeof macro.pctChange === "number" ? `Macro risk-off: BTC ${macro.pctChange.toFixed(2)}% in 4h` : "Macro risk-off: BTC flush detected"),
           evaluated,
+          generated_at,
           top_rejections,
         };
       }
@@ -9939,13 +9944,15 @@ Every level must be technically defensible. Return JSON only.`;
         type: "ALL_REJECTED",
         detail: `${evaluated} candidates evaluated; none met the quality thresholds`,
         evaluated,
+        generated_at,
         top_rejections,
       };
     }
     return {
       type: "NO_CANDIDATES",
-      detail: "No qualifying setups this run",
+      detail: "The AI returned no candidate plans for this request; no trade-idea quality gate rejected a candidate.",
       evaluated,
+      generated_at,
       top_rejections,
     };
   }
@@ -10271,7 +10278,7 @@ Every level must be technically defensible. Return JSON only.`;
     const forceFresh = req.body.forceFresh === true && effectiveTier === "elite";
 
     const cached = aiCache.get(cacheKey);
-    if (!forceFresh && cached && Date.now() - cached.ts < AI_CACHE_TTL) {
+    if (!forceFresh && cached && Date.now() - cached.ts < AI_CACHE_TTL && shouldCacheAiAnalysis(cached.text)) {
       return res.json({ text: cached.text, response: cached.text, cached: true });
     }
 
@@ -10287,7 +10294,7 @@ Every level must be technically defensible. Return JSON only.`;
       if (inflight) {
         try { await inflight; } catch { /* first caller errored — compute below */ }
         const after = aiCache.get(cacheKey);
-        if (after && Date.now() - after.ts < AI_CACHE_TTL) {
+        if (after && Date.now() - after.ts < AI_CACHE_TTL && shouldCacheAiAnalysis(after.text)) {
           return res.json({ text: after.text, response: after.text, cached: true, coalesced: true });
         }
       }
@@ -10506,8 +10513,12 @@ Every level must be technically defensible. Return JSON only.`;
             // survive. No gate is weakened; we only explain WHY it's empty.
             if (parsed.trades.length === 0) {
               parsed.empty_reason = await buildTradeIdeasEmptyReason(evaluated, runTally);
-              console.log(`[ai/analyze] empty run — reason=${parsed.empty_reason.type} evaluated=${evaluated} top=${parsed.empty_reason.top_rejections.join(" | ") || "none"}`);
+              console.log(`[ai/analyze] empty run — reason=${parsed.empty_reason.type} evaluated=${evaluated} rejections=${JSON.stringify(runTally)}`);
             }
+            console.info("[trade-ideas-audit]", JSON.stringify({
+              at: new Date().toISOString(), evaluated, accepted: parsed.trades.length,
+              rejections: runTally, emptyType: parsed.empty_reason?.type || null,
+            }));
             text = JSON.stringify(parsed);
           }
         }
@@ -10518,7 +10529,8 @@ Every level must be technically defensible. Return JSON only.`;
       // Only cache valid non-empty responses (post-hardening). A force-fresh
       // re-roll also writes the shared key, so the window re-syncs to the newest
       // batch and subsequent users stay consistent again.
-      aiCache.set(cacheKey, { text, ts: Date.now() });
+      if (shouldCacheAiAnalysis(text)) aiCache.set(cacheKey, { text, ts: Date.now() });
+      else aiCache.delete(cacheKey);
 
       res.json({ text, response: text, cached: false, fresh: forceFresh, model });
     } catch (e: any) {
@@ -12936,6 +12948,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
 
   app.post("/api/auth/signup", signupLimiter, async (req, res) => {
     const { name, email, password, dailyEmail, referralCode: refCode } = req.body;
+    const timeZone = isBriefTimeZone(req.body.timeZone) ? req.body.timeZone : "America/Toronto";
     if (signupProtectionRequired()) {
     if (!process.env.TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY) {
       return res.status(503).json({ error: "Signup verification is not configured. Please contact support." });
@@ -12957,6 +12970,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         password: hashed,
         name: name.trim(),
         subscribeToBrief: !!dailyEmail,
+        timeZone,
       });
       await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
       const crypto = await import("crypto");
@@ -12992,7 +13006,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             "List-Unsubscribe": "<mailto:Support@clvrquantai.com?subject=unsubscribe>",
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
           },
-          text: `Welcome to CLVRQuant, ${name.trim()}!\n\nVerify your email to activate your account:\n${verifyUrl}\n\nFeatures included:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas (Pro)\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
+          text: `Welcome to CLVRQuant, ${name.trim()}!\n\nVerify your email to activate your account:\n${verifyUrl}\n\nFeatures included:\n- Real-time prices across 32 crypto, 16 equities, 7 commodities, 14 forex\n- Live signal detection with QuantBrain AI scoring\n- Macro calendar — central bank decisions & economic events\n- AI Market Analyst — ask anything, get trade ideas (Pro)\n- Price alerts and push notifications\n- Phantom Wallet — Solana integration\n${dailyEmail ? `- Daily brief scheduled for about 6:00 AM in ${timeZone}\n` : ""}\n\nDISCLAIMER: CLVRQuant is for informational and educational purposes only. Nothing constitutes financial advice. All trading involves significant risk of loss.\n\n© 2026 CLVRQuant · Support@clvrquantai.com`,
           html: `<div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#050709;color:#c8d4ee;padding:32px 24px;max-width:600px;margin:0 auto">
             <div style="text-align:center;margin-bottom:28px">
               <div style="font-family:Georgia,serif;font-size:32px;font-weight:900;color:#e8c96d;letter-spacing:0.04em">CLVRQuant</div>
@@ -13543,6 +13557,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         id: user.id, name: user.name, email: user.email, tier,
         memberSince: user.createdAt ? new Date(user.createdAt).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : "2026",
         dailyEmail,
+        timeZone: user.timeZone || "America/Toronto",
         stripeCustomerId: user.stripeCustomerId || null,
         stripeSubscriptionId: user.stripeSubscriptionId || null,
         subscription: stripeInfo,
@@ -13575,6 +13590,26 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       res.json({ ok: true, dailyEmail: !!subscribe });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/account/brief-timezone", async (req, res) => {
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ error: "Not signed in" });
+    const timeZone = req.body?.timeZone;
+    if (!isBriefTimeZone(timeZone)) {
+      return res.status(400).json({ error: "Choose a supported time zone." });
+    }
+    try {
+      const result = await pool.query(
+        "UPDATE users SET time_zone = $1 WHERE id = $2 RETURNING time_zone",
+        [timeZone, userId],
+      );
+      if (!result.rowCount) return res.status(404).json({ error: "User not found" });
+      res.json({ ok: true, timeZone: result.rows[0].time_zone });
+    } catch (e: any) {
+      console.error("[account] brief time-zone update failed:", e?.message);
+      res.status(500).json({ error: "Could not update the morning brief time zone." });
     }
   });
 

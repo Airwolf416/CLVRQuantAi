@@ -10,6 +10,7 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   name: text("name").notNull().default("Trader"),
   subscribeToBrief: boolean("subscribe_to_brief").notNull().default(false),
+  timeZone: text("time_zone").notNull().default("America/Toronto"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   tier: text("tier").notNull().default("free"),
@@ -97,6 +98,7 @@ export const insertUserSchema = createInsertSchema(users).pick({
   password: true,
   name: true,
   subscribeToBrief: true,
+  timeZone: true,
 });
 
 export const insertAccessCodeSchema = createInsertSchema(accessCodes).pick({

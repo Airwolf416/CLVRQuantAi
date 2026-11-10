@@ -27,3 +27,4 @@
 - [Inactive-account cleanup](inactive-account-cleanup.md) — never infer a legacy account's inactivity from creation date when durable login history is missing.
 - [Market context policy](market-context-policy.md) — real cross-asset evidence should inform AI tools without overriding safety gates or inventing readiness.
 - [Dashboard motion policy](ui-motion-policy.md) — live updates must not shift layout; Trade Ideas should show honest, professional thinking feedback.
+- [Local morning briefs](brief-delivery-policy.md) — subscriber-local 6 AM delivery, editable time zones, weekend-aware summaries, and conservative Eastern defaults.

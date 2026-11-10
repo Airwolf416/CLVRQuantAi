@@ -1,4 +1,5 @@
 import { pool } from "./db";
+import { BRIEF_RECIPIENT_LEDGER_DDL } from "./lib/briefDelivery";
 
 /**
  * Creates all required tables on startup using IF NOT EXISTS.
@@ -35,6 +36,16 @@ export async function initializeDatabase(): Promise<void> {
         created_at               TIMESTAMP DEFAULT NOW(),
         last_login_at            TIMESTAMP
       )
+    `);
+    // Existing accounts retain the historical Eastern-time delivery default.
+    // New accounts can choose any supported brief time zone.
+    await client.query(`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS time_zone TEXT NOT NULL DEFAULT 'America/Toronto'
+    `);
+    await client.query(`
+      UPDATE users SET time_zone = 'America/Toronto'
+      WHERE time_zone IS NULL OR BTRIM(time_zone) = ''
     `);
     // Idempotent migration for existing DBs
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false`);
@@ -176,6 +187,8 @@ export async function initializeDatabase(): Promise<void> {
         recipient_count INTEGER DEFAULT 0
       )
     `);
+
+    await client.query(BRIEF_RECIPIENT_LEDGER_DDL);
 
     // ── daily_brief_telegram_log ─────────────────────────────────────────────
     // Independent ledger so the morning Telegram trade idea fires AT MOST

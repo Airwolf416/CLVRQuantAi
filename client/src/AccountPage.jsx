@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { apiFetch } from "./lib/apiClient";
+import { BRIEF_TIME_ZONES } from "@shared/briefTimeZones";
 
 const C = {
   bg:"#050709", panel:"#0c1220", border:"#141e35", border2:"#1c2b4a",
@@ -231,7 +232,7 @@ const SYSTEM_EMAILS = [
   {
     key: "morning-brief",
     name: "Morning Market Brief",
-    trigger: "Automatic — daily at 6:00 AM ET",
+    trigger: "Automatic — daily around 6:00 AM in each subscriber’s time zone",
     recipients: "All subscribed users",
     description: "Daily AI-generated brief covering market sentiment, macro outlook, top trades, and price signals.",
     color: "#c9a84c",
@@ -431,7 +432,7 @@ function OwnerStatsPanel({ C, MONO, SERIF }) {
         <div style={sectionTitle}>Who actually receives your broadcasts</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
           <Stat label="DAILY BRIEF OPT-IN" value={lists.dailyBriefOptIn || 0} color={C.cyan}
-                sub="Sent 6:00 AM ET daily"
+                sub="Around 6:00 AM in the selected time zone"
                 testId="stat-daily-brief" />
           <Stat label="WEEKLY UPDATE" value={lists.weeklyActiveSubscribers || 0} color={C.cyan}
                 sub="Sent Sat 10 AM ET"
@@ -2052,6 +2053,24 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
     setActionLoading(false);
   };
 
+  const handleUpdateBriefTimeZone = async (timeZone) => {
+    setActionLoading(true);
+    try {
+      const res = await apiFetch("/api/account/brief-timezone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timeZone }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Could not update time zone.");
+      setAcct(a => ({ ...a, timeZone: data.timeZone }));
+      showToast("Morning brief time zone updated");
+    } catch (e) {
+      showToast(e?.message || "Could not update time zone");
+    }
+    setActionLoading(false);
+  };
+
   const handleManageStripe = async () => {
     setActionLoading(true);
     try {
@@ -2483,6 +2502,21 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
                 </button>
               )}
             </div>
+            <label style={{ display:"block", padding:"14px 0 2px", fontSize:11, color:C.muted2 }}>
+              Morning brief time zone
+              <select
+                data-testid="select-account-brief-timezone"
+                value={acct.timeZone || "America/Toronto"}
+                onChange={e => handleUpdateBriefTimeZone(e.target.value)}
+                disabled={actionLoading}
+                style={{ display:"block", width:"100%", marginTop:7, padding:"9px 10px", background:C.bg, color:C.text, border:`1px solid ${C.border}`, borderRadius:4, fontFamily:MONO, fontSize:10, boxSizing:"border-box", cursor:actionLoading?"wait":"pointer" }}
+              >
+                {BRIEF_TIME_ZONES.map(zone => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+              </select>
+              <span style={{ display:"block", marginTop:6, fontSize:10, color:C.muted, lineHeight:1.5 }}>
+                When subscribed, your brief is scheduled for about 6:00 AM local time. Daylight-saving changes are handled automatically.
+              </span>
+            </label>
           </div>
 
           <div style={{ ...S.card, borderColor:"rgba(0,212,255,.12)" }}>

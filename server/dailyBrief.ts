@@ -20,11 +20,13 @@ import { exposureCapMode } from "./lib/featureFlags";
 import { selectExposureCapped } from "./lib/exposureSelector";
 import { correlationToBtc } from "./lib/hourlyCloseHistory";
 import { fetchBinancePrices, fetchForex, fetchMetals, fetchEnergyCommodities, quoteSafe } from "./services/marketData";
+import { buildMarketSessionContext, dueBriefZones, isBriefScheduleDue, localBriefClock } from "./lib/briefSchedule";
+import { type BriefTimeZone } from "@shared/briefTimeZones";
+import { createBriefDeliveryLedger, deliverBriefOnce } from "./lib/briefDelivery";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
 
-const BRIEF_HOUR_ET = 6;
 // Hard upper bound on catch-up attempts. The "morning" brief is by definition
 // a morning artefact — sending it at 2 PM ET is worse than skipping a day.
 // More importantly: every restart between 6 AM ET and 11 PM ET used to fire a
@@ -32,29 +34,24 @@ const BRIEF_HOUR_ET = 6;
 // (and there are 5+ code paths that DELETE that row when recipient_count=0).
 // That meant every git push during the working day potentially blasted users.
 // Catch-up is now bounded to a tight morning window.
-const BRIEF_CATCHUP_END_HOUR_ET = 9; // catch-up allowed only when 6 ≤ hour ≤ 8 ET
-const BRIEF_MINUTE_ET = 0;
 const APP_URL = "https://clvrquantai.com";
 
-let lastBriefDate = "";
 let lastApologySentAt = 0; // Unix ms — prevents double-send within 6 hours
+const localBriefLastAttempt = new Map<string, number>();
 
 // Boot ID for traceability — log alongside PID so we can confirm in production
 // logs that exactly one process+boot fired the brief on any given date.
 const BRIEF_BOOT_ID = Math.random().toString(36).slice(2, 10);
 const briefTag = () => `pid=${process.pid} boot=${BRIEF_BOOT_ID}`;
 
-async function getTodayBriefKey(): Promise<string | null> {
+async function hasBriefSlot(dateKey: string): Promise<boolean> {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      year: "numeric", month: "2-digit", day: "2-digit",
-    }).formatToParts(new Date());
-    const p = (type: string) => parts.find(p => p.type === type)?.value || "0";
-    const dateKey = `${p("year")}-${p("month")}-${p("day")}`;
-    const res = await pool.query(`SELECT date_key FROM daily_briefs_log WHERE date_key = $1`, [dateKey]);
-    return res.rows.length > 0 ? dateKey : null;
-  } catch { return null; }
+    const res = await pool.query(`SELECT 1 FROM daily_briefs_log WHERE date_key = $1 LIMIT 1`, [dateKey]);
+    return res.rows.length > 0;
+  } catch (e: any) {
+    console.warn(`[daily-brief] Could not check brief slot ${dateKey}: ${e?.message || e}`);
+    return true; // Fail closed if the duplicate-delivery ledger is unavailable.
+  }
 }
 
 // ── ATOMIC CLAIM — single race-safe gate for the daily brief ─────────────────
@@ -240,11 +237,11 @@ async function fetchMarketData(): Promise<MarketData> {
   return data;
 }
 
-async function generateBriefContent(marketData: MarketData): Promise<string | null> {
+async function generateBriefContent(marketData: MarketData, timeZone: BriefTimeZone, marketSchedule: string): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
-  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
+  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone });
 
   const cryptoStr = marketData.crypto.map(c => `${c.symbol}: ${c.price} (${c.change})`).join(" | ");
   const fxStr = marketData.forex.map(f => `${f.pair}: ${f.price}`).join(" | ");
@@ -346,6 +343,9 @@ async function generateBriefContent(marketData: MarketData): Promise<string | nu
 5. The "watchToday" items must use conditional language: "IF [level] breaks THEN [action]". Never unconditional calls.
 6. If any HIGH-impact event is within 6 hours of ${new Date().toISOString()}, add a tail risk note.
 7. Never fabricate data. Never state a macro outcome unless STATUS:RELEASED with actual value.
+8. RECIPIENT LOCAL MARKET SCHEDULE (${timeZone}):
+${marketSchedule}
+Use this verified schedule to distinguish live, closed, holiday, and weekend markets. Never describe a closed-market quote as a live-session move. On Saturday/Sunday write a clearly labeled Weekend Market Brief; focus on 24/7 crypto, the last available closed-session prices, verified weekend events, and the upcoming market reopening. For US equities/FX, do not invent quotes or session activity. If no trade setup survives the existing filters, set topTrade to null and additionalTrades to []; never force a trade.
 ${pendingWarningBlock}
 ═════════════════════════════════════════════
 
@@ -395,7 +395,7 @@ Return a JSON object with EXACTLY these fields (output STRICT JSON only, no mark
   ],
   "watchToday": ["7 specific actionable items with price levels and triggers — each one tells the reader WHAT to watch and WHAT to do if it triggers"],
   "keyRisk": "single sentence: biggest tail risk today and how to hedge it",
-  "topTrade": {
+  "topTrade": null or {
     "asset": "Best trade idea for today — asset name",
     "dir": "LONG or SHORT",
     "entry": "price",
@@ -462,10 +462,10 @@ RULES:
 }
 
 // ── Retry wrapper: 3 attempts with exponential backoff (2s, 4s, 8s) ──────────
-async function generateBriefContentWithRetry(marketData: MarketData, retries = 3): Promise<string | null> {
+async function generateBriefContentWithRetry(marketData: MarketData, retries = 3, timeZone: BriefTimeZone = "America/Toronto", marketSchedule = ""): Promise<string | null> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     console.log(`[daily-brief] Generating brief (attempt ${attempt}/${retries})...`);
-    const text = await generateBriefContent(marketData);
+    const text = await generateBriefContent(marketData, timeZone, marketSchedule);
     if (text) {
       console.log(`[daily-brief] ✓ Brief generated on attempt ${attempt}`);
       return text;
@@ -481,13 +481,18 @@ async function generateBriefContentWithRetry(marketData: MarketData, retries = 3
 }
 
 // ── Condensed fallback prompt (smaller payload, less likely to rate-limit) ───
-async function generateCondensedBrief(marketData: MarketData): Promise<string | null> {
+async function generateCondensedBrief(marketData: MarketData, timeZone: BriefTimeZone = "America/Toronto", marketSchedule = ""): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
   const cryptoStr = marketData.crypto.slice(0, 5).map(c => `${c.symbol}: ${c.price} (${c.change})`).join(", ");
   const fxStr = marketData.forex.slice(0, 3).map(f => `${f.pair}: ${f.price} (${f.change})`).join(", ");
   const metalStr = marketData.metals.slice(0, 2).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(", ");
-  const prompt = `Generate a concise market brief as JSON. Return ONLY valid JSON, no markdown.
+  const localToday = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone });
+  const prompt = `Generate a concise market brief for ${localToday} at 6:00 AM in ${timeZone}. Return ONLY valid JSON, no markdown.
+
+VERIFIED MARKET SESSION STATUS:
+${marketSchedule}
+If local day is Saturday/Sunday, clearly title it "Weekend Market Brief"; discuss 24/7 crypto, verified upcoming catalysts, and last available prices for closed markets. Never call closed-session quotes live. If no valid trade setup exists, set topTrade to null and additionalTrades to [] rather than inventing one.
 
 PRICES:
 Crypto: ${cryptoStr}
@@ -506,7 +511,7 @@ Return EXACTLY:
     {"emoji":"🇪🇺","title":"EUR/USD","text":"2 sentences on EUR/USD. End with 🟢/🟡/🔴."},
     {"emoji":"🥇","title":"Gold","text":"2 sentences on Gold. End with 🟢/🟡/🔴."}
   ],
-  "topTrade": {"asset":"asset","dir":"LONG|SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"None"},
+  "topTrade": null or {"asset":"asset","dir":"LONG|SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"None"},
   "additionalTrades": [],
   "watchItems": ["3 specific items to watch today with price levels"],
   "riskLevel": "low" | "medium" | "high",
@@ -565,23 +570,36 @@ function dedupeAndTrim(errs: string[]): string[] {
   return out;
 }
 
-async function sendDailyBriefEmails(): Promise<BriefSendResult> {
-  const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-  const dateKey = etTime.toISOString().split("T")[0];
-  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" });
+export type DailyBriefOptions = {
+  scheduledTimeZone?: BriefTimeZone;
+  localDate?: string;
+};
+
+async function sendDailyBriefEmails(options: DailyBriefOptions = {}): Promise<BriefSendResult> {
+  const timeZone = options.scheduledTimeZone || "America/Toronto";
+  const now = new Date();
+  const dateKey = options.localDate || localBriefClock(now, timeZone).dateKey;
+  if (options.scheduledTimeZone &&
+      (dateKey !== localBriefClock(now, timeZone).dateKey || !isBriefScheduleDue(now, timeZone))) {
+    return { ran: false, sent: 0, total: 0, reason: "Scheduled job is outside its local morning delivery window", errors: [] };
+  }
+  const slotKey = options.scheduledTimeZone ? `local:${timeZone}:${dateKey}` : dateKey;
+  const today = now.toLocaleDateString("en-US", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone,
+  });
 
   // ── ATOMIC double-send guard ──────────────────────────────────────────────
   // Single INSERT … ON CONFLICT DO NOTHING RETURNING. If another tick / process
   // already claimed the slot, RETURNING is empty and we abort. This eliminates
   // the previous SELECT-then-INSERT TOCTOU race that allowed two concurrent
   // invocations to both pass the gate and double-send.
-  const claimed = await claimBriefSlot(dateKey);
+  const claimed = await claimBriefSlot(slotKey);
   if (!claimed) {
     const reason = `Slot for ${dateKey} already claimed elsewhere`;
     console.log(`[daily-brief] ${reason} — ${briefTag()} aborting.`);
     return { ran: false, sent: 0, total: 0, reason, errors: [] };
   }
-  console.log(`[daily-brief] Slot ${dateKey} claimed by ${briefTag()} — generating...`);
+  console.log(`[daily-brief] Slot ${slotKey} claimed by ${briefTag()} — generating for ${timeZone}...`);
 
   // Outer guard: any uncaught throw between the claim and the send loop
   // (market data fetch, brief generation, subscriber query, tier-trade
@@ -590,7 +608,7 @@ async function sendDailyBriefEmails(): Promise<BriefSendResult> {
   // retry can run. The send loop below has its own narrower try/catch that
   // also releases on its specific failure modes.
   try {
-    return await sendDailyBriefBody(dateKey, today);
+    return await sendDailyBriefBody(slotKey, today, timeZone, options.scheduledTimeZone);
   } catch (e: any) {
     const msg = e?.message || String(e);
     const where = (e?.stack || "").split("\n").slice(0, 3).join(" | ");
@@ -598,16 +616,22 @@ async function sendDailyBriefEmails(): Promise<BriefSendResult> {
     try {
       await pool.query(
         `DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`,
-        [dateKey]
+        [slotKey]
       );
     } catch {}
     return { ran: true, sent: 0, total: 0, reason: `Pre-send exception: ${msg}`, errors: [msg] };
   }
 }
 
-async function sendDailyBriefBody(dateKey: string, today: string): Promise<BriefSendResult> {
+async function sendDailyBriefBody(
+  dateKey: string,
+  today: string,
+  timeZone: BriefTimeZone,
+  scheduledTimeZone?: BriefTimeZone,
+): Promise<BriefSendResult> {
 
   const marketData = await fetchMarketData();
+  const session = buildMarketSessionContext(new Date(), timeZone);
   console.log(`[daily-brief] Market data: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
 
   // ── DATA INTEGRITY GATE ────────────────────────────────────────────────────
@@ -621,7 +645,12 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       ...marketData.metals.map((r: any)   => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
       ...marketData.equities.map((r: any) => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
     ];
-    const integrity = runIntegrityCheck(flatRows, []);
+    const closedMarketSymbols = new Set<string>([
+      ...(!session.usEquitiesOpen ? marketData.equities.map((r: any) => r.symbol) : []),
+      ...(!session.forexOpen ? marketData.forex.map((r: any) => r.pair) : []),
+      ...(!session.forexOpen ? marketData.metals.map((r: any) => r.symbol) : []),
+    ]);
+    const integrity = runIntegrityCheck(flatRows, [], closedMarketSymbols);
     if (integrity.warnings.length) {
       console.log(`[daily-brief] integrity warnings — ${integrity.warnings.join(" | ")}`);
     }
@@ -646,10 +675,11 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
   }
 
   // Try full brief with 3 retries → condensed fallback prompt → minimal placeholder
-  let briefText: string | null = await generateBriefContentWithRetry(marketData, 3);
+  console.log(`[daily-brief] local market schedule ${timeZone} ${session.localDate} ${session.localWeekday} weekend=${session.isLocalWeekend} US-equities=${session.usEquitiesOpen} holiday=${session.usHoliday || "none"}`);
+  let briefText: string | null = await generateBriefContentWithRetry(marketData, 3, timeZone, session.text);
   let usedCondensed = false;
   if (!briefText) {
-    briefText = await generateCondensedBrief(marketData);
+    briefText = await generateCondensedBrief(marketData, timeZone, session.text);
     usedCondensed = !!briefText;
   }
 
@@ -685,6 +715,18 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       riskLevel: "medium",
       riskNote: "Apply extra caution today. Do not trade on this brief alone.",
     };
+  }
+  briefJson.marketSession = {
+    localDate: session.localDate,
+    timeZone,
+    localWeekday: session.localWeekday,
+    isWeekend: session.isLocalWeekend,
+    usHoliday: session.usHoliday,
+    usEquitiesOpen: session.usEquitiesOpen,
+    note: session.text,
+  };
+  if (session.isLocalWeekend) {
+    briefJson.headline = `Weekend Market Brief — ${String(briefJson.headline || "Weekly market outlook").replace(/^Weekend Market Brief\s*[—:]\s*/i, "")}`;
   }
 
   // ── FINAL GEOMETRY GUARD (shared) — repair wrong-side levels on Claude's
@@ -741,11 +783,13 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
   // expired promos and ended Stripe subs always resolve to 'free' regardless
   // of the stored u.tier value.
   const subsResult = await pool.query(`
-    SELECT s.email, s.name, ${effectiveTierSql("u")} AS tier
+    SELECT s.email, s.name, ${effectiveTierSql("u")} AS tier,
+      COALESCE(NULLIF(u.time_zone, ''), 'America/Toronto') AS time_zone
     FROM subscribers s
     LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
     WHERE s.active = true
-  `);
+      AND ($1::text IS NULL OR COALESCE(NULLIF(u.time_zone, ''), 'America/Toronto') = $1)
+  `, [scheduledTimeZone || null]);
   const subs = subsResult.rows;
 
   if (subs.length === 0) {
@@ -759,6 +803,8 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
 
   console.log(`[daily-brief] Sending to ${subs.length} subscribers in parallel batches of 50...`);
   let sentCount = 0;
+  let protectedCount = 0;
+  const deliveryLedger = createBriefDeliveryLedger(pool);
   // Per-email failures, captured WITH attribution (render vs send vs other)
   // so the manual-retry route can return them to the UI and we stop guessing
   // why "Failed for X@Y" actually failed.
@@ -1111,9 +1157,11 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
             briefJson, today, marketData, subTierForRender, sub.email,
             tieredTrades,
             tieredTrades && tieredTrades.length < (subTierForRender === "elite" ? 3 : 2) ? heldSlotNote : "",
+            `${session.isLocalWeekend ? "WEEKEND MARKET BRIEF" : "6:00 AM LOCAL MARKET BRIEF"} · ${timeZone}\n${session.text}`,
           );
           const plainText = [
-            `CLVRQuant Morning Brief — ${today}`,
+            `${session.isLocalWeekend ? "CLVRQuant Weekend Market Brief" : "CLVRQuant Morning Brief"} — ${today} (${timeZone})`,
+            `${session.text}`,
             ``,
             briefJson.headline || "",
             briefJson.summary || "",
@@ -1139,7 +1187,8 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
             : subTier === "pro" ? `📊 CLVRQuant Pro Brief — ${today} · ${proCt} trade idea${proCt === 1 ? "" : "s"} today`
             : `☕ CLVRQuant Daily Brief — ${today} · upgrade for trade ideas`;
           stage = "send";
-          const resp = await client.emails.send({
+          const recipientDate = localBriefClock(new Date(), sub.time_zone).dateKey;
+          const delivery = await deliverBriefOnce(deliveryLedger, sub.email, recipientDate, () => client.emails.send({
             from: "CLVRQuant <hello@clvrquantai.com>",
             to: sub.email,
             replyTo: "noreply@clvrquantai.com",
@@ -1150,12 +1199,16 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
             },
             text: plainText,
             html,
-          });
+          }));
 
-          if ((resp as any).error) {
-            throw new Error(JSON.stringify((resp as any).error));
+          if (delivery.status === "skipped") {
+            protectedCount++;
+            continue;
           }
-          const id = (resp as any).data?.id || "unknown";
+          if (delivery.status !== "sent") {
+            throw new Error(`${delivery.status}: ${delivery.reason}`);
+          }
+          const id = delivery.providerId;
           console.log(`[daily-brief] Sent to ${sub.email} [${sub.tier}] — id: ${id}`);
           sentCount++;
         } catch (err: any) {
@@ -1178,18 +1231,16 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
     }
 
     console.log(`[daily-brief] Done — ${sentCount}/${subs.length} emails sent across ${chunks.length} batch(es)`);
-    if (sentCount === 0) {
-      // Every individual send failed (rate limit storm, bad domain, transient
-      // Resend outage). Release the slot so the next scheduled tick or a
-      // manual retry can attempt the send instead of recording a permanent
-      // recipient_count=0 lock for the day.
-      console.log(`[daily-brief] 0/${subs.length} delivered — releasing slot ${dateKey} for retry`);
+    if (sendErrors.length > 0) {
+      // Release even a partially successful batch. Recipient claims survive
+      // this deletion, so a retry skips successful/ambiguous recipients.
+      console.log(`[daily-brief] ${sentCount}/${subs.length} newly delivered, ${protectedCount} protected — releasing group slot ${dateKey}`);
       try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
       return {
         ran: true,
-        sent: 0,
+        sent: sentCount,
         total: subs.length,
-        reason: `0/${subs.length} delivered`,
+        reason: `${sentCount}/${subs.length} newly delivered; ${protectedCount} protected; explicit rejections may retry; ambiguous deliveries remain held`,
         errors: dedupeAndTrim(sendErrors),
       };
     }
@@ -1201,6 +1252,7 @@ async function sendDailyBriefBody(dateKey: string, today: string): Promise<Brief
       ran: true,
       sent: sentCount,
       total: subs.length,
+      reason: protectedCount ? `${protectedCount} recipients already protected against repeat delivery` : undefined,
       errors: dedupeAndTrim(sendErrors),
     };
   } catch (e: any) {
@@ -1458,188 +1510,66 @@ export async function sendPromoEmail(): Promise<{ sent: number; skipped: number 
   return { sent, skipped: recipients.length - sent };
 }
 
-function getETComponents(): { hour: number; minute: number; dateKey: string } {
-  const now = new Date();
-  // CRITICAL: hour12:false alone returns "24" for midnight in Node/ICU.
-  // That is THE root cause of the "midnight brief" incident — at 00:xx ET
-  // the resolver sees hour=24, which satisfies hour>=BRIEF_HOUR_ET (6) and
-  // fires catch-up. Use hourCycle 'h23' so midnight is reported as 0.
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(now);
-  const p = (type: string) => parts.find(p => p.type === type)?.value || "0";
-  // Defensive coercion in case any future runtime still emits "24".
-  const rawHour = parseInt(p("hour"));
-  const hour = rawHour === 24 ? 0 : rawHour;
-  return {
-    hour,
-    minute: parseInt(p("minute")),
-    dateKey: `${p("year")}-${p("month")}-${p("day")}`,
-  };
-}
-
-// ── Single attempt helper — used by boot catch-up + scheduled tick ───────────
-// Critical rule: only stamp `lastBriefDate` AFTER enqueueDailyBrief() returns
-// without throwing. The previous code pre-stamped before the await, which
-// meant any silent throw (BullMQ down, AI generation crash, Resend outage,
-// missing daily_brief_telegram_log table on prod) permanently blocked the
-// same process from retrying that day even though the DB-side slot got
-// released. That bug was the root cause of the long brief outage we
-// debugged in Apr 2026 — the scheduler "tried", failed quietly, then
-// refused to try again until the next process restart that happened to
-// land before the next 6 ET tick (which on Railway never reliably did).
-let _briefInFlight = false;
-async function _attemptBrief(reason: string, dateKey: string): Promise<void> {
-  if (_briefInFlight) {
-    console.log(`[daily-brief] ${reason} skipped (${dateKey}): another attempt already in flight — ${briefTag()}`);
-    return;
-  }
-  _briefInFlight = true;
-  console.log(`[daily-brief] ${reason} → attempt ${dateKey} — ${briefTag()}`);
+let localBriefTickInFlight = false;
+async function processSubscriberLocalBriefs(now = new Date()) {
+  if (localBriefTickInFlight) return;
+  localBriefTickInFlight = true;
   try {
-    const res = await enqueueDailyBrief();
-    // Inspect the structured BriefSendResult — NOT just "did it throw".
-    // sendDailyBriefEmails() returns ran=true / sent=0 (without throwing)
-    // for genuine failures (pre-send exception, data integrity abort) and
-    // releases the DB slot in those cases — so we MUST leave lastBriefDate
-    // unstamped to allow the next 15-min heartbeat / 6 ET tick to retry.
-    // Stamp only when the outcome is terminal-for-today:
-    //   • res === null              → BullMQ queued (Redis dev path); the
-    //                                 worker is the source of truth, stamp
-    //                                 to avoid re-enqueueing the same day.
-    //   • res.ran === false         → slot already claimed by another
-    //                                 process (cross-process race winner) —
-    //                                 brief is going out, stamp.
-    //   • res.sent > 0              → real successful send.
-    //   • "no active subscribers"   → outcome is identical on retry today,
-    //                                 stamp to avoid an infinite retry loop.
-    // Anything else (ran=true / sent=0 with a non-empty-recipients reason
-    // such as "Pre-send exception" or "Data integrity gate") is a
-    // recoverable failure and is left UNSTAMPED.
-    let shouldStamp = false;
-    let stampReason = "";
-    if (res === null) {
-      shouldStamp = true; stampReason = "queued via BullMQ";
-    } else if (res.ran === false) {
-      shouldStamp = true; stampReason = `claimed-elsewhere: ${res.reason}`;
-    } else if (res.sent > 0) {
-      shouldStamp = true; stampReason = `sent=${res.sent}/${res.total}`;
-    } else if (/no active subscribers/i.test(res.reason || "")) {
-      shouldStamp = true; stampReason = "no subscribers (no point retrying today)";
+    const result = await pool.query(`
+      SELECT DISTINCT COALESCE(NULLIF(u.time_zone, ''), 'America/Toronto') AS time_zone
+      FROM subscribers s
+      LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
+      WHERE s.active = true
+    `);
+    for (const { timeZone, dateKey } of dueBriefZones(now, result.rows.map((row: any) => row.time_zone))) {
+      const slotKey = `local:${timeZone}:${dateKey}`;
+      if (await hasBriefSlot(slotKey)) continue;
+      const previous = localBriefLastAttempt.get(slotKey) || 0;
+      if (now.getTime() - previous < 15 * 60_000) continue;
+
+      // Do not duplicate the former one-time Eastern blast on the migration day.
+      if (dateKey === localBriefClock(now, "America/Toronto").dateKey) {
+        const prior = await pool.query(
+          "SELECT sent_at, recipient_count FROM daily_briefs_log WHERE date_key=$1 AND recipient_count>0 LIMIT 1",
+          [dateKey],
+        );
+        if (prior.rows[0]) {
+          await pool.query(
+            `INSERT INTO daily_briefs_log (date_key,sent_at,recipient_count)
+             VALUES ($1,$2,$3) ON CONFLICT (date_key) DO NOTHING`,
+            [slotKey, prior.rows[0].sent_at, prior.rows[0].recipient_count],
+          );
+          console.log(`[daily-brief] ${slotKey} skipped — legacy Eastern brief already sent today`);
+          continue;
+        }
+      }
+
+      localBriefLastAttempt.set(slotKey, now.getTime());
+      const queued = await enqueueDailyBrief({
+        scheduledTimeZone: timeZone as BriefTimeZone,
+        localDate: dateKey,
+      });
+      const terminal = queued === null || queued.ran === false || queued.errors.length === 0 ||
+        /no active subscribers/i.test(queued.reason || "");
+      if (terminal) localBriefLastAttempt.set(slotKey, now.getTime() + 4 * 60 * 60_000);
     }
-    if (shouldStamp) {
-      lastBriefDate = dateKey;
-      console.log(`[daily-brief] ${reason} ${dateKey}: STAMPED — ${stampReason} — ${briefTag()}`);
-    } else {
-      const r = res ? `ran=${res.ran} sent=${res.sent}/${res.total} reason="${res.reason}"` : "null";
-      console.warn(`[daily-brief] ${reason} ${dateKey}: NOT stamped (recoverable) — ${r} — ${briefTag()}`);
+    if (localBriefLastAttempt.size > 500) {
+      for (const [key, attempt] of localBriefLastAttempt) {
+        if (now.getTime() - attempt > 2 * 24 * 60 * 60_000) localBriefLastAttempt.delete(key);
+      }
     }
   } catch (e: any) {
-    // DO NOT stamp lastBriefDate on throw — leave the door open for the
-    // next tick to retry. enqueueDailyBrief on Railway runs sendDailyBrief-
-    // Emails inline (no Redis), so any throw here means the brief did not
-    // go out. Log the full stack so future debugging has signal.
-    console.error(
-      `[daily-brief] ${reason} attempt threw — leaving lastBriefDate unset for retry — ${briefTag()}: ${e?.stack || e?.message || e}`
-    );
+    console.error("[daily-brief] Local-time scheduler failed:", e?.message || e);
   } finally {
-    _briefInFlight = false;
+    localBriefTickInFlight = false;
   }
 }
 
 export function startDailyBriefScheduler() {
-  console.log(`[daily-brief] Scheduler started — briefs at ${BRIEF_HOUR_ET}:00 AM ET daily — ${briefTag()}`);
-
-  // ── Heartbeat ───────────────────────────────────────────────────────────────
-  // Emits one line every 15 minutes regardless of activity so production logs
-  // (Railway, etc.) always confirm the in-process scheduler is alive. Without
-  // this, a multi-day silent failure looks identical to a healthy day on
-  // which no brief was due.
-  setInterval(() => {
-    const { hour, minute, dateKey } = getETComponents();
-    const mm = String(minute).padStart(2, "0");
-    console.log(
-      `[daily-brief] heartbeat ${dateKey} ${hour}:${mm} ET — lastBriefDate=${lastBriefDate || "(none)"} — ${briefTag()}`
-    );
-  }, 15 * 60 * 1000);
-
-  // ── Startup catch-up ────────────────────────────────────────────────────────
-  // If the server boots in the morning catch-up window (6:00 ≤ hour < 9 ET)
-  // and today's brief slot is unclaimed, attempt the brief NOW. Atomic
-  // claimBriefSlot() guarantees only one process actually sends.
-  //
-  // Outside that window we DO NOT attempt the brief, even if today's slot
-  // looks unclaimed. Reasons:
-  //   • A "morning brief" delivered at 3 PM ET is worse than no brief.
-  //   • daily_briefs_log gets DELETEd by ~5 paths when recipient_count=0,
-  //     so "slot unclaimed" is not a reliable signal that no email went out.
-  //   • Boot catch-up firing at arbitrary hours = every redeploy blasts
-  //     subscribers, which is what we explicitly want to prevent.
-  setTimeout(async () => {
-    try {
-      const { hour, dateKey } = getETComponents();
-      const inCatchUpWindow = hour >= BRIEF_HOUR_ET && hour < BRIEF_CATCHUP_END_HOUR_ET;
-      if (inCatchUpWindow) {
-        const alreadySent = await getTodayBriefKey();
-        if (!alreadySent) {
-          console.log(`[daily-brief] Missed ${BRIEF_HOUR_ET}:00 brief on boot (now ${hour}:xx ET) — running catch-up — ${briefTag()}`);
-          await _attemptBrief("Boot catch-up", dateKey);
-        } else {
-          lastBriefDate = dateKey;
-          console.log(`[daily-brief] Today's brief already claimed — skipping catch-up — ${briefTag()}`);
-        }
-      } else if (hour >= BRIEF_CATCHUP_END_HOUR_ET) {
-        // Past the catch-up window. Mark today as "done from this process'
-        // perspective" so the 30s tick also bails — even if the DB row was
-        // deleted, we will not re-blast subscribers in the afternoon/evening.
-        lastBriefDate = dateKey;
-        console.log(`[daily-brief] Boot at ${hour}:xx ET — past catch-up window (${BRIEF_HOUR_ET}-${BRIEF_CATCHUP_END_HOUR_ET} ET); will NOT send today even if slot looks unclaimed — ${briefTag()}`);
-      } else {
-        console.log(`[daily-brief] It's ${hour}:xx ET — next brief at ${BRIEF_HOUR_ET}:00 ET — ${briefTag()}`);
-      }
-    } catch (e: any) {
-      console.log("[daily-brief] Startup catch-up check error:", e.message);
-    }
-  }, 10_000);
-
-  // ── Daily tick ──────────────────────────────────────────────────────────────
-  // Polls every 30s. Two firing modes:
-  //   (a) Primary window — hour === BRIEF_HOUR_ET && minute <= 1: send if
-  //       this process hasn't yet sent today.
-  //   (b) Self-healing catch-up — any time AFTER 6 ET (until midnight): send
-  //       only if the DB confirms today's slot is unclaimed AND this process
-  //       hasn't yet attempted today. Recovers from restarts that land
-  //       outside the 90-second primary window AND from previous failed
-  //       attempts that released the slot. The atomic claim makes this
-  //       safe across replicas — losers see ON CONFLICT DO NOTHING and bail.
-  setInterval(async () => {
-    if (_briefInFlight) return;
-    const { hour, minute, dateKey } = getETComponents();
-    if (dateKey === lastBriefDate) return;
-
-    const inPrimaryWindow = hour === BRIEF_HOUR_ET && minute <= 1;
-    // Self-healing window: 6:02 ET through 8:59 ET only. Previously this ran
-    // any time hour > 6 (so all the way to 11 PM ET), which combined with the
-    // recipient_count=0 deletion paths caused unintended sends every time the
-    // server restarted during the working day.
-    const inCatchUpWindow = hour >= BRIEF_HOUR_ET && hour < BRIEF_CATCHUP_END_HOUR_ET && !inPrimaryWindow;
-
-    if (!inPrimaryWindow && !inCatchUpWindow) return;
-
-    // Outside primary window, only fire when DB confirms today's slot is
-    // genuinely unclaimed. Saves a DB roundtrip during the 6 ET burst.
-    if (!inPrimaryWindow) {
-      const already = await getTodayBriefKey();
-      if (already) {
-        lastBriefDate = dateKey; // another process or earlier attempt won
-        return;
-      }
-    }
-
-    await _attemptBrief(inPrimaryWindow ? "Scheduled tick" : "Self-healing catch-up", dateKey);
-  }, 30_000);
+  console.log(`[daily-brief] Scheduler started — subscriber-local 6 AM delivery active — ${briefTag()}`);
+  setTimeout(() => { void processSubscriberLocalBriefs(); }, 10_000);
+  setInterval(() => { void processSubscriberLocalBriefs(); }, 30_000);
+  setInterval(() => console.log(`[daily-brief] local scheduler heartbeat — ${briefTag()}`), 15 * 60_000);
 }
 
 export { sendDailyBriefEmails };

@@ -6,6 +6,7 @@ import PasswordStrength from "./components/PasswordStrength.jsx";
 // Auth/reset/verification endpoints are public by design, but use the same
 // same-origin transport for bearer compatibility and structured responses.
 import { SiInstagram, SiTiktok } from "react-icons/si";
+import { BRIEF_TIME_ZONES } from "@shared/briefTimeZones";
 
 // ── WebAuthn / Face ID helpers ─────────────────────────────────────────────
 const WA_STORE_KEY = "clvr_wa_cred";
@@ -328,7 +329,13 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
   const C = isDark ? DARK_C : LIGHT_C;
   const tiers = usePricing();
   const [mode, setMode] = useState(initialMode);
-  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, agreeTerms: false, referralCode: "" });
+  const detectedBriefTimeZone = (() => {
+    try {
+      const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return BRIEF_TIME_ZONES.some(zone => zone.value === detected) ? detected : "America/Toronto";
+    } catch { return "America/Toronto"; }
+  })();
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "", dailyEmail: false, timeZone: detectedBriefTimeZone, agreeTerms: false, referralCode: "" });
   const [showSigninPassword, setShowSigninPassword] = useState(false);
   const [showVerifyPassword, setShowVerifyPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -505,7 +512,7 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.name, email: form.email, password: form.password, dailyEmail: form.dailyEmail, referralCode: form.referralCode || undefined, turnstileToken }),
+        body: JSON.stringify({ name: form.name, email: form.email, password: form.password, dailyEmail: form.dailyEmail, timeZone: form.timeZone, referralCode: form.referralCode || undefined, turnstileToken }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || "Signup failed"); setTurnstileToken(""); if (window.turnstile) window.turnstile.reset(); setLoading(false); return; }
@@ -1135,9 +1142,17 @@ export default function WelcomePage({ onEnter, onBack, isDark = true, onToggleTh
                   style={{ marginTop: 2, accentColor: C.gold, width: 16, height: 16, flexShrink: 0 }} />
                 <div>
                   <div style={{ fontFamily: SANS, fontSize: 13, color: C.white, fontWeight: 600 }}>Daily 6AM Market Brief</div>
-                   <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted2, marginTop: 3, lineHeight: 1.6 }}>{BRIEF_RULE} Receive the market summary before markets open.</div>
+                   <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted2, marginTop: 3, lineHeight: 1.6 }}>{BRIEF_RULE} Includes weekend-aware coverage and a local morning outlook.</div>
                 </div>
               </label>
+              {form.dailyEmail && <label style={{ display: "block", marginTop: 12, fontFamily: SANS, fontSize: 11, color: C.muted2 }}>
+                Morning brief time zone
+                <select data-testid="select-signup-brief-timezone" value={form.timeZone} onChange={e => set("timeZone", e.target.value)}
+                  style={{ ...inputStyle, marginTop: 6, cursor: "pointer" }}>
+                  {BRIEF_TIME_ZONES.map(zone => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+                </select>
+                <span style={{ display: "block", marginTop: 4, fontSize: 10 }}>Delivered around 6:00 AM local time. You can change this later in Account settings.</span>
+              </label>}
               <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 9, color: C.muted, lineHeight: 1.7, borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
                 We will <strong style={{ color: C.muted2 }}>never</strong> sell, share, or spam your email. Unsubscribe anytime.{" "}
                 <button type="button" data-testid="link-email-policy" onClick={() => setShowSpam(true)} style={{ color: C.gold, cursor: "pointer", background: "none", border: 0, padding: 0, font: "inherit" }}>Email policy →</button>

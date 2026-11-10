@@ -52,6 +52,7 @@ function normalizeSymbol(raw: string): string {
 export function runIntegrityCheck(
   rows: PriceRow[],
   citedTickers: string[] = [],
+  closedMarketSymbols: ReadonlySet<string> = new Set(),
 ): IntegrityReport {
   const warnings: string[] = [];
   const stale: string[] = [];
@@ -59,7 +60,7 @@ export function runIntegrityCheck(
 
   // ── Stale check (changeNum exactly 0) ────────────────────────────────────
   for (const r of rows) {
-    if (Number.isFinite(r.changeNum) && r.changeNum === 0) {
+    if (Number.isFinite(r.changeNum) && r.changeNum === 0 && !closedMarketSymbols.has(r.symbol)) {
       stale.push(r.symbol);
       drop.push(r.symbol);
     }

@@ -26,9 +26,9 @@ export interface SignalPushJobData {
   subscriptions: Array<{ id: number; subscription: any }>;
 }
 
-export interface DailyBriefJobData {
+export type DailyBriefJobData = import("../dailyBrief").DailyBriefOptions & {
   type: "daily_brief";
-}
+};
 
 export interface PromoEmailJobData {
   type: "promo_email";
@@ -238,11 +238,11 @@ export async function sendPushBatch(
 // (no Redis, the production code path on Railway). Returns null when the
 // job was handed off to BullMQ (Redis dev path) — caller should fall back
 // to log-only feedback in that case.
-export async function enqueueDailyBrief(): Promise<import("../dailyBrief").BriefSendResult | null> {
-  const queued = await addToQueue("daily_brief", { type: "daily_brief" });
+export async function enqueueDailyBrief(options: import("../dailyBrief").DailyBriefOptions = {}): Promise<import("../dailyBrief").BriefSendResult | null> {
+  const queued = await addToQueue("daily_brief", { type: "daily_brief", ...options });
   if (!queued) {
     const { sendDailyBriefEmails } = await import("../dailyBrief");
-    return await sendDailyBriefEmails();
+    return await sendDailyBriefEmails(options);
   }
   console.log("[notifications] Daily brief job queued via BullMQ");
   return null;
@@ -308,7 +308,10 @@ export function startNotificationWorker(): void {
 
         case "daily_brief": {
           const { sendDailyBriefEmails } = await import("../dailyBrief");
-          await sendDailyBriefEmails();
+          const result = await sendDailyBriefEmails(data as import("../dailyBrief").DailyBriefOptions);
+          if (result.ran && result.errors.length > 0) {
+            throw new Error(`Daily brief batch needs retry: ${result.reason || "recipient failures"}`);
+          }
           break;
         }
 

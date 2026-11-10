@@ -72,7 +72,7 @@ export const TIERS = {
 
 export const TIER_ORDER = ["free", "pro", "elite"];
 
-export const BRIEF_RULE = "Optional 6 AM ET daily email for subscribers on every plan: Free gets the market summary without trade-idea cards; Pro gets up to 1 trade idea and Elite up to 3.";
+export const BRIEF_RULE = "Optional daily email around 6 AM in your selected time zone for subscribers on every plan: Free gets the market summary without trade-idea cards; Pro gets up to 1 trade idea and Elite up to 3.";
 export const SIGNAL_RULE = "Free: signals delayed 30 minutes with prices hidden. Pro & Elite: real-time signals with full trade data.";
 
 export function annualSavings(tier) {
