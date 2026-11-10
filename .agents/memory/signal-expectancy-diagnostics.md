@@ -28,3 +28,11 @@ Three flag-gated levers (all default ON) inject the above into the live signal p
 - **Off-list is SOFT but not immune.** Token gate only down-weights off-list crypto (conviction capped 40, `off-list` flag) — it never drops "for being off-list." But an off-list coin can still be dropped by the **independent** conviction-tail rule (same as any coin). "Soft, nothing hidden" = we don't hide it *for the token reason*, not "never filtered."
 - **Scope = crypto only.** The evidence is crypto; equities/forex/commodities are left untouched (analyze gates on `cls==="crypto"`; kronos is all-crypto). Chart AI gets only a non-blocking caution (>50 confidence), never a drop.
 - **Parse confidence defensively.** Use `parseConfidencePct` (handles `"55%"` strings, NaN→fail-open). Tail-suppress fails OPEN on unparseable conviction (keep the trade) rather than coercing a missing value into a false suppress.
+
+## Gate compatibility and score interpretation
+
+Treat the empirical conviction band as a selection-score scale, not a calibrated probability of winning. A policy change must prove that a valid cohort can pass the entire sequence of filters in both directions; testing each filter independently is insufficient.
+
+**Why:** Rejecting ordinary crypto at raw conviction >=50 while requiring >=50 after multiplicative deductions makes the accepted set empty. Repeated “no setups” in that configuration is a structural policy conflict, not evidence that markets lack opportunities. Historical cohort findings alone also do not establish the profitability of newly admitted live candidates.
+
+**How to apply:** Keep empirical and standard score scales explicit. When the crypto tail rule applies, use its existing cohort's lower boundary for the post-deduction check; preserve deductions and the upper-tail veto. Keep the standard floor for other assets, exempt PREFERRED verdicts, and disabled-tail mode. Test viable LONG/SHORT cases alongside below-floor, high-tail, missing-data, chase/crowding, and invalid-score rejections before releasing.

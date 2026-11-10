@@ -9508,7 +9508,7 @@ Every level must be technically defensible. Return JSON only.`;
         // ── Empirical filters (June 2026) — flags + helpers (crypto leaks) ────
         const { convictionTailSuppressEnabled, tokenSoftGateEnabled, empiricalLeverageCapEnabled } =
           await import("./lib/featureFlags");
-        const { isConvictionTailToxic, applyTokenSoftGate, empiricalLeverageCeiling } =
+        const { isConvictionTailToxic, applyTokenSoftGate, empiricalLeverageCeiling, postHaircutConvictionFloorPct } =
           await import("./lib/empiricalFilters");
 
         // Conviction-tail suppression: the 1,260-signal study shows RAW
@@ -9557,7 +9557,13 @@ Every level must be technically defensible. Return JSON only.`;
             ? card.edgeSource : "estimated" as const,
         };
 
-        const h = hardenSignal(ctx);
+        const convictionFloorPct = postHaircutConvictionFloorPct(
+          cls === "crypto", edge.brainVerdict, convictionTailSuppressEnabled(),
+        );
+        const h = hardenSignal(ctx, { minPostHaircutConviction: convictionFloorPct / 100 });
+        if (convictionFloorPct < 50) {
+          h.notes.push("Empirical crypto score scale: minimum 30/100 after deductions; not a win probability");
+        }
         // Edge inversion is itself a material mutation — force rationale regen
         // even if hardener didn't otherwise mark it.
         const inverted = edge.action === "INVERT";
@@ -9831,6 +9837,7 @@ Every level must be technically defensible. Return JSON only.`;
           thesis,
           hardener: {
             applied: true,
+            convictionFloorPct,
             sizeMultiplier: Number(h.sizeMultiplier.toFixed(3)),
             wrCi: [Number((h.wrCiLow * 100).toFixed(0)), Number((h.wrCiHigh * 100).toFixed(0))],
             notes: h.notes,
@@ -10911,7 +10918,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
             const { getBrainFor, applyEdgePolicy, mirrorPrice } = await import("./lib/statisticalBrain");
             const { convictionTailSuppressEnabled, tokenSoftGateEnabled, empiricalLeverageCapEnabled } =
               await import("./lib/featureFlags");
-            const { isConvictionTailToxic, applyTokenSoftGate, empiricalLeverageCeiling } =
+            const { isConvictionTailToxic, applyTokenSoftGate, empiricalLeverageCeiling, postHaircutConvictionFloorPct } =
               await import("./lib/empiricalFilters");
             const symbolK = String(parsed.asset || ticker).split("/")[0].toUpperCase();
             const llmDirK: "LONG" | "SHORT" = tp.direction;
@@ -10974,7 +10981,13 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
                 regime: regimeK,
                 edgeSource: "estimated" as const,
               };
-              const hK = hardenSignal(ctxK);
+              const convictionFloorPctK = postHaircutConvictionFloorPct(
+                true, edgeK.brainVerdict, convictionTailSuppressEnabled(),
+              );
+              const hK = hardenSignal(ctxK, { minPostHaircutConviction: convictionFloorPctK / 100 });
+              if (convictionFloorPctK < 50) {
+                hK.notes.push("Empirical crypto score scale: minimum 30/100 after deductions; not a win probability");
+              }
               if (!hK.accept) {
                 parsed.trade_plan = {
                   ...tp,

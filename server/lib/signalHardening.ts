@@ -590,6 +590,9 @@ export function hardenSignal(ctx: SignalContext, config: HardenConfig = {}): Har
   const sizeMultiplier = _kellySize(ciLow, ctx.backtestAvgR);
 
   // 8. Veto checks
+  if (!Number.isFinite(ctx.rawConviction) || ctx.rawConviction < 0 || ctx.rawConviction > 1) {
+    rejected.push("VETO: missing or invalid conviction score");
+  }
   if (chase && crowded) {
     rejected.push("VETO: chase + crowded = late entry into already-positioned move");
   }

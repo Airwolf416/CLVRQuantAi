@@ -29,6 +29,28 @@ export const EMPIRICAL_LEVERAGE_CAP = 2;
 /** Raw conviction at or above this is the empirically-inverted toxic tail. */
 export const CONVICTION_TAIL_THRESHOLD = 50;
 
+/** Lower edge of the existing empirical [30,50) crypto score cohort. */
+export const EMPIRICAL_CONVICTION_FLOOR = 30;
+
+/**
+ * Do not combine a raw-score ceiling of <50 with a post-haircut floor of 50:
+ * that rejects EVERY ordinary crypto candidate. Use the empirical score's
+ * lower boundary AFTER deductions, so haircuts still exclude weaker setups.
+ * This score is not a calibrated probability of winning.
+ *
+ * Keep the standard 50 floor for other assets, PREFERRED verdicts (which are
+ * exempt from tail suppression), and when the empirical tail rule is disabled.
+ */
+export function postHaircutConvictionFloorPct(
+  isCrypto: boolean,
+  brainVerdict: string | null | undefined,
+  tailSuppressionEnabled: boolean,
+): number {
+  return isCrypto && tailSuppressionEnabled && brainVerdict !== "PREFERRED"
+    ? EMPIRICAL_CONVICTION_FLOOR
+    : 50;
+}
+
 /** Displayed-conviction ceiling applied to off-list crypto tokens (soft gate). */
 export const OFFLIST_CONVICTION_CAP = 40;
 
