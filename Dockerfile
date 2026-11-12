@@ -25,6 +25,8 @@ RUN npm prune --omit=dev --legacy-peer-deps
 # ---------- Stage 2: runtime ----------
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
+ARG APP_BUILD_SHA=unknown
+ENV APP_BUILD_SHA=${APP_BUILD_SHA}
 
 ENV NODE_ENV=production
 ENV PYTHONUNBUFFERED=1

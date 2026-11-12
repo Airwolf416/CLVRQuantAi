@@ -8,6 +8,15 @@ import {
   applyTokenSoftGate,
 } from "../lib/empiricalFilters";
 import { hardenSignal, type SignalContext } from "../lib/signalHardening";
+import { releaseIdentity } from "../lib/releaseIdentity";
+
+test("release identity accepts only a full baked commit and never claims an unknown build", () => {
+  assert.equal(releaseIdentity("a".repeat(40)).revision, "a".repeat(40));
+  assert.equal(releaseIdentity("not-a-commit").revision, "unknown");
+  assert.equal(releaseIdentity("").revision, "unknown");
+  assert.equal(releaseIdentity("A".repeat(40)).revision, "a".repeat(40));
+  assert.equal(releaseIdentity("").tradeIdeaPolicy, "crypto-compatible-floor-v1");
+});
 
 function context(direction: "LONG" | "SHORT", score: number, overrides: Partial<SignalContext> = {}): SignalContext {
   return {

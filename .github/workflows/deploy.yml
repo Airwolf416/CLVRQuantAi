@@ -40,6 +40,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            APP_BUILD_SHA=${{ github.sha }}
           tags: |
             ghcr.io/airwolf416/clvrquantai:latest
             ghcr.io/airwolf416/clvrquantai:${{ github.sha }}
@@ -49,11 +51,36 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Install Railway CLI
-        run: npm install -g @railway/cli
+        run: |
+          set -euo pipefail
+          node --test scripts/verify-release.test.mjs
+          npm install -g @railway/cli@5.71.0 --allow-scripts=@railway/cli --foreground-scripts
+          version="$(railway --version)"
+          printf '%s\n' "$version"
+          [[ "$version" =~ railway[[:space:]]+5\.71\.0 ]]
 
       - name: Trigger Railway redeploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway redeploy --service ${{ secrets.RAILWAY_SERVICE_ID }} --yes
+          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$RAILWAY_TOKEN"
+          test -n "$RAILWAY_SERVICE_ID"
+          railway redeploy --service "$RAILWAY_SERVICE_ID" --yes
+
+      - name: Verify the exact serving release
+        timeout-minutes: 16
+        run: node scripts/verify-release.mjs https://clvrquantai.com "${{ github.sha }}"

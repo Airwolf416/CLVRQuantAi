@@ -23,6 +23,7 @@ import { startCircuitBreaker } from "./lib/circuitBreaker";
 import { initSocketIO } from "./socketServer";
 import { PostgresRateLimitStore, isAuthMeRead } from "./lib/postgresRateLimitStore";
 import { isTrustedCookieMutation } from "./lib/csrfOrigin";
+import { releaseIdentity } from "./lib/releaseIdentity";
 
 let shuttingDown = false;
 const _origExit = process.exit;
@@ -42,7 +43,10 @@ const httpServer = createServer(app);
 // Lightweight liveness probe — registered before any heavy middleware so the
 // Railway healthcheck gets a 200 the instant the port binds, even while DB /
 // Stripe / route init is still running (or failing) in the background.
-app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
+app.get("/health", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({ ok: true, ...releaseIdentity() });
+});
 
 const isProduction = process.env.NODE_ENV === "production";
 
