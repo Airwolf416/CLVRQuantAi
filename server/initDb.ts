@@ -1,5 +1,6 @@
 import { pool } from "./db";
 import { BRIEF_RECIPIENT_LEDGER_DDL } from "./lib/briefDelivery";
+import { BRIEF_GROUP_KEY_MIGRATION } from "./lib/briefGroupLedger";
 
 /**
  * Creates all required tables on startup using IF NOT EXISTS.
@@ -189,6 +190,7 @@ export async function initializeDatabase(): Promise<void> {
     `);
 
     await client.query(BRIEF_RECIPIENT_LEDGER_DDL);
+    await client.query(BRIEF_GROUP_KEY_MIGRATION);
 
     // ── daily_brief_telegram_log ─────────────────────────────────────────────
     // Independent ledger so the morning Telegram trade idea fires AT MOST
@@ -1521,6 +1523,7 @@ export async function initializeDatabase(): Promise<void> {
 
     await client.query("COMMIT");
     console.log("[db] All tables verified / created successfully");
+    console.log("[daily-brief] Delivery-group key compatibility migration committed");
 
     // ── Chart AI performance views (post-commit, idempotent) ──────────────────
     // Wrapped separately so a view definition error never blocks startup.

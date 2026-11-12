@@ -23,6 +23,7 @@ import { fetchBinancePrices, fetchForex, fetchMetals, fetchEnergyCommodities, qu
 import { buildMarketSessionContext, dueBriefZones, isBriefScheduleDue, localBriefClock } from "./lib/briefSchedule";
 import { type BriefTimeZone } from "@shared/briefTimeZones";
 import { createBriefDeliveryLedger, deliverBriefOnce } from "./lib/briefDelivery";
+import { createBriefGroupLedger, isTerminalBriefAttempt } from "./lib/briefGroupLedger";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -43,14 +44,14 @@ const localBriefLastAttempt = new Map<string, number>();
 // logs that exactly one process+boot fired the brief on any given date.
 const BRIEF_BOOT_ID = Math.random().toString(36).slice(2, 10);
 const briefTag = () => `pid=${process.pid} boot=${BRIEF_BOOT_ID}`;
+const briefGroupLedger = createBriefGroupLedger(pool);
 
 async function hasBriefSlot(dateKey: string): Promise<boolean> {
   try {
-    const res = await pool.query(`SELECT 1 FROM daily_briefs_log WHERE date_key = $1 LIMIT 1`, [dateKey]);
-    return res.rows.length > 0;
+    return await briefGroupLedger.has(dateKey);
   } catch (e: any) {
     console.warn(`[daily-brief] Could not check brief slot ${dateKey}: ${e?.message || e}`);
-    return true; // Fail closed if the duplicate-delivery ledger is unavailable.
+    throw e; // Fail closed, but never misreport a database failure as a sent brief.
   }
 }
 
@@ -60,19 +61,12 @@ async function hasBriefSlot(dateKey: string): Promise<boolean> {
 // scheduler tick, server replica, restart catch-up) sees rowCount=0 and aborts.
 async function claimBriefSlot(dateKey: string): Promise<boolean> {
   try {
-    const res = await pool.query(
-      `INSERT INTO daily_briefs_log (date_key, sent_at, recipient_count)
-       VALUES ($1, NOW(), 0)
-       ON CONFLICT (date_key) DO NOTHING
-       RETURNING date_key`,
-      [dateKey]
-    );
-    const claimed = (res.rowCount || 0) > 0;
+    const claimed = await briefGroupLedger.claim(dateKey);
     console.log(`[daily-brief] claim ${dateKey} ${briefTag()} → ${claimed ? "WON" : "lost (already claimed)"}`);
     return claimed;
   } catch (e: any) {
     console.log(`[daily-brief] claimBriefSlot failed: ${e.message}`);
-    return false;
+    throw e;
   }
 }
 
@@ -593,7 +587,13 @@ async function sendDailyBriefEmails(options: DailyBriefOptions = {}): Promise<Br
   // already claimed the slot, RETURNING is empty and we abort. This eliminates
   // the previous SELECT-then-INSERT TOCTOU race that allowed two concurrent
   // invocations to both pass the gate and double-send.
-  const claimed = await claimBriefSlot(slotKey);
+  let claimed: boolean;
+  try {
+    claimed = await claimBriefSlot(slotKey);
+  } catch {
+    const reason = "Delivery record unavailable; no emails were sent. The batch will retry.";
+    return { ran: false, sent: 0, total: 0, reason, errors: [reason] };
+  }
   if (!claimed) {
     const reason = `Slot for ${dateKey} already claimed elsewhere`;
     console.log(`[daily-brief] ${reason} — ${briefTag()} aborting.`);
@@ -1549,8 +1549,7 @@ async function processSubscriberLocalBriefs(now = new Date()) {
         scheduledTimeZone: timeZone as BriefTimeZone,
         localDate: dateKey,
       });
-      const terminal = queued === null || queued.ran === false || queued.errors.length === 0 ||
-        /no active subscribers/i.test(queued.reason || "");
+      const terminal = isTerminalBriefAttempt(queued);
       if (terminal) localBriefLastAttempt.set(slotKey, now.getTime() + 4 * 60 * 60_000);
     }
     if (localBriefLastAttempt.size > 500) {

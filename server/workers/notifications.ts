@@ -309,7 +309,7 @@ export function startNotificationWorker(): void {
         case "daily_brief": {
           const { sendDailyBriefEmails } = await import("../dailyBrief");
           const result = await sendDailyBriefEmails(data as import("../dailyBrief").DailyBriefOptions);
-          if (result.ran && result.errors.length > 0) {
+          if (result.errors.length > 0) {
             throw new Error(`Daily brief batch needs retry: ${result.reason || "recipient failures"}`);
           }
           break;
