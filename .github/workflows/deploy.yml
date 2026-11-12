@@ -24,4 +24,8 @@ jobs:
           RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
         run: |
           python scripts/brief-email-diagnostics.py --self-test
-          python scripts/brief-email-diagnostics.py
+          python scripts/brief-email-diagnostics.py --current
+          sleep 90
+          python scripts/brief-email-diagnostics.py --current
+          sleep 90
+          python scripts/brief-email-diagnostics.py --current

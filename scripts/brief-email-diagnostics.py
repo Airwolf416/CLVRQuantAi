@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 RULES = {
+    "group_key_migration_committed": r"Delivery-group key compatibility migration committed",
     "scheduler_started": r"Scheduler started",
     "scheduler_heartbeat": r"local scheduler heartbeat",
     "scheduler_failed": r"Local-time scheduler failed",
@@ -47,6 +48,7 @@ def summarize(raw):
     counts = collections.Counter()
     days = collections.defaultdict(collections.Counter)
     http = collections.Counter()
+    varchar_limits = collections.Counter()
     rows = 0
     for line in raw.splitlines():
         try:
@@ -67,9 +69,12 @@ def summarize(raw):
                 days[day][label] += 1
         for code in re.findall(r"\bHTTP\s+(400|401|403|429|500|502|503|529)\b", message):
             http[code] += 1
+        for limit in re.findall(r"value too long for type character varying\((\d{1,5})\)", message):
+            varchar_limits[limit] += 1
     return {"matched_rows": rows, "events": dict(counts),
             "days": {day: dict(value) for day, value in days.items()},
-            "provider_http_statuses": dict(http)}
+            "provider_http_statuses": dict(http),
+            "rejected_varchar_limits": dict(varchar_limits)}
 
 
 def cli(args):
@@ -92,7 +97,8 @@ def main():
     service = os.environ.get("RAILWAY_SERVICE_ID", "")
     if not service or not os.environ.get("RAILWAY_TOKEN"):
         raise SystemExit("Required Railway connection is not configured")
-    raw, error = cli(["deployment", "list", "--service", service, "--limit", "12", "--json"])
+    limit = "1" if "--current" in sys.argv else "12"
+    raw, error = cli(["deployment", "list", "--service", service, "--limit", limit, "--json"])
     if error:
         print(json.dumps({"deployment_list_error": error}))
         return 1
