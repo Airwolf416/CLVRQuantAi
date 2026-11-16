@@ -24,6 +24,7 @@ import { buildMarketSessionContext, dueBriefZones, isBriefScheduleDue, localBrie
 import { type BriefTimeZone } from "@shared/briefTimeZones";
 import { createBriefDeliveryLedger, deliverBriefOnce } from "./lib/briefDelivery";
 import { createBriefGroupLedger, isTerminalBriefAttempt } from "./lib/briefGroupLedger";
+import { filterBriefTrades } from "./lib/briefTradeNumbers";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -397,7 +398,7 @@ Return a JSON object with EXACTLY these fields (output STRICT JSON only, no mark
     "tp1": "price",
     "tp2": "price",
     "confidence": "X%",
-    "edge": "one sentence explaining the edge",
+    "edge": "qualitative setup rationale only; no prices, targets or risk/reward claims (the backend computes those)",
     "riskLabel": "🟢 or 🟡 or 🔴",
     "flags": "${macroRiskEvents.length > 0 ? "MACRO RISK" : "None"}"
   },
@@ -414,6 +415,7 @@ RULES:
 - If FOMC/CPI within 48h: ALL signals get 🔴 label, cap leverage at 2x, say SIZE DOWN
 - Minimum R:R 1.5:1 for any trade idea. Skip if R:R is worse.
 - All 3 trade ideas must be from different asset classes (crypto, forex, metals, equities)
+- Trade fields must satisfy LONG: stop < entry < tp1 < tp2; SHORT: stop > entry > tp1 > tp2. Preserve exact price precision, including four decimal places for FX. Trade edge text must be qualitative only; the backend generates all execution levels and explicitly labeled R:R to TP1 and R:R to TP2 from these fields.
 - impactfulNews: at least 3 items, ranked by trading relevance for the next 24h
 - watchToday: exactly 7 items, each phrased as "IF [level] breaks THEN [action]" or similar conditional
 - Return ONLY the JSON object. No markdown, no backticks.`;
@@ -487,6 +489,7 @@ async function generateCondensedBrief(marketData: MarketData, timeZone: BriefTim
 VERIFIED MARKET SESSION STATUS:
 ${marketSchedule}
 If local day is Saturday/Sunday, clearly title it "Weekend Market Brief"; discuss 24/7 crypto, verified upcoming catalysts, and last available prices for closed markets. Never call closed-session quotes live. If no valid trade setup exists, set topTrade to null and additionalTrades to [] rather than inventing one.
+Trade fields must satisfy LONG: stop < entry < tp1 < tp2; SHORT: stop > entry > tp1 > tp2. Preserve FX price precision. Trade edge text must be qualitative only, without prices or risk/reward claims; the backend generates execution text from the validated fields.
 
 PRICES:
 Crypto: ${cryptoStr}
@@ -729,11 +732,11 @@ async function sendDailyBriefBody(
     briefJson.headline = `Weekend Market Brief — ${String(briefJson.headline || "Weekly market outlook").replace(/^Weekend Market Brief\s*[—:]\s*/i, "")}`;
   }
 
-  // ── FINAL GEOMETRY GUARD (shared) — repair wrong-side levels on Claude's
-  // trade plans BEFORE tiered selection, email render, and Telegram post.
-  // Repair-only: mirrors wrong-side SL/TP legs around entry so the plan
-  // matches its stated direction. Never flips direction; it only removes a
-  // trade when the explicitly enabled emission policy suppresses it.
+  // Reject malformed trades before the policy adapter can repair them.
+  // Preserve full precision; formatting belongs only at the display boundary.
+  filterBriefTrades(briefJson);
+  // Apply the existing shared policy only to already-valid generated plans.
+  // Revalidate its output before tiered selection, render or publication.
   try {
     const guardBriefTrade = (t: any): boolean => {
       if (!t || !t.asset) return true;
@@ -742,7 +745,7 @@ async function sendDailyBriefBody(
         const dir = dirU.includes("SHORT") ? "SHORT" : dirU.includes("LONG") ? "LONG" : null;
         const num = (v: any) => parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
         const e = num(t.entry), sl = num(t.stop), t1 = num(t.tp1), t2 = num(t.tp2);
-        if (!dir || !Number.isFinite(e) || e <= 0 || !Number.isFinite(sl) || !Number.isFinite(t1)) return true;
+        if (!dir || !Number.isFinite(e) || e <= 0 || !Number.isFinite(sl) || !Number.isFinite(t1)) return false;
         const policy = applyEmissionPolicy({
           source: "morning_brief", symbol: String(t.asset), marketType: t.marketType ?? t.market_type, conviction: Number(t.conviction ?? t.confidence), direction: dir, entry: e, stopLoss: sl, tp1: t1,
           tp2: Number.isFinite(t2) ? t2 : null, assetClass: "unknown", regime: String(briefJson.macroRegime || "unknown"),
@@ -751,7 +754,7 @@ async function sendDailyBriefBody(
         const g = policy.candidate;
         // Write back as plain numeric strings (same shape the email/telegram
         // renderers and pushClaudeTrade parse).
-        const fmt = (n: number) => n >= 1000 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(6);
+        const fmt = (n: number) => String(n);
         t.stop = fmt(g.stopLoss);
         t.tp1 = fmt(g.tp1);
         if (g.tp2 != null && t.tp2 != null) t.tp2 = fmt(g.tp2);
@@ -761,9 +764,9 @@ async function sendDailyBriefBody(
         // remove the card before any email, tier selection, or downstream
         // promotion can serialize it.
         return !policy.decision.suppress;
-      } catch {
-        // Existing fail-open behavior is retained if the adapter itself fails.
-        return true;
+      } catch (error: any) {
+        console.warn(`[daily-brief] Excluded trade: emission validation failed: ${error?.message || error}`);
+        return false;
       }
     };
     if (!guardBriefTrade(briefJson.topTrade)) briefJson.topTrade = null;
@@ -771,8 +774,12 @@ async function sendDailyBriefBody(
       briefJson.additionalTrades = briefJson.additionalTrades.filter(guardBriefTrade);
     }
   } catch (e: any) {
-    console.warn("[daily-brief] geometry guard failed (non-fatal):", e?.message || e);
+    console.warn("[daily-brief] Trade guard failed; excluding all trade ideas:", e?.message || e);
+    briefJson.topTrade = null;
+    briefJson.additionalTrades = [];
   }
+  // Policy can change levels; validate again before selection or any send.
+  filterBriefTrades(briefJson);
 
   // Sweep expired-promo users to free BEFORE we query subscribers, so anyone
   // whose promo lapsed since yesterday's send gets the free version of the
@@ -981,7 +988,7 @@ async function sendDailyBriefBody(
       // posts have the same on-brand format as live signals and manual
       // test sends. The autoposter renders the reasoning array as the
       // post body, so this IS the caption Mike sees in Telegram.
-      const selectionLine = `Selection: ${pick.source === "elite" ? "calibrated daily winner" : "Claude top pick"} · RR ${pick.rr.toFixed(2)}` + (pick.n > 0 ? ` · n=${pick.n}` : "") + ` · Morning Brief ${today}`;
+      const selectionLine = `Selection: ${pick.source === "elite" ? "calibrated daily winner" : "Claude top pick"} · R:R to TP1 ${pick.rr.toFixed(2)}:1` + (pick.n > 0 ? ` · n=${pick.n}` : "") + ` · Morning Brief ${today}`;
       // Compute a regime alignment gate for the morning pick so the
       // Telegram caption mirrors what /api/quant + the in-app SignalCard
       // show. The brief's pick has already cleared the calibration +
@@ -1096,7 +1103,6 @@ async function sendDailyBriefBody(
       stop:           t.stop.toString(),
       tp1:            t.tp1.toString(),
       tp2:            t.tp2.toString(),
-      rrDisplay:      t.riskReward.toFixed(2),
       thesis:         t.thesis,
       sessionFlag:    t.sessionFlag,
     }));

@@ -5,6 +5,7 @@
 import Handlebars from "handlebars";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { presentBriefTrade } from "../lib/briefTradeNumbers";
 
 // ── Template cache: compiled once per process ──────────────────────────────────
 
@@ -70,7 +71,7 @@ export interface TieredTradeIdea {
   stop:           string;
   tp1:            string;
   tp2:            string;
-  rrDisplay:      string;          // e.g. "2.4"
+  rrDisplay?:     string;          // legacy callers ignored; ratios are recomputed
   thesis?:        string;
   sessionFlag?:   string;
 }
@@ -168,36 +169,26 @@ export function renderDailyBriefEmail(
   // Tier caps: Pro = 1 idea (topTrade only), Elite = 3 ideas (top + 2 additional).
   let tradeIdeas: any[] = [];
   const accent = isElite ? "#00e5ff" : "#c9a84c";
-  if (tieredTrades && tieredTrades.length) {
-    tradeIdeas = tieredTrades.map((t, i) => ({ ...t, idx: i + 1, accent }));
+  const safeIdea = (t: any) => {
+    const result = presentBriefTrade(t);
+    if (!result.ok) {
+      console.warn(`[daily-brief] Excluded trade at render: ${result.reasons.join("; ")}`);
+      return [];
+    }
+    return [result.trade];
+  };
+  if (tieredTrades !== undefined && !isFreeTier) {
+    // An explicitly empty selection must not resurrect rejected legacy trades.
+    tradeIdeas = tieredTrades.flatMap(safeIdea);
   } else if (!isFreeTier) {
     // Legacy fallback: rehydrate from Claude's brief JSON
     const cap = isElite ? 3 : 1;
     const legacySource = [briefJson.topTrade, ...((briefJson.additionalTrades) || [])]
       .filter(Boolean)
       .slice(0, cap);
-    tradeIdeas = legacySource.map((t: any, i: number) => {
-      const entryN = parseFloat(String(t.entry).replace(/[^0-9.\-]/g, "")) || 0;
-      const stopN  = parseFloat(String(t.stop).replace(/[^0-9.\-]/g, ""))  || 0;
-      const tp2N   = parseFloat(String(t.tp2).replace(/[^0-9.\-]/g, ""))   || 0;
-      const risk   = Math.abs(entryN - stopN);
-      const reward = Math.abs(tp2N - entryN);
-      const rr     = risk > 0 ? (reward / risk).toFixed(2) : "—";
-      return {
-        idx:            i + 1,
-        accent,
-        instrument:     t.asset || t.instrument || "—",
-        direction:      String(t.dir || t.direction || "").toUpperCase(),
-        entry:          String(t.entry ?? "—"),
-        stop:           String(t.stop ?? "—"),
-        tp1:            String(t.tp1 ?? "—"),
-        tp2:            String(t.tp2 ?? "—"),
-        rrDisplay:      rr,
-        thesis:         t.edge || t.thesis || "",
-        sessionFlag:    t.sessionFlag,
-      };
-    });
+    tradeIdeas = legacySource.flatMap(safeIdea);
   }
+  tradeIdeas = tradeIdeas.map((t, i) => ({ ...t, idx: i + 1, accent }));
   const ideaCount = isFreeTier ? 0 : tradeIdeas.length;
   const ideaCountLabel = ideaCount === 1 ? "Idea" : "Ideas";
   const tierLabel = isElite ? "Elite" : isPro ? "Pro" : "Free";
