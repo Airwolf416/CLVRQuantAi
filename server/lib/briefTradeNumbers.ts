@@ -52,8 +52,11 @@ export function briefPriceDecimals(instrument: string, value: number): number {
   const symbol = instrument.toUpperCase().replace(/[^A-Z]/g, "");
   // Currency pairs only: XAU/USD, BTC/USD etc. are not FX.
   if (/(?:USD|EUR|GBP|JPY|CHF|AUD|CAD|NZD|MXN|ZAR|TRY|SGD|HKD|NOK|SEK){2}$/.test(symbol)) return 4;
-  // Metals/equities/large crypto use cents; retain sub-cent token precision.
-  return value >= 1 ? 2 : Math.min(8, Math.max(2, -Math.floor(Math.log10(value)) + 3));
+  // Preserve supplied quote precision for non-FX instruments (e.g. natural
+  // gas at 3 decimals and sub-cent crypto), with cents as the display minimum.
+  // Do not assume that every instrument above $1 trades in whole cents.
+  const fractionalDigits = value.toFixed(8).replace(/0+$/, "").split(".")[1]?.length || 0;
+  return Math.max(2, fractionalDigits);
 }
 
 export function formatBriefPrice(instrument: string, value: number): string {

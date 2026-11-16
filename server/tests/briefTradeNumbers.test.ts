@@ -86,6 +86,9 @@ test("FX four-decimal precision, sub-cent tokens, cents for metals/equities/larg
     assert.equal(formatBriefPrice(symbol, 3850), "3850.00");
   }
   assert.equal(formatBriefPrice("PEPE/USD", 0.00001234), "0.00001234");
+  assert.equal(formatBriefPrice("Natural Gas", 3.527), "3.527");
+  assert.equal(formatBriefPrice("SOL/USD", 89.513), "89.513");
+  assert.equal(presentBriefTrade({ asset: "Natural Gas", dir: "LONG", entry: 3.527, stop: 3.501, tp1: 3.569, tp2: 3.591 }).ok, true);
   assert.equal(presentBriefTrade({ ...examples[1], entry: 1.10051 }).ok, false);
   assert.equal(validateBriefTrade({ ...examples[2], entry: "$64,600", stop: "65,800" }).ok, true);
 });
