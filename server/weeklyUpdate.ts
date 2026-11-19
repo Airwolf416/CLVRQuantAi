@@ -11,7 +11,7 @@ import { CLAUDE_MODEL } from "./config";
 import { getReleaseCommitEvidence } from "./githubClient";
 import { DigestError, WEEKLY_DIGEST_POLICY, publicCommitSubjects, saturdayDigestWindow } from "./lib/weeklyDigestPolicy";
 import { deliverWeeklyDigest, type WeeklyDigestDeliveryResult } from "./lib/weeklyDigestDelivery";
-import { WEEK_LOCK, withDigestLock } from "./lib/weeklyDigestStore";
+import { WEEK_LOCK, withDigestLock, publishWeeklyDigestOnce } from "./lib/weeklyDigestStore";
 import { runWeeklyDigestTick } from "./lib/weeklyDigestScheduler";
 import { parseWeeklyDigestResponse, WEEKLY_DIGEST_JSON_SCHEMA, type DigestShape } from "./lib/weeklyDigestContent";
 import { WEEKLY_SCHEDULE, WEEKLY_RETRY_WINDOW } from "../shared/weeklyDigestSchedule.js";
@@ -273,7 +273,7 @@ export async function generateWeeklyUpdateWithAI(opts: { weekKey?: string } = {}
   const evidence = await readReleaseEvidence(since);
   const commits = filterPublicCommitSubjects(commitDigestNotes(evidence.commits));
   if (opts.weekKey) {
-    await pool.query("UPDATE weekly_digest_runs SET source_head_sha=$2 WHERE week_key=$1", [opts.weekKey, evidence.headSha]);
+    await pool.query("UPDATE weekly_digest_runs SET source_head_sha=$2 WHERE week_key=$1 AND update_id IS NULL", [opts.weekKey, evidence.headSha]);
   }
   console.log(`[weekly-update] AI generation: ${pending.length} pending log entries + ${commits.length} user-facing commits since ${since.toISOString().slice(0, 10)}`);
 
@@ -297,9 +297,7 @@ export async function generateWeeklyUpdateWithAI(opts: { weekKey?: string } = {}
   if (flags.length > 0 || digest.items.length === 0) throw new DigestError("compliance", "DIGEST_BLOCKED");
   const cited = new Set(digest.items.flatMap(item => item.sources || []));
   const consumedLogIds = pending.filter((_, i) => cited.has(i + 1)).map(entry => entry.id);
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  const saved = await publishWeeklyDigestOnce(pool, opts.weekKey, async client => {
     const result = await client.query(`
       INSERT INTO weekly_updates(version,title,summary,items,created_by)
       VALUES($1,$2,$3,$4::jsonb,$5) RETURNING *`,
@@ -310,18 +308,10 @@ export async function generateWeeklyUpdateWithAI(opts: { weekKey?: string } = {}
       INSERT INTO weekly_update_sources(update_id,source_head_sha,source_since,commit_shas,log_ids)
       VALUES($1,$2,$3,$4,$5)`,
     [row.id, evidence.headSha, since, evidence.commits.map(c => c.sha), consumedLogIds]);
-    if (opts.weekKey) {
-      await client.query("UPDATE weekly_digest_runs SET update_id=$2 WHERE week_key=$1", [opts.weekKey, row.id]);
-    }
-    await client.query("COMMIT");
-    // Log entries remain pending until the entire delivery batch is complete.
-    return weeklyUpdateFromRow(row);
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+    return row;
+  }, evidence.headSha);
+  // Log entries remain pending until the entire delivery batch is complete.
+  return weeklyUpdateFromRow(saved);
 }
 
 export async function generateWeeklyUpdateManually() {
@@ -584,7 +574,7 @@ export function startWeeklyUpdateScheduler() {
         sourceCheckedAt = Date.now();
         schedulerState.sourceCheckedAt = new Date(sourceCheckedAt).toISOString();
         try {
-          await readReleaseEvidence(new Date(Date.now() - 7 * 86400_000));
+          await readReleaseEvidence(await resolveCommitSince(7));
           schedulerState.sourceReady = true;
           schedulerState.sourceError = null;
         } catch (error) {

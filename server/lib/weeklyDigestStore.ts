@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { DigestError } from "./weeklyDigestPolicy";
 
 // Additive tables only. Production uses the existing Railway initDb path.
 export async function initializeWeeklyDigestTables(db: Pick<PoolClient, "query">): Promise<void> {
@@ -65,3 +66,38 @@ export async function withDigestLock<T>(
 
 export const WEEK_LOCK = 548201;
 export const DELIVERY_LOCK = 548202;
+
+/** Fence publication even if an advisory-lock connection dies during AI work. */
+export async function publishWeeklyDigestOnce<T extends { id: number }>(
+  db: Pool,
+  weekKey: string | undefined,
+  save: (client: PoolClient) => Promise<T>,
+  sourceHeadSha?: string,
+): Promise<T> {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    if (weekKey) {
+      const run = await client.query("SELECT update_id FROM weekly_digest_runs WHERE week_key=$1 FOR UPDATE", [weekKey]);
+      if (!run.rows[0]) throw new DigestError("publication", "WEEKLY_RUN_MISSING");
+      if (run.rows[0].update_id) {
+        const existing = await client.query("SELECT * FROM weekly_updates WHERE id=$1", [run.rows[0].update_id]);
+        if (!existing.rows[0]) throw new DigestError("publication", "ATTACHED_UPDATE_MISSING");
+        await client.query("COMMIT");
+        return existing.rows[0] as T;
+      }
+    }
+    const update = await save(client);
+    if (weekKey) await client.query(
+      "UPDATE weekly_digest_runs SET update_id=$2,source_head_sha=COALESCE($3,source_head_sha),updated_at=NOW() WHERE week_key=$1",
+      [weekKey, update.id, sourceHeadSha || null],
+    );
+    await client.query("COMMIT");
+    return update;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}

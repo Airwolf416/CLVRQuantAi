@@ -13,6 +13,8 @@
 
 PostgreSQL advisory locks serialize weekly generation and each update's delivery across replicas. The run row, published update/source manifest, audience snapshot and per-recipient receipts survive restarts. Publication and attachment to the weekly run are committed together.
 
+A row-level publication fence also returns the already attached update if two processes reach publication after an advisory-lock connection is lost. It does not rely on the old process stopping its AI work immediately.
+
 Recipient retries use the same provider idempotency key and the exact saved request body. The installed Resend SDK predates request-level idempotency options; this sender uses Resend's HTTP `Idempotency-Key` header directly. Other email senders are unchanged.
 
 Provider acceptance is not proof of inbox delivery. An ambiguous request older than 23 hours is held for provider reconciliation rather than blindly retried after the provider's 24-hour idempotency retention. Such a run needs owner attention. Unsent failures never cause a partial batch to be marked complete.

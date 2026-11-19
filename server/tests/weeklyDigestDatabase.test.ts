@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { initializeWeeklyDigestTables } from "../lib/weeklyDigestStore";
+import { initializeWeeklyDigestTables, publishWeeklyDigestOnce } from "../lib/weeklyDigestStore";
 import { deliverWeeklyDigest } from "../lib/weeklyDigestDelivery";
 import { runWeeklyDigestTick } from "../lib/weeklyDigestScheduler";
 import { DigestError } from "../lib/weeklyDigestPolicy";
@@ -122,6 +122,27 @@ test("PostgreSQL scheduling, restarts, concurrent replicas and delivery failures
         assert.equal(result.status, "complete");
         assert.equal(receipts.size, 1);
         assert.equal((await db.query("SELECT count(*)::int n FROM weekly_updates")).rows[0].n, 1);
+      });
+
+      await t.test("publication is fenced even when two processes reach it without the advisory lock", async () => {
+        await reset();
+        await db.query("INSERT INTO weekly_digest_runs(week_key,status) VALUES('2026-11-21','running')");
+        let publications = 0;
+        const save = async (client: any) => {
+          publications++;
+          await new Promise(resolve => setTimeout(resolve, 50));
+          return (await client.query("INSERT INTO weekly_updates(title) VALUES('One publication') RETURNING *")).rows[0];
+        };
+        const [a, b] = await Promise.all([
+          publishWeeklyDigestOnce(db, "2026-11-21", save, "winner"),
+          publishWeeklyDigestOnce(replica, "2026-11-21", save, "other"),
+        ]);
+        assert.equal(a.id, b.id);
+        assert.equal(publications, 1);
+        assert.equal((await db.query("SELECT count(*)::int n FROM weekly_updates")).rows[0].n, 1);
+        const attached = (await db.query("SELECT update_id,source_head_sha FROM weekly_digest_runs")).rows[0];
+        assert.equal(attached.update_id, a.id);
+        assert.ok(["winner", "other"].includes(attached.source_head_sha));
       });
 
       await t.test("partial sends retry only failures; duplicate addresses collapse and unrelated changes stay pending", async () => {
