@@ -19,6 +19,7 @@ import { enforceGeometry } from "./lib/geometryGuard";
 import { applyEmissionPolicy } from "./lib/emissionPolicy";
 import { isInCooldown, COOLDOWN_WINDOW_MINUTES } from "./lib/cooldown";
 import { getYahooCandles, isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
+import { getXyzSignalFeedState } from "./services/xyzSignalFeed";
 import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
 import { persistRecentNews } from "./lib/newsPersist";
 import { getUserTier } from "./lib/userTier";
@@ -2369,6 +2370,19 @@ export async function registerRoutes(
       }
     }
     res.json(result);
+  });
+
+  app.get("/api/xyz-signals", (_req, res) => {
+    const state = getXyzSignalFeedState();
+    res.setHeader("Cache-Control", "no-store");
+    if (state.status === "error") {
+      return res.status(502).json({
+        error: state.error,
+        code: state.code,
+        retryAfter: state.retryAfter,
+      });
+    }
+    res.json(state);
   });
 
   const POLY_MARKETS = [

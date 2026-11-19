@@ -23,6 +23,7 @@ import QRScanner from "./QRScanner";
 import { accessCodeFeedback, ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedback";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
+import EquitiesMoreSignals from "./components/EquitiesMoreSignals.jsx";
 import RotationBrainPage from "./components/rotation-brain/RotationBrainPage.jsx";
 import AlphaDeskPage from "./components/alphaDesk/AlphaDeskPage.jsx";
 import InsiderTab from "./tabs/InsiderTab";
@@ -6675,6 +6676,8 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               </div>}
             </div>:sorted.map(sig=>{const id=liveSignalIds[liveSignals.indexOf(sig)];return <SignalCard key={id} sig={sig} marketData={cryptoPrices} onShare={onShareSig} onAiAnalyze={onAiSig} onTrade={openTradeModal} whaleAlerts={whaleAlerts} isPro={isPro} onUpgrade={onUpgrade} regimeName={regimeName} regimeMult={regimeMult} isAdmin={isAdmin} animateIn={isNewLiveSignal(id)} onSendToTelegram={r=>setToast(r.ok?`Sent ${r.sig.token} ${r.sig.dir} to Telegram ✦`:`Telegram dispatch failed: ${r.detail||"unknown error"}`)}/>;});
           })()}
+
+          <EquitiesMoreSignals/>
 
           {/* ── Signal Performance Tracker — owner-only diagnostic; the
               public Track Record tab already exposes per-user history. ── */}
