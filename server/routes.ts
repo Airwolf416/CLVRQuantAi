@@ -10527,6 +10527,12 @@ Every level must be technically defensible. Return JSON only.`;
         if (looksJson) {
           const parsed: any = JSON.parse(trimmed);
           if (parsed && Array.isArray(parsed.trades)) {
+            // Enforce the requested batch bound before evaluation, so every
+            // evaluated candidate has one visible outcome even if the model
+            // returns more than the requested six (Elite) or four (Pro).
+            if (featureKey === "tradeIdeas") {
+              parsed.trades = parsed.trades.slice(0, (req as any).effectiveTier === "elite" ? 6 : 4);
+            }
             const evaluated = parsed.trades.length;
             let runTally: Record<string, number> = {};
             const includeResearch = featureKey === "tradeIdeas";
