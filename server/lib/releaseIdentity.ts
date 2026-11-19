@@ -1,4 +1,4 @@
-export const TRADE_IDEA_POLICY_REVISION = "crypto-compatible-floor-v1";
+export const TRADE_IDEA_POLICY_REVISION = "risk-off-short-research-v1";
 
 export function releaseIdentity(revision = process.env.APP_BUILD_SHA) {
   return {

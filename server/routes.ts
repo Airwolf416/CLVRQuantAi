@@ -38,6 +38,7 @@ import { users as usersTable, subscribers as subscribersTable } from "@shared/sc
 import { isBriefTimeZone } from "@shared/briefTimeZones";
 import { shouldCacheAiAnalysis } from "./lib/aiAnalysisCache";
 import { releaseIdentity } from "./lib/releaseIdentity";
+import { tradeIdeaConvictionMinimumPct, researchIdea, selectResearchIdeas, isResearchIdea, type ResearchIdea } from "./lib/tradeIdeaEvaluation";
 import { clampAiText, serializeAiRequest, describeAiProviderFailure } from "./lib/aiRequestEncoding";
 import multerLib from "multer";
 import sharpLib from "sharp";
@@ -9336,6 +9337,7 @@ Every level must be technically defensible. Return JSON only.`;
       if (!trades.length) return res.json({ logged: 0 });
       let logged = 0;
       for (const t of trades) {
+        if (isResearchIdea(t)) continue;
         const token = String(t.token || t.symbol || "").toUpperCase();
         const dirRaw = String(t.direction || t.signal || "").toUpperCase();
         const direction = dirRaw.includes("LONG") ? "LONG" : dirRaw.includes("SHORT") ? "SHORT" : null;
@@ -9433,13 +9435,17 @@ Every level must be technically defensible. Return JSON only.`;
   async function hardenTradeIdeas(
     cards: IdeaCard[],
     apiKey: string,
-  ): Promise<{ cards: IdeaCard[]; inCount: number; dropped: number; vetoed: number; regenerated: number; rejectionTally: Record<string, number> }> {
+    includeResearch = false,
+  ): Promise<{ cards: IdeaCard[]; research: ResearchIdea[]; inCount: number; dropped: number; vetoed: number; regenerated: number; rejectionTally: Record<string, number> }> {
     const { hardenSignal } = await import("./lib/signalHardening");
     const { getOiChangePct } = await import("./lib/signalHardening");
     const { getBrainFor, applyEdgePolicy, mirrorPrice } = await import("./lib/statisticalBrain");
     const { RATIONALE_REGEN_SYSTEM_PROMPT, buildRationaleUserMsg } = await import("./lib/rationalePrompt");
 
     const bus = getDataBusStatus();
+    // Reuse Alpha Desk's detected risk tone; do not infer a second regime
+    // from VIX/DXY or allow a client-provided regime to lower the floor.
+    const alphaDesk = includeResearch ? await loadAlphaDeskOverview().catch(() => null) : null;
     const busLabel = (bus?.regime?.label || "NEUTRAL").toUpperCase();
     const regime: "MACRO_CLEAR" | "RISK_ON" | "RISK_OFF" | "MACRO_EVENT" =
       busLabel === "RISK_ON" ? "RISK_ON" :
@@ -9481,7 +9487,10 @@ Every level must be technically defensible. Return JSON only.`;
     };
 
     const out: IdeaCard[] = [];
+    const research: ResearchIdea[] = [];
     await Promise.all(cards.map(async (card, idx) => {
+      let evaluation: { direction: string; conviction: number; minimum: number; reasons: string[] } | null = null;
+      const rejectionReasons: string[] = [];
       try {
         const symbol = String(card.asset || "").split("/")[0].toUpperCase();
         const llmDirection: "LONG" | "SHORT" = card.direction === "SHORT" ? "SHORT" : "LONG";
@@ -9491,6 +9500,12 @@ Every level must be technically defensible. Return JSON only.`;
         let tp2 = Number(card.tp2?.price ?? card.tp2);
         let tp3 = Number(card.tp3?.price ?? card.tp3);
         if (!symbol || !Number.isFinite(entry) || !Number.isFinite(proposedStop) || !Number.isFinite(tp1)) {
+          if (includeResearch) {
+            rejectionReasons.push("Missing required levels — cannot validate candidate");
+            tallyReject(rejectionReasons[0]);
+            dropped++;
+            return;
+          }
           out[idx] = card; // missing required fields — skip hardening
           return;
         }
@@ -9505,7 +9520,8 @@ Every level must be technically defensible. Return JSON only.`;
           vetoed++; dropped++;
           tallyReject("edge policy: no demonstrated edge");
           console.log(`[edge-policy] ${symbol} ${llmDirection} SUPPRESSED: ${edge.reason}`);
-          return;
+          if (!includeResearch) return;
+          rejectionReasons.push(`Edge policy: ${edge.reason || "no demonstrated edge"}`);
         }
         let direction = edge.recommendedDirection;
         if (edge.action === "INVERT") {
@@ -9535,7 +9551,8 @@ Every level must be technically defensible. Return JSON only.`;
           vetoed++; dropped++;
           tallyReject(`${symbol} ${llmDirection} [${cls}, ${edge.brainVerdict || "UNCLASSIFIED"}]: conviction-tail filter (raw ${rawConvPct}%, ceiling below 50%)`);
           console.log(`[empirical-filter] ${symbol} ${llmDirection} SUPPRESSED: raw conviction ${rawConvPct} >= 50 (inverted tail)`);
-          return;
+          if (!includeResearch) return;
+          rejectionReasons.push("Conviction-tail filter — raw score in empirically suppressed band");
         }
 
         const [atr1h, brain] = await Promise.all([
@@ -9572,11 +9589,16 @@ Every level must be technically defensible. Return JSON only.`;
             ? card.edgeSource : "estimated" as const,
         };
 
-        const convictionFloorPct = postHaircutConvictionFloorPct(
-          cls === "crypto", edge.brainVerdict, convictionTailSuppressEnabled(),
-        );
+        const convictionFloorPct = includeResearch
+          ? tradeIdeaConvictionMinimumPct(alphaDesk?.riskTone, direction)
+          : postHaircutConvictionFloorPct(
+              cls === "crypto", edge.brainVerdict, convictionTailSuppressEnabled(),
+            );
         const h = hardenSignal(ctx, { minPostHaircutConviction: convictionFloorPct / 100 });
-        if (convictionFloorPct < 50) {
+        if (includeResearch) {
+          evaluation = { direction, conviction: h.finalConviction, minimum: convictionFloorPct, reasons: h.reasonsRejected };
+          h.notes.push(`Alpha Desk risk tone: ${alphaDesk?.riskTone || "unavailable"}; ${direction} minimum ${convictionFloorPct}%`);
+        } else if (convictionFloorPct < 50) {
           h.notes.push("Empirical crypto score scale: minimum 30/100 after deductions; not a win probability");
         }
         // Edge inversion is itself a material mutation — force rationale regen
@@ -9584,9 +9606,8 @@ Every level must be technically defensible. Return JSON only.`;
         const inverted = edge.action === "INVERT";
         if (inverted) (h as any).materiallyMutated = true;
 
-        if (!h.accept) {
-          vetoed++;
-          dropped++;
+        if (!h.accept || rejectionReasons.length > 0) {
+          if (rejectionReasons.length === 0) { vetoed++; dropped++; }
           tallyReject(
             `${symbol} ${direction} [${cls}, ${edge.brainVerdict || "UNCLASSIFIED"}, minimum ${convictionFloorPct}%]: ` +
             (h.reasonsRejected?.[0] || "hardening gate"),
@@ -9665,7 +9686,7 @@ Every level must be technically defensible. Return JSON only.`;
                   },
                   classificationDiagnostics: cardArchetypeDiagnostics ?? null,
                 }).catch(() => {});
-                if (hot) { vetoed++; dropped++; tallyReject("no recognized setup archetype"); return; }
+                if (hot) { vetoed++; dropped++; tallyReject("no recognized setup archetype"); rejectionReasons.push("No recognized setup archetype"); return; }
               } catch { /* shadow log is best-effort */ }
             }
             if (cardArchetype && cardArchetype !== "UNCLASSIFIED") {
@@ -9738,6 +9759,7 @@ Every level must be technically defensible. Return JSON only.`;
                 cardTrendFilter.enforced = true;
                 vetoed++; dropped++;
                 tallyReject("counter-trend filter");
+                rejectionReasons.push("Counter-trend filter");
                 return;
               }
             }
@@ -9838,6 +9860,7 @@ Every level must be technically defensible. Return JSON only.`;
 
         out[idx] = {
           ...card,
+          ...(includeResearch ? { researchOnly: false, gateStatus: "PASSING" } : {}),
           direction,                                    // <- reflects edge-policy flip when INVERT
           sl: Number(h.stop.toFixed(6)),
           tp1: card.tp1 && typeof card.tp1 === "object"
@@ -9856,6 +9879,7 @@ Every level must be technically defensible. Return JSON only.`;
           hardener: {
             applied: true,
             convictionFloorPct,
+            postHaircutConvictionPct: Number((h.finalConviction * 100).toFixed(2)),
             sizeMultiplier: Number(h.sizeMultiplier.toFixed(3)),
             wrCi: [Number((h.wrCiLow * 100).toFixed(0)), Number((h.wrCiHigh * 100).toFixed(0))],
             notes: h.notes,
@@ -9893,7 +9917,19 @@ Every level must be technically defensible. Return JSON only.`;
         };
       } catch (e: any) {
         console.warn(`[hardenTradeIdeas] card ${idx} skipped:`, e?.message || e);
-        out[idx] = card; // keep original on per-card failure
+        if (includeResearch) {
+          rejectionReasons.push("Evaluation failed — candidate is not approved; retry generation");
+          tallyReject("candidate evaluation failed");
+          dropped++;
+        } else out[idx] = card; // preserve legacy callers
+      } finally {
+        if (includeResearch && !out[idx]) {
+          research[idx] = researchIdea(
+            { ...card, direction: evaluation?.direction ?? card?.direction },
+            [...rejectionReasons, ...(evaluation?.reasons || [])],
+            evaluation?.conviction, evaluation?.minimum,
+          );
+        }
       }
     }));
 
@@ -9915,6 +9951,7 @@ Every level must be technically defensible. Return JSON only.`;
         // Can't validate R:R — drop rather than ship a malformed card.
         postFloorDropped++;
         tallyReject("malformed levels — cannot validate R:R");
+        if (includeResearch) research.push(researchIdea(c, ["Malformed levels — cannot validate R:R"], c.hardener?.postHaircutConvictionPct / 100, c.hardener?.convictionFloorPct));
         console.warn(`[hardenTradeIdeas DEFENSE] dropping ${c?.asset || "?"} ${c?.direction || "?"} — cannot compute R:R (e=${e} sl=${sl} tp1=${t1})`);
         continue;
       }
@@ -9922,13 +9959,14 @@ Every level must be technically defensible. Return JSON only.`;
       if (rr < MIN_DISPLAYED_RR) {
         postFloorDropped++;
         tallyReject(`R:R below ${MIN_DISPLAYED_RR} display floor`);
+        if (includeResearch) research.push(researchIdea(c, [`R:R below ${MIN_DISPLAYED_RR} display floor`], c.hardener?.postHaircutConvictionPct / 100, c.hardener?.convictionFloorPct));
         console.warn(`[hardenTradeIdeas DEFENSE] dropping ${c?.asset || "?"} ${c?.direction || "?"} — R:R ${rr.toFixed(2)} < ${MIN_DISPLAYED_RR} (hardener likely fail-open: entry=${e} sl=${sl} tp1=${t1} hardenerApplied=${!!c?.hardener?.applied})`);
         continue;
       }
       safeCards.push(c);
     }
     if (postFloorDropped > 0) dropped += postFloorDropped;
-    return { cards: safeCards, inCount, dropped, vetoed, regenerated, rejectionTally };
+    return { cards: safeCards, research: research.filter(Boolean), inCount, dropped, vetoed, regenerated, rejectionTally };
   }
 
   // ── Structured empty_reason for Trade Ideas (honest reporting only — no
@@ -10299,7 +10337,7 @@ Every level must be technically defensible. Return JSON only.`;
     const alphaContextHash = alphaDeskContextBlock
       ? `|ad:${cryptoCreateHash("sha256").update(alphaDeskContextBlock).digest("hex").slice(0, 16)}`
       : "";
-    const cacheKey = cacheKeyBase + flagSuffix + contextHashSuffix + alphaContextHash + `|f:${featureKey || "-"}`;
+    const cacheKey = cacheKeyBase + flagSuffix + contextHashSuffix + alphaContextHash + `|f:${featureKey || "-"}` + (featureKey === "tradeIdeas" ? "|policy:risk-off-short-research-v1" : "");
 
     // Elite-only cache bypass: lets an Elite user force a fresh re-roll within
     // the cache window. Pro users — and Elite's DEFAULT press — still share the
@@ -10491,9 +10529,12 @@ Every level must be technically defensible. Return JSON only.`;
           if (parsed && Array.isArray(parsed.trades)) {
             const evaluated = parsed.trades.length;
             let runTally: Record<string, number> = {};
+            const includeResearch = featureKey === "tradeIdeas";
+            let research: ResearchIdea[] = [];
             if (evaluated > 0) {
-              const hardened = await hardenTradeIdeas(parsed.trades, apiKey);
+              const hardened = await hardenTradeIdeas(parsed.trades, apiKey, includeResearch);
               parsed.trades = hardened.cards;
+              research = hardened.research;
               runTally = hardened.rejectionTally;
               console.log(
                 `[ai/analyze] hardener: in=${hardened.inCount} out=${hardened.cards.length} ` +
@@ -10525,6 +10566,7 @@ Every level must be technically defensible. Return JSON only.`;
                    const g = policy.candidate;
                    if (policy.decision.suppress) {
                      runTally.EXPECTANCY_POLICY_REJECTED = (runTally.EXPECTANCY_POLICY_REJECTED || 0) + 1;
+                     if (includeResearch) research.push(researchIdea(c, ["Expectancy emission policy rejected candidate"], c.hardener?.postHaircutConvictionPct / 100, c.hardener?.convictionFloorPct));
                      return null;
                    }
                    const out: any = { ...c, sl: g.stopLoss };
@@ -10538,14 +10580,34 @@ Every level must be technically defensible. Return JSON only.`;
                   // Only overwrite an existing top-level rr — keep it directional/null-honest.
                   if ("rr" in out) out.rr = g.rr;
                   return out;
-                } catch { return c; }
+                } catch {
+                  if (includeResearch) {
+                    research.push(researchIdea(c, ["Final validation failed — candidate is not approved"], c.hardener?.postHaircutConvictionPct / 100, c.hardener?.convictionFloorPct));
+                    return null;
+                  }
+                  return c;
+                }
               }).filter((c: any) => c != null);
             } catch (geoErr: any) {
               console.warn("[ai/analyze] geometry guard failed (non-fatal):", geoErr?.message || geoErr);
             }
             // ── Structured empty_reason — honest reporting when zero ideas
             // survive. No gate is weakened; we only explain WHY it's empty.
-            if (parsed.trades.length === 0) {
+            if (includeResearch) {
+              // The model cannot manufacture approval or diagnostic records.
+              // Only the evaluated candidates above may populate these fields.
+              const limit = (req as any).effectiveTier === "elite" ? 6 : 4;
+              parsed.trades = parsed.trades.slice(0, limit);
+              parsed.below_gate = selectResearchIdeas(research, parsed.trades.length, limit);
+              parsed.evaluation_summary = {
+                evaluated, passing: parsed.trades.length, belowGate: parsed.below_gate.length,
+                displayed: parsed.trades.length + parsed.below_gate.length,
+                notDisplayed: Math.max(0, evaluated - parsed.trades.length - parsed.below_gate.length),
+                generatedAt: new Date().toISOString(),
+              };
+              delete parsed.empty_reason;
+            }
+            if (parsed.trades.length === 0 && (!includeResearch || evaluated === 0)) {
               parsed.empty_reason = await buildTradeIdeasEmptyReason(evaluated, runTally);
               console.log(`[ai/analyze] empty run — reason=${parsed.empty_reason.type} evaluated=${evaluated} rejections=${JSON.stringify(runTally)}`);
             }
@@ -10558,6 +10620,9 @@ Every level must be technically defensible. Return JSON only.`;
         }
       } catch (e: any) {
         console.warn("[ai/analyze] hardener skipped:", e?.message || e);
+        if (featureKey === "tradeIdeas") {
+          return res.status(502).json({ error: "Trade Ideas evaluation failed. Please retry; no candidates were approved." });
+        }
       }
 
       // Only cache valid non-empty responses (post-hardening). A force-fresh

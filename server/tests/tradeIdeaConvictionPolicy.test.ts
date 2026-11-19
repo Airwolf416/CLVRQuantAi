@@ -15,7 +15,7 @@ test("release identity accepts only a full baked commit and never claims an unkn
   assert.equal(releaseIdentity("not-a-commit").revision, "unknown");
   assert.equal(releaseIdentity("").revision, "unknown");
   assert.equal(releaseIdentity("A".repeat(40)).revision, "a".repeat(40));
-  assert.equal(releaseIdentity("").tradeIdeaPolicy, "crypto-compatible-floor-v1");
+  assert.equal(releaseIdentity("").tradeIdeaPolicy, "risk-off-short-research-v1");
 });
 
 function context(direction: "LONG" | "SHORT", score: number, overrides: Partial<SignalContext> = {}): SignalContext {

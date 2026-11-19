@@ -213,7 +213,10 @@ ${snap.sections}`;
 
           // ── Log trades to ai_signal_log for adaptive learning ──
           if (Array.isArray(parsed?.trades) && parsed.trades.length) {
-            const payload = parsed.trades.map(t => {
+            const loggableTrades = parsed.trades.filter(t => (
+              !t?.researchOnly && t?.gateStatus !== "BELOW_GATE"
+            ));
+            const payload = loggableTrades.map(t => {
               const killClockHours = (() => {
                 const k = String(t.killClock || "").toUpperCase();
                 const m = k.match(/(\d+)\s*H/);
@@ -244,12 +247,14 @@ ${snap.sections}`;
                 scores: t.scores,
               };
             });
-            apiFetch("/api/ai/log-trades", {
-              method: "POST",
-              credentials: "include",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ trades: payload }),
-            }).catch(() => {});
+            if (payload.length > 0) {
+              apiFetch("/api/ai/log-trades", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ trades: payload }),
+              }).catch(() => {});
+            }
           }
         } else {
           setError("Failed to parse trade ideas. Please try again.");
@@ -264,6 +269,13 @@ ${snap.sections}`;
   };
 
   const tradesList = trades?.trades || [];
+  const belowGateList = Array.isArray(trades?.below_gate) ? trades.below_gate : [];
+  const evaluationSummary = trades?.evaluation_summary;
+  const evaluationCount = Number.isFinite(evaluationSummary?.evaluated)
+    ? evaluationSummary.evaluated
+    : Number.isFinite(trades?.empty_reason?.evaluated)
+      ? trades.empty_reason.evaluated
+      : null;
   const tradeItemIds = useStableResponseItemIds(tradesList, trade => trade?.id || trade?.signalId, "trade-idea");
   const isNewTrade = useNewItemMotion(tradeItemIds);
 
@@ -436,7 +448,19 @@ ${snap.sections}`;
 
       {loading && <TradeIdeasThinking />}
 
-      {tradesList.length > 0 && (
+      {evaluationSummary && (
+        <div data-testid="text-trade-evaluation-counts" style={{
+          margin: "0 0 10px", padding: "8px 10px",
+          borderLeft: "2px solid rgba(201,168,76,0.55)",
+          background: "rgba(201,168,76,0.045)",
+          color: "rgba(255,255,255,0.58)", fontFamily: MONO, fontSize: 9,
+          letterSpacing: "0.06em",
+        }}>
+          {evaluationSummary.passing} passing · {evaluationSummary.belowGate} below gate
+        </div>
+      )}
+
+      {(tradesList.length > 0 || belowGateList.length > 0) && (
         <div className="motion-tab-content" key={`${timeframe}:${todayMode}:${assetClass}:${marketTypeFilter}`} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {tradesList.map((trade, i) => {
             const locked = !isPro && i >= freeLimit;
@@ -458,10 +482,65 @@ ${snap.sections}`;
               </div>
             );
           })}
+          {belowGateList.map((record, index) => (
+            <section
+              key={`below-gate-${record.asset || "research"}-${index}`}
+              data-testid={`card-below-gate-${index}`}
+              aria-label={`${record.asset || "Research"} below gate`}
+              style={{
+                padding: "13px 14px",
+                background: "linear-gradient(110deg, rgba(25,28,33,0.94), rgba(18,21,26,0.88))",
+                border: "1px solid rgba(231,146,92,0.28)",
+                borderLeft: "3px solid rgba(231,146,92,0.72)",
+                borderRadius: 10,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                <div>
+                  <div style={{ fontFamily: SERIF, fontSize: 15, fontWeight: 700, color: "#d8d5ce" }}>
+                    {record.asset || "Unknown asset"}
+                    {record.direction && <span style={{ marginLeft: 8, fontFamily: MONO, fontSize: 9, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em" }}>{record.direction}</span>}
+                  </div>
+                  <div style={{ marginTop: 4, fontFamily: MONO, fontSize: 8, color: "#e6a277", fontWeight: 700, letterSpacing: "0.14em" }}>
+                    BELOW GATE · RESEARCH ONLY
+                  </div>
+                </div>
+                <span style={{
+                  flexShrink: 0, padding: "4px 7px", borderRadius: 4,
+                  background: "rgba(231,146,92,0.08)", border: "1px solid rgba(231,146,92,0.22)",
+                  color: "#e6a277", fontFamily: MONO, fontSize: 8, fontWeight: 700, letterSpacing: "0.08em",
+                }}>NOT APPROVED</span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px", marginTop: 12 }}>
+                <div>
+                  <div style={{ fontFamily: MONO, fontSize: 7, color: "rgba(255,255,255,0.34)", letterSpacing: "0.1em" }}>POST-HAIRCUT CONVICTION</div>
+                  <div style={{ marginTop: 3, fontFamily: MONO, fontSize: 11, color: "#d8d5ce" }}>
+                    {typeof record.postHaircutConvictionPct === "number" ? `${record.postHaircutConvictionPct}%` : "Unavailable"}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontFamily: MONO, fontSize: 7, color: "rgba(255,255,255,0.34)", letterSpacing: "0.1em" }}>MINIMUM REQUIRED</div>
+                  <div style={{ marginTop: 3, fontFamily: MONO, fontSize: 11, color: "#d8d5ce" }}>
+                    {typeof record.minimumConvictionPct === "number" ? `${record.minimumConvictionPct}%` : "Unavailable"}
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: 12, paddingTop: 9, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                <div style={{ marginBottom: 5, fontFamily: MONO, fontSize: 7, color: "rgba(255,255,255,0.34)", letterSpacing: "0.1em" }}>VETO REASONS</div>
+                {Array.isArray(record.reasons) && record.reasons.length > 0 ? (
+                  <ul style={{ margin: 0, paddingLeft: 16, color: "#c2a995", fontFamily: SANS, fontSize: 10, lineHeight: 1.55 }}>
+                    {record.reasons.map((reason, reasonIndex) => <li key={`${reasonIndex}-${reason}`}>{reason}</li>)}
+                  </ul>
+                ) : (
+                  <div style={{ fontFamily: SANS, fontSize: 10, color: "rgba(255,255,255,0.42)" }}>No veto reasons supplied.</div>
+                )}
+              </div>
+            </section>
+          ))}
         </div>
       )}
 
-      {trades && tradesList.length === 0 && !loading && (() => {
+      {trades && tradesList.length === 0 && belowGateList.length === 0 && !loading && evaluationCount === 0 && (() => {
         // Reason-aware empty state driven by the server's structured
         // empty_reason. Falls back to a neutral message when absent.
         const er = trades.empty_reason || null;
@@ -513,6 +592,32 @@ ${snap.sections}`;
           </div>
         );
       })()}
+
+      {trades && tradesList.length === 0 && belowGateList.length === 0 && !loading && evaluationCount !== 0 && (
+        <div data-testid="card-evaluation-data-unavailable" role="alert" style={{
+          padding: "14px 16px", background: "rgba(239,68,68,0.055)",
+          border: "1px solid rgba(239,68,68,0.22)", borderRadius: 9,
+        }}>
+          <div style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#ef7777" }}>
+            EVALUATION DATA UNAVAILABLE
+          </div>
+          <div style={{ marginTop: 6, fontFamily: SANS, fontSize: 10, lineHeight: 1.55, color: "rgba(255,255,255,0.52)" }}>
+            This response contains no passing cards or below-gate research records, so its evaluation result cannot be verified.
+          </div>
+          <button
+            type="button"
+            data-testid="btn-retry-evaluation-data"
+            onClick={() => runTradeIdeas(false)}
+            disabled={loading}
+            style={{
+              marginTop: 10, padding: "7px 10px", borderRadius: 5,
+              border: "1px solid rgba(239,119,119,0.3)", background: "rgba(239,119,119,0.07)",
+              color: "#ef9999", fontFamily: MONO, fontSize: 8, fontWeight: 700,
+              letterSpacing: "0.08em", cursor: loading ? "not-allowed" : "pointer",
+            }}
+          >RETRY EVALUATION</button>
+        </div>
+      )}
     </div>
   );
 }
