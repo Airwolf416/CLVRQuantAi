@@ -1,4 +1,5 @@
-export const TRADE_IDEA_POLICY_REVISION = "risk-off-short-research-v1";
+import { TRADE_IDEA_POLICY_REVISION } from "../../shared/tradeIdeaPolicy.js";
+export { TRADE_IDEA_POLICY_REVISION };
 
 export function releaseIdentity(revision = process.env.APP_BUILD_SHA) {
   return {

@@ -1,13 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { matchesRelease, verifyRelease } from "./verify-release.mjs";
+import { TRADE_IDEA_POLICY_REVISION } from "../shared/tradeIdeaPolicy.js";
 
 const sha = "a".repeat(40);
-const current = { ok: true, revision: sha, tradeIdeaPolicy: "crypto-compatible-floor-v1" };
+const current = { ok: true, revision: sha, tradeIdeaPolicy: TRADE_IDEA_POLICY_REVISION };
 test("health 200 alone and wrong revision or policy cannot pass", () => {
   assert.equal(matchesRelease({ ok: true }, sha), false);
   assert.equal(matchesRelease({ ...current, revision: "b".repeat(40) }, sha), false);
   assert.equal(matchesRelease({ ...current, tradeIdeaPolicy: "old" }, sha), false);
+  assert.equal(matchesRelease({ ...current, tradeIdeaPolicy: "crypto-compatible-floor-v1" }, sha), false);
   assert.equal(matchesRelease(current, sha), true);
 });
 test("mixed replicas and request failures reset the consecutive evidence", async () => {

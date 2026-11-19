@@ -1,9 +1,10 @@
 import { pathToFileURL } from "node:url";
+import { TRADE_IDEA_POLICY_REVISION } from "../shared/tradeIdeaPolicy.js";
 
 export function matchesRelease(body, expected) {
   return /^[a-f0-9]{40}$/i.test(expected) &&
     body?.ok === true && body?.revision === expected.toLowerCase() &&
-    body?.tradeIdeaPolicy === "crypto-compatible-floor-v1";
+    body?.tradeIdeaPolicy === TRADE_IDEA_POLICY_REVISION;
 }
 
 export async function verifyRelease(base, expected, {
