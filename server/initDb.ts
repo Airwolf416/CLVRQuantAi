@@ -1,6 +1,7 @@
 import { pool } from "./db";
 import { BRIEF_RECIPIENT_LEDGER_DDL } from "./lib/briefDelivery";
 import { BRIEF_GROUP_KEY_MIGRATION } from "./lib/briefGroupLedger";
+import { initializeWeeklyDigestTables } from "./lib/weeklyDigestStore";
 
 /**
  * Creates all required tables on startup using IF NOT EXISTS.
@@ -1385,6 +1386,7 @@ export async function initializeDatabase(): Promise<void> {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_weekly_updates_created ON weekly_updates (created_at DESC)`);
+    await initializeWeeklyDigestTables(client);
 
     // ── news_items (deduped news feed) ────────────────────────────────────────
     await client.query(`

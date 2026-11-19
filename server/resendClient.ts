@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import { createWeeklyDigestMailer } from "./lib/weeklyDigestMailer";
 
 // Replit Resend connector — fetches API key from the Replit connector service.
 // WARNING: Never cache this client. Tokens/keys can be rotated.
@@ -59,4 +60,9 @@ export async function getUncachableResendClient() {
     client: new Resend(apiKey),
     fromEmail,
   };
+}
+
+export async function getWeeklyDigestMailer() {
+  const { apiKey } = await getCredentials();
+  return createWeeklyDigestMailer(apiKey);
 }

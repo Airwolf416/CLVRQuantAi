@@ -13,7 +13,7 @@ import { getStripeSync } from "./stripeClient";
 import { stripePriceTier } from "./lib/stripePlan";
 import { startDailyBriefScheduler } from "./dailyBrief";
 import { startPositionEventScheduler } from "./positionEvents";
-import { startWeeklyUpdateScheduler } from "./weeklyUpdate";
+import { startWeeklyUpdateScheduler, weeklyDigestReadiness } from "./weeklyUpdate";
 import { initializeDatabase } from "./initDb";
 import { startOutcomeResolver } from "./lib/outcomeResolver";
 import { startChartAIResolver } from "./lib/chartAIResolver";
@@ -45,7 +45,7 @@ const httpServer = createServer(app);
 // Stripe / route init is still running (or failing) in the background.
 app.get("/health", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.status(200).json({ ok: true, ...releaseIdentity() });
+  res.status(200).json({ ok: true, ...releaseIdentity(), weeklyDigest: weeklyDigestReadiness() });
 });
 
 const isProduction = process.env.NODE_ENV === "production";

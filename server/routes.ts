@@ -8910,6 +8910,20 @@ Every level must be technically defensible. Return JSON only.`;
   });
 
   // Preview what the Saturday AI generator would produce — no DB write, no email.
+  app.get("/api/admin/weekly-update/diagnostics", async (req, res) => {
+    try {
+      const uid = (req.session as any)?.userId;
+      if (!uid) return res.status(401).json({ error: "Unauthorized" });
+      const user = await storage.getUser(uid);
+      if (!user || (user.email || "").toLowerCase() !== OWNER_EMAIL) return res.status(403).json({ error: "Forbidden" });
+      const { weeklyDigestDiagnostics } = await import("./weeklyUpdate");
+      res.set("Cache-Control", "no-store");
+      res.json(await weeklyDigestDiagnostics());
+    } catch {
+      res.status(503).json({ error: "Weekly delivery diagnostics are temporarily unavailable" });
+    }
+  });
+
   app.post("/api/admin/weekly-update/ai-preview", async (req, res) => {
     try {
       const uid = (req.session as any)?.userId;
@@ -8938,8 +8952,8 @@ Every level must be technically defensible. Return JSON only.`;
       if (!uid) return res.status(401).json({ error: "Unauthorized" });
       const u = await storage.getUser(uid);
       if (!u || (u.email || "").toLowerCase() !== OWNER_EMAIL) return res.status(403).json({ error: "Forbidden" });
-      const { generateWeeklyUpdateWithAI } = await import("./weeklyUpdate");
-      const created = await generateWeeklyUpdateWithAI();
+      const { generateWeeklyUpdateManually } = await import("./weeklyUpdate");
+      const created = await generateWeeklyUpdateManually();
       if (!created) return res.json({ ok: false, message: "AI produced nothing user-visible — no update created." });
       res.json({ ok: true, update: created });
     } catch (e: any) {
@@ -9093,10 +9107,11 @@ Every level must be technically defensible. Return JSON only.`;
       const result = await sendWeeklyUpdateNow({ ignoreFreshnessGate: true });
       const parts: string[] = [];
       if (result.alreadySent) parts.push("⚠ Already sent earlier — no duplicate emails went out");
+      else if ("busy" in result && result.busy) parts.push("A send is already running; no duplicate campaign was started");
+      else if (!result.complete) parts.push(`Accepted ${result.sent}/${result.total}; delivery is incomplete and needs retry or review`);
       else if (result.total === 0) parts.push("No active subscribers");
-      else parts.push(`✓ Sent ${result.sent}/${result.total} email${result.total === 1 ? "" : "s"}`);
-      if (result.swept && result.swept > 0) parts.push(`cleaned ${result.swept} pending log ${result.swept === 1 ? "entry" : "entries"}`);
-      res.json({ ok: true, message: parts.join(" · "), ...result });
+      else parts.push(`✓ Accepted ${result.sent}/${result.total} email${result.total === 1 ? "" : "s"}`);
+      res.json({ ok: result.complete, message: parts.join(" · "), ...result });
     } catch (e: any) {
       console.error("weekly-update send-now error:", e);
       res.status(500).json({ error: e?.message || "Failed to send" });

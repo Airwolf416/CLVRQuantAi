@@ -8,15 +8,18 @@
 
 import { buildWeeklyUpdatePreview } from "../weeklyUpdate";
 import { pool } from "../db";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 async function main() {
   const days = Number(process.argv[2]) || 14;
   console.log(`\n=== WEEKLY UPDATE DRY RUN — last ${days} days (no send / no publish) ===\n`);
 
-  const p = await buildWeeklyUpdatePreview({ sinceDays: days });
+  const p = await buildWeeklyUpdatePreview({ sinceDays: days, commitsOnly: process.argv.includes("--commits-only") });
 
   console.log(`source            : ${p.source}`);
   console.log(`since             : ${p.since}`);
+  console.log(`source release    : ${p.sourceHeadSha}`);
   console.log(`manual log entries: ${p.pendingCount}`);
   p.pendingEntries.forEach((e) => console.log(`   • ${e.emoji || "•"} ${e.headline}`));
   console.log(`commits (user-facing, after filter): ${p.commitCount}`);
@@ -25,7 +28,8 @@ async function main() {
 
   if (p.skipped || !p.digest) {
     console.log(`>> SKIPPED: ${p.skipReason}`);
-    console.log(`>> (real pipeline logs "[weeklyUpdate] nothing user-visible this week — skipped." and sends NOTHING)`);
+    console.log(">> No update was published and no email was sent.");
+    if (!p.ok) throw new Error(p.skipReason || "Digest preview failed validation");
   } else {
     console.log("=== RENDERED DIGEST (subscriber copy) ===");
     console.log(`version : ${p.digest.version || "(none)"}`);
@@ -41,6 +45,12 @@ async function main() {
     console.log(`footer present   : ${p.emailHtml?.includes("not financial advice") ? "YES ✓" : "NO ✗"}`);
     console.log(`tagline present  : ${p.emailHtml?.includes("Personal Edge") ? "YES ✓" : "NO ✗"}`);
     console.log(`email HTML size  : ${p.emailHtml?.length || 0} chars (NOT sent)`);
+    const output = process.argv.find(arg => arg.startsWith("--out="))?.slice(6);
+    if (output && p.emailHtml && p.ok) {
+      await mkdir(dirname(output), { recursive: true });
+      await writeFile(output, p.emailHtml, "utf8");
+      console.log(`preview saved     : ${output} (file only; no publication or email)`);
+    }
   }
 
   console.log("\n=== END DRY RUN — nothing was saved or emailed ===\n");

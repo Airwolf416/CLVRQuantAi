@@ -32,3 +32,4 @@ clvrquantai_dump*
 *.swp
 *.swo
 Thumbs.db
+/generated-artifacts/
