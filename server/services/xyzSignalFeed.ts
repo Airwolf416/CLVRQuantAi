@@ -11,9 +11,10 @@ const MARKET_REFRESH_MS = 15_000;
 const CANDLE_REFRESH_MS = 15 * 60_000;
 const CANDLE_LOOKBACK_MS = 90 * 24 * 60 * 60_000;
 const FETCH_CONCURRENCY = 1;
-// candleSnapshot carries an API weight of 20 plus a cost per 60 returned bars.
-// This pacing stays below the documented per-IP aggregate even with two app replicas.
-const REQUEST_SPACING_MS = 2_700;
+// candleSnapshot carries weight 20 plus 1 per 60 returned bars (22 for 90
+// daily bars). Reserve room for each replica's existing 5s Hyperliquid worker,
+// this feed's 15s metadata refresh, and a second replica under the per-IP cap.
+const REQUEST_SPACING_MS = 5_500;
 const RATE_LIMIT_COOLDOWN_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
