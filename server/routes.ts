@@ -37,7 +37,8 @@ import { recordActivity as recordLiveActivity, getLiveStats, getLiveUserList } f
 import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
 import { isBriefTimeZone } from "@shared/briefTimeZones";
 import { shouldCacheAiAnalysis } from "./lib/aiAnalysisCache";
-import { releaseIdentity } from "./lib/releaseIdentity";
+import { releaseIdentity, TRADE_IDEA_POLICY_REVISION } from "./lib/releaseIdentity";
+import { parseTradeIdeasCandidates } from "../shared/tradeIdeasResponse.js";
 import { tradeIdeaConvictionMinimumPct, researchIdea, selectResearchIdeas, isResearchIdea, type ResearchIdea } from "./lib/tradeIdeaEvaluation";
 import { clampAiText, serializeAiRequest, describeAiProviderFailure } from "./lib/aiRequestEncoding";
 import multerLib from "multer";
@@ -10512,6 +10513,7 @@ Every level must be technically defensible. Return JSON only.`;
       if (!text) {
         const errMsg = "CLVR AI did not return a response — please try again.";
         console.error("[ai/analyze] Claude returned empty content. stop_reason:", data.stop_reason, "content_types:", (data.content||[]).map((b:any)=>b.type));
+        if (featureKey === "tradeIdeas") return res.status(502).json({ error: errMsg });
         return res.json({ text: errMsg, response: errMsg, cached: false, model });
       }
 
@@ -10524,8 +10526,10 @@ Every level must be technically defensible. Return JSON only.`;
       try {
         const trimmed = text.trim();
         const looksJson = trimmed.startsWith("{") && trimmed.includes('"trades"');
-        if (looksJson) {
-          const parsed: any = JSON.parse(trimmed);
+        if (featureKey === "tradeIdeas" || looksJson) {
+          const parsed: any = featureKey === "tradeIdeas"
+            ? parseTradeIdeasCandidates(trimmed)
+            : JSON.parse(trimmed);
           if (parsed && Array.isArray(parsed.trades)) {
             // Enforce the requested batch bound before evaluation, so every
             // evaluated candidate has one visible outcome even if the model
@@ -10606,6 +10610,7 @@ Every level must be technically defensible. Return JSON only.`;
               parsed.trades = parsed.trades.slice(0, limit);
               parsed.below_gate = selectResearchIdeas(research, parsed.trades.length, limit);
               parsed.evaluation_summary = {
+                policy: TRADE_IDEA_POLICY_REVISION,
                 evaluated, passing: parsed.trades.length, belowGate: parsed.below_gate.length,
                 displayed: parsed.trades.length + parsed.below_gate.length,
                 notDisplayed: Math.max(0, evaluated - parsed.trades.length - parsed.below_gate.length),

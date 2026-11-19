@@ -4,6 +4,7 @@ import TradeIdeasThinking from "./TradeIdeasThinking.jsx";
 import MacroPreFlight from "./MacroPreFlight.jsx";
 import { buildMarketSnapshot, buildMacroPreflightContext } from "../../utils/marketDataSnapshot.js";
 import { apiFetch } from "../../lib/apiClient";
+import { parseEvaluatedTradeIdeas } from "../../../../shared/tradeIdeasResponse.js";
 import { useNewItemMotion, useStableResponseItemIds } from "../../hooks/useNewItemMotion.js";
 
 const MONO = "'IBM Plex Mono', monospace";
@@ -206,9 +207,10 @@ ${snap.sections}`;
 
       const text = data.text || "";
       try {
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
+        {
+          // Never extract a raw/fenced model payload into approved cards.
+          // The server must validate and evaluate this exact envelope first.
+          const parsed = parseEvaluatedTradeIdeas(text);
           setTrades(parsed);
 
           // ── Log trades to ai_signal_log for adaptive learning ──
@@ -256,8 +258,6 @@ ${snap.sections}`;
               }).catch(() => {});
             }
           }
-        } else {
-          setError("Failed to parse trade ideas. Please try again.");
         }
       } catch (parseErr) {
         setError("Failed to parse AI response. Please try again.");
