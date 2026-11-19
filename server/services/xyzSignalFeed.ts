@@ -89,9 +89,11 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
   let candlesTotal = 0;
   let lastError = "";
   let retryAt = 0;
+  let historyRefresh: Promise<void> | null = null;
+  let requestQueue: Promise<unknown> = Promise.resolve();
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  const postInfo = async (payload: unknown): Promise<any> => {
+  const performPostInfo = async (payload: unknown): Promise<any> => {
     const waitMs = Math.max(0, nextRequestAt - now());
     if (waitMs > 0) await sleep(waitMs);
     nextRequestAt = now() + requestSpacingMs;
@@ -109,6 +111,12 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
       throw new Error(`HYPERLIQUID_HTTP_${response.status}`);
     }
     return response.json();
+  };
+  // Metadata and background candle refreshes share one paced queue.
+  const postInfo = (payload: unknown): Promise<any> => {
+    const request = requestQueue.then(() => performPostInfo(payload));
+    requestQueue = request.catch(() => {});
+    return request;
   };
 
   const readCandleHistory = async (
@@ -164,11 +172,28 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
 
     candlesCompleted = 0;
     candlesTotal = assets.length;
+    // Once history exists, serve it immediately while refreshing expired
+    // candles separately. A 147-market history pass must not block live marks.
+    const expired = assets.filter(({ coin }: any) => {
+      const cached = candleCache.get(coin);
+      return cached && now() - cached.fetchedAt >= candleRefreshMs;
+    });
+    if (expired.length && !historyRefresh && now() >= retryAt) {
+      historyRefresh = mapLimit(expired, concurrency, async ({ coin }: any) => {
+        if (now() < retryAt) return;
+        await readCandleHistory(coin, startTime, fetchedAt);
+      }).then(() => {}).catch((error) => {
+        console.warn("[xyz-signal-feed] background history refresh failed", error?.message);
+      }).finally(() => { historyRefresh = null; });
+    }
     const candleResults = await mapLimit(
       assets,
       concurrency,
       async (asset: any) => {
-        const history = await readCandleHistory(asset.coin, startTime, fetchedAt);
+        const cached = candleCache.get(asset.coin);
+        const history = cached
+          ? { ...cached, stale: now() - cached.fetchedAt >= candleRefreshMs }
+          : await readCandleHistory(asset.coin, startTime, fetchedAt);
         candlesCompleted += 1;
         return { coin: asset.coin, ...history };
       },
@@ -213,8 +238,8 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
         else retryAt = now() + marketRefreshMs;
         if (lastSnapshot) {
           console.warn("[xyz-signal-feed] refresh failed; returning last complete snapshot");
-          lastMarketFetchAt = now();
-          return { ...lastSnapshot, stale: true };
+          lastSnapshot = { ...lastSnapshot, stale: true };
+          return lastSnapshot;
         }
         throw error;
       } finally {

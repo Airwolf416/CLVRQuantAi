@@ -246,3 +246,62 @@ test("first-load endpoint state returns immediately with progress instead of wai
   assert.equal(completed.rows[0].signal, "NO_DATA");
   assert.equal(completed.rows.length, completed.universeSize);
 });
+
+test("expired daily history refresh never blocks publishing new mark prices", async () => {
+  let clock = Date.UTC(2026, 10, 19, 12);
+  let candleCalls = 0;
+  let mark = 105;
+  let releaseHistory: (() => void) | undefined;
+  const fakeFetch: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.type === "metaAndAssetCtxs") {
+      return feedResponse([{ universe: [{ name: "xyz:ANT" }] }, [{ markPx: String(mark), funding: "0", openInterest: "10" }]]);
+    }
+    candleCalls++;
+    if (candleCalls === 1) return feedResponse(candlesFromCloses(Array(25).fill(100), clock));
+    return new Promise<Response>(resolve => {
+      releaseHistory = () => resolve(feedResponse(candlesFromCloses(Array(25).fill(101), clock)));
+    });
+  };
+  const feed = createXyzSignalFeed({
+    fetch: fakeFetch, now: () => clock, requestSpacingMs: 0,
+    marketRefreshMs: 15_000, candleRefreshMs: 60_000,
+  });
+  await feed.getSnapshot();
+  clock += 61_000;
+  mark = 110;
+  const refreshed = await feed.getSnapshot();
+  assert.equal(refreshed.rows[0].markPrice, 110);
+  assert.equal(refreshed.stale, true, "old candle history is explicitly labelled stale");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(typeof releaseHistory, "function", "history is still loading independently");
+  releaseHistory!();
+  await new Promise(resolve => setImmediate(resolve));
+  clock += 16_000;
+  const completed = await feed.getSnapshot();
+  assert.equal(completed.stale, false);
+  assert.equal(completed.rows[0].historyLabel, "insufficient history");
+});
+
+test("metadata failure preserves rows but never labels the cached snapshot live", async () => {
+  let clock = Date.UTC(2026, 10, 19, 12);
+  let fail = false;
+  const fakeFetch: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.type === "metaAndAssetCtxs") {
+      if (fail) return new Response("unavailable", { status: 503 });
+      return feedResponse([{ universe: [{ name: "xyz:ANT" }] }, [{ markPx: "105", funding: "0", openInterest: "10" }]]);
+    }
+    return feedResponse([]);
+  };
+  const feed = createXyzSignalFeed({ fetch: fakeFetch, now: () => clock, requestSpacingMs: 0 });
+  await feed.getSnapshot();
+  clock += 16_000;
+  fail = true;
+  const failedRefresh = await feed.getSnapshot();
+  assert.equal(failedRefresh.stale, true);
+  const state = feed.getState();
+  assert.equal(state.status, "ready");
+  assert.equal("stale" in state && state.stale, true);
+  assert.equal("rows" in state && state.rows.length, 1);
+});
