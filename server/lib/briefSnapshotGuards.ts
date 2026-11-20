@@ -1,5 +1,6 @@
 import { parseBriefPrice } from "./briefTradeNumbers";
 import type { BriefMarketData, BriefMarketRow } from "./briefMarketSnapshot";
+import { CRYPTO_SYMS } from "../config/assets";
 
 const ASSET_FIELDS: Record<string, { codes: string[]; labels: string[] }> = {
   btc: { codes: ["BTC"], labels: ["Bitcoin (BTC/USD)"] },
@@ -29,10 +30,18 @@ const SYMBOL_MENTIONS: Array<[RegExp, string]> = [
   [/\b(?:spx|s&p\s*500|gspc)\b/i, "SPX"],
   [/\b(?:ndx|nasdaq\s*100)\b/i, "NDX"],
   [/\b(?:aapl|msft|nvda|tsla|googl|amzn|meta)\b/i, "EQUITY"],
+  ...CRYPTO_SYMS.filter(symbol => !["BTC", "ETH", "SOL"].includes(symbol))
+    .map(symbol => [new RegExp(`\\b${symbol}(?:[/\\-]?(?:USD[TC]?))?\\b`, "i"), symbol] as [RegExp, string]),
 ];
 
 function codeFor(input: unknown): string {
   const value = String(input ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  // Quotes, ideas, and systematic signals must use the same base identity.
+  // Match only registered symbols, never strip USD from arbitrary stock/FX names.
+  for (const symbol of CRYPTO_SYMS) {
+    if (["", "USD", "USDT", "USDC"].some(quote =>
+      value === `${symbol}${quote}` || value === `${symbol}${quote}PERP`)) return symbol;
+  }
   if (/BITCOIN|BTC/.test(value)) return "BTC";
   if (/ETHEREUM|ETH/.test(value)) return "ETH";
   if (/SOLANA|SOL/.test(value)) return "SOL";
@@ -68,8 +77,12 @@ export function findBriefSnapshotQuote(data: BriefMarketData, instrument: unknow
   return rows.find(row => quoteCode(row) === code) || null;
 }
 
-function numericPriceTokens(text: string): Array<{ raw: string; value: number }> {
-  const pattern = LEVEL_TERMS.test(text)
+function numericPriceTokens(text: string, instrumentCode?: string): Array<{ raw: string; value: number }> {
+  const quoteContext = !!instrumentCode && (
+    /\b(?:trad(?:e|es|ing)|quot(?:e|es|ed)|last|price|spot|at|around|near|above|below)\b/i.test(text)
+    || SYMBOL_MENTIONS.some(([pattern, code]) => code === instrumentCode && pattern.test(text))
+  );
+  const pattern = LEVEL_TERMS.test(text) || quoteContext
     ? /\b\d[\d,]*(?:\.\d+)?[KMB]?\b/gi
     : /(?:[$€£¥]\s*\d[\d,]*(?:\.\d+)?[KMB]?|\b\d+(?:\.\d+)?[KMB]\b|\b\d{1,3}(?:,\d{3})+(?:\.\d+)?[KMB]?\b|\b\d{4,}(?:\.\d+)?[KMB]?\b|\b\d+\.\d{3,}[KMB]?\b)/gi;
   const matches: Array<{ raw: string; value: number }> = [];
@@ -110,7 +123,7 @@ function safeSentence(sentence: string, data: BriefMarketData, code: string): bo
   // for an asset. Drop model-supplied percent claims rather than risk a second
   // provider window or a stale daily-change value.
   if (/\b\d+(?:\.\d+)?\s*%/.test(sentence)) return false;
-  const prices = numericPriceTokens(sentence);
+  const prices = numericPriceTokens(sentence, code);
   if (!prices.length) return true;
   const spot = spotFor(data, code);
   if (!spot) return false;

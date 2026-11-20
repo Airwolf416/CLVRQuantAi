@@ -8,6 +8,7 @@ import {
   removeBriefSignalConflicts,
 } from "./briefSnapshotGuards";
 import type { BriefMarketData } from "./briefMarketSnapshot";
+import { CRYPTO_SYMS } from "../config/assets";
 
 const snapshot: BriefMarketData = {
   capturedAt: "2026-11-20T11:00:00.000Z",
@@ -93,4 +94,48 @@ test("recent systematic-signal conflicts are excluded; unavailable context fails
   const unavailable: any = { topTrade: { asset: "BTC", direction: "LONG" }, additionalTrades: [] };
   removeBriefSignalConflicts(unavailable, [], false, now, () => {});
   assert.equal(unavailable.topTrade, null);
+});
+
+test("all registered crypto base/pair aliases share quote lookup and signal-conflict identity", () => {
+  const now = Date.now();
+  for (const symbol of CRYPTO_SYMS) {
+    const aliases = [symbol, `${symbol}/USD`, `${symbol}-USD`, `${symbol}USD`, `${symbol}USDT`, `${symbol}/USDC`, `${symbol}-PERP`];
+    for (const quoteAlias of aliases) {
+      const data: BriefMarketData = {
+        crypto: [{ symbol: quoteAlias, price: "$10.00", priceValue: 10, change: "—", changeNum: null }],
+        forex: [], metals: [], equities: [],
+      };
+      for (const ideaAlias of aliases) {
+        assert.equal(findBriefSnapshotQuote(data, ideaAlias)?.priceValue, 10, `${quoteAlias} quote / ${ideaAlias} idea`);
+        const brief: any = {
+          topTrade: { asset: ideaAlias, dir: "LONG", entry: 10, stop: 9, tp1: 12, tp2: 13 },
+          additionalTrades: [],
+        };
+        anchorBriefTradesToSnapshot(brief, data, () => {});
+        assert.equal(brief.topTrade?.entryMode, "MARKET", ideaAlias);
+        removeBriefSignalConflicts(brief, [{ token: symbol, direction: "SHORT", ts: now }], true, now, () => {});
+        assert.equal(brief.topTrade, null, `${symbol} SHORT must block ${ideaAlias} LONG`);
+      }
+    }
+    const baseIdea: any = { topTrade: { asset: symbol, dir: "SHORT" }, additionalTrades: [] };
+    removeBriefSignalConflicts(baseIdea, [{ token: `${symbol}/USD`, direction: "LONG", ts: now }], true, now, () => {});
+    assert.equal(baseIdea.topTrade, null, `${symbol}/USD LONG must block ${symbol} SHORT`);
+  }
+});
+
+test("plain JPY prices are validated against the snapshot, including short integers", () => {
+  const data: BriefMarketData = {
+    crypto: [], metals: [], equities: [],
+    forex: [{ pair: "USD/JPY", price: "150.2500", priceValue: 150.25, change: "+0.10%", changeNum: 0.1 }],
+  };
+  const brief: any = {
+    usdjpy: "USD/JPY trades at 160.25. USD/JPY is quoted at 160.2. USD/JPY trades at 160. USD/JPY trades at 150.25. Momentum remains mixed.",
+    commentary: [{ title: "FX overview", text: "USD/JPY trades at 160.25. Watch incoming macro releases." }],
+  };
+  guardBriefCommentary(brief, data, "America/Toronto", () => {});
+  assert.doesNotMatch(brief.usdjpy, /\b160(?:\.25|\.2)?\b/);
+  assert.match(brief.usdjpy, /USD\/JPY trades at 150\.25/);
+  assert.match(brief.usdjpy, /Snapshot: 150\.2500/);
+  assert.doesNotMatch(brief.commentary[0].text, /160\.25/);
+  assert.match(brief.commentary[0].text, /Watch incoming macro releases/);
 });
