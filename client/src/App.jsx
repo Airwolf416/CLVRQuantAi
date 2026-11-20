@@ -558,9 +558,19 @@ function UnusualPulse({ data, C, MONO }) {
   );
 }
 
-function PreviewGate({tab,onSignUp,onSignIn,C2,MONO2,SERIF2}){
+function PreviewGate({tab,onSignUp,onSignIn,onUpgrade,C2,MONO2,SERIF2}){
   const tabNames={radar:"Radar Command Center",markets:"Live Markets",macro:"Macro Calendar",brief:"Morning Brief",signals:"AI Quant Signals",alerts:"Price Alerts",wallet:"Phantom Wallet",ai:"CLVR AI Analyst",chartai:"Chart AI",basket:"My Basket",account:"Your Account",insider:"SEC Insider Flow",monitor:"Portfolio Advisor",quant:"Quant Engine",about:"About",journal:"Trade Journal"};
   const tabBlurbs={radar:"Live market regime · crash detector · global liquidity index · social sentiment",markets:"Real-time crypto, equities, metals & forex · funding rates · OI · whale tracking",macro:"Fed calendar · CPI/NFP events · geopolitical risk · economic data",brief:"Daily AI market brief · 4 curated trade ideas · macro risk scoring",signals:"Full quant signal library · Bayesian scoring · funding anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI market chat · real-time data context · trade ideas · position sizing",chartai:"Upload any chart · AI returns direction, entry, SL & TP1/TP2/TP3 with live news context · 5 analyses/day",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",quant:"QuantBrain engine · custom signal tuning · risk profiles",journal:"Log trades · P&L tracking · R:R analysis (Elite)"};
+  if(tab==="monitor")return(
+    <div data-testid="preview-monitor-upgrade" style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
+      <div style={{fontSize:44,marginBottom:14}}>🔒</div>
+      <div style={{fontFamily:SERIF2,fontSize:22,fontWeight:900,color:"#00e5ff",marginBottom:6}}>Elite Feature</div>
+      <div style={{fontFamily:MONO2,fontSize:11,color:C2.muted,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:16}}>Portfolio Advisor · Monitor</div>
+      <div style={{fontFamily:MONO2,fontSize:10,color:C2.muted2,lineHeight:1.85,marginBottom:24,maxWidth:300}}>Portfolio Advisor and the PnL Tracker are available to Elite members. Sign in with an Elite account or view the existing Elite plans to continue.</div>
+      <button data-testid="preview-monitor-elite-plans" onClick={onUpgrade} style={{width:"100%",maxWidth:300,padding:"14px 0",borderRadius:4,background:"rgba(0,229,255,.1)",border:"1px solid rgba(0,229,255,.4)",color:"#00e5ff",fontFamily:SERIF2,fontStyle:"italic",fontWeight:700,fontSize:16,cursor:"pointer",marginBottom:10}}>View Elite plans →</button>
+      <button data-testid="preview-monitor-signin" onClick={onSignIn} style={{width:"100%",maxWidth:300,padding:"11px 0",borderRadius:4,background:"transparent",border:"1px solid #26334b",color:C2.muted2,fontFamily:MONO2,fontSize:10,cursor:"pointer"}}>Sign in to your account</button>
+    </div>
+  );
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:460,padding:"36px 20px",textAlign:"center"}}>
       {/* Icon + heading */}
@@ -690,8 +700,8 @@ function PreviewPricingPage({onSignUp,onSignIn,C2,MONO2,SERIF2}){
 
 function TabUpgradeGate({tab,tier,onUpgrade,C2,MONO2,SERIF2}){
   const isElite=tier==="elite";
-    const labels={brief:"Morning Brief",signals:"Quant AI Signals",alerts:"Alerts & Anomalies",wallet:"Phantom Wallet",ai:"AI Market Analyst",insider:"SEC Insider Flow",alphaDesk:"Alpha Desk"};
-    const features={brief:"Daily AI-generated market brief · 4 curated trade ideas · macro risk scoring",signals:"Full pattern library · Bayesian signal scoring · funding rate anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI Market Chat · real-time context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",alphaDesk:"Cross-asset risk, technical levels, volatility, correlations, and volume-flow context."};
+    const labels={brief:"Morning Brief",signals:"Quant AI Signals",alerts:"Alerts & Anomalies",wallet:"Phantom Wallet",ai:"AI Market Analyst",insider:"SEC Insider Flow",alphaDesk:"Alpha Desk",monitor:"Portfolio Advisor"};
+    const features={brief:"Daily AI-generated market brief · 4 curated trade ideas · macro risk scoring",signals:"Full pattern library · Bayesian signal scoring · funding rate anomalies · whale detection",alerts:"Custom price alerts · push notifications · macro event warnings",wallet:"Phantom Wallet · Solana balance · DeFi integration · token tracking",ai:"CLVR AI Market Chat · real-time context · trade ideas · position sizing",insider:"SEC Form 4 insider filings · whale cluster tracking · institutional flow",alphaDesk:"Cross-asset risk, technical levels, volatility, correlations, and volume-flow context.",monitor:"Portfolio Advisor · Daily Plan · PnL Tracker."};
   return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:380,padding:"32px 24px",textAlign:"center"}}>
       <div style={{fontSize:32,marginBottom:16}}>🔒</div>
@@ -3593,6 +3603,7 @@ export default function App(){
   if (_path === "/terms" || _path.startsWith("/terms?")) return <SiteShell><TermsPage/></SiteShell>;
 
   const [user,setUser]=useState(null);
+  const [monitorPricingOpen,setMonitorPricingOpen]=useState(false);
   const [showAuth,setShowAuth]=useState(false);
   const [authInitialMode,setAuthInitialMode]=useState("welcome");
   // After login, if a checkout URL was stashed before auth, navigate to it now
@@ -3686,6 +3697,21 @@ export default function App(){
   }
 
   if(!user){
+    const monitorRequested = _path === "/monitor" || new URLSearchParams(window.location.search).get("tab") === "monitor";
+    if(monitorRequested)return <SiteShell>
+      <ThemeCtx.Provider value={themeVal}>
+        <main style={{background:themeVal.C.bg,color:themeVal.C.text,minHeight:"100vh",padding:"40px 16px"}}>
+          <PreviewGate tab="monitor" C2={themeVal.C} MONO2={MONO} SERIF2={SERIF}
+            onSignIn={()=>{setAuthInitialMode("signin");setShowAuth(true);}}
+            onUpgrade={()=>setMonitorPricingOpen(true)}
+          />
+          <PricingModal isOpen={monitorPricingOpen} onClose={()=>setMonitorPricingOpen(false)}
+            userTier="free" defaultTier="elite"
+            onUpgrade={()=>{setMonitorPricingOpen(false);setAuthInitialMode("signup");setShowAuth(true);}}
+          />
+        </main>
+      </ThemeCtx.Provider>
+    </SiteShell>;
     return <SiteShell>
       <ThemeCtx.Provider value={themeVal}>
         <WelcomePage isDark={isDark} initialMode={authInitialMode} onToggleTheme={toggleTheme} onEnter={(u)=>{setUser(u);_checkPostLoginRedirect();}}/>
@@ -3819,7 +3845,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const {regime:dbRegime,fearGreed:dbFearGreed,killSwitch:dbKillSwitch}=useDataBus();
   const {isMobile,isTablet,isDesktop}=useWindowSize();
   const sidebarW=isDesktop?180:isTablet?64:0;
-  const [tab,setTab]=useState(()=>window.location.pathname==="/alpha-desk"?"alphaDesk":"radar");
+  const [tab,setTab]=useState(()=>window.location.pathname==="/alpha-desk"?"alphaDesk":window.location.pathname==="/monitor"||new URLSearchParams(window.location.search).get("tab")==="monitor"?"monitor":"radar");
   const [rotationBrainData,setRotationBrainData]=useState(null);
   const [rotationBrainLoading,setRotationBrainLoading]=useState(false);
   const [rotationBrainError,setRotationBrainError]=useState("");
@@ -3848,7 +3874,7 @@ function Dashboard({user,setUser,onShowAuth}){
   },[tab,refreshRotationBrain]);
   useEffect(()=>{
     if(typeof window==="undefined")return;
-    const path=tab==="alphaDesk"?"/alpha-desk":window.location.pathname==="/alpha-desk"?"/":window.location.pathname;
+    const path=tab==="alphaDesk"?"/alpha-desk":tab==="monitor"?"/monitor":["/alpha-desk","/monitor"].includes(window.location.pathname)?"/":window.location.pathname;
     if(window.location.pathname!==path)window.history.replaceState({}, "", `${path}${window.location.search}`);
   },[tab]);
   const expireSession = useCallback(() => {
@@ -5168,7 +5194,8 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
     ...(!isGuest&&user&&!isPreview?[{k:"book",icon:"📅",label:"1-ON-1"}]:[]),
     {k:"account",icon:"⚙",label:i18n.account},
   ];
-  const NAV=isGuest?NAV_ALL.filter(n=>GUEST_TABS.includes(n.k)):NAV_ALL;
+  const visibleNav=NAV_ALL.filter(n=>n.k!=="monitor"||isElite);
+  const NAV=isGuest?visibleNav.filter(n=>GUEST_TABS.includes(n.k)):visibleNav;
 
   return(
     <div style={{fontFamily:SANS,background:C.bg,color:C.text,minHeight:"100vh",paddingBottom:isMobile?76:24,paddingTop:"env(safe-area-inset-top,0px)",paddingLeft:isMobile?0:sidebarW,maxWidth:isMobile?780:undefined,margin:isMobile?"0 auto":0,position:"relative"}}>
@@ -5692,6 +5719,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             <PreviewGate tab={tab} C2={C} MONO2={MONO} SERIF2={SERIF}
               onSignUp={()=>onShowAuth&&onShowAuth()}
               onSignIn={()=>onShowAuth&&onShowAuth()}
+              onUpgrade={()=>{setUpgradeDefaultTier("elite");setShowPricingModal(true);}}
             />
           </div>
         )}

@@ -24,7 +24,10 @@ import { buildMarketSessionContext, dueBriefZones, isBriefScheduleDue, localBrie
 import { type BriefTimeZone } from "@shared/briefTimeZones";
 import { createBriefDeliveryLedger, deliverBriefOnce } from "./lib/briefDelivery";
 import { createBriefGroupLedger, isTerminalBriefAttempt } from "./lib/briefGroupLedger";
-import { filterBriefTrades } from "./lib/briefTradeNumbers";
+import { filterBriefTrades, parseBriefPrice } from "./lib/briefTradeNumbers";
+import { getOrCreateBriefMarketSnapshot, type BriefMarketData } from "./lib/briefMarketSnapshot";
+import { anchorBriefTradesToSnapshot, briefEntryMode, guardBriefCommentary, removeBriefSignalConflicts } from "./lib/briefSnapshotGuards";
+import { liveSignals } from "./state";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -38,7 +41,6 @@ const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
 // Catch-up is now bounded to a tight morning window.
 const APP_URL = "https://clvrquantai.com";
 
-let lastApologySentAt = 0; // Unix ms — prevents double-send within 6 hours
 const localBriefLastAttempt = new Map<string, number>();
 
 // Boot ID for traceability — log alongside PID so we can confirm in production
@@ -129,12 +131,7 @@ async function markBriefSent(dateKey: string, count: number) {
   } catch (e: any) { console.log("[daily-brief] Failed to mark brief sent:", e.message); }
 }
 
-interface MarketData {
-  crypto: { symbol: string; price: string; change: string; changeNum: number }[];
-  forex: { pair: string; price: string; change: string; changeNum: number }[];
-  metals: { symbol: string; price: string; change: string; changeNum: number }[];
-  equities: { symbol: string; price: string; change: string; changeNum: number }[];
-}
+interface MarketData extends BriefMarketData {}
 
 async function fetchMarketData(): Promise<MarketData> {
   const data: MarketData = { crypto: [], forex: [], metals: [], equities: [] };
@@ -161,12 +158,13 @@ async function fetchMarketData(): Promise<MarketData> {
   const usableQuote = (quote: any) =>
     quote && Number.isFinite(Number(quote.price)) && Number(quote.price) > 0 && quote.live !== false;
   const pct = (value: unknown) => {
+    if (value == null || value === "") return null;
     const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
+    return Number.isFinite(n) ? n : null;
   };
   const price = (n: number) =>
-    n >= 100 ? `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
-      : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(6)}`;
+    n >= 1 ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : `$${n.toFixed(6)}`;
 
   for (const symbol of ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", "TRUMP", "HYPE", "BNB"]) {
     const quote = crypto[symbol];
@@ -175,8 +173,10 @@ async function fetchMarketData(): Promise<MarketData> {
     data.crypto.push({
       symbol: `${symbol}/USD`,
       price: price(Number(quote.price)),
-      change: `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%`,
+      priceValue: Number(Number(quote.price).toFixed(Number(quote.price) >= 1 ? 2 : 6)),
+      change: changeNum == null ? "—" : `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%`,
       changeNum,
+      sourceChangeNum: changeNum,
     });
   }
 
@@ -191,8 +191,10 @@ async function fetchMarketData(): Promise<MarketData> {
     data.forex.push({
       pair: label,
       price: Number(quote.price).toFixed(4),
-      change: quote.chg != null ? `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%` : "—",
+      priceValue: Number(Number(quote.price).toFixed(4)),
+      change: changeNum == null ? "—" : `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%`,
       changeNum,
+      sourceChangeNum: changeNum,
     });
   }
 
@@ -208,8 +210,10 @@ async function fetchMarketData(): Promise<MarketData> {
     data.metals.push({
       symbol: label,
       price: `$${Number(quote.price).toFixed(2)}`,
-      change: quote.chg != null ? `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%` : "—",
+      priceValue: Number(Number(quote.price).toFixed(2)),
+      change: changeNum == null ? "—" : `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%`,
       changeNum,
+      sourceChangeNum: changeNum,
     });
   }
 
@@ -220,8 +224,10 @@ async function fetchMarketData(): Promise<MarketData> {
     data.equities.push({
       symbol,
       price: `$${Number(quote.price).toFixed(2)}`,
-      change: quote.chg != null ? `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%` : "—",
+      priceValue: Number(Number(quote.price).toFixed(2)),
+      change: changeNum == null ? "—" : `${changeNum >= 0 ? "+" : ""}${changeNum.toFixed(2)}%`,
       changeNum,
+      sourceChangeNum: changeNum,
     });
   }
 
@@ -232,20 +238,103 @@ async function fetchMarketData(): Promise<MarketData> {
   return data;
 }
 
-async function generateBriefContent(marketData: MarketData, timeZone: BriefTimeZone, marketSchedule: string): Promise<string | null> {
+async function fetchIntegrityCheckedMarketData(timeZone: BriefTimeZone): Promise<MarketData> {
+  const marketData = await fetchMarketData();
+  const session = buildMarketSessionContext(new Date(), timeZone);
+  const flatRows: PriceRow[] = [
+    ...marketData.crypto.map(row => ({ symbol: row.symbol || "", price: row.price, change: row.change, changeNum: Number(row.sourceChangeNum ?? NaN) })),
+    ...marketData.forex.map(row => ({ symbol: row.pair || "", price: row.price, change: row.change, changeNum: Number(row.sourceChangeNum ?? NaN) })),
+    ...marketData.metals.map(row => ({ symbol: row.symbol || "", price: row.price, change: row.change, changeNum: Number(row.sourceChangeNum ?? NaN) })),
+    ...marketData.equities.map(row => ({ symbol: row.symbol || "", price: row.price, change: row.change, changeNum: Number(row.sourceChangeNum ?? NaN) })),
+  ];
+  const closedMarketSymbols = new Set<string>([
+    ...(!session.usEquitiesOpen ? marketData.equities.map(row => row.symbol || "") : []),
+    ...(!session.forexOpen ? marketData.forex.map(row => row.pair || "") : []),
+    ...(!session.forexOpen ? marketData.metals.map(row => row.symbol || "") : []),
+  ]);
+  const integrity = runIntegrityCheck(flatRows, [], closedMarketSymbols);
+  if (integrity.warnings.length) {
+    console.log(`[daily-brief] integrity warnings — ${integrity.warnings.join(" | ")}`);
+  }
+  if (integrity.criticalFailure) {
+    throw new Error(`Data integrity gate: ${integrity.staleCount}/${integrity.totalInstruments} instruments stale`);
+  }
+  if (integrity.dropList.length) {
+    console.log(`[daily-brief] dropping stale rows from feed: ${integrity.dropList.join(", ")}`);
+    const dropSet = new Set(integrity.dropList.map(symbol => symbol.toUpperCase()));
+    marketData.crypto = marketData.crypto.filter(row => !dropSet.has(String(row.symbol).toUpperCase()));
+    marketData.metals = marketData.metals.filter(row => !dropSet.has(String(row.symbol).toUpperCase()));
+    marketData.equities = marketData.equities.filter(row => !dropSet.has(String(row.symbol).toUpperCase()));
+    marketData.forex = marketData.forex.filter(row => !dropSet.has(String(row.pair).toUpperCase()));
+  }
+  return marketData;
+}
+
+async function loadSystematicBriefSignals(): Promise<{ available: boolean; rows: any[] }> {
+  try {
+    const result = await pool.query(`
+      SELECT token, direction, ts
+      FROM signal_history
+      WHERE ts >= NOW() - INTERVAL '24 hours'
+        AND UPPER(direction) IN ('LONG', 'SHORT')
+      ORDER BY ts DESC
+      LIMIT 200
+    `);
+    const fromMemory = liveSignals
+      .filter((signal: any) => ["LONG", "SHORT"].includes(String(signal?.dir || signal?.direction || "").toUpperCase()))
+      .map((signal: any) => ({
+        token: signal.token || signal.symbol,
+        direction: signal.dir || signal.direction,
+        ts: signal.ts,
+      }));
+    return { available: true, rows: [...fromMemory, ...result.rows] };
+  } catch (error: any) {
+    console.error(`[daily-brief] Systematic signal context unavailable; trade ideas will fail closed: ${error?.message || error}`);
+    return { available: false, rows: [] };
+  }
+}
+
+function formatSystematicSignalContext(rows: any[]): string {
+  const cutoff = Date.now() - 24 * 60 * 60_000;
+  const latest = new Map<string, { token: string; direction: string; ts: number }>();
+  for (const row of rows) {
+    const token = String(row?.token || row?.symbol || "").trim().toUpperCase();
+    const direction = String(row?.direction || row?.dir || "").toUpperCase();
+    const rawTs = row?.ts;
+    const ts = typeof rawTs === "number"
+      ? (rawTs < 10_000_000_000 ? rawTs * 1000 : rawTs)
+      : Date.parse(String(rawTs || ""));
+    if (!token || !["LONG", "SHORT"].includes(direction) || !Number.isFinite(ts) || ts < cutoff) continue;
+    const current = latest.get(token);
+    if (!current || ts > current.ts) latest.set(token, { token, direction, ts });
+  }
+  if (!latest.size) return "No LONG/SHORT signals were emitted in the last 24 hours.";
+  return [...latest.values()]
+    .sort((a, b) => a.token.localeCompare(b.token))
+    .map(signal => `${signal.token}: ${signal.direction}`)
+    .join("\n");
+}
+
+async function generateBriefContent(
+  marketData: MarketData,
+  timeZone: BriefTimeZone,
+  marketSchedule: string,
+  systematicSignalContext: string,
+): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone });
 
   const cryptoStr = marketData.crypto.map(c => `${c.symbol}: ${c.price} (${c.change})`).join(" | ");
-  const fxStr = marketData.forex.map(f => `${f.pair}: ${f.price}`).join(" | ");
+  const fxStr = marketData.forex.map(f => `${f.pair}: ${f.price} (${f.change})`).join(" | ");
   const metalStr = marketData.metals.map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ");
   const eqStr = marketData.equities.map(e => `${e.symbol}: ${e.price} (${e.change})`).join(" | ");
 
   let macroStr = "";
   let pendingHighEvents: string[] = [];
   const macroFetchedAt = new Date().toISOString();
+  const marketSnapshotAt = marketData.capturedAt || macroFetchedAt;
   try {
     const macroRes = await fetch("http://localhost:5000/api/macro").then(r => r.json());
     if (Array.isArray(macroRes) && macroRes.length > 0) {
@@ -328,10 +417,13 @@ async function generateBriefContent(marketData: MarketData, timeZone: BriefTimeZ
     console.warn(`[daily-brief] brain summary failed (proceeding without): ${e?.message || e}`);
   }
 
-  const prompt = `You are CLVR AI — a senior markets correspondent (think Bloomberg / FT / Reuters) writing the morning brief for ${today}. Voice: clear, calm, authoritative economic-journalism prose. Short concrete sentences. No marketing fluff, no hedging clichés. Always name the WHY, not just the WHAT. ALL data below is REAL, LIVE, and TIMESTAMPED.
+  const prompt = `You are CLVR AI — a senior markets correspondent (think Bloomberg / FT / Reuters) writing the morning brief for ${today}. Voice: clear, calm, authoritative economic-journalism prose. Short concrete sentences. No marketing fluff, no hedging clichés. Always name the WHY, not just the WHAT. Quote data comes from one stored morning snapshot captured ${marketSnapshotAt}.
 
 ═══ CRITICAL RULES — READ BEFORE WRITING ═══
 1. Only use prices, percentages, and figures EXPLICITLY provided in the data below. Do NOT invent or round differently.
+1a. Every displayed change is calculated from the previous local 6:00 AM snapshot for ${timeZone}. Never substitute an upstream/provider change percentage. If the value is "—", do not state a change.
+1b. Analyze only instruments with a valid price in the snapshot. Do not write N/A prices, changes, levels, or directional bias for missing instruments. Do not discuss SPX/NDX unless they appear in the data below.
+1c. Technical support, resistance, and trigger levels must be freshly derived for this run, stay within 15% of that instrument's snapshot price, or be explicitly labelled multi-week structural. If no defensible level is available, omit it.
 2. For any macro event with STATUS:PENDING — write ONLY forward-looking language ("market is pricing in X", "watch for Y"). NEVER state outcomes.
 3. For any macro event with STATUS:RELEASED — state the ACTUAL value provided. Never infer.
 4. Label market sentiment (RISK ON / RISK OFF / NEUTRAL) using provided data only.
@@ -341,6 +433,9 @@ async function generateBriefContent(marketData: MarketData, timeZone: BriefTimeZ
 8. RECIPIENT LOCAL MARKET SCHEDULE (${timeZone}):
 ${marketSchedule}
 Use this verified schedule to distinguish live, closed, holiday, and weekend markets. Never describe a closed-market quote as a live-session move. On Saturday/Sunday write a clearly labeled Weekend Market Brief; focus on 24/7 crypto, the last available closed-session prices, verified weekend events, and the upcoming market reopening. For US equities/FX, do not invent quotes or session activity. If no trade setup survives the existing filters, set topTrade to null and additionalTrades to []; never force a trade.
+9. SYSTEMATIC SIGNAL DIRECTIONS (latest emitted signal within 24 hours):
+${systematicSignalContext}
+Never silently publish a trade idea opposite the listed systematic signal. Omit the conflict or explain the conflict and reason in that idea.
 ${pendingWarningBlock}
 ═════════════════════════════════════════════
 
@@ -351,21 +446,21 @@ SESSION: ${sessionCtx}
 MACRO EVENTS [fetched: ${macroFetchedAt}]:
   ${macroStr || "No imminent releases"}
 
-LAYER 2 — LIVE MARKET DATA [fetched: ${macroFetchedAt}]:
+LAYER 2 — SHARED MARKET SNAPSHOT [captured: ${marketSnapshotAt}; change window: ${marketData.changeWindow || "unavailable"}]:
 CRYPTO: ${cryptoStr || "Data unavailable"}
 EQUITIES: ${eqStr || "Data unavailable"}
 ENERGY & COMMODITIES (use these exact prices in your Oil & Gas commentary):
-  ${marketData.metals.filter(m => ["WTI Crude Oil","Brent Crude Oil","Natural Gas"].includes(m.symbol)).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
-METALS: ${marketData.metals.filter(m => ["Gold XAU/USD","Silver XAG/USD","Copper"].includes(m.symbol)).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
+  ${marketData.metals.filter(m => ["WTI Crude Oil","Brent Crude Oil","Natural Gas"].includes(m.symbol || "")).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
+METALS: ${marketData.metals.filter(m => ["Gold XAU/USD","Silver XAG/USD","Copper"].includes(m.symbol || "")).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(" | ") || "Data unavailable"}
 FOREX: ${fxStr || "Data unavailable"}${brainBlock}
 
 LAYER 3 — SESSION: ${sessionCtx}
 
 STYLE RULES:
-• Each per-asset section is a tight paragraph (2–4 sentences). Lead with the move + the cause, then the technical level, then the outlook.
+• Each per-asset section is a tight paragraph (2–4 sentences). Lead with the move + the cause, then a verified technical level if available, then the outlook.
 • Use full sentences and connective tissue ("because", "after", "as", "while"). No bullet-style fragments inside the prose fields.
 • Embed risk colour at the END of each section as " 🟢 bias" / " 🟡 bias" / " 🔴 bias".
-• Keep R:R for any trade idea ≥ 1.5:1.
+• Keep R:R for any trade idea ≥ 1.20:1 to TP1.
 
 Return a JSON object with EXACTLY these fields (output STRICT JSON only, no markdown, no backticks):
 {
@@ -381,7 +476,7 @@ Return a JSON object with EXACTLY these fields (output STRICT JSON only, no mark
   "xau":      "2-3 sentences: XAU price, real-yield driver, DXY correlation, key level, 🟢/🟡/🔴 bias",
   "xag":      "1-2 sentences XAG with XAU correlation, 🟢/🟡/🔴 bias",
   "oil":      "3-4 sentences covering WTI AND Brent prices, supply/demand drivers (OPEC+, US inventories, demand), geopolitical risk premium (Middle East, Russia/Ukraine, Strait of Hormuz, Red Sea), and natural gas if notable. End with 🟢/🟡/🔴 bias",
-  "equities": "3-4 sentences covering SPX AND NDX overnight move, mega-cap leadership (NVDA/TSLA/AAPL/MSFT/META direction), breadth and sector rotation, key earnings or Fed cross-currents, VIX context. End with 🟢/🟡/🔴 bias",
+   "equities": "3-4 sentences only for indices and stocks with valid snapshot prices; leave empty when no valid index prices are supplied. End with 🟢/🟡/🔴 bias",
   "eurusd":   "2-3 sentences: rate, DXY, ECB/Fed divergence, key level, 🟢/🟡/🔴 bias",
   "usdjpy":   "2-3 sentences: rate, BOJ stance, real yield spread, intervention risk, 🟢/🟡/🔴 bias",
   "usdcad":   "2-3 sentences: rate, oil correlation, BOC context, 🟢/🟡/🔴 bias",
@@ -393,7 +488,8 @@ Return a JSON object with EXACTLY these fields (output STRICT JSON only, no mark
   "topTrade": null or {
     "asset": "Best trade idea for today — asset name",
     "dir": "LONG or SHORT",
-    "entry": "price",
+     "entry": "exact current snapshot price for MARKET; otherwise a nearby planned price",
+     "entryMode": "MARKET or LIMIT / PULLBACK",
     "stop": "price",
     "tp1": "price",
     "tp2": "price",
@@ -403,8 +499,8 @@ Return a JSON object with EXACTLY these fields (output STRICT JSON only, no mark
     "flags": "${macroRiskEvents.length > 0 ? "MACRO RISK" : "None"}"
   },
   "additionalTrades": [
-    {"asset":"2nd trade — different asset class from topTrade","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"},
-    {"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"}
+    {"asset":"2nd trade — different asset class from topTrade","dir":"LONG or SHORT","entry":"price","entryMode":"MARKET or LIMIT / PULLBACK","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"},
+    {"asset":"3rd trade — different asset class","dir":"LONG or SHORT","entry":"price","entryMode":"MARKET or LIMIT / PULLBACK","stop":"price","tp1":"price","tp2":"price","confidence":"X%","edge":"one sentence","riskLabel":"🟢|🟡|🔴","flags":"any"}
   ],
   "riskLevel": "low" or "medium" or "high"
 }
@@ -413,9 +509,9 @@ RULES:
 - Reference exact prices from the data above
 - Apply 5-layer framework: macro regime → structure → session → signal → risk rules
 - If FOMC/CPI within 48h: ALL signals get 🔴 label, cap leverage at 2x, say SIZE DOWN
-- Minimum R:R 1.5:1 for any trade idea. Skip if R:R is worse.
+- Minimum R:R 1.20:1 to TP1 for any trade idea. Skip if R:R is worse.
 - All 3 trade ideas must be from different asset classes (crypto, forex, metals, equities)
-- Trade fields must satisfy LONG: stop < entry < tp1 < tp2; SHORT: stop > entry > tp1 > tp2. Preserve exact price precision, including four decimal places for FX. Trade edge text must be qualitative only; the backend generates all execution levels and explicitly labeled R:R to TP1 and R:R to TP2 from these fields.
+- Trade fields must satisfy LONG: stop < entry < tp1 < tp2; SHORT: stop > entry > tp1 > tp2. Preserve exact price precision, including four decimal places for FX. A MARKET entry must equal the snapshot's displayed price; otherwise label it LIMIT / PULLBACK. Re-derive all trade levels from this snapshot on every run. Trade edge text must be qualitative only; the backend generates all execution levels and explicitly labeled R:R to TP1 and R:R to TP2 from these fields.
 - impactfulNews: at least 3 items, ranked by trading relevance for the next 24h
 - watchToday: exactly 7 items, each phrased as "IF [level] breaks THEN [action]" or similar conditional
 - Return ONLY the JSON object. No markdown, no backticks.`;
@@ -458,10 +554,16 @@ RULES:
 }
 
 // ── Retry wrapper: 3 attempts with exponential backoff (2s, 4s, 8s) ──────────
-async function generateBriefContentWithRetry(marketData: MarketData, retries = 3, timeZone: BriefTimeZone = "America/Toronto", marketSchedule = ""): Promise<string | null> {
+async function generateBriefContentWithRetry(
+  marketData: MarketData,
+  retries = 3,
+  timeZone: BriefTimeZone = "America/Toronto",
+  marketSchedule = "",
+  systematicSignalContext = "No recent systematic signal context.",
+): Promise<string | null> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     console.log(`[daily-brief] Generating brief (attempt ${attempt}/${retries})...`);
-    const text = await generateBriefContent(marketData, timeZone, marketSchedule);
+    const text = await generateBriefContent(marketData, timeZone, marketSchedule, systematicSignalContext);
     if (text) {
       console.log(`[daily-brief] ✓ Brief generated on attempt ${attempt}`);
       return text;
@@ -477,19 +579,26 @@ async function generateBriefContentWithRetry(marketData: MarketData, retries = 3
 }
 
 // ── Condensed fallback prompt (smaller payload, less likely to rate-limit) ───
-async function generateCondensedBrief(marketData: MarketData, timeZone: BriefTimeZone = "America/Toronto", marketSchedule = ""): Promise<string | null> {
+async function generateCondensedBrief(
+  marketData: MarketData,
+  timeZone: BriefTimeZone = "America/Toronto",
+  marketSchedule = "",
+  systematicSignalContext = "No recent systematic signal context.",
+): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
   const cryptoStr = marketData.crypto.slice(0, 5).map(c => `${c.symbol}: ${c.price} (${c.change})`).join(", ");
   const fxStr = marketData.forex.slice(0, 3).map(f => `${f.pair}: ${f.price} (${f.change})`).join(", ");
   const metalStr = marketData.metals.slice(0, 2).map(m => `${m.symbol}: ${m.price} (${m.change})`).join(", ");
   const localToday = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone });
-  const prompt = `Generate a concise market brief for ${localToday} at 6:00 AM in ${timeZone}. Return ONLY valid JSON, no markdown.
+  const prompt = `Generate a concise market brief for ${localToday} at 6:00 AM in ${timeZone}. Quotes were captured at ${marketData.capturedAt || "an unknown time"}; all change percentages use ${marketData.changeWindow || "an unavailable reference window"}. Return ONLY valid JSON, no markdown.
 
 VERIFIED MARKET SESSION STATUS:
 ${marketSchedule}
 If local day is Saturday/Sunday, clearly title it "Weekend Market Brief"; discuss 24/7 crypto, verified upcoming catalysts, and last available prices for closed markets. Never call closed-session quotes live. If no valid trade setup exists, set topTrade to null and additionalTrades to [] rather than inventing one.
-Trade fields must satisfy LONG: stop < entry < tp1 < tp2; SHORT: stop > entry > tp1 > tp2. Preserve FX price precision. Trade edge text must be qualitative only, without prices or risk/reward claims; the backend generates execution text from the validated fields.
+Only use instruments with valid prices below. Do not quote an upstream/provider change percentage. Do not invent a change when shown as "—". Technical levels must be freshly derived, within 15% of the snapshot price, or explicitly labelled multi-week structural. Leave a commentary field empty when its instrument has no snapshot quote.
+Latest systematic signal directions in the last 24 hours: ${systematicSignalContext}
+Never silently contradict a listed signal direction. Trade fields must satisfy LONG: stop < entry < tp1 < tp2; SHORT: stop > entry > tp1 > tp2. Preserve FX price precision. A MARKET entry equals the snapshot price; otherwise label it LIMIT / PULLBACK. Trade edge text must be qualitative only, without prices or risk/reward claims; the backend generates execution text from the validated fields. Minimum TP1 R:R is 1.20:1; skip lower ideas.
 
 PRICES:
 Crypto: ${cryptoStr}
@@ -576,11 +685,10 @@ async function sendDailyBriefEmails(options: DailyBriefOptions = {}): Promise<Br
   const timeZone = options.scheduledTimeZone || "America/Toronto";
   const now = new Date();
   const dateKey = options.localDate || localBriefClock(now, timeZone).dateKey;
-  if (options.scheduledTimeZone &&
-      (dateKey !== localBriefClock(now, timeZone).dateKey || !isBriefScheduleDue(now, timeZone))) {
+  if (dateKey !== localBriefClock(now, timeZone).dateKey || !isBriefScheduleDue(now, timeZone)) {
     return { ran: false, sent: 0, total: 0, reason: "Scheduled job is outside its local morning delivery window", errors: [] };
   }
-  const slotKey = options.scheduledTimeZone ? `local:${timeZone}:${dateKey}` : dateKey;
+  const slotKey = `local:${timeZone}:${dateKey}`;
   const today = now.toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone,
   });
@@ -611,7 +719,7 @@ async function sendDailyBriefEmails(options: DailyBriefOptions = {}): Promise<Br
   // retry can run. The send loop below has its own narrower try/catch that
   // also releases on its specific failure modes.
   try {
-    return await sendDailyBriefBody(slotKey, today, timeZone, options.scheduledTimeZone);
+    return await sendDailyBriefBody(slotKey, dateKey, today, timeZone, timeZone);
   } catch (e: any) {
     const msg = e?.message || String(e);
     const where = (e?.stack || "").split("\n").slice(0, 3).join(" | ");
@@ -627,62 +735,34 @@ async function sendDailyBriefEmails(options: DailyBriefOptions = {}): Promise<Br
 }
 
 async function sendDailyBriefBody(
-  dateKey: string,
+  slotKey: string,
+  localDate: string,
   today: string,
   timeZone: BriefTimeZone,
   scheduledTimeZone?: BriefTimeZone,
 ): Promise<BriefSendResult> {
 
-  const marketData = await fetchMarketData();
+  const snapshot = await getOrCreateBriefMarketSnapshot(
+    pool,
+    timeZone,
+    localDate,
+    () => fetchIntegrityCheckedMarketData(timeZone),
+  );
+  const marketData = snapshot.data as MarketData;
   const session = buildMarketSessionContext(new Date(), timeZone);
-  console.log(`[daily-brief] Market data: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
+  console.log(`[daily-brief] Shared snapshot ${snapshot.capturedAt} for ${timeZone}/${localDate}: ${marketData.crypto.length} crypto, ${marketData.forex.length} fx, ${marketData.metals.length} metals, ${marketData.equities.length} equities`);
 
-  // ── DATA INTEGRITY GATE ────────────────────────────────────────────────────
-  // Run on the flat price feed before generating the brief. Drops stale rows
-  // (0.00% prints), warns on Brent/WTI / Gold/Silver / BTC/ETH divergences, and
-  // — if >20% of instruments are stale — aborts the send entirely.
-  try {
-    const flatRows: PriceRow[] = [
-      ...marketData.crypto.map((r: any)   => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
-      ...marketData.forex.map((r: any)    => ({ symbol: r.pair,   price: r.price, change: r.change, changeNum: r.changeNum })),
-      ...marketData.metals.map((r: any)   => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
-      ...marketData.equities.map((r: any) => ({ symbol: r.symbol, price: r.price, change: r.change, changeNum: r.changeNum })),
-    ];
-    const closedMarketSymbols = new Set<string>([
-      ...(!session.usEquitiesOpen ? marketData.equities.map((r: any) => r.symbol) : []),
-      ...(!session.forexOpen ? marketData.forex.map((r: any) => r.pair) : []),
-      ...(!session.forexOpen ? marketData.metals.map((r: any) => r.symbol) : []),
-    ]);
-    const integrity = runIntegrityCheck(flatRows, [], closedMarketSymbols);
-    if (integrity.warnings.length) {
-      console.log(`[daily-brief] integrity warnings — ${integrity.warnings.join(" | ")}`);
-    }
-    if (integrity.criticalFailure) {
-      const reason = `Data integrity gate: ${integrity.staleCount}/${integrity.totalInstruments} instruments stale`;
-      console.log(`[daily-brief] 🛑 CRITICAL DATA INTEGRITY FAILURE — ${integrity.staleCount}/${integrity.totalInstruments} stale. Aborting send. ${briefTag()}`);
-      // Release the slot so a subsequent retry (manual or next tick) can attempt the send.
-      try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
-      return { ran: true, sent: 0, total: 0, reason, errors: [reason] };
-    }
-    if (integrity.dropList.length) {
-      console.log(`[daily-brief] dropping stale rows from feed: ${integrity.dropList.join(", ")}`);
-      marketData.crypto   = filterDropList(marketData.crypto.map((r: any) => ({ ...r, symbol: r.symbol })),   integrity.dropList) as any;
-      marketData.metals   = filterDropList(marketData.metals.map((r: any) => ({ ...r, symbol: r.symbol })),   integrity.dropList) as any;
-      marketData.equities = filterDropList(marketData.equities.map((r: any) => ({ ...r, symbol: r.symbol })), integrity.dropList) as any;
-      // FX pairs use `.pair` not `.symbol` — handle separately
-      const dropSet = new Set(integrity.dropList.map(s => s.toUpperCase()));
-      marketData.forex = marketData.forex.filter((r: any) => !dropSet.has(String(r.pair).toUpperCase()));
-    }
-  } catch (e: any) {
-    console.log(`[daily-brief] integrity check error (non-fatal):`, e.message);
-  }
+  const systematic = await loadSystematicBriefSignals();
+  const systematicSignalContext = systematic.available
+    ? formatSystematicSignalContext(systematic.rows)
+    : "Unavailable: do not publish trade ideas.";
 
   // Try full brief with 3 retries → condensed fallback prompt → minimal placeholder
   console.log(`[daily-brief] local market schedule ${timeZone} ${session.localDate} ${session.localWeekday} weekend=${session.isLocalWeekend} US-equities=${session.usEquitiesOpen} holiday=${session.usHoliday || "none"}`);
-  let briefText: string | null = await generateBriefContentWithRetry(marketData, 3, timeZone, session.text);
+  let briefText: string | null = await generateBriefContentWithRetry(marketData, 3, timeZone, session.text, systematicSignalContext);
   let usedCondensed = false;
   if (!briefText) {
-    briefText = await generateCondensedBrief(marketData, timeZone, session.text);
+    briefText = await generateCondensedBrief(marketData, timeZone, session.text, systematicSignalContext);
     usedCondensed = !!briefText;
   }
 
@@ -732,9 +812,12 @@ async function sendDailyBriefBody(
     briefJson.headline = `Weekend Market Brief — ${String(briefJson.headline || "Weekly market outlook").replace(/^Weekend Market Brief\s*[—:]\s*/i, "")}`;
   }
 
+  guardBriefCommentary(briefJson, marketData, timeZone);
   // Reject malformed trades before the policy adapter can repair them.
   // Preserve full precision; formatting belongs only at the display boundary.
   filterBriefTrades(briefJson);
+  anchorBriefTradesToSnapshot(briefJson, marketData);
+  removeBriefSignalConflicts(briefJson, systematic.rows, systematic.available);
   // Apply the existing shared policy only to already-valid generated plans.
   // Revalidate its output before tiered selection, render or publication.
   try {
@@ -804,7 +887,7 @@ async function sendDailyBriefBody(
     // Release the claimed slot so a manual/scheduled retry can attempt the
     // send once subscribers exist. Without this, recipient_count=0 blocks
     // the day permanently.
-    try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
+    try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [slotKey]); } catch {}
     return { ran: true, sent: 0, total: 0, reason: "No active subscribers", errors: [] };
   }
 
@@ -896,7 +979,7 @@ async function sendDailyBriefBody(
         const held = 3 - eliteTrades.length;
         heldSlotNote = `${held} slot${held === 1 ? "" : "s"} held — no qualifying setup met our threshold today.`;
       }
-      try { await logTierDistribution(dateKey, eliteTrades); } catch {}
+    try { await logTierDistribution(localDate, eliteTrades); } catch {}
     } catch (e: any) {
       console.log(`[daily-brief] tiered v1 selection error (non-fatal):`, e.message);
       eliteTrades = [];
@@ -1056,9 +1139,9 @@ async function sendDailyBriefBody(
       // token|direction|timestamp, so anchoring `ts` to the brief's date
       // (not Date.now()) means a same-day retry produces the IDENTICAL key
       // and the downstream service dedupes even if our local ledger blip.
-      // We use UTC-midnight of dateKey so the value is reproducible without
+      // We use UTC-midnight of the local calendar date so the value is reproducible without
       // pulling in a timezone library here.
-      const stableTs = Date.parse(`${dateKey}T00:00:00.000Z`) || Date.now();
+      const stableTs = Date.parse(`${localDate}T00:00:00.000Z`) || Date.now();
 
       // advancedScore must clear the downstream "advanced_score_below_minimum"
       // gate (~80 in current rules). Calibrated elite picks have already
@@ -1105,6 +1188,7 @@ async function sendDailyBriefBody(
       tp2:            t.tp2.toString(),
       thesis:         t.thesis,
       sessionFlag:    t.sessionFlag,
+      entryMode:      briefEntryMode(t.instrument, t.entry, marketData),
     }));
   };
 
@@ -1159,14 +1243,18 @@ async function sendDailyBriefBody(
         try {
           const subTierForRender = (sub.tier || "free").toLowerCase();
           const tieredTrades = buildTierTrades(subTierForRender);
+          const sentAt = new Date().toISOString();
           const html = renderDailyBriefEmail(
             briefJson, today, marketData, subTierForRender, sub.email,
             tieredTrades,
             tieredTrades && tieredTrades.length < (subTierForRender === "elite" ? 3 : 2) ? heldSlotNote : "",
             `${session.isLocalWeekend ? "WEEKEND MARKET BRIEF" : "6:00 AM LOCAL MARKET BRIEF"} · ${timeZone}\n${session.text}`,
+            { timeZone: sub.time_zone || timeZone, sentAt },
           );
           const plainText = [
             `${session.isLocalWeekend ? "CLVRQuant Weekend Market Brief" : "CLVRQuant Morning Brief"} — ${today} (${timeZone})`,
+            `Shared market snapshot: ${snapshot.capturedAt} · ${snapshot.changeWindow}`,
+            `Send initiated: ${sentAt}`,
             `${session.text}`,
             ``,
             briefJson.headline || "",
@@ -1176,7 +1264,8 @@ async function sendDailyBriefBody(
             ...(briefJson.themes || []).map((t: any) => `• ${t}`),
             ``,
             `MARKET SNAPSHOT:`,
-            ...(briefJson.marketSnapshot || []).map((m: any) => `  ${m.label}: ${m.value} ${m.change || ""}`),
+            ...[...marketData.crypto, ...marketData.forex, ...marketData.metals, ...marketData.equities]
+              .map(row => `  ${row.pair || row.symbol}: ${row.price} ${row.change}`),
             ``,
             `Visit https://clvrquantai.com for live data and AI analysis.`,
             ``,
@@ -1186,8 +1275,9 @@ async function sendDailyBriefBody(
 
           // Tier-aware subject — counts reflect the actual tier slice we ship
           const subTier = subTierForRender;
-          const eliteCt = (tieredTrades?.length ?? eliteTrades.length) || 3;
-          const proCt   = Math.min(eliteCt, 2);
+          const legacyCount = [briefJson.topTrade, ...(briefJson.additionalTrades || [])].filter(Boolean).length;
+          const eliteCt = tieredTrades?.length ?? Math.min(legacyCount, 3);
+          const proCt   = tieredTrades?.length ?? Math.min(legacyCount, 1);
           const tierSubject =
             subTier === "elite" ? `🏆 CLVRQuant Elite Brief — ${today} · ${eliteCt} trade idea${eliteCt === 1 ? "" : "s"} inside`
             : subTier === "pro" ? `📊 CLVRQuant Pro Brief — ${today} · ${proCt} trade idea${proCt === 1 ? "" : "s"} today`
@@ -1240,8 +1330,8 @@ async function sendDailyBriefBody(
     if (sendErrors.length > 0) {
       // Release even a partially successful batch. Recipient claims survive
       // this deletion, so a retry skips successful/ambiguous recipients.
-      console.log(`[daily-brief] ${sentCount}/${subs.length} newly delivered, ${protectedCount} protected — releasing group slot ${dateKey}`);
-      try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
+      console.log(`[daily-brief] ${sentCount}/${subs.length} newly delivered, ${protectedCount} protected — releasing group slot ${slotKey}`);
+      try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [slotKey]); } catch {}
       return {
         ran: true,
         sent: sentCount,
@@ -1252,7 +1342,7 @@ async function sendDailyBriefBody(
     }
     await pool.query(
       `UPDATE daily_briefs_log SET recipient_count = $1 WHERE date_key = $2`,
-      [sentCount, dateKey]
+      [sentCount, slotKey]
     );
     return {
       ran: true,
@@ -1268,8 +1358,8 @@ async function sendDailyBriefBody(
     // every retry path (scheduled tick, restart catch-up, manual admin) silently
     // aborts. Release the slot so the next attempt can actually run.
     const msg = e?.message || String(e);
-    console.log("[daily-brief] Resend client / loop error:", msg, `— releasing slot ${dateKey} for retry`);
-    try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [dateKey]); } catch {}
+    console.log("[daily-brief] Resend client / loop error:", msg, `— releasing slot ${slotKey} for retry`);
+    try { await pool.query(`DELETE FROM daily_briefs_log WHERE date_key = $1 AND recipient_count = 0`, [slotKey]); } catch {}
     return {
       ran: true,
       sent: sentCount,
@@ -1280,7 +1370,10 @@ async function sendDailyBriefBody(
   }
 }
 
-async function sendApologyBriefEmails() {
+/* Legacy bulk apology resend was unsafe: it fetched a second set of prices
+   and bypassed the durable per-recipient delivery ledger. Keep it disabled. */
+/*
+async function legacyApologyBriefEmails() {
   // ── Double-send guard (15 min — enough to prevent double-click duplicates,
   //     short enough to allow retry after a failure) ─────────────────────────
   const nowMs = Date.now();
@@ -1401,6 +1494,13 @@ async function sendApologyBriefEmails() {
   } catch (e: any) {
     console.log("[daily-brief] Resend client error:", e.message);
   }
+}
+*/
+
+async function sendApologyBriefEmails(): Promise<BriefSendResult> {
+  const reason = "A second same-day brief is blocked. Use the protected daily retry only when the original delivery failed; corrections require an explicit Updated notice.";
+  console.warn(`[daily-brief] ${reason}`);
+  return { ran: false, sent: 0, total: 0, reason, errors: [] };
 }
 
 export { sendApologyBriefEmails };

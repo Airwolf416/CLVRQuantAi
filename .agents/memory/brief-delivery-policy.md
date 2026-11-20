@@ -8,8 +8,20 @@ The user approved a daily brief scheduled around 6 AM in each subscriber’s sel
 
 **How to apply:** Use named IANA zones, not fixed UTC offsets, so daylight saving is handled. Existing subscribers retain the historical Eastern schedule until they choose otherwise. Adapt regional emphasis only from supported data; a timezone does not establish nationality or prove an exchange is open. Never invent trades to fill brief slots.
 
+Share one immutable morning market snapshot per selected timezone and local date, not one global snapshot for all recipients. The brief's table and commentary must use that same snapshot and reference window.
+
+**Why:** The user explicitly chose one snapshot per local 6 AM so each region gets its own morning data without contradictory prices across products.
+
+**How to apply:** Retries must reuse that local-morning snapshot. When no previous snapshot exists for the reference window, show the change as unavailable rather than mixing provider percentages.
+
 Recipient-level duplicate protection must survive batch retries and time-zone changes. Unknown provider outcomes must remain held rather than automatically resent.
 
 **Why:** The user approved adding duplicate protection before release. A provider may accept an email before a transport timeout or a database-finalization failure, so blindly retrying can duplicate a successful delivery.
 
 **How to apply:** Retry only explicit provider rejections. Retain pending/uncertain claims when acknowledgement is missing, including after a process crash. Protect both the recipient's local date and rapid date-line changes, while allowing ordinary next-morning delivery across daylight-saving changes. Describe this as conservative duplicate prevention, not guaranteed exactly-once email delivery.
+
+Brief trade ideas must not be made apparently valid by silently mirroring malformed generated levels. Exclude invalid ideas with a specific reason. Every published risk/reward figure must identify its target, and execution prose must use the same validated levels as the table.
+
+**Why:** The user reported recurring FX price corruption and contradictions between trade tables and narrative, and explicitly required exclusion or a surfaced error rather than sending a bad recommendation.
+
+**How to apply:** Treat this as numeric-integrity work, not permission to weaken trade-quality filters, invent replacement trades, change market commentary, or resend an already-delivered brief.

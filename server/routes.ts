@@ -37,6 +37,9 @@ import { computeRegimeGate } from "./lib/regimeGate";
 import { recordActivity as recordLiveActivity, getLiveStats, getLiveUserList } from "./liveUsers";
 import { users as usersTable, subscribers as subscribersTable } from "@shared/schema";
 import { isBriefTimeZone } from "@shared/briefTimeZones";
+import { type BriefTimeZone } from "@shared/briefTimeZones";
+import { localBriefClock } from "./lib/briefSchedule";
+import { authorizeEliteMonitor } from "./lib/eliteMonitorAccess";
 import { shouldCacheAiAnalysis } from "./lib/aiAnalysisCache";
 import { releaseIdentity, TRADE_IDEA_POLICY_REVISION } from "./lib/releaseIdentity";
 import { parseTradeIdeasCandidates } from "../shared/tradeIdeasResponse.js";
@@ -192,7 +195,6 @@ import {
   enqueueDailyBrief,
   enqueuePromoEmail,
   enqueueServiceApology,
-  enqueueApologyBrief,
   broadcastKronosFlipPush,
 } from "./workers/notifications";
 import { startHlRefreshWorker } from "./workers/hlRefreshWorker";
@@ -6314,13 +6316,22 @@ Stay in scope no matter how the user rephrases.`;
   // ── POSITION MONITOR (Elite) ───────────────────────────────────────────
   // Owner override matches the existing AI-endpoint pattern.
   async function requireElitePosition(req: any, res: any) {
-    const userId = (req.session as any)?.userId;
-    if (!userId) { res.status(401).json({ error: "Sign in required." }); return null; }
-    const dbUser = await storage.getUser(userId);
-    if (!dbUser) { res.status(401).json({ error: "Sign in required." }); return null; }
-    const isElite = dbUser.tier === "elite" || (dbUser.email || "").toLowerCase() === OWNER_EMAIL;
-    if (!isElite) { res.status(403).json({ error: "Position Monitor is an Elite feature." }); return null; }
-    return { userId, dbUser };
+    try {
+      const auth = await authorizeEliteMonitor(
+        (req.session as any)?.userId,
+        userId => storage.getUser(userId),
+        getEffectiveTier,
+        OWNER_EMAIL,
+      );
+      if (!auth.allowed) {
+        res.status(auth.status).json({ error: auth.error });
+        return null;
+      }
+      return { userId: auth.userId, dbUser: auth.user };
+    } catch {
+      res.status(500).json({ error: "Could not verify Elite access. Please try again." });
+      return null;
+    }
   }
 
   // List open positions for the signed-in user
@@ -12021,11 +12032,9 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
     }
   });
 
-  // Force-retry today's daily brief. Releases any existing claim row for
-  // today's date_key (recipient_count=0) and re-enqueues the send. Use this
-  // when the morning send failed and the slot is locked, OR when you want to
-  // resend (BEWARE: this WILL re-send to every active subscriber if today's
-  // brief is locked at 0 — verify recipient_count=0 before calling).
+  // Retry only the Toronto-local 6 AM batch, and only while its local delivery
+  // window is open. Successful or uncertain recipient deliveries are protected
+  // by the durable per-recipient ledger.
   app.post("/api/admin/retry-daily-brief", async (req, res) => {
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ error: "Not authenticated" });
@@ -12034,8 +12043,9 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       const userEmail = (userRes.rows[0]?.email || "").toLowerCase();
       if (userEmail !== OWNER_EMAIL) return res.status(403).json({ error: "Owner only" });
 
-      const etTime = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-      const dateKey = etTime.toISOString().split("T")[0];
+      const timeZone: BriefTimeZone = "America/Toronto";
+      const dateKey = localBriefClock(new Date(), timeZone).dateKey;
+      const slotKey = `local:${timeZone}:${dateKey}`;
 
       // Stuck-lease policy: a brief send takes a few minutes max (claim →
       // generate → loop over subscribers with 250ms spacing + small retries).
@@ -12051,11 +12061,11 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         `WITH cur AS (
            SELECT recipient_count, sent_at,
                   EXTRACT(EPOCH FROM (NOW() - sent_at)) / 60 AS age_min
-           FROM daily_briefs_log WHERE date_key = $1
+            FROM daily_briefs_log WHERE date_key = $1
          ),
          rel AS (
            DELETE FROM daily_briefs_log
-           WHERE date_key = $1
+            WHERE date_key = $1
              AND recipient_count = 0
              AND sent_at < NOW() - ($2::int || ' minutes')::interval
            RETURNING id
@@ -12064,7 +12074,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
            COALESCE((SELECT recipient_count FROM cur), -1) AS recipient_count,
            COALESCE((SELECT age_min FROM cur), -1)         AS age_min,
            (SELECT COUNT(*) FROM rel)::int                 AS released`,
-        [dateKey, STUCK_LEASE_MIN]
+         [slotKey, STUCK_LEASE_MIN]
       );
       const row = txn.rows[0];
       if (row.recipient_count > 0) {
@@ -12097,7 +12107,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       let timedOut = false;
       try {
         result = await Promise.race([
-          enqueueDailyBrief(),
+          enqueueDailyBrief({ scheduledTimeZone: timeZone, localDate: dateKey }),
           new Promise(res2 => setTimeout(() => { timedOut = true; res2(null); }, SEND_DEADLINE_MS)),
         ]);
       } catch (e: any) {
@@ -12172,12 +12182,10 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       if ((userEmail || "").toLowerCase() !== OWNER_EMAIL) {
         return res.status(403).json({ error: "Owner only" });
       }
-      console.log(`[apology-brief] Owner ${userEmail} triggered manual resend at ${new Date().toISOString()}`);
-      // Fire-and-forget so slow generation/sends don't time out the mobile request.
-      enqueueApologyBrief()
-        .then(() => console.log("[apology-brief] enqueue completed"))
-        .catch((err: any) => console.log("[apology-brief] enqueue error:", err?.message || err));
-      res.json({ ok: true, message: "Apology brief send started — watch logs for delivery status" });
+      console.log(`[apology-brief] Blocked unmarked same-day resend requested by ${userEmail}`);
+      return res.status(409).json({
+        error: "A second same-day brief is blocked to prevent duplicate emails. Use the protected retry only if the original batch failed. A corrected brief requires an explicit Updated notice.",
+      });
     } catch (e: any) {
       console.log("[apology-brief] route error:", e?.message || e);
       res.status(500).json({ error: e.message });

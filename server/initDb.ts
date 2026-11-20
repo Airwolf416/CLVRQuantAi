@@ -1,6 +1,7 @@
 import { pool } from "./db";
 import { BRIEF_RECIPIENT_LEDGER_DDL } from "./lib/briefDelivery";
 import { BRIEF_GROUP_KEY_MIGRATION } from "./lib/briefGroupLedger";
+import { BRIEF_MARKET_SNAPSHOT_DDL } from "./lib/briefMarketSnapshot";
 import { initializeWeeklyDigestTables } from "./lib/weeklyDigestStore";
 
 /**
@@ -192,6 +193,7 @@ export async function initializeDatabase(): Promise<void> {
 
     await client.query(BRIEF_RECIPIENT_LEDGER_DDL);
     await client.query(BRIEF_GROUP_KEY_MIGRATION);
+    await client.query(BRIEF_MARKET_SNAPSHOT_DDL);
 
     // ── daily_brief_telegram_log ─────────────────────────────────────────────
     // Independent ledger so the morning Telegram trade idea fires AT MOST

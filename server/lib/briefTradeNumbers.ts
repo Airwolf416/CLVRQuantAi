@@ -11,7 +11,9 @@ export interface BriefTradeNumbers {
   rrTp2: number;
 }
 
-function price(value: unknown): number {
+export const MIN_BRIEF_TP1_RR = 1.2;
+
+export function parseBriefPrice(value: unknown): number {
   if (typeof value === "number") return value;
   // Accept ordinary currency/grouped prices, not ranges or prose whose digits
   // could otherwise concatenate into a completely different price.
@@ -24,7 +26,12 @@ export function validateBriefTrade(raw: any):
   { ok: true; trade: BriefTradeNumbers } | { ok: false; reasons: string[] } {
   const instrument = String(raw?.instrument || raw?.asset || "").trim();
   const direction = String(raw?.direction || raw?.dir || "").trim().toUpperCase();
-  const levels = { entry: price(raw?.entry), stop: price(raw?.stop), tp1: price(raw?.tp1), tp2: price(raw?.tp2) };
+  const levels = {
+    entry: parseBriefPrice(raw?.entry),
+    stop: parseBriefPrice(raw?.stop),
+    tp1: parseBriefPrice(raw?.tp1),
+    tp2: parseBriefPrice(raw?.tp2),
+  };
   const reasons: string[] = [];
   if (!instrument) reasons.push("missing instrument");
   if (direction !== "LONG" && direction !== "SHORT") reasons.push("direction must be LONG or SHORT");
@@ -90,7 +97,15 @@ export function presentBriefTrade(raw: any) {
   const execution = `Entry ${formatted.entry}; stop ${formatted.stop}; TP1 ${formatted.tp1}; TP2 ${formatted.tp2}. R:R to TP1 ${rrTp1Display}; R:R to TP2 ${rrTp2Display}.`;
   return {
     ok: true as const,
-    trade: { ...t, ...formatted, rrTp1Display, rrTp2Display, thesis: [qualitative, execution].filter(Boolean).join(" "), sessionFlag: raw?.sessionFlag },
+    trade: {
+      ...t,
+      ...formatted,
+      rrTp1Display,
+      rrTp2Display,
+      thesis: [qualitative, execution].filter(Boolean).join(" "),
+      sessionFlag: raw?.sessionFlag,
+      entryMode: raw?.entryMode,
+    },
   };
 }
 
@@ -99,9 +114,22 @@ export function filterBriefTrades(brief: any, log = (message: string) => console
     if (!raw) return false;
     const result = presentBriefTrade(raw);
     if (result.ok) {
+      if (result.trade.rrTp1 < MIN_BRIEF_TP1_RR) {
+        const symbol = String(raw.instrument || raw.asset || "unknown").replace(/[\r\n]/g, " ").slice(0, 100);
+        log(`[daily-brief] Excluded trade ${symbol}: R:R to TP1 ${result.trade.rrTp1.toFixed(2)}:1 below ${MIN_BRIEF_TP1_RR.toFixed(2)}:1`);
+        return false;
+      }
       // Store canonical levels and execution text before selection/publishing.
       const t = result.trade;
-      Object.assign(raw, { entry: t.entry, stop: t.stop, tp1: t.tp1, tp2: t.tp2, edge: t.thesis, thesis: t.thesis });
+      Object.assign(raw, {
+        entry: t.entry,
+        stop: t.stop,
+        tp1: t.tp1,
+        tp2: t.tp2,
+        edge: t.thesis,
+        thesis: t.thesis,
+        entryMode: t.entryMode,
+      });
       return true;
     }
     // No recipients or other user data in these diagnostics.

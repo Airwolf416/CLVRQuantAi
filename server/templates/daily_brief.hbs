@@ -34,6 +34,7 @@
   <!-- Market Summary Table -->
   <div style="padding:16px 24px">
     <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:4px">📊 Market Summary</div>
+    {{#if snapshotMeta}}<div style="font-family:monospace;font-size:9px;color:#7182a0;line-height:1.6">{{snapshotMeta}}</div>{{/if}}
     <table style="width:100%;border-collapse:collapse;margin:12px 0;background:rgba(5,7,9,.4);border:1px solid #141e35;border-radius:4px">
       <thead>
         <tr>
@@ -57,6 +58,7 @@
   <!-- Commentary -->
   <div style="padding:8px 24px 24px">
     <div style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#e8e0d0;margin-bottom:16px">🧠 Market Commentary &amp; Outlook</div>
+    {{#if snapshotMeta}}<div style="font-family:monospace;font-size:9px;color:#7182a0;line-height:1.6;margin:-8px 0 14px">{{snapshotMeta}}</div>{{/if}}
     <div style="height:2px;background:linear-gradient(90deg,#c9a84c,transparent);margin-bottom:20px"></div>
     {{#each commentary}}
     <div style="margin-bottom:24px">
@@ -127,6 +129,7 @@
       <div style="font-size:15px;font-weight:700;color:#e8e0d0;margin-bottom:8px">{{instrument}} {{direction}}</div>
       <div style="font-family:monospace;font-size:11px;color:#c5cfe0;line-height:2.0">
         📍 Entry: {{entry}}<br>
+        {{#if entryMode}}⚙ Execution: {{entryMode}}<br>{{/if}}
         🛑 Stop: {{stop}}<br>
         🎯 TP1: {{tp1}}<br>
         🎯 TP2: {{tp2}}<br>
@@ -214,6 +217,7 @@
   <div style="padding:16px 24px;border-top:1px solid #141e35;text-align:center">
     <div style="font-family:Georgia,serif;font-size:14px;color:#e8c96d;margin-bottom:8px">CLVRQuant</div>
     <div style="font-family:monospace;font-size:8px;color:#3a4a6a;letter-spacing:0.12em;line-height:2">
+      SENT: {{sentTime}}<br>
       For any issues or inquiries, please email <a href="mailto:Support@CLVRQuantAI.com" style="color:#4a5d80;text-decoration:none;">Support@CLVRQuantAI.com</a><br>
       NOT FINANCIAL ADVICE · AI-POWERED RESEARCH FOR EDUCATIONAL PURPOSES ONLY<br>
       ALL DATA IS INFORMATIONAL — TRADE AT YOUR OWN RISK

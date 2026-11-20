@@ -164,7 +164,7 @@ function OwnerResendBrief({ C, MONO }) {
   return (
     <OwnerEmailTool C={C} MONO={MONO}
       title="Morning Market Brief (Resend)"
-      description="Resends TODAY's morning market brief to all active subscribers. Refuses if today's brief already went out (no double-sends) or if a send is currently in progress (15-min lease)."
+      description="Retries the Toronto-local 6 AM batch only during its morning window. Completed batches are blocked, and successful or uncertain recipient deliveries are never resent."
       endpoint="/api/admin/retry-daily-brief"
       testId="btn-owner-resend-brief"
       buttonLabel="📤 Resend Today's Morning Brief"

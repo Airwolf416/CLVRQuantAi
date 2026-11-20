@@ -37,12 +37,13 @@ test("legacy and tiered HTML use the same validated labeled values", () => {
     instrument: e.asset, direction: e.dir, entry: String(e.entry), stop: String(e.stop), tp1: String(e.tp1), tp2: String(e.tp2), rrDisplay: "999",
   })));
   for (const html of [legacy, tiered]) {
-    for (const e of examples) {
+    for (const e of examples.slice(0, 1)) {
       assert.ok(html.includes(`R:R to TP1: ${e.ratios[0]}`));
       assert.ok(html.includes(`R:R to TP2: ${e.ratios[1]}`));
     }
-    assert.ok(html.includes("Stop: 1.1050"));
-    assert.ok(html.includes("TP1: 1.0960"));
+    assert.ok(html.includes("Stop: 3828.00"));
+    assert.ok(html.includes("TP1: 3895.00"));
+    assert.doesNotMatch(html, /Stop: 1\.1050|TP1: 1\.0960|TP1: 63200/);
     assert.doesNotMatch(html, /R:R:|999|21\.00/);
     assert.ok(html.includes("Commentary unchanged."));
   }
@@ -94,14 +95,47 @@ test("FX four-decimal precision, sub-cent tokens, cents for metals/equities/larg
 });
 
 test("canonical generation is idempotent and removes stale numerical or spelled-out ratio claims", () => {
-  const brief = { topTrade: { ...examples[1], edge: "Offers two-to-one to TP1. Stop above 1.1050. Dollar strength persists." }, additionalTrades: [] };
+  const brief = { topTrade: { ...examples[1], tp1: 1.0940, edge: "Offers two-to-one to TP1. Stop above 1.1050. Dollar strength persists." }, additionalTrades: [] };
   filterBriefTrades(brief);
   const once = JSON.stringify(brief);
   filterBriefTrades(brief);
   assert.equal(JSON.stringify(brief), once);
   assert.doesNotMatch(brief.topTrade.edge, /two-to-one|Stop above/);
   assert.match(brief.topTrade.edge, /Dollar strength persists/);
-  assert.match(brief.topTrade.edge, /R:R to TP1 1.00:1/);
+  assert.match(brief.topTrade.edge, /R:R to TP1 1.44:1/);
+});
+
+test("Nov 20 low-R:R ideas are excluded without replacement slots", () => {
+  const brief: any = {
+    topTrade: { asset: "BTC", dir: "SHORT", entry: 60000, stop: 61000, tp1: 59180, tp2: 58000 },
+    additionalTrades: [
+      { asset: "USD/CAD", dir: "LONG", entry: 1.4, stop: 1.39, tp1: 1.41, tp2: 1.42 },
+      { asset: "EUR/USD", dir: "SHORT", entry: 1.1, stop: 1.11, tp1: 1.0895, tp2: 1.08 },
+    ],
+  };
+  const logs: string[] = [];
+  filterBriefTrades(brief, line => logs.push(line));
+  assert.equal(brief.topTrade, null);
+  assert.deepEqual(brief.additionalTrades, []);
+  for (const ratio of ["0.82:1", "1.00:1", "1.05:1"]) assert.ok(logs.some(line => line.includes(ratio)));
+});
+
+test("email table and commentary share a snapshot timestamp and show the actual send clock", () => {
+  const snapshot = {
+    capturedAt: "2026-11-20T11:00:00.000Z",
+    changeWindow: "Since the previous local 6:00 AM snapshot",
+    crypto: [{ symbol: "BTC/USD", price: "$61,734.25", change: "+0.46%", changeNum: 0.46 }],
+    forex: [], metals: [], equities: [],
+  };
+  const html = renderDailyBriefEmail(
+    { btc: "Snapshot: $61,734.25 · Change +0.46%", topTrade: null, additionalTrades: [] },
+    "November 20, 2026", snapshot, "elite", "", [], "", "",
+    { timeZone: "America/Toronto", sentAt: "2026-11-20T11:12:00.000Z" },
+  );
+  assert.equal(html.match(/Shared snapshot captured 6:00 AM EST/g)?.length, 2);
+  assert.ok(html.includes("SENT: 6:12 AM EST"));
+  assert.ok(html.includes("$61,734.25"));
+  assert.ok(html.includes("+0.46%"));
 });
 
 test("empty authoritative selection does not fall back; Free receives no trade", () => {

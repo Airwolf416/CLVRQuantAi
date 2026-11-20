@@ -5,7 +5,7 @@
 import Handlebars from "handlebars";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { presentBriefTrade } from "../lib/briefTradeNumbers";
+import { MIN_BRIEF_TP1_RR, presentBriefTrade } from "../lib/briefTradeNumbers";
 
 // ── Template cache: compiled once per process ──────────────────────────────────
 
@@ -27,12 +27,14 @@ function getTemplate(name: string): HandlebarsTemplateDelegate {
 
 // ── MarketData types (mirrors dailyBrief.ts) ──────────────────────────────────
 
-interface MarketRow { symbol?: string; pair?: string; price: string; change: string; changeNum: number }
+interface MarketRow { symbol?: string; pair?: string; price: string; priceValue?: number; change: string; changeNum: number | null }
 interface MarketData {
   crypto:   MarketRow[];
   forex:    MarketRow[];
   metals:   MarketRow[];
   equities: MarketRow[];
+  capturedAt?: string;
+  changeWindow?: string;
 }
 
 // ── Build price rows for the market summary table ─────────────────────────────
@@ -40,9 +42,9 @@ interface MarketData {
 function buildPriceRows(marketData: MarketData) {
   const rows: Array<{ label: string; price: string; changeColor: string; arrow: string; changeDisplay: string }> = [];
 
-  const push = (label: string, price: string, change: string, changeNum: number) => {
-    const changeColor = change === "—" ? "#8a96b2" : changeNum >= 0 ? "#00c787" : "#ff4060";
-    const arrow       = change === "—" ? "" : changeNum >= 0 ? "▲ " : "▼ ";
+  const push = (label: string, price: string, change: string, changeNum: number | null) => {
+    const changeColor = change === "—" ? "#8a96b2" : Number(changeNum) >= 0 ? "#00c787" : "#ff4060";
+    const arrow       = change === "—" ? "" : Number(changeNum) >= 0 ? "▲ " : "▼ ";
     const changeDisplay = change === "—" ? "—" : change.replace("+", "").replace("-", "");
     rows.push({ label, price, changeColor, arrow, changeDisplay });
   };
@@ -50,6 +52,7 @@ function buildPriceRows(marketData: MarketData) {
   for (const c of marketData.crypto.slice(0, 4)) push(`${c.symbol} ₿`, c.price, c.change, c.changeNum);
   for (const f of marketData.forex.slice(0, 4))   push(f.pair || "", f.price, f.change, f.changeNum);
   for (const m of marketData.metals)               push(m.symbol || "", m.price, m.change, m.changeNum);
+  for (const e of marketData.equities)             push(e.symbol || "", e.price, e.change, e.changeNum);
 
   return rows;
 }
@@ -74,6 +77,26 @@ export interface TieredTradeIdea {
   rrDisplay?:     string;          // legacy callers ignored; ratios are recomputed
   thesis?:        string;
   sessionFlag?:   string;
+  entryMode?:     string;
+}
+
+export interface DailyBriefEmailMeta {
+  timeZone: string;
+  sentAt: string;
+}
+
+function formatEmailClock(value: string | undefined, timeZone: string): string {
+  if (!value) return "time unavailable";
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone,
+      timeZoneName: "short",
+    }).format(new Date(value));
+  } catch {
+    return "time unavailable";
+  }
 }
 
 export function renderDailyBriefEmail(
@@ -85,6 +108,7 @@ export function renderDailyBriefEmail(
   tieredTrades?: TieredTradeIdea[],         // when present → tiered v1 path
   heldSlotNote?: string,                    // e.g. "1 slot held — no setup met threshold"
   marketSessionNote?: string,
+  emailMeta?: DailyBriefEmailMeta,
 ): string {
   const template = getTemplate("daily_brief");
 
@@ -175,6 +199,10 @@ export function renderDailyBriefEmail(
       console.warn(`[daily-brief] Excluded trade at render: ${result.reasons.join("; ")}`);
       return [];
     }
+    if (result.trade.rrTp1 < MIN_BRIEF_TP1_RR) {
+      console.warn(`[daily-brief] Excluded trade at render: R:R to TP1 ${result.trade.rrTp1.toFixed(2)}:1 below ${MIN_BRIEF_TP1_RR.toFixed(2)}:1`);
+      return [];
+    }
     return [result.trade];
   };
   if (tieredTrades !== undefined && !isFreeTier) {
@@ -192,11 +220,19 @@ export function renderDailyBriefEmail(
   const ideaCount = isFreeTier ? 0 : tradeIdeas.length;
   const ideaCountLabel = ideaCount === 1 ? "Idea" : "Ideas";
   const tierLabel = isElite ? "Elite" : isPro ? "Pro" : "Free";
+  const timeZone = emailMeta?.timeZone || "America/Toronto";
+  const snapshotTime = formatEmailClock(marketData.capturedAt, timeZone);
+  const sentTime = formatEmailClock(emailMeta?.sentAt, timeZone);
+  const snapshotMeta = marketData.capturedAt
+    ? `Shared snapshot captured ${snapshotTime} · change ${marketData.changeWindow || "reference window unavailable"}`
+    : "";
 
   const data = {
     dateStr,
     headline:    briefJson.headline || "Markets in Motion",
     marketSessionNote: marketSessionNote || "",
+    snapshotMeta,
+    sentTime,
     sentimentColor,
     sentimentLabel,
     macroRegime:    macroRegimeStr,
