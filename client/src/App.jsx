@@ -6182,7 +6182,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
           </div>
           </ProGate>
 
-          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",letterSpacing:"0.1em"}}>{i18n.allDataLive}</div>
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",letterSpacing:"0.1em"}}>SOURCED MARKET DATA · CHECK EACH FEED'S TIMESTAMP AND STATUS</div>
           {briefData&&<>
             <div style={{background:isDark?"linear-gradient(135deg,#080d18,#0f1a2e)":C.panel,borderRadius:2,border:`1px solid ${C.border2}`,padding:"22px 18px",marginBottom:10,textAlign:"center",position:"relative",overflow:"hidden"}}>
               <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${C.gold},transparent)`}}/>
