@@ -20,6 +20,7 @@ import WelcomePage from "./WelcomePage";
 import { decodeTextEntities } from "./lib/decodeTextEntities";
 import AccountPage from "./AccountPage";
 import QRScanner from "./QRScanner";
+import { ThemeCtx } from "./lib/themeContext";
 import { accessCodeFeedback, ACCESS_CODE_FORMATS } from "./lib/accessCodeFeedback";
 import OnboardingTour from "./OnboardingTour";
 import MarketTab from "./tabs/MarketTab";
@@ -120,7 +121,6 @@ const LIGHT_C = {
 };
 // module-level fallback (dark) for simple utility components
 const C = DARK_C;
-const ThemeCtx = createContext({C:DARK_C,isDark:true,toggle:()=>{}});
 const SERIF = "'Playfair Display', Georgia, serif";
 const MONO  = "'IBM Plex Mono', monospace";
 const SANS  = "'Barlow', system-ui, sans-serif";
@@ -497,6 +497,7 @@ function AdvancedFactorBreakdown({breakdown,C:_C}){
 
 // ─── LAYOUT HELPERS (stable, outside Dashboard) ──────────
 function SLabel({children}){
+  const {C}=useContext(ThemeCtx);
   return(
     <div style={{fontFamily:MONO,fontSize:10,letterSpacing:"0.25em",textTransform:"uppercase",color:C.gold,marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
       <span style={{flex:"0 0 24px",height:1,background:`linear-gradient(90deg,${C.gold},transparent)`,display:"inline-block"}}/>
@@ -504,7 +505,7 @@ function SLabel({children}){
     </div>
   );
 }
-function PTitle({children}){return<span style={{fontFamily:SERIF,fontWeight:700,fontSize:15,color:C.white}}>{children}</span>;}
+function PTitle({children}){const {C}=useContext(ThemeCtx);return<span style={{fontFamily:SERIF,fontWeight:700,fontSize:15,color:C.white}}>{children}</span>;}
 function SubBtn({k,label,col="gold",state,setter}){
   const active=state===k;
   const ac=col==="green"?C.green:col==="blue"?C.blue:col==="teal"?C.teal:col==="red"?C.red:col==="purple"?C.purple:col==="orange"?C.orange:col==="cyan"?C.cyan:C.gold;
@@ -539,7 +540,9 @@ function UnusualPulse({ data, C, MONO }) {
   return (
     <div style={{ padding: "4px 0" }} data-testid="tab-pulse-root">
       <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", color: "#e8c96d", marginBottom: 10 }}>UNUSUAL ACTIVITY — CONDITIONS, NOT PREDICTIONS</div>
-      {signals.length === 0 && <div style={{ fontFamily: MONO, fontSize: 11, color: "#5a6b86", padding: "24px 0", textAlign: "center" }} data-testid="text-pulse-empty">No unusual activity right now. Markets quiet.</div>}
+      {data?.ts&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:8}}>Detector snapshot: {new Date(data.ts).toLocaleString()} · short-window acceleration, volume and funding</div>}
+      {signals.length===0&&<div style={{fontFamily:MONO,fontSize:9,color:C.muted2}}>Last detected activity: {data?.lastActivityAt?new Date(data.lastActivityAt).toLocaleString():"none recorded since this server started"}.</div>}
+      {signals.length === 0 && <div style={{ fontFamily: MONO, fontSize: 11, color: "#5a6b86", padding: "24px 0", textAlign: "center" }} data-testid="text-pulse-empty">No unusual activity passed the detector's thresholds in this snapshot. A large price move alone does not establish a signal.</div>}
       {signals.map((s) => (
         <div key={s.symbol} data-testid={`card-pulse-${s.symbol}`} style={{ background: "#0a1020", border: `1px solid ${bandColor(s.band)}55`, borderLeft: `3px solid ${bandColor(s.band)}`, borderRadius: 4, padding: "10px 12px", marginBottom: 8 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -1178,14 +1181,10 @@ const MACRO_EVENTS=[];
 // ─── MACRO EVENT CARD ────────────────────────────────────
 function MacroCard({evt,imp,surprise,marketImpacts,bc,isToday,isLiveNow,status,onAskAI,onAddCal,onGoAI}){
   const [expanded,setExpanded]=useState(false);
-  // Hold inference: for rate decisions where forecast === previous (a hold was priced in)
-  // and the official actual hasn't arrived yet from ForexFactory, infer the result = HOLD
-  const isRateDecision=(evt.name||"").toLowerCase().match(/rate|fomc|interest/);
-  const holdInferred=!evt.actual&&evt.isPast&&evt.impact==="HIGH"&&isRateDecision&&
-    evt.forecast&&evt.forecast!=="—"&&evt.previous&&evt.previous!=="—"&&
-    evt.forecast===evt.previous;
-  const displayActual=evt.actual||(holdInferred?evt.forecast:null);
-  const isEffectivelyReleased=evt.released||holdInferred;
+  // Forecasts cannot establish a released actual, even when they equal previous.
+  const holdInferred=false;
+  const displayActual=evt.actual;
+  const isEffectivelyReleased=!!evt.actual;
   return(
     <div data-testid={`macro-card-${evt.id}`} style={{background:C.panel,border:`1px solid ${isEffectivelyReleased?(surprise?.color===C.red?C.red+"22":surprise?.color===C.green?C.green+"22":C.border):evt.isPast?C.border:imp.color+"22"}`,borderRadius:2,marginBottom:8,overflow:"hidden",opacity:(isEffectivelyReleased||evt.isPast)?1:0.88}}>
       <div style={{padding:"12px 14px",cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
@@ -1205,7 +1204,7 @@ function MacroCard({evt,imp,surprise,marketImpacts,bc,isToday,isLiveNow,status,o
               {!isEffectivelyReleased&&evt.isPast&&(displayActual||evt.impact!=="HIGH")&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>RELEASED</span>}
               {!isEffectivelyReleased&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted,border:`1px solid ${C.border}`,borderRadius:2,padding:"1px 5px"}}>PENDING</span>}
               {isToday&&!isLiveNow&&!evt.isPast&&<span style={{fontFamily:MONO,fontSize:7,color:C.red,border:`1px solid ${C.red}33`,borderRadius:2,padding:"1px 5px",animation:"pulse 1.4s ease infinite"}}>TODAY</span>}
-              {evt.live&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>LIVE</span>}
+              {evt.actual&&<span style={{fontFamily:MONO,fontSize:7,color:C.green,border:`1px solid ${C.green}33`,borderRadius:2,padding:"1px 5px"}}>ACTUAL REPORTED</span>}
             </div>
             <div style={{fontFamily:MONO,fontSize:8,color:C.muted,marginBottom:6}}>{evt.region||evt.country} · {evt.date}</div>
             <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
@@ -1280,6 +1279,7 @@ function macroActualLabel(e){
 
 // ─── HELP FAQ ITEM (accordion) ────────────────────────────
 function HelpItem({q,a}){
+  const {C}=useContext(ThemeCtx);
   const [open,setOpen]=useState(false);
   return(
     <div style={{borderBottom:`1px solid ${C.border}`,paddingBottom:8,marginBottom:8}}>
@@ -2021,13 +2021,16 @@ function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
   const[items,setItems]=useState([]);
   const[loading,setLoading]=useState(true);
   const[lastFetchTs,setLastFetchTs]=useState(null);
+  const[feedError,setFeedError]=useState("");
   const[newIds,setNewIds]=useState(new Set());
   const seenRef=useRef(new Set());
   const fetchItems=useCallback(async(isInitial=false)=>{
     if(isInitial)setLoading(true);
     try{
       const r=await apiFetch("/api/macro-intel");
+      if(!r.ok)throw new Error(`News feed unavailable (${r.status})`);
       const d=await r.json();
+      if(!Array.isArray(d.items))throw new Error("News feed response invalid");
       const list=d.items||[];
       if(!isInitial){
         const fresh=new Set(list.map(i=>i.id).filter(id=>!seenRef.current.has(id)));
@@ -2036,7 +2039,8 @@ function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
       list.forEach(i=>seenRef.current.add(i.id));
       setItems(list);
       setLastFetchTs(Date.now());
-    }catch(e){}
+      setFeedError(d.status==="unavailable"?"News provider is unavailable. Please retry.":"");
+    }catch(e){setFeedError(e?.message||"News feed unavailable. Please retry.");}
     finally{if(isInitial)setLoading(false);}
   },[]);
   useEffect(()=>{
@@ -2075,11 +2079,12 @@ function MacroIntelFeed({isElite,onUpgrade,onAskAI}){
         <div style={{fontFamily:MONO,fontSize:8,color:C.gold,letterSpacing:"0.2em"}}>MACRO INTEL FEED</div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           {lastFetchTs&&<span style={{fontFamily:MONO,fontSize:7,color:C.muted}}>refreshed {timeAgo(lastFetchTs)}</span>}
-          <span style={{fontFamily:MONO,fontSize:7,color:liveGreen,animation:"pulse 2s infinite"}}>● LIVE</span>
+          <span style={{fontFamily:MONO,fontSize:7,color:liveGreen}}>NEWS · {feedError?"SOURCE UNAVAILABLE":"LATEST FETCH"}</span>
         </div>
       </div>
       {loading&&<div style={{padding:24,textAlign:"center",fontFamily:MONO,fontSize:10,color:C.muted}}>Loading macro intel…</div>}
-      {!loading&&items.length===0&&<div style={{...panelBase,padding:"16px",fontFamily:MONO,fontSize:9,color:C.muted,textAlign:"center"}}>No macro news items found — feed updates every 60 seconds.</div>}
+      {feedError&&<div role="alert" style={{...panelBase,padding:"12px 16px",fontFamily:MONO,fontSize:9,color:C.orange}}>{feedError} {items.length>0?"Showing last available items.":""} <button onClick={()=>fetchItems()} style={{color:C.gold,background:"none",border:0,cursor:"pointer"}}>Retry</button></div>}
+      {!loading&&!feedError&&items.length===0&&<div style={{...panelBase,padding:"16px",fontFamily:MONO,fontSize:9,color:C.muted,textAlign:"center"}}>No relevant macro news in the latest provider response.</div>}
       {items.map(item=>{
         const ic=impactCfg[item.impact]||impactCfg.yellow;
         const isNew=newIds.has(item.id);
@@ -2759,6 +2764,7 @@ function TradeJournalTab({isElite,onUpgrade}){
   );
   return(<>
     <div style={{fontFamily:MONO,fontSize:9,fontWeight:700,color:"#d4af37",letterSpacing:"0.16em",marginBottom:10}}>📓 TRADE JOURNAL</div>
+    <div style={{fontFamily:MONO,fontSize:9,color:C.muted2,marginBottom:12}}>Saved entries for this account, not an automatically synced wallet history. Imported community records retain their source attribution; older entries are archived records, not current trading signals.</div>
     {/* Stats bar */}
     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
       {[
@@ -2899,7 +2905,10 @@ function TradeJournalTab({isElite,onUpgrade}){
                   </div>
                 ))}
               </div>
-              {e.notes&&<div style={{fontFamily:MONO,fontSize:8,color:"#8b7d5a",marginTop:6,lineHeight:1.5,fontStyle:"italic"}}>"{e.notes}"</div>}
+              {e.sourceAttribution&&<div style={{fontFamily:MONO,fontSize:8,color:C.gold}}>{e.sourceAttribution}</div>}
+              {e.createdAt&&Date.now()-Date.parse(e.createdAt)>90*86400000&&<div style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>Archived journal entry · not a live position</div>}
+              {e.displayWarning&&<div role="note" style={{fontFamily:MONO,fontSize:8,color:C.orange,marginTop:6}}>{e.displayWarning}</div>}
+              {e.notes&&!e.displayWarning&&<div style={{fontFamily:MONO,fontSize:8,color:"#8b7d5a",marginTop:6,lineHeight:1.5,fontStyle:"italic"}}>"{e.notes}"</div>}
               <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                 {isOpen&&(
                   closing===e.id?(
@@ -3207,11 +3216,14 @@ function WhatsNewPanel({ panel, ph, PTitle, Badge, C, SERIF, SANS }){
   if(loading) return null;
   if(!u || !Array.isArray(u.items) || u.items.length===0) return null;
   const items = u.items;
-  const versionLabel = u.version || "Latest";
-  const headline = u.title || "What's New This Week";
+  const publishedAt=Date.parse(u.createdAt||"");
+  const archived=Number.isFinite(publishedAt)&&Date.now()-publishedAt>7*86400000;
+  const versionLabel = archived ? `ARCHIVED · ${u.version||new Date(publishedAt).toLocaleDateString()}` : u.version || "Latest";
+  const headline = archived ? "Previous Published Update" : u.title || "What's New This Week";
   return (
     <div style={{...panel,border:`1px solid rgba(0,229,255,.22)`,background:"linear-gradient(180deg,rgba(0,229,255,.04),transparent)"}}>
       <div style={ph}><PTitle>{headline}</PTitle><Badge label={versionLabel} color="gold"/></div>
+      {archived&&<div style={{padding:"0 16px 8px",fontFamily:SANS,fontSize:12,color:C.muted2}}>This is an archived release note, not a claim that new changes shipped this week. Refer to the current Help guide for feature behavior.</div>}
       {u?.summary && (
         <div style={{padding:"0 16px 8px",fontFamily:SANS,fontSize:12,color:C.muted2,lineHeight:1.7}}>{u.summary}</div>
       )}
@@ -3624,6 +3636,7 @@ export default function App(){
   useEffect(()=>{
     document.documentElement.setAttribute("data-theme",isDark?"dark":"light");
     document.documentElement.classList.toggle("light-mode",!isDark);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content",isDark?"#050709":"#f0f2f5");
   },[isDark]);
 
   // Check for existing session on mount.
@@ -3918,6 +3931,20 @@ function Dashboard({user,setUser,onShowAuth}){
   const [equityPrices,setEquityPrices]=useState(()=>Object.fromEntries(EQUITY_SYMS.map(k=>[k,{price:null,chg:null,live:false}])));
   const [metalPrices,setMetalPrices]=useState(()=>Object.fromEntries(METALS_SYMS.map(k=>[k,{price:null,chg:null,live:false}])));
   const [forexPrices,setForexPrices]=useState(()=>Object.fromEntries(FOREX_SYMS.map(k=>[k,{price:null,chg:null,live:false}])));
+  const [dxyQuote,setDxyQuote]=useState(null);
+  useEffect(()=>{
+    let active=true;
+    const refresh=async()=>{
+      try{
+        const response=await apiFetch("/api/market/dxy");
+        if(!response.ok)return;
+        const quote=await response.json();
+        if(active&&Number.isFinite(quote.price)&&quote.price>0)setDxyQuote({...quote,live:true});
+      }catch{/* Keep the last valid observed quote. */}
+    };
+    refresh();const timer=setInterval(refresh,60_000);
+    return()=>{active=false;clearInterval(timer);};
+  },[]);
   const [cryptoRefreshing,setCryptoRefreshing]=useState(false);
   const [fhRefreshing,setFhRefreshing]=useState(false);
 
@@ -4130,6 +4157,7 @@ function Dashboard({user,setUser,onShowAuth}){
   const [macroLoading,setMacroLoading]=useState(true);
   const [macroError,setMacroError]=useState(false);
   const [macroStale,setMacroStale]=useState(false);
+  const [macroUpdatedAt,setMacroUpdatedAt]=useState(null);
   const macroLoaderRef=useRef(null);
   const [macroAiEvent,setMacroAiEvent]=useState(null);
   const [macroAiResp,setMacroAiResp]=useState(null);
@@ -4374,7 +4402,7 @@ function Dashboard({user,setUser,onShowAuth}){
     setFhRefreshing(true);
     try{
       const{stocks,metals,forex}=await fetchFinnhub();
-      const mergeFresh=(prev,updates)=>{const n={...prev};Object.entries(updates).forEach(([sym,d])=>{n[sym]={...prev[sym],...d,receivedAt:d.price>0?Date.now():prev[sym]?.receivedAt};});triggerFlashes(n);return n;};
+      const mergeFresh=(prev,updates)=>{const n={...prev};Object.entries(updates).forEach(([sym,d])=>{if(Number.isFinite(d?.price)&&d.price>0)n[sym]={...prev[sym],...d,receivedAt:Date.now()};});triggerFlashes(n);return n;};
       setEquityPrices(prev=>mergeFresh(prev,stocks));
       setMetalPrices(prev=>mergeFresh(prev,metals));
       setForexPrices(prev=>mergeFresh(prev,forex));
@@ -4451,6 +4479,10 @@ function Dashboard({user,setUser,onShowAuth}){
   },[]);
 
   const verifyAccessCode=useCallback(async(codeOverride)=>{
+    if(verificationLocked){
+      const message="Verify your email before entering an access code. Open the verification email or use Resend verification email.";
+      setAccessCodeMsg(message);setToast(message);return {success:false,message};
+    }
     const code=(codeOverride||accessCodeInput).trim();
     if(!code){const message="Enter an access code.";setAccessCodeMsg(message);return {success:false,message};}
     if(codeOverride)setAccessCodeInput(codeOverride);
@@ -4479,7 +4511,7 @@ function Dashboard({user,setUser,onShowAuth}){
       setAccessCodeMsg(message);
       return {success:false,message};
     }
-  },[accessCodeInput,setUser]);
+  },[accessCodeInput,setUser,verificationLocked]);
 
   // Show biometric setup prompt if WebAuthn is supported and no credential stored yet
   useEffect(()=>{
@@ -4538,12 +4570,13 @@ function Dashboard({user,setUser,onShowAuth}){
     const loader=createMacroLoader(async(force)=>{
       const r=await apiFetch(force?"/api/macro?retry=1":"/api/macro");
       if(!r.ok)throw new Error(`Macro calendar HTTP ${r.status}`);
-      return {events:await r.json(),stale:r.headers.get("X-Macro-Stale")==="1"};
+      return {events:await r.json(),stale:r.headers.get("X-Macro-Stale")==="1",updatedAt:r.headers.get("X-Macro-Fetched-At")};
     },update=>{
       if(update.events)setMacroEvents(update.events);
       setMacroLoading(update.loading);
       setMacroError(update.error);
       if(update.stale!==undefined)setMacroStale(update.stale);
+      if(update.updatedAt)setMacroUpdatedAt(update.updatedAt);
     });
     macroLoaderRef.current=loader;
     loader.fetch();
@@ -5223,7 +5256,16 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
       `}</style>
 
       {/* QR Scanner overlay */}
-      {showQRScanner&&<QRScanner onScan={verifyAccessCode} onClose={()=>setShowQRScanner(false)}/>}
+      {showQRScanner&&(verificationLocked
+        ? <div role="dialog" aria-modal="true" style={{position:"fixed",inset:0,zIndex:9000,background:"#080d18",color:"#f0f4ff",display:"grid",placeItems:"center",padding:24}}>
+            <div style={{maxWidth:430,textAlign:"center"}}>
+              <h2 style={{fontFamily:SERIF,color:"#e8c96d"}}>Verify your email before redeeming</h2>
+              <p>Open the verification link sent to your email, then return here to scan or enter your code. Your code has not been used.</p>
+              <button onClick={handleResendVerification} disabled={resendLoading||resendSeconds>0} style={{padding:12,marginRight:8}}>{resendLoading?"Sending…":resendSeconds>0?`Retry in ${resendSeconds}s`:"Resend verification email"}</button>
+              <button onClick={()=>setShowQRScanner(false)} style={{padding:12}}>Close</button>
+            </div>
+          </div>
+        : <QRScanner onScan={verifyAccessCode} onClose={()=>setShowQRScanner(false)}/>)}
 
       {/* ── Slide-out Menu Drawer ─────────────────────────────────────── */}
       <div
@@ -5654,17 +5696,10 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
         {/* Ticker chips */}
         <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:2}}>
           {["BTC","ETH","SOL","XAU","WTI","EURUSD","DXY","TSLA","NVDA"].map(sym=>{
-            // DXY: derived from EURUSD inverse (Finnhub free tier lacks DXY directly).
-            // Approx: DXY ≈ 1.08 / EURUSD * 100  (calibrated so EUR/USD=1.08 → DXY≈100).
+            // DXY is the actual Yahoo index quote, never an inverse-EUR proxy.
             let d, flash, derived=false;
             if(sym==="DXY"){
-              const eu=forexPrices.EURUSD;
-              if(eu?.price){
-                const dxy=(1.08/eu.price)*100;
-                const dxyChg=-(eu.chg||0);
-                d={price:dxy,chg:dxyChg,live:!!eu.live,receivedAt:eu.receivedAt};
-              }else d=null;
-              flash=null; derived=true;
+              d=dxyQuote;flash=null;
             }else{
               d=allPrices[sym]; flash=flashes[sym];
             }
@@ -5676,7 +5711,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             const livePrice=hasPrice&&!!d?.live&&fresh&&!sourceError&&!refreshing;
             const priceState=refreshing?"↻ REFRESH · LAST":sourceError?"LAST · SOURCE ERROR":"LAST";
             const isUp=Number(d?.chg)>=0;
-            const label=sym==="DXY"?"DXY*":sym;
+            const label=sym;
             return(
               <div key={sym} data-testid={`ticker-${sym}`} title={`${label}: ${livePrice?"Live price":priceState}${derived?" · DXY derived from EUR/USD inverse (proxy)":""}`}
                 onClick={()=>{setAiInput(`${sym==="DXY"?"DXY (Dollar Index)":sym} — long or short right now?`);setTab("ai");}}
@@ -5684,7 +5719,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
                   border:`1px solid ${C.border}`,borderRadius:2,padding:"5px 7px",boxSizing:"border-box",flex:"0 0 90px",width:90,minWidth:90,height:62,overflow:"hidden",cursor:"pointer",transition:"background .35s",fontVariantNumeric:"tabular-nums"}}>
                 <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.02em",display:"flex",alignItems:"center",justifyContent:"space-between",whiteSpace:"nowrap",height:12}}>
                   <span>{label}</span>
-                  <span style={{width:26,textAlign:"right",fontSize:6,color:C.muted}}>{sourceError?"ERROR":refreshing?"SYNC":livePrice?"LIVE":hasPrice?"LAST":"WAIT"}</span>
+                  <span style={{width:26,textAlign:"right",fontSize:6,color:C.muted}}>{refreshing?"SYNC":livePrice?"LIVE":hasPrice?"LAST":"WAIT"}</span>
                 </div>
                 {hasPrice?<><div style={{fontFamily:MONO,fontSize:11,fontWeight:600,color:flash==="green"?C.green:flash==="red"?C.red:C.white,marginTop:1,height:16,lineHeight:"16px",whiteSpace:"nowrap"}}>{sym==="DXY"?d.price.toFixed(2):fmt(d.price,sym)}</div>
                   <div style={{fontFamily:MONO,fontSize:9,color:isUp?C.green:C.red}}>{d?.chg!=null?pct(d.chg):"—"}</div></>
@@ -6362,7 +6397,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
 
           {!macroLoading&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
             <div style={{fontFamily:MONO,fontSize:8,color:C.muted,letterSpacing:"0.1em"}}>{macroStale||macroError?"Calendar unavailable (last known events below)":`${macroAllFiltered.length} events · ForexFactory weekly feed · 5m refresh`}</div>
-            {!macroStale&&!macroError&&<Badge label="LIVE" color="green" style={{fontSize:7}}/>}
+            {macroUpdatedAt&&<span style={{fontFamily:MONO,fontSize:8,color:C.muted2}}>Updated {new Date(macroUpdatedAt).toLocaleString()}</span>}
           </div>}
 
           {!macroLoading&&!macroError&&!macroStale&&macroAllFiltered.length===0&&<div style={{padding:30,textAlign:"center",color:C.muted,fontFamily:MONO,fontSize:10}}>
@@ -6387,7 +6422,7 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
             <span>HIGH Impact</span><span>MED Impact</span><span>LOW Impact</span><span>· Tap any card for analysis</span>
           </div>
 
-          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",marginTop:4,letterSpacing:"0.1em"}}>CLVRQuant v2 · ALL DATA LIVE · Not financial advice</div>
+          <div style={{fontFamily:MONO,fontSize:7,color:C.muted,textAlign:"center",padding:"8px 0",marginTop:4,letterSpacing:"0.1em"}}>CLVRQuant v2 · Data availability varies by source · Not financial advice</div>
 
           {/* ── Macro Intel Feed (Elite) ── */}
           <div style={{marginTop:6,marginBottom:4}}>
@@ -7101,7 +7136,8 @@ CONFLUENCE: Score ${cScore > 0 ? "+" : ""}${cScore}/8 | Regime: ${regime} | Prob
               {q:"What is My Basket? (Elite)",a:"Pick up to 5 assets plus a style (scalp / day / swing) and get personalized recommendations across the whole basket, with correlation and concentration flagged."},
               {q:"Is any of this financial advice?",a:"No. Everything in CLVRQuant is information and education only — not financial advice. Always do your own research."},
             ]},
-            {cat:"What's New (April 2026)",color:"#00e5ff",items:[
+            {cat:"What's New · November 2026",color:"#00e5ff",items:[
+              {q:"Why does the app say Top 6 but the Elite email has up to 3 ideas?",a:"These are separate views: the on-demand Trade Ideas screen evaluates up to 6 candidates. The Elite Morning Brief email includes up to 3 approved ideas. Quality gates can reduce either count; below-gate research is not an approved trade. Plan access and email allowances have not changed."},
               {q:"What changed with the price feeds?",a:"Migrated off Finnhub. Equities, forex, and commodity-spot now stream from Yahoo Finance (primary) with FMP as fallback — same real-time refresh, far higher rate limits, no more 429 outages. Crypto spot also opens a direct browser→Binance WebSocket for sub-second tick updates on top of Hyperliquid."},
               {q:"Why did 'Generate Trade Idea' sometimes show 'Load failed'?",a:"Safari and some mobile browsers silently abort fetch requests longer than ~60 seconds, and Claude trade-idea generation occasionally takes 70-90s on heavy market data. We added an explicit 90-second controller — you'll now see a clean '⏱ Trade Ideas timed out (90s)' message instead of a confusing 'Load failed' if it ever runs over."},
               {q:"Are commodity perps now live from Hyperliquid?",a:"Yes. The COMMODITIES tab → PERP · TRADE.XYZ toggle now reads live mids from the Hyperliquid Trade.xyz HIP-3 dex for everything: Gold, Silver, WTI (CL), Brent, NatGas, Copper, Platinum, Palladium. Each row shows the live mark + funding rate + open interest. CME futures only display if a HL contract drifts >10% from spot (illiquidity safeguard) — labelled 'HL STALE'."},

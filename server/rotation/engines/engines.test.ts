@@ -24,6 +24,18 @@ function macroSeries(value: (day: number) => number, stale = false): MacroSeries
   };
 }
 
+test("30-day and 60-day breadth independently compare each return against BTC",()=>{
+  const btc=priceSeries("bitcoin","BTC",1);
+  btc.points=btc.points.map(point=>({...point,price:100}));
+  const alt=priceSeries("different-windows","ALT",2);
+  alt.points=alt.points.map((point,index)=>({...point,price:index===199?80:index===169?120:100}));
+  const state=computeCryptoRotation({
+    asOf:new Date(asOf).toISOString(),coins:[btc,alt],totalMarketCap:2000,stablecoins:[],priorDominance:null,
+  });
+  assert.equal(state.asi.day30.asi,100);
+  assert.equal(state.asi.day60.asi,0);
+});
+
 test("crypto calculations exclude future prices and require 90-day history", () => {
   const btc = priceSeries("bitcoin", "BTC", 1);
   const alt = priceSeries("coin-a", "AAA", 2, 80);

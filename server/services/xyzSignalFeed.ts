@@ -94,6 +94,7 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   const performPostInfo = async (payload: unknown): Promise<any> => {
+    if(now()<retryAt)throw new Error("HYPERLIQUID_RATE_LIMIT_COOLDOWN");
     const waitMs = Math.max(0, nextRequestAt - now());
     if (waitMs > 0) await sleep(waitMs);
     nextRequestAt = now() + requestSpacingMs;
@@ -123,7 +124,7 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
     coin: string,
     startTime: number,
     endTime: number,
-  ): Promise<{ candles: XyzDailyCandle[]; fetchedAt: number; stale: boolean }> => {
+  ): Promise<{ candles: XyzDailyCandle[]; fetchedAt: number; stale: boolean; sourceError?: string }> => {
     const cached = candleCache.get(coin);
     const at = now();
     if (cached && at - cached.fetchedAt < candleRefreshMs) {
@@ -144,7 +145,9 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
         console.warn(`[xyz-signal-feed] using cached candles for ${coin} after refresh failure`);
         return { ...cached, stale: true };
       }
-      throw error;
+      // One unavailable market must not erase every other market's real score.
+      // The unchanged scorer maps empty history to NO_DATA, never to a trade.
+      return {candles:[],fetchedAt:0,stale:true,sourceError:error instanceof Error?error.message:"Candle source unavailable"};
     }
   };
 
@@ -199,15 +202,19 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
       },
     );
     const candleByCoin = new Map(candleResults.map(result => [result.coin, result]));
+    if(candleResults.every(result=>result.sourceError)){
+      throw new Error(candleResults[0].sourceError);
+    }
     const rows = assets.map(({ coin, context }: any) => {
       const history = candleByCoin.get(coin)!;
-      return scoreXyzPerp({
+      const scored=scoreXyzPerp({
         coin,
         markPrice: asFinite(context.markPx),
         fundingRate: asFinite(context.funding),
         openInterest: asFinite(context.openInterest),
         candles: history.candles,
       });
+      return history.sourceError?{...scored,historyLabel:`Source unavailable: ${history.sourceError}`}:scored;
     });
     const candlesAsOf = Math.min(...candleResults.map(result => result.fetchedAt));
     return {
@@ -230,7 +237,7 @@ export function createXyzSignalFeed(options: XyzFeedOptions = {}) {
         lastSnapshot = snapshot;
         lastMarketFetchAt = snapshot.fetchedAt;
         lastError = "";
-        retryAt = 0;
+        if(!snapshot.stale)retryAt = 0;
         return snapshot;
       } catch (error: any) {
         lastError = error?.message || "XYZ_MARKET_DATA_UNAVAILABLE";

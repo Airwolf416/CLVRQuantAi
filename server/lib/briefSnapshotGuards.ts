@@ -27,6 +27,7 @@ const SYMBOL_MENTIONS: Array<[RegExp, string]> = [
   [/\b(?:eur\s*\/?\s*usd|eurusd)\b/i, "EURUSD"],
   [/\b(?:usd\s*\/?\s*jpy|usdjpy)\b/i, "USDJPY"],
   [/\b(?:usd\s*\/?\s*cad|usdcad)\b/i, "USDCAD"],
+  [/\b(?:dxy|dollar index|dollar-index)\b/i, "DXY"],
   [/\b(?:spx|s&p\s*500|gspc)\b/i, "SPX"],
   [/\b(?:ndx|nasdaq\s*100)\b/i, "NDX"],
   [/\b(?:aapl|msft|nvda|tsla|googl|amzn|meta)\b/i, "EQUITY"],

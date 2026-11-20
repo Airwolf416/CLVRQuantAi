@@ -184,7 +184,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
       };
       const index = byCanonical.get(sym);
       if (index != null) assets[index] = { ...assets[index], ...fields };
-      else {
+      else if (supported && !String(sym).includes(":")) {
         assets.push({
           sym, label:market.symbol || sym, icon:sym.slice(0, 1),
           cat:market.assetClass === "equity" ? "equities" : "crypto",
@@ -194,7 +194,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
         byCanonical.set(sym, assets.length - 1);
       }
     }
-    return assets;
+    return assets.filter(asset => !asset.hlOnly || asset.hlSupported);
   }, [hlUniverse]);
 
   // ── Promote-to-Scanner (Elite-only) ───────────────────────────────────────
@@ -279,7 +279,11 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
   }, []);
 
   const filtered = useMemo(() => {
-    let list = mergedAllAssets;
+    let list = mergedAllAssets.filter(a => {
+      const price = cryptoPrices?.[a.sym]?.price ?? equityPrices?.[a.sym]?.price
+        ?? metalPrices?.[a.sym]?.price ?? bPrices?.[a.sym]?.price;
+      return Number.isFinite(Number(price)) && Number(price)>0 && a.hlSupported !== false;
+    });
     if (cat !== "all") list = list.filter(a => a.cat === cat);
     if (region !== "all") list = list.filter(a => a.region === region);
     if (showHalalOnly) list = list.filter(a => a.halal === true);
@@ -288,7 +292,7 @@ export default function MyBasket({ isPro, onUpgrade, storePerps, storeSpot, cryp
       list = list.filter(a => a.sym.toLowerCase().includes(q) || a.label.toLowerCase().includes(q));
     }
     return list;
-  }, [cat, region, search, showHalalOnly, mergedAllAssets]);
+  }, [cat, region, search, showHalalOnly, mergedAllAssets, cryptoPrices, equityPrices, metalPrices, bPrices]);
 
   const fmtPrice = useCallback((price, currency) => {
     if (!price || price === 0) return null;
@@ -460,9 +464,9 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
       <div onClick={() => setOpenPanel(o => !o)} style={{ padding:"11px 14px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <span style={{ fontFamily:MONO, fontSize:9, color:C.purple, letterSpacing:"0.18em" }}>MY BASKET</span>
-          <span style={{ fontFamily:MONO, fontSize:8, color:C.muted, background:"rgba(168,85,247,.08)", border:`1px solid rgba(168,85,247,.2)`, borderRadius:2, padding:"2px 7px" }}>GLOBAL AI · 140+ ASSETS</span>
+          <span style={{ fontFamily:MONO, fontSize:8, color:C.muted, background:"rgba(168,85,247,.08)", border:`1px solid rgba(168,85,247,.2)`, borderRadius:2, padding:"2px 7px" }}>GLOBAL AI · PRICED &amp; SUPPORTED</span>
           {selList.length > 0 && (
-            <span style={{ fontFamily:MONO, fontSize:8, color:C.purple }}>{selList.length}/{MAX_ASSETS}</span>
+            <span style={{ fontFamily:MONO, fontSize:8, color:C.purple }}>{selList.length} selected · {MAX_ASSETS} maximum</span>
           )}
           {pricesLoading ? (
             <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, letterSpacing:"0.1em" }}>⟳ LOADING PRICES…</span>
@@ -495,7 +499,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
           <div style={{ display:"flex", gap:4, marginBottom:6, overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
             {CATS.map(c => (
               <button key={c.k} data-testid={`basket-cat-${c.k}`} onClick={() => setCat(c.k)} style={{ flexShrink:0, padding:"4px 10px", borderRadius:2, border:`1px solid ${cat===c.k ? C.purple : C.border}`, background:cat===c.k ? "rgba(168,85,247,.1)" : "transparent", color:cat===c.k ? C.purple : C.muted, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
-                {c.label}
+                {c.k==="all"?"All asset classes":c.label}
               </button>
             ))}
           </div>
@@ -503,7 +507,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
           <div style={{ display:"flex", gap:4, marginBottom:8, overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
             {REGIONS.map(r => (
               <button key={r.k} data-testid={`basket-region-${r.k}`} onClick={() => setRegion(r.k)} style={{ flexShrink:0, padding:"4px 10px", borderRadius:2, border:`1px solid ${region===r.k ? C.blue : C.border}`, background:region===r.k ? "rgba(59,130,246,.1)" : "transparent", color:region===r.k ? C.blue : C.muted, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
-                {r.flag} {r.label}
+                {r.flag} {r.k==="all"?"All regions":r.label}
               </button>
             ))}
             <button data-testid="basket-halal-toggle" onClick={() => setShowHalalOnly(h => !h)} style={{ flexShrink:0, padding:"4px 10px", borderRadius:2, border:`1px solid ${showHalalOnly ? C.halal : C.border}`, background:showHalalOnly ? "rgba(34,197,94,.1)" : "transparent", color:showHalalOnly ? C.halal : C.muted, fontFamily:MONO, fontSize:8, cursor:"pointer", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
@@ -620,7 +624,7 @@ Return one signal object per asset. Do NOT skip any. If no setup, use direction:
                 );
               })}
               {selected.size < MAX_ASSETS && (
-                <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, alignSelf:"center" }}>{MAX_ASSETS - selected.size} more</span>
+                <span style={{ fontFamily:MONO, fontSize:7, color:C.muted, alignSelf:"center" }}>{MAX_ASSETS - selected.size} slots available</span>
               )}
             </div>
           )}

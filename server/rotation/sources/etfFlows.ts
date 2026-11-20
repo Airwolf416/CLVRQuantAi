@@ -69,7 +69,8 @@ export function createEtfFlowSource() {
           // SoSoValue's authenticated API contract is not configured in this app.
           // Until its endpoint is explicitly configured, use the public Farside table.
           const html = await fetchText(ROTATION_CONFIG.source.farsideBitcoinEtfUrl, "Farside");
-          const allRows = parseFarsideHtml(html).filter(row => row.date <= requestedDate);
+          const allRows = parseFarsideHtml(html).filter(row => row.date <= requestedDate)
+            .sort((a,b)=>a.date.localeCompare(b.date));
           if (!allRows.length) throw new Error("Farside has no ETF flow rows for the requested date");
           return { provider: "farside", rows: allRows.slice(-500) } satisfies RotationEtfFlows;
         },

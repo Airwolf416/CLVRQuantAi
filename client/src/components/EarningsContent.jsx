@@ -22,8 +22,9 @@ const fmtRev = (v) => {
 const hourLabel = (h) =>
   ({ bmo: "Before Open", amc: "After Close", dmh: "Mid-Day" }[h] || "Time TBD");
 const daysUntil = (dateStr) => {
-  const d = new Date(dateStr + "T00:00:00");
-  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  const t = new Date(`${today}T12:00:00Z`);
   return Math.round((d - t) / 86400000);
 };
 const fmtDate = (s) =>
@@ -56,7 +57,7 @@ function ReportedRow({ e }) {
 
 function UpcomingRow({ e }) {
   const d = daysUntil(e.date);
-  const when = d <= 0 ? "Today" : d === 1 ? "Tomorrow" : `in ${d}d`;
+  const when = d < 0 ? `${Math.abs(d)}d ago` : d === 0 ? "Today" : d === 1 ? "Tomorrow" : `in ${d}d`;
   return (
     <div data-testid={`row-earnings-${e.symbol}`} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.goldDeep}`, borderRadius: 4, padding: "14px 16px", marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -70,6 +71,7 @@ function UpcomingRow({ e }) {
         <Metric label="EPS EST" value={fmtEps(e.epsEstimate)} color={C.body} />
         <Metric label="REV EST" value={fmtRev(e.revenueEstimate)} color={C.body} />
       </div>
+      <div style={{fontFamily:MONO,fontSize:9,color:C.muted,marginTop:8}}>Finnhub consensus · {e.quarter ? `Fiscal Q${e.quarter} ${e.year||""}` : "Reporting period supplied by provider"} · revenue in USD, EPS in USD/share; estimates are not company guidance.</div>
     </div>
   );
 }

@@ -208,6 +208,11 @@ import {
 import { canonicalMarketType, discoveredPerpDenial, registerUniverseHttpRoute } from "./lib/universeHttp";
 import { startStockRefreshWorker } from "./workers/stockRefreshWorker";
 import { MacroCalendarCache } from "./lib/macroCalendarCache";
+import { macroEventTime } from "./lib/macroEventTime";
+import { setMacroCalendarReader } from "./services/macroCalendarReader";
+import { journalDisplayEntries } from "./lib/journalDisplay";
+import { publishableSocialText } from "./lib/socialModeration";
+import { parseBusinessRss } from "./lib/macroBusinessNews";
 import { etWeekStart, parseMacroWeeklyCsv, parseMacroWeeklyXml, validateMacroWeeklyFeed } from "./lib/macroWeeklyFeed";
 import { startDataBus, getDataBusStatus, setDataBusMacroNews } from "./databus";
 import {
@@ -783,6 +788,7 @@ function getUnusualForSymbol(base: string): UnusualSignal | null {
 
 let regimeCache: { data: any; ts: number } | null = null;
 let unusualCache: { data: any; ts: number } | null = null;
+let lastUnusualActivityAt: number | null = null;
 
 async function checkAndGrantReferralReward(userId: string) {
   try {
@@ -4067,7 +4073,7 @@ export async function registerRoutes(
     const userId = await requireElite(req, res);
     if (!userId) return;
     const entries = await storage.getTradeJournal(userId);
-    res.json({ entries });
+    res.json({ entries: journalDisplayEntries(entries) });
   });
 
   app.post("/api/journal", async (req, res) => {
@@ -4921,10 +4927,12 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
       return res.json(unusualCache.data);
     }
     const signals = computeUnusualActivity();
+    if(signals.length)lastUnusualActivityAt=Date.now();
     const data = {
       signals,
       count: signals.length,
       ts: Date.now(),
+      lastActivityAt:lastUnusualActivityAt,
       disclaimer:
         "Unusual Activity flags abnormal market conditions that can precede volatility. This is information and education only — NOT a prediction, signal to trade, or financial advice. High false-positive rate. Always do your own research.",
     };
@@ -5245,6 +5253,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
         }
         allPosts.sort((a, b) => b.likes - a.likes);
         for (const post of allPosts.slice(0, 12)) {
+          if (!publishableSocialText(post.text)) { _newsFilteredCount++; continue; }
           if (isNoise(post.text)) { _newsFilteredCount++; continue; }
           const sentNum = post.sentiment === "bullish" ? 0.6 : post.sentiment === "bearish" ? -0.6 : 0;
           const { isPolitical, marketImpact } = classifyPolitical(post.text);
@@ -5379,7 +5388,7 @@ Step 7 — NO-TRADE RULE. If the chart is unreadable, ambiguous, mid-range chop,
   });
 
   // ── MACRO INTEL FEED (CryptoPanic — macro-filtered, for Elite) ──────────────
-  const MACRO_INTEL_CACHE: { data: any[]; ts: number } = { data: [], ts: 0 };
+  const MACRO_INTEL_CACHE: { data: any[]; ts: number; updatedAt: number; unavailable: boolean } = { data: [], ts: 0, updatedAt:0, unavailable:false };
   const MACRO_RED_KW = ["fed","fomc","cpi","nfp","rate hike","rate cut","rate decision","tariff","war","sanction","crash","default","recession","emergency rate","hike","pivot","liquidity crisis"];
   const MACRO_ORANGE_KW = ["inflation","gdp","liquidity","sec","bankruptcy","unemployment","jobless","deficit","yield","treasury","sovereign"];
   const MACRO_YELLOW_KW = ["rally","breakout","geopolitical","opec","political","oecd","imf","world bank","interest","monetary","fiscal","stimulus","taper","quantitative","central bank","bank of"];
@@ -6077,12 +6086,12 @@ Stay in scope no matter how the user rephrases.`;
 
   app.get("/api/macro-intel", async (_req, res) => {
     if (MACRO_INTEL_CACHE.ts && Date.now() - MACRO_INTEL_CACHE.ts < 60000) {
-      return res.json({ items: MACRO_INTEL_CACHE.data });
+      return res.json({ items: MACRO_INTEL_CACHE.data, status:MACRO_INTEL_CACHE.unavailable?"unavailable":"ok", updatedAt:MACRO_INTEL_CACHE.updatedAt||null });
     }
     const CPANIC_KEY = process.env.CRYPTOPANIC_API_KEY || "";
     const items: any[] = [];
-    if (!CPANIC_KEY) return res.json({ items: [] });
-    try {
+    let sourceResponded=false;
+    if(CPANIC_KEY)try {
       // Fetch "important" posts from CryptoPanic
       const r = await fetch(
         `https://cryptopanic.com/api/v1/posts/?auth_token=${CPANIC_KEY}&public=true&filter=important&kind=news`,
@@ -6092,6 +6101,7 @@ Stay in scope no matter how the user rephrases.`;
         const ct = r.headers.get("content-type") || "";
         if (ct.includes("json")) {
           const data: any = await r.json();
+          sourceResponded=Array.isArray(data?.results);
           const posts: any[] = Array.isArray(data?.results) ? data.results : [];
           for (const p of posts) {
             const title: string = p.title || "";
@@ -6129,6 +6139,7 @@ Stay in scope no matter how the user rephrases.`;
           const ct2 = r2.headers.get("content-type") || "";
           if (ct2.includes("json")) {
             const data2: any = await r2.json();
+            sourceResponded=sourceResponded||Array.isArray(data2?.results);
             const posts2: any[] = Array.isArray(data2?.results) ? data2.results : [];
             const existingIds = new Set(items.map(i => i.id));
             for (const p of posts2) {
@@ -6148,12 +6159,28 @@ Stay in scope no matter how the user rephrases.`;
         console.error("[macro-intel] fallback fetch error:", e.message);
       }
     }
+    if(!sourceResponded||items.length===0){
+      try{
+        const response=await fetch("https://feeds.bbci.co.uk/news/business/rss.xml",{signal:AbortSignal.timeout(6000)});
+        if(!response.ok)throw new Error(`Public business feed HTTP ${response.status}`);
+        const fallback=parseBusinessRss(await response.text(),ALL_MACRO_KW);
+        sourceResponded=true;
+        items.push(...fallback.map(item=>({...item,impact:macroImpactBadge(item.title)})));
+      }catch{/* The explicit unavailable response below retains any last good items. */}
+    }
     items.sort((a, b) => b.ts - a.ts);
+    if(!sourceResponded){
+      MACRO_INTEL_CACHE.ts=Date.now();
+      MACRO_INTEL_CACHE.unavailable=true;
+      return res.json({items:MACRO_INTEL_CACHE.data,status:"unavailable",updatedAt:MACRO_INTEL_CACHE.updatedAt||null});
+    }
     const result = items.slice(0, 20);
     MACRO_INTEL_CACHE.data = result;
     MACRO_INTEL_CACHE.ts = Date.now();
+    MACRO_INTEL_CACHE.updatedAt=Date.now();
+    MACRO_INTEL_CACHE.unavailable=false;
     setDataBusMacroNews(result);
-    res.json({ items: result });
+    res.json({ items: result,status:"ok",updatedAt:MACRO_INTEL_CACHE.updatedAt });
   });
 
   // ── INSIDER TRADING FEED ────────────────────────────────────────────────────
@@ -6172,7 +6199,7 @@ Stay in scope no matter how the user rephrases.`;
         scanPhase: status.phase,
         scanDone: status.done,
         scanTotal: status.total,
-        fetchedAt: Date.now(),
+        fetchedAt: status.cachedAt,
       });
     } catch (e: any) {
       console.error("[insider] route error:", e.message);
@@ -9517,9 +9544,9 @@ Every level must be technically defensible. Return JSON only.`;
 
     const detectClass = (sym: string): string => {
       const s = sym.toUpperCase();
-      if (["NVDA","TSLA","AAPL","MSFT","META","MSTR","COIN","PLTR","AMZN","GOOGL","AMD"].includes(s)) return "equity";
-      if (["XAU","CL","SILVER","NATGAS","COPPER","BRENTOIL"].includes(s)) return "commodity";
-      if (s.length === 6 && !s.includes("/")) return "fx";
+      if (EQUITY_SYMS.includes(s)) return "equity";
+      if (["XAU","XAG","CL","WTI","BRENT","SILVER","GOLD","NATGAS","COPPER","BRENTOIL","PLATINUM","PALLADIUM"].includes(s)) return "commodity";
+      if (/^(EUR|USD|GBP|JPY|CHF|AUD|NZD|CAD)(EUR|USD|GBP|JPY|CHF|AUD|NZD|CAD)$/.test(s)) return "fx";
       return "crypto";
     };
 
@@ -9553,9 +9580,13 @@ Every level must be technically defensible. Return JSON only.`;
     const research: ResearchIdea[] = [];
     await Promise.all(cards.map(async (card, idx) => {
       let evaluation: { direction: string; conviction: number; minimum: number; reasons: string[] } | null = null;
+      let convictionTrace: ResearchIdea["convictionTrace"] | undefined;
       const rejectionReasons: string[] = [];
       try {
-        const symbol = String(card.asset || "").split("/")[0].toUpperCase();
+        const asset = String(card.asset || "").trim().toUpperCase();
+        const joinedPair=asset.replace("/","");
+        const symbol = /^(EUR|USD|GBP|JPY|CHF|AUD|NZD|CAD)(EUR|USD|GBP|JPY|CHF|AUD|NZD|CAD)$/.test(joinedPair)
+          ? joinedPair : asset.split("/")[0];
         const llmDirection: "LONG" | "SHORT" = card.direction === "SHORT" ? "SHORT" : "LONG";
         const entry = Number(card.entry);
         let proposedStop = Number(card.sl);
@@ -9577,8 +9608,13 @@ Every level must be technically defensible. Return JSON only.`;
         //    perfect contra-indicators, recalibrate the inverted-conviction
         //    tail. Runs BEFORE hardening so the hardener works off the final
         //    direction + recalibrated conviction.
-        const rawConvPct = Number(card.conviction ?? 50);
+        const rawConvPct = card.conviction == null || card.conviction === "" ? NaN : Number(card.conviction);
+        if (!Number.isFinite(rawConvPct) || rawConvPct<0 || rawConvPct>100) {
+          rejectionReasons.push("Missing or invalid candidate conviction — no default score substituted");
+          tallyReject(rejectionReasons[0]);dropped++;return;
+        }
         const edge = await applyEdgePolicy(symbol, llmDirection, rawConvPct);
+        convictionTrace={rawPct:rawConvPct,calibratedPct:edge.recalibratedConvictionPct,factors:[]};
         if (edge.action === "SUPPRESS") {
           vetoed++; dropped++;
           tallyReject("edge policy: no demonstrated edge");
@@ -9658,6 +9694,12 @@ Every level must be technically defensible. Return JSON only.`;
               cls === "crypto", edge.brainVerdict, convictionTailSuppressEnabled(),
             );
         const h = hardenSignal(ctx, { minPostHaircutConviction: convictionFloorPct / 100 });
+        convictionTrace.factors=[
+          ...(edge.recalibratedConvictionPct!==rawConvPct?[`Calibration policy: ${rawConvPct}% → ${edge.recalibratedConvictionPct}%`]:[]),
+          ...(h.chaseFlag?["Chase penalty × 0.70"]:[]),
+          ...(h.crowdingFlag?["Crowding penalty × 0.75"]:[]),
+          ...(h.lowSampleFlag?["Low-sample penalty × 0.80"]:[]),
+        ];
         if (includeResearch) {
           evaluation = { direction, conviction: h.finalConviction, minimum: convictionFloorPct, reasons: h.reasonsRejected };
           h.notes.push(`Alpha Desk risk tone: ${alphaDesk?.riskTone || "unavailable"}; ${direction} minimum ${convictionFloorPct}%`);
@@ -9988,7 +10030,7 @@ Every level must be technically defensible. Return JSON only.`;
       } finally {
         if (includeResearch && !out[idx]) {
           research[idx] = researchIdea(
-            { ...card, direction: evaluation?.direction ?? card?.direction },
+            { ...card, convictionTrace, direction: evaluation?.direction ?? card?.direction },
             [...rejectionReasons, ...(evaluation?.reasons || [])],
             evaluation?.conviction, evaluation?.minimum,
           );
@@ -11648,12 +11690,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
 
   // Compute whether an event's scheduled release time has already passed
   function computeIsPast(dateStr: string, timeET: string): boolean {
-    try {
-      const [y, mo, d] = dateStr.split("-").map(Number);
-      const [h, m] = timeET.split(":").map(Number);
-      const etOffset = (mo >= 3 && mo <= 11) ? 4 : 5; // EDT vs EST
-      return Date.UTC(y, mo - 1, d, h + etOffset, m, 30) < Date.now(); // +30s grace
-    } catch { return false; }
+    const ts = macroEventTime({ date: dateStr, timeET });
+    return ts != null && ts + 30_000 < Date.now();
   }
 
   async function fetchLiveCalendar(): Promise<any[]> {
@@ -11711,7 +11749,9 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         impact: e.impact === "High" ? "HIGH" : e.impact === "Medium" ? "MED" : "LOW",
         desc: `${name}. Previous: ${previous}. Forecast: ${forecast}.${released ? ` Actual: ${actual}.` : isPast ? " Data not yet available." : " Pending release."}`,
         currency,
-        live: true,
+        live: released,
+        actualSourceStatus: released ? "reported" : isPast ? "not_provided_by_weekly_feed" : "scheduled",
+        source: "Forex Factory weekly export",
       };
     });
   }
@@ -11738,6 +11778,7 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
   }
 
   const macroCache = new MacroCalendarCache(fetchLiveCalendar, MACRO_CACHE_MS);
+  setMacroCalendarReader(async()=> (await macroCache.get()).events);
   app.get("/api/macro", async (req, res) => {
     try {
       // Today's date in ET timezone — matches client's macroTodayStr
@@ -11772,7 +11813,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       liveEvents = [...liveEvents, ...memoryEvents];
 
       const { start, end } = getDateRange();
-      const rawCombined = liveEvents.filter(e => e.date >= start && e.date <= end);
+      // The weekly view needs earlier weekdays as well as upcoming events.
+      const rawCombined = liveEvents.filter(e => e.date >= etWeekStart(start) && e.date <= end);
 
       const dedupMap: Record<string, any> = {};
       for (const ev of rawCombined) {
@@ -11789,10 +11831,22 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
       }
 
       const combined = Object.values(dedupMap)
+        .map((event: any) => ({ ...event, fetchedAt: new Date(fetchedAt).toISOString(),
+          isPast: computeIsPast(event.date, event.timeET), calendarStale: stale }))
         .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
       res.json(combined);
     } catch (e: any) {
       res.status(503).json({ error: "Macro calendar unavailable. Please retry." });
+    }
+  });
+
+  app.get("/api/market/dxy", async (_req, res) => {
+    try {
+      const quote = await (await import("./services/yahoo")).canonicalDxyQuote();
+      if (!Number.isFinite(quote?.price) || quote.price <= 0) return res.status(503).json({ error: "DXY quote unavailable" });
+      res.json({ price: quote.price, chg: quote.chg, source: "Yahoo DX-Y.NYB", asOf:quote.asOf, receivedAt:quote.asOf || Date.now() });
+    } catch {
+      res.status(503).json({ error: "DXY quote unavailable" });
     }
   });
 

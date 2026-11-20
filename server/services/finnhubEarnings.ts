@@ -53,7 +53,7 @@ function fresh<T>(e: CacheEntry<T> | undefined, ttl: number): T | null {
   return e.data;
 }
 
-const num = (v: any): number | null => (v == null || v === "" ? null : Number(v));
+const num = (v: any): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
 export async function getEarningsCalendar(from: string, to: string): Promise<EarningsRow[]> {
   if (!FINNHUB_KEY) return [];

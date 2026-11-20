@@ -22,17 +22,20 @@ export function macroEventDate(value) {
 
 export function macroWeekRange(now = new Date()) {
   const { date, weekday } = etDateParts(now);
-  const daysToSunday = 6 - ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(weekday);
-  const end = new Date(`${date}T12:00:00Z`);
-  end.setUTCDate(end.getUTCDate() + daysToSunday);
-  return { start: date, end: end.toISOString().slice(0, 10) };
+  const day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(weekday);
+  const start = new Date(`${date}T12:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - day);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 6);
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
 export function filterMacroCalendar(events, tab, region, impact, now = new Date()) {
   const { start, end } = macroWeekRange(now);
+  const today = etDateParts(now).date;
   return events.filter(e => {
     const date = macroEventDate(e.date);
-    return date && date >= start && date <= (tab === "today" ? start : end);
+    return date && (tab === "today" ? date === today : date >= start && date <= end);
   })
     .filter(e => region === "ALL" || (e.country || "").toUpperCase() === region)
     .filter(e => impact === "ALL" || e.impact === impact)
@@ -92,7 +95,8 @@ export function createMacroLoader(load, onUpdate) {
         }
         if (disposed || request !== sequence) return;
         hasData = true;
-        onUpdate({ events, loading: false, error: false, stale: !Array.isArray(result) && !!result.stale });
+        onUpdate({ events, loading: false, error: false, stale: !Array.isArray(result) && !!result.stale,
+          ...(!Array.isArray(result) && result.updatedAt ? { updatedAt: result.updatedAt } : {}) });
       } catch (error) {
         if (disposed || request !== sequence) return;
         onUpdate({ loading: false, error: error?.message || "Macro calendar unavailable", stale: hasData });

@@ -224,10 +224,10 @@ export async function resolveOnce(): Promise<void> {
     const censorReason = observation.kind === "CENSORED" ? observation.reason : null;
     const result = await db.execute(sql`
       UPDATE ai_signal_log
-         SET observed_mfe_pct = CASE WHEN ${maxFavorable} > 0 AND (observed_mfe_pct IS NULL OR observed_mfe_pct < ${maxFavorable}) THEN ${maxFavorable} ELSE observed_mfe_pct END,
-             observed_mfe_at = CASE WHEN ${maxFavorable} > 0 AND (observed_mfe_pct IS NULL OR observed_mfe_pct < ${maxFavorable}) THEN ${maxFavorableAt} ELSE observed_mfe_at END,
-             observed_mae_pct = CASE WHEN ${maxAdverse} > 0 AND (observed_mae_pct IS NULL OR observed_mae_pct < ${maxAdverse}) THEN ${maxAdverse} ELSE observed_mae_pct END,
-             observed_mae_at = CASE WHEN ${maxAdverse} > 0 AND (observed_mae_pct IS NULL OR observed_mae_pct < ${maxAdverse}) THEN ${maxAdverseAt} ELSE observed_mae_at END,
+         SET observed_mfe_pct = CASE WHEN ${maxFavorable}::double precision > 0 AND (observed_mfe_pct IS NULL OR observed_mfe_pct < ${maxFavorable}::double precision) THEN ${maxFavorable}::double precision ELSE observed_mfe_pct END,
+             observed_mfe_at = CASE WHEN ${maxFavorable}::double precision > 0 AND (observed_mfe_pct IS NULL OR observed_mfe_pct < ${maxFavorable}::double precision) THEN ${maxFavorableAt} ELSE observed_mfe_at END,
+             observed_mae_pct = CASE WHEN ${maxAdverse}::double precision > 0 AND (observed_mae_pct IS NULL OR observed_mae_pct < ${maxAdverse}::double precision) THEN ${maxAdverse}::double precision ELSE observed_mae_pct END,
+             observed_mae_at = CASE WHEN ${maxAdverse}::double precision > 0 AND (observed_mae_pct IS NULL OR observed_mae_pct < ${maxAdverse}::double precision) THEN ${maxAdverseAt} ELSE observed_mae_at END,
              observation_cursor = COALESCE(${cursorJson}::jsonb, observation_cursor),
               observation_cursor_at = COALESCE(${lastInterval ? new Date(lastInterval.endTs) : null}, observation_cursor_at),
               observation_method_version = COALESCE(${evaluated.version ?? (row.entryFillStatus === "VERIFIED" ? CLOSED_INTERVAL_VERSION : null)}, observation_method_version),

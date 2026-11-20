@@ -8,7 +8,7 @@
 
 import { EQUITY_BASE, FOREX_BASE, METALS_BASE } from "../config/assets";
 
-type Quote = { price: number; chg: number; live: boolean };
+type Quote = { price: number; chg: number; live: boolean; asOf?: number };
 
 const UA = { "User-Agent": "Mozilla/5.0 (compatible; CLVRBot/2.0)" };
 const CHART = "https://query1.finance.yahoo.com/v8/finance/chart";
@@ -42,7 +42,8 @@ async function yfFetchOne(yfSym: string, base?: number): Promise<Quote> {
     const price = Number(meta.regularMarketPrice);
     const prev = Number(meta.chartPreviousClose ?? meta.previousClose ?? price);
     const chg = prev > 0 ? +((price - prev) / prev * 100).toFixed(2) : 0;
-    return { price: +price.toFixed(4), chg, live: true };
+    return { price: +price.toFixed(4), chg, live: true,
+      ...(Number.isFinite(Number(meta.regularMarketTime)) ? {asOf:Number(meta.regularMarketTime)*1000} : {}) };
   } catch {
     return { price: base ?? 0, chg: 0, live: false };
   }
@@ -59,6 +60,21 @@ export async function yahooQuoteBatch(symbols: string[]): Promise<Record<string,
   );
   for (const [sym, q] of results) out[sym] = q;
   return out;
+}
+
+let dxyCache: { quote: Quote; fetchedAt: number } | null = null;
+let dxyPending: Promise<Quote> | null = null;
+/** The actual dollar index, shared by ticker, Alpha Desk and Brief. Never a FX proxy. */
+export async function canonicalDxyQuote(): Promise<Quote> {
+  if(dxyCache && Date.now()-dxyCache.fetchedAt<60_000)return dxyCache.quote;
+  if(dxyPending)return dxyPending;
+  dxyPending=(async()=>{
+    const quote=await yfFetchOne("DX-Y.NYB");
+    if(!quote.live||!Number.isFinite(quote.price)||quote.price<=0)throw new Error("DXY source unavailable");
+    dxyCache={quote,fetchedAt:Date.now()};
+    return quote;
+  })().finally(()=>{dxyPending=null;});
+  return dxyPending;
 }
 
 // ── All forex pairs in our basket ────────────────────────────────────────────

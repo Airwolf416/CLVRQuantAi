@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useContext } from "react";
+import { ThemeCtx } from "./lib/themeContext";
 import { apiFetch } from "./lib/apiClient";
 // Wallet RPC/Hyperliquid endpoints are cross-origin and intentionally bypass apiFetch.
 const nativeFetch = globalThis.fetch.bind(globalThis);
@@ -489,6 +490,7 @@ export function PerpsPnlCalculator() {
 }
 
 export default function PhantomWalletPanel() {
+  const {C}=useContext(ThemeCtx);
   const { pubkey, balance, tokens, status, error, connect, disconnect, signMessage, sendSOL, txHistory } = usePhantom();
   const [walletTab, setWalletTab] = useState("overview");
   const [authMsg, setAuthMsg] = useState("Sign in to CLVRQuant AI");

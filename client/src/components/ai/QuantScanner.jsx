@@ -268,6 +268,9 @@ export default function QuantScanner({ mode, isPro, isElite }) {
           {selected.length > 0 && <button data-testid="btn-clear-scan" onClick={() => setSelected([])} style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid rgba(239,68,68,0.25)", background: "rgba(239,68,68,0.06)", color: "#ef4444", fontFamily: MONO, fontSize: 8, cursor: "pointer" }}>CLEAR</button>}
         </div>
 
+        <div style={{fontFamily:MONO,fontSize:9,color:"#aab4c6",lineHeight:1.7,marginBottom:8}}>
+          Discovery is not scoring support. SCORER_UNSUPPORTED: no validated scorer for this market; VOLUME_BELOW_25M: below the liquidity floor; EQUITY_CONTEXT_PENDING: required equity/session context has not loaded. Disabled markets cannot produce an approved setup.
+        </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 200, overflowY: "auto" }}>
           {filtered.map(a => {
             const isSel = selected.includes(a.ticker);

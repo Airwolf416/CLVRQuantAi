@@ -517,6 +517,11 @@ ${snap.sections}`;
                   <div style={{ marginTop: 3, fontFamily: MONO, fontSize: 11, color: "#d8d5ce" }}>
                     {typeof record.postHaircutConvictionPct === "number" ? `${record.postHaircutConvictionPct}%` : "Unavailable"}
                   </div>
+                  {record.convictionTrace&&<div style={{marginTop:6,fontSize:10,color:"#aab4c6"}}>
+                    Raw candidate score {record.convictionTrace.rawPct}% · calibrated {record.convictionTrace.calibratedPct}%.
+                    {" "}{record.convictionTrace.factors?.join(" · ")}
+                    {" "}This policy-adjusted score is not a measured win probability.
+                  </div>}
                 </div>
                 <div>
                   <div style={{ fontFamily: MONO, fontSize: 7, color: "rgba(255,255,255,0.34)", letterSpacing: "0.1em" }}>MINIMUM REQUIRED</div>

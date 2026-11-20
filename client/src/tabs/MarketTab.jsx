@@ -4,7 +4,8 @@
 // Each has SPOT and PERP sub-tabs with live data and flash animations
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useContext } from "react";
+import { ThemeCtx } from "../lib/themeContext";
 import useMarketData from "../store/MarketDataStore.jsx";
 import { getET, getNYSEStatus } from "../utils/marketBell.js";
 
@@ -127,6 +128,7 @@ function injectBlink() {
 // ── Flash-animated row ────────────────────────────────────────────────────────
 // flash is "green" | "red" | undefined (from Dashboard's triggerFlashes)
 function FlashRow({ sym, label, price, chg, flash, isForex, children }) {
+  const { C } = useContext(ThemeCtx);
   injectBlink();
   const chgN = Number(chg) || 0;
   const isUp = chgN >= 0;

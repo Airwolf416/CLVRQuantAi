@@ -19,7 +19,7 @@ import { apiFetch } from "../lib/apiClient";
 const POLL_MS = 30_000;
 
 const DEFAULT_REGIME = { score: 50, label: "NEUTRAL", trend: "sideways" };
-const DEFAULT_FEAR_GREED = { value: 50, classification: "Neutral", signal: "neutral" };
+const DEFAULT_FEAR_GREED = { value: null, classification: "Loading sentiment", signal: null };
 const DEFAULT_KILL_SWITCH = { active: false, reason: null, expiresAt: null, nearest_event: null };
 
 export const DataBusCtx = createContext({
@@ -94,7 +94,7 @@ export function DataBusProvider({ children }) {
       if (controller.signal.aborted) return;
 
       if (d.regime)      setRegime(d.regime);
-      if (d.fearGreed)   setFearGreed(d.fearGreed);
+      if (Number.isFinite(d.fearGreed?.value)) setFearGreed(d.fearGreed);
       if (d.killSwitch)  setKillSwitch(d.killSwitch);
       if (d.prices)      setPrices(d.prices);
       if (d.funding)     setFunding(d.funding);

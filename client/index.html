@@ -20,10 +20,26 @@
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body { background: #050709; font-family: 'Barlow', system-ui, sans-serif; color: #c8d4ee; }
+      html[data-theme="light"] body { background: #f0f2f5; color: #0d1321; }
     </style>
+    <script>
+      try {
+        const light = localStorage.getItem("clvr_theme") === "light";
+        document.documentElement.setAttribute("data-theme", light ? "light" : "dark");
+        document.documentElement.classList.toggle("light-mode", light);
+        if (light) document.querySelector('meta[name="theme-color"]').content = "#f0f2f5";
+      } catch {}
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div role="status" aria-live="polite" style="min-height:100vh;display:grid;place-content:center;text-align:center;gap:14px;padding:24px">
+        <strong style="font-family:Georgia,serif;font-size:27px;color:#a07820">CLVRQuant</strong>
+        <div>Loading your dashboard…</div>
+        <progress aria-label="Loading dashboard" style="width:180px;margin:auto"></progress>
+        <noscript>Enable JavaScript to open your dashboard.</noscript>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {

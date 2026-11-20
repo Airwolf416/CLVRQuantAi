@@ -261,7 +261,8 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
   const macroValue = symbol => macro.find(asset => asset.symbol === symbol);
   const correlationSymbols = useMemo(() => {
     const source = data?.correlationWindows?.[corrWindow] || data?.correlationMatrix;
-    const names = safeArray(source).map(row => row.symbol);
+    const names = safeArray(source).filter(row => Object.entries(row.values || {})
+      .some(([symbol,value]) => symbol!==row.symbol && valid(value))).map(row => row.symbol);
     return names.length ? names : [];
   }, [data?.correlationMatrix, data?.correlationWindows, corrWindow]);
   const correlationMap = useMemo(() => new Map(safeArray(data?.correlationWindows?.[corrWindow] || data?.correlationMatrix).map(row => [row.symbol, row.values || {}])), [data?.correlationMatrix, data?.correlationWindows, corrWindow]);
@@ -281,7 +282,7 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
   return <main className="ad-shell">
     <style>{STYLES}</style>
     <div className="ad-topline"><span className="ad-mark">CQ</span><span>CLVRQUANT</span><i>/</i><strong>ALPHA DESK</strong><span className="ad-top-right"><span className={`ad-live-dot ${data && !stale ? "live" : ""}`} />{stale ? "STALE SNAPSHOT" : data ? "LIVE SNAPSHOT" : "CONNECTING"}</span></div>
-    <div className="ad-riskbar">
+    {!data&&loading ? <div className="ad-riskbar" role="status">Loading sourced market context…</div> : <div className="ad-riskbar">
       <span className="ad-risk-label">MARKET RISK</span>
       {[
         ["VIX", macroValue("VIX") ? displayPrice(macroValue("VIX").price, "VIX") : NA],
@@ -292,7 +293,7 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
         ["RISK TONE", data?.riskTone || NA],
       ].map(([label, value]) => <div className="ad-risk-item" key={label}><span>{label}</span><b style={label === "RISK TONE" || label === "REGIME" ? { color: toneFor(value) } : undefined}>{value}</b></div>)}
       <div className="ad-risk-source"><span>LIVE PRICES</span><b>{ago(data?.sourceStatus?.livePricesUpdatedAt)}</b></div>
-    </div>
+    </div>}
 
     {error && <div className={`ad-alert ${data ? "stale-alert" : "error-alert"}`} role="status">
       <div><strong>{data ? "Refresh delayed — showing last available snapshot" : "Market overview unavailable"}</strong><span>{error}</span></div>
@@ -316,7 +317,7 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
           return <button className={`ad-hero-card hero-${index}`} key={symbol} onClick={() => asset && setSelected(asset)} disabled={!asset}>
             <span className="ad-hero-top"><span>{symbol}</span><span className="ad-arrow">↗</span></span>
             <strong className="ad-hero-price">{asset ? displayPrice(asset.price, symbol) : NA}</strong>
-            <span className={`ad-hero-change ${valid(asset?.dayChangePct) ? Number(asset.dayChangePct) >= 0 ? "is-positive" : "is-negative" : ""}`}>{asset ? signedPct(asset.dayChangePct) : NA}<small> / SESSION</small></span>
+            <span title="Latest daily candle versus previous daily close; not the ticker's rolling 24-hour return." className={`ad-hero-change ${valid(asset?.dayChangePct) ? Number(asset.dayChangePct) >= 0 ? "is-positive" : "is-negative" : ""}`}>{asset ? signedPct(asset.dayChangePct) : NA}<small> / DAILY CLOSE BASIS</small></span>
             <span className="ad-hero-bottom"><span>{asset?.trend || NA}</span><span>ATR {asset ? displayPrice(asset.atr14, symbol) : NA}</span></span>
           </button>;
         })}
@@ -360,6 +361,7 @@ export default function AlphaDeskPage({ isElite, tier, isAdmin, onUpgrade }) {
             return <td key={column} title={`${row} / ${column}: ${valid(value) ? Number(value).toFixed(2) : NA}`} style={{ background: corrColor(value) }}>{valid(value) ? Number(value).toFixed(2) : NA}</td>;
           })}</tr>)}</tbody></table></div> : <div className="ad-chart-empty">Correlation observations are unavailable.</div>}
           <div className="ad-legend"><span><i className="pos" /> Positive</span><span><i className="neg" /> Negative</span><span>Color intensity = magnitude</span></div>
+          <div className="ad-note">Assets without aligned return history are omitted; a missing correlation is not zero.</div>
         </section>
         <section className="ad-panel ad-change-panel">
           <SectionTitle kicker="DAILY CROSS-ASSET TAPE">Single-session change</SectionTitle>

@@ -207,6 +207,7 @@ export default function RotationBrainPage({ data, loading = false, error, onRetr
     <header className="rb-page-head">
       <div><div className="rb-eyebrow">MARKET REGIME / DAILY READ</div><h1>Rotation <span>Brain</span></h1>
         <p>Measure whether breadth is moving beyond Bitcoin — then check if the wider tape agrees.</p>
+        <p>Crypto breadth is a daily read, collected after 00:15 UTC; macro refreshes every 15 minutes during US trading hours. FRED observations reflect publication dates, not fetch times. Equal 30D and 60D breadth can represent different independently measured windows.</p>
       </div>
       <div className="rb-snapshot-meta">
         <div><span>CRYPTO SNAPSHOT</span><strong>{asDate(data.cryptoSnapshotDate || crypto.asOf)}</strong></div>

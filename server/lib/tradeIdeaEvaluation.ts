@@ -12,6 +12,11 @@ export interface ResearchIdea {
   reasons: string[];
   gateStatus: "BELOW_GATE";
   researchOnly: true;
+  convictionTrace?: {
+    rawPct: number;
+    calibratedPct: number;
+    factors: string[];
+  };
 }
 
 /** Deliberately omit actionable levels, alerts and persistence fields. */
@@ -24,6 +29,7 @@ export function researchIdea(card: any, reasons: string[], finalConviction?: num
     reasons: reasons.length ? [...reasons] : ["Evaluation unavailable — candidate is not approved"],
     gateStatus: "BELOW_GATE",
     researchOnly: true,
+    ...(card?.convictionTrace ? { convictionTrace: card.convictionTrace } : {}),
   };
 }
 

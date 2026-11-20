@@ -1,5 +1,5 @@
 import { getDataBusStatus } from "../databus";
-import { getYahooCandles, yahooQuoteBatch, type YfCandle } from "../services/yahoo";
+import { getYahooCandles, yahooQuoteBatch, canonicalDxyQuote, type YfCandle } from "../services/yahoo";
 import { rGet, rSet } from "../services/redis";
 import { calculateAlphaAsset, type DailyBar } from "./calculations";
 import { livePrices, liveSignals, priceHistory } from "../state";
@@ -100,9 +100,11 @@ export async function loadAlphaDeskOverview() {
     ...Object.entries(ALPHA_MACRO).map(([symbol, yahoo]) => ({ symbol, yahoo, group: "macro" as const })),
   ];
   const directQuoteSymbols = [...new Set(definitions
-    .filter(item => !bus.prices[item.symbol] && !livePrices[item.symbol])
+    .filter(item => item.symbol!=="DXY" && !bus.prices[item.symbol] && !livePrices[item.symbol])
     .map(item => item.yahoo))];
   const publicQuotes = directQuoteSymbols.length ? await yahooQuoteBatch(directQuoteSymbols) : {};
+  const dxyQuote=await canonicalDxyQuote().catch(()=>null);
+  if(dxyQuote)publicQuotes[ALPHA_MACRO.DXY]=dxyQuote;
   const publicQuotesFetchedAt = Date.now();
   const fxFlowBars = Object.fromEntries(await Promise.all(
     Object.entries(FX_FLOW_FUTURES).map(async ([symbol, source]) => [symbol, await dailyBars(source.ticker)] as const),

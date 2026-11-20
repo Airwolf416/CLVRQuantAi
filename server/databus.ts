@@ -33,7 +33,7 @@ export interface BusRegime {
 }
 
 export interface BusFearGreed {
-  value: number;
+  value: number | null;
   classification: string;
   signal: string | null;
 }
@@ -64,7 +64,7 @@ const bus: DataBusState = {
   funding: {},
   oi: {},
   regime: { score: 50, label: "NEUTRAL", trend: "sideways" },
-  fearGreed: { value: 50, classification: "Neutral", signal: null },
+  fearGreed: { value: null, classification: "Not loaded", signal: null },
   macroEvents: [],
   macroNews: [],
   killSwitch: { active: false, reason: null, expiresAt: null, nearest_event: null },

@@ -2,13 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { macroWeekRange, macroEventDate, macroEventInstant, selectUpcomingMacroEvents, filterMacroCalendar, createMacroLoader } from "./macroCalendar.js";
 
-test("ET week ends Sunday, including across DST, timezone and year boundary", () => {
+test("ET week covers Monday through Sunday, including past weekdays and DST", () => {
   assert.deepEqual(macroWeekRange(new Date("2026-03-09T02:00:00Z")),
-    { start: "2026-03-08", end: "2026-03-08" }); // Sunday evening ET
+    { start: "2026-03-02", end: "2026-03-08" }); // Sunday evening ET
   assert.deepEqual(macroWeekRange(new Date("2026-03-09T05:00:00Z")),
     { start: "2026-03-09", end: "2026-03-15" });
   assert.deepEqual(macroWeekRange(new Date("2027-01-01T02:00:00Z")),
-    { start: "2026-12-31", end: "2027-01-03" });
+    { start: "2026-12-28", end: "2027-01-03" });
+});
+
+test("Friday weekly view retains all five weekdays while Today selects Friday only", () => {
+  const events = [16,17,18,19,20].map(day => ({ name: String(day), date: `2026-11-${day}` }));
+  const now = new Date("2026-11-20T15:30:00Z");
+  assert.equal(filterMacroCalendar(events, "week", "ALL", "ALL", now).length, 5);
+  assert.deepEqual(filterMacroCalendar(events, "today", "ALL", "ALL", now).map(e=>e.name), ["20"]);
 });
 
 test("week shares upcoming dates with radar; today/region/impact filter transitions", () => {

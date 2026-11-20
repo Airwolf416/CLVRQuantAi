@@ -20,6 +20,7 @@ import { exposureCapMode } from "./lib/featureFlags";
 import { selectExposureCapped } from "./lib/exposureSelector";
 import { correlationToBtc } from "./lib/hourlyCloseHistory";
 import { fetchBinancePrices, fetchForex, fetchMetals, fetchEnergyCommodities, quoteSafe } from "./services/marketData";
+import { canonicalDxyQuote } from "./services/yahoo";
 import { buildMarketSessionContext, dueBriefZones, isBriefScheduleDue, localBriefClock } from "./lib/briefSchedule";
 import { type BriefTimeZone } from "@shared/briefTimeZones";
 import { createBriefDeliveryLedger, deliverBriefOnce } from "./lib/briefDelivery";
@@ -28,6 +29,9 @@ import { filterBriefTrades, parseBriefPrice } from "./lib/briefTradeNumbers";
 import { getOrCreateBriefMarketSnapshot, type BriefMarketData } from "./lib/briefMarketSnapshot";
 import { anchorBriefTradesToSnapshot, briefEntryMode, guardBriefCommentary, removeBriefSignalConflicts } from "./lib/briefSnapshotGuards";
 import { liveSignals } from "./state";
+import { upcomingBriefEvents, macroEventTime } from "./lib/macroEventTime";
+import { readMacroCalendar } from "./services/macroCalendarReader";
+import { guardBriefPublicationFacts } from "./lib/briefPublicationFacts";
 
 const BATCH_SIZE = 50;
 const RATE_LIMIT_DELAY_MS = 600; // stay under Resend 2 req/s
@@ -143,7 +147,7 @@ async function fetchMarketData(): Promise<MarketData> {
       return fallback;
     }
   };
-  const [crypto, forex, preciousMetals, energy, equities] = await Promise.all([
+  const [crypto, forex, preciousMetals, energy, equities, dxy] = await Promise.all([
     safeFetch("crypto", fetchBinancePrices, {} as Record<string, any>),
     safeFetch("forex", fetchForex, {} as Record<string, any>),
     safeFetch("metals", fetchMetals, {} as Record<string, any>),
@@ -153,6 +157,7 @@ async function fetchMarketData(): Promise<MarketData> {
       const quotes = await Promise.all(symbols.map(async symbol => [symbol, await quoteSafe(symbol)] as const));
       return Object.fromEntries(quotes);
     }, {} as Record<string, any>),
+    safeFetch("DXY", canonicalDxyQuote, null),
   ]);
 
   const usableQuote = (quote: any) =>
@@ -235,6 +240,12 @@ async function fetchMarketData(): Promise<MarketData> {
     `[daily-brief] Market data fetched directly: ${data.crypto.length} crypto, ${data.forex.length} FX, ${data.metals.length} metals/energy, ${data.equities.length} equities`,
   );
 
+  if(dxy && dxy.price>0){
+    const changeNum=Number.isFinite(dxy.chg)?dxy.chg:null;
+    data.forex.push({pair:"DXY",price:dxy.price.toFixed(3),priceValue:Number(dxy.price.toFixed(3)),
+      change:changeNum==null?"—":`${changeNum>=0?"+":""}${changeNum.toFixed(2)}%`,
+      changeNum,sourceChangeNum:changeNum});
+  }
   return data;
 }
 
@@ -336,16 +347,17 @@ async function generateBriefContent(
   const macroFetchedAt = new Date().toISOString();
   const marketSnapshotAt = marketData.capturedAt || macroFetchedAt;
   try {
-    const macroRes = await fetch("http://localhost:5000/api/macro").then(r => r.json());
+    const macroRes = await readMacroCalendar();
     if (Array.isArray(macroRes) && macroRes.length > 0) {
-      const filtered = macroRes.filter((e: any) => e.impact === "HIGH" || e.impact === "MED").slice(0, 14);
+      const filtered = macroRes.filter((e: any) => e.impact === "HIGH" || e.impact === "MED")
+        .filter((e: any) => e.actual || (macroEventTime(e) ?? 0) > Date.now()).slice(0, 14);
       macroStr = filtered.map((e: any) => {
         const status = e.actual ? `STATUS:RELEASED ACTUAL:${e.actual}` : e.isPast ? "STATUS:PENDING_DATA" : "STATUS:PENDING";
         return `${e.date} ${e.timeET||e.time||""} [${e.region||e.country}] ${e.name} (${e.impact}) | Prev:${e.previous||e.current||"—"} Fcast:${e.forecast||"—"} | ${status}`;
       }).join("\n  ");
       // Collect HIGH impact PENDING events for the anti-hallucination injection
       for (const ev of filtered) {
-        if (ev.impact === "HIGH" && !ev.actual) {
+        if (ev.impact === "HIGH" && !ev.actual && (macroEventTime(ev) ?? 0) > Date.now()) {
           pendingHighEvents.push(`${ev.name} at ${ev.timeET||ev.time||"TBD"} on ${ev.date}`);
         }
       }
@@ -359,13 +371,13 @@ async function generateBriefContent(
   let macroRiskFlag = "";
   let macroRiskEvents: string[] = [];
   try {
-    const macroFull = await fetch("http://localhost:5000/api/macro").then(r => r.json());
+    const macroFull = await readMacroCalendar();
     if (Array.isArray(macroFull)) {
-      for (const ev of macroFull) {
+      for (const ev of upcomingBriefEvents(macroFull, now.getTime())) {
         if (ev.impact !== "HIGH") continue;
         if (!ev.date) continue;
-        const evDate = new Date(ev.date);
-        if (evDate >= now && evDate <= in48h && HIGH_MACRO_KEYWORDS.some((k: string) => (ev.name || "").includes(k))) {
+        const eventTime = macroEventTime(ev);
+        if (eventTime != null && eventTime <= in48h.getTime() && HIGH_MACRO_KEYWORDS.some((k: string) => (ev.name || "").includes(k))) {
           macroRiskEvents.push(`${ev.name} on ${ev.date} ${ev.timeET || ev.time || ""}`);
         }
       }
@@ -813,6 +825,7 @@ async function sendDailyBriefBody(
   }
 
   guardBriefCommentary(briefJson, marketData, timeZone);
+  guardBriefPublicationFacts(briefJson, await readMacroCalendar().catch(()=>[]));
   // Reject malformed trades before the policy adapter can repair them.
   // Preserve full precision; formatting belongs only at the display boundary.
   filterBriefTrades(briefJson);

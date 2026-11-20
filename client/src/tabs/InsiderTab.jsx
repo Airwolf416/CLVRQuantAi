@@ -84,7 +84,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       const r = await apiFetch("/api/insider", { credentials: "include" });
       if (r.status === 429) {
         // Rate-limited upstream — show friendly note, keep prior data, auto-retry in 60s
-        setError(null);
+        setError("SEC EDGAR rate-limited. Showing the last available filings, if any.");
         setScanLoading(true);
         setScanStatus({ phase: "rate-limited", done: 0, total: 0 });
         setTimeout(() => loadInsider(), 60000);
@@ -96,12 +96,13 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
       const stillScanning = data.scanning || (data.loading && (data.trades || []).length === 0);
       setScanLoading(stillScanning);
       if (data.scanPhase) setScanStatus({ phase: data.scanPhase, done: data.scanDone || 0, total: data.scanTotal || 0 });
-      setLastFetch(data.fetchedAt || Date.now());
+      setLastFetch(data.fetchedAt || null);
       setLastRefresh(new Date());
       setError(null);
     } catch (e) {
       // Don't surface scary HTTP errors — keep any prior data on screen
       console.warn("[insider] fetch error:", e?.message);
+      setError("SEC filings could not be refreshed. Showing the last available results, if any.");
     } finally {
       setLoading(false);
     }
@@ -190,7 +191,7 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
 
       {lastRefresh && (
         <div style={{ fontFamily: MONO, fontSize: 8, color: C.muted, marginBottom: 10, letterSpacing: "0.1em" }}>
-          LAST UPDATED {lastRefresh.toLocaleTimeString()} · AUTO-REFRESH EVERY 20 MIN · SEC FILINGS ≥$25K · LAST 14 DAYS
+           LAST CHECKED {lastRefresh.toLocaleTimeString()} · SOURCE FETCH {lastFetch ? new Date(lastFetch).toLocaleString() : "UNKNOWN"} · AUTO-REFRESH EVERY 20 MIN · SEC FILINGS ≥$25K · LAST 14 DAYS
         </div>
       )}
 
@@ -261,14 +262,8 @@ export default function InsiderTab({ isPro, onUpgrade, onAskAI }) {
           <div style={{ fontSize: 8, color: C.muted, marginTop: 8, opacity: 0.6 }}>
             SEC EDGAR rate-limited · Building initial scan · Auto-refreshes every 20 min
           </div>
-          {scanLoading && (
-            <button
-              onClick={() => { setScanLoading(false); loadInsider(); }}
-              style={{ marginTop: 14, padding: "7px 18px", background: "rgba(201,168,76,.08)", border: `1px solid rgba(201,168,76,.3)`, borderRadius: 3, fontFamily: MONO, fontSize: 9, color: C.gold, cursor: "pointer", letterSpacing: "0.08em" }}
-            >
-              View available data →
-            </button>
-          )}
+          <button onClick={loadInsider} disabled={loading}
+            style={{ marginTop: 14, padding: "7px 18px", background: "rgba(201,168,76,.08)", border: `1px solid rgba(201,168,76,.3)`, borderRadius: 3, fontFamily: MONO, fontSize: 9, color: C.gold, cursor: "pointer" }}>Retry SEC scan</button>
         </div>
       )}
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
