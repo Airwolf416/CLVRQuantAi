@@ -373,6 +373,90 @@ export async function initializeDatabase(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_user_positions_symbol ON user_positions (symbol)
     `);
 
+    // Portfolio Advisor stores only a public wallet address. There is no
+    // credential/signature field and the public-wallet endpoint is read-only.
+    await client.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS portfolio_wallet_address TEXT,
+        ADD COLUMN IF NOT EXISTS portfolio_time_zone TEXT
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfolio_advisor_plans (
+        id BIGSERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        local_date DATE NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('morning','evening')),
+        signal_table TEXT NOT NULL,
+        account_value NUMERIC,
+        content JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, local_date, phase)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS portfolio_advisor_plans_user_date_idx ON portfolio_advisor_plans(user_id, local_date DESC)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfolio_advisor_alerts (
+        id BIGSERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        position_key TEXT NOT NULL,
+        alert_type TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        email_status TEXT NOT NULL DEFAULT 'pending',
+        push_status TEXT NOT NULL DEFAULT 'pending',
+        email_payload TEXT,
+        email_first_attempt_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (event_key)
+      )
+    `);
+    await client.query(`
+      ALTER TABLE portfolio_advisor_alerts
+        ADD COLUMN IF NOT EXISTS email_payload TEXT,
+        ADD COLUMN IF NOT EXISTS email_first_attempt_at TIMESTAMPTZ
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS portfolio_advisor_alerts_user_date_idx ON portfolio_advisor_alerts(user_id, created_at DESC)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfolio_advisor_position_samples (
+        user_id TEXT NOT NULL,
+        position_key TEXT NOT NULL,
+        local_date DATE NOT NULL,
+        mark_price NUMERIC,
+        pnl_pct_margin NUMERIC,
+        signal_direction TEXT,
+        position_size NUMERIC NOT NULL,
+        sampled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, position_key)
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfolio_advisor_signal_runs (
+        local_date DATE PRIMARY KEY,
+        captured_at TIMESTAMPTZ NOT NULL,
+        xyz_fetched_at TIMESTAMPTZ NOT NULL,
+        main_count INTEGER NOT NULL,
+        xyz_count INTEGER NOT NULL
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfolio_advisor_fill_cursors (
+        user_id TEXT PRIMARY KEY,
+        last_fill_time BIGINT NOT NULL DEFAULT 0
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfolio_advisor_pnl_cache (
+        user_id TEXT NOT NULL,
+        time_zone TEXT NOT NULL,
+        period TEXT NOT NULL CHECK (period IN ('daily','monthly','quarterly','yearly')),
+        period_key TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id,time_zone,period,period_key)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS portfolio_advisor_pnl_cache_age_idx ON portfolio_advisor_pnl_cache(fetched_at)`);
+
     // ── position_event_log — idempotent dedup for T-1 / T-0 notifications ────
     // UNIQUE(position_id, event_date, phase) + ON CONFLICT DO NOTHING means a
     // server restart can never double-send a given position/event/phase.

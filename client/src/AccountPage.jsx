@@ -2004,6 +2004,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
   const [proCodeDuration, setProCodeDuration] = useState(1);
   const [proCodeResult, setProCodeResult] = useState(null);
   const [proCodeLoading, setProCodeLoading] = useState(false);
+  const [portfolioWalletAddress, setPortfolioWalletAddress] = useState("");
+  const [portfolioTimeZone, setPortfolioTimeZone] = useState("");
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
 
@@ -2025,6 +2027,8 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
         if (cancelled || !data) return;
         if (data.error) { setLoading(false); return; }
         setAcct(data);
+        setPortfolioWalletAddress(data.portfolioWalletAddress || "");
+        setPortfolioTimeZone(data.portfolioAdvisorTimeZone || "");
         setLoading(false);
       }).catch(() => { if (!cancelled) setLoading(false); });
     };
@@ -2069,6 +2073,29 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
       showToast(e?.message || "Could not update time zone");
     }
     setActionLoading(false);
+  };
+
+  const handleSavePortfolioAdvisorSettings = async () => {
+    setActionLoading(true);
+    try {
+      const res = await apiFetch("/api/portfolio-advisor/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          walletAddress: portfolioWalletAddress.trim() || null,
+          timeZone: portfolioTimeZone || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Could not save Portfolio Advisor settings.");
+      setAcct(a => ({ ...a, portfolioWalletAddress: portfolioWalletAddress.trim() || null, portfolioAdvisorTimeZone: data.timeZone }));
+      showToast("Portfolio Advisor settings saved");
+    } catch (e) {
+      showToast(e?.message || "Could not save Portfolio Advisor settings");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleManageStripe = async () => {
@@ -2518,6 +2545,45 @@ export default function AccountPage({ user, onSignOut, isPro, setShowUpgrade, on
               </span>
             </label>
           </div>
+
+          {effectiveTier === "elite" && (
+            <div style={{ ...S.card, borderColor:"rgba(201,168,76,.28)" }}>
+              <div style={{ fontFamily:MONO, fontSize:9, color:C.gold, letterSpacing:"0.2em", marginBottom:8 }}>PORTFOLIO ADVISOR</div>
+              <div style={{ fontSize:11, color:C.muted2, lineHeight:1.6, marginBottom:12 }}>
+                Connect one public Hyperliquid wallet address for read-only position monitoring. Never enter a seed phrase, private key, or wallet password. No trades are placed or changed.
+              </div>
+              <label style={{ display:"block", fontSize:11, color:C.muted2, marginBottom:12 }}>
+                Public wallet address
+                <input
+                  data-testid="input-portfolio-wallet"
+                  value={portfolioWalletAddress}
+                  onChange={e => setPortfolioWalletAddress(e.target.value)}
+                  placeholder="0x…"
+                  autoComplete="off"
+                  spellCheck="false"
+                  style={{ display:"block", width:"100%", marginTop:7, padding:"9px 10px", background:C.bg, color:C.text, border:`1px solid ${C.border}`, borderRadius:4, fontFamily:MONO, fontSize:11, boxSizing:"border-box" }}
+                />
+              </label>
+              <label style={{ display:"block", fontSize:11, color:C.muted2, marginBottom:12 }}>
+                Portfolio time zone
+                <select
+                  data-testid="select-portfolio-timezone"
+                  value={portfolioTimeZone}
+                  onChange={e => setPortfolioTimeZone(e.target.value)}
+                  style={{ display:"block", width:"100%", marginTop:7, padding:"9px 10px", background:C.bg, color:C.text, border:`1px solid ${C.border}`, borderRadius:4, fontFamily:MONO, fontSize:10, boxSizing:"border-box" }}
+                >
+                  <option value="">Select a time zone to enable scheduling</option>
+                  {BRIEF_TIME_ZONES.map(zone => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+                </select>
+              </label>
+              <button data-testid="button-save-portfolio-settings" onClick={handleSavePortfolioAdvisorSettings} disabled={actionLoading} style={S.goldBtn}>
+                {actionLoading ? "Saving…" : "Save Portfolio Advisor settings"}
+              </button>
+              <div style={{ fontFamily:MONO, fontSize:9, color:C.muted, lineHeight:1.5, marginTop:9 }}>
+                Plans run after 6:30 AM and at 9:00 PM in this selected zone. Intraday checks run every 15 minutes until 9:00 PM. Both wallet and time zone are required.
+              </div>
+            </div>
+          )}
 
           <div style={{ ...S.card, borderColor:"rgba(0,212,255,.12)" }}>
             <div style={{ fontFamily:MONO, fontSize:9, color:C.cyan, letterSpacing:"0.2em", marginBottom:8 }}>YOUR EMAIL RIGHTS (CASL / GDPR)</div>

@@ -752,6 +752,8 @@ process.on("uncaughtException", (err) => {
   startDailyBriefScheduler();
   startPositionEventScheduler();
   startWeeklyUpdateScheduler();
+  const { startPortfolioAdvisorScheduler } = await import("./lib/portfolioAdvisor");
+  startPortfolioAdvisorScheduler();
   startOutcomeResolver();
   startChartAIResolver();
   startAdaptiveThresholds();

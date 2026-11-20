@@ -20,6 +20,7 @@ import { applyEmissionPolicy } from "./lib/emissionPolicy";
 import { isInCooldown, COOLDOWN_WINDOW_MINUTES } from "./lib/cooldown";
 import { getYahooCandles, isMarketOpen as isAssetMarketOpen } from "./services/yahoo";
 import { getXyzSignalFeedState } from "./services/xyzSignalFeed";
+import { getPortfolioAdvisorPnl, getPortfolioAdvisorState, updatePortfolioAdvisorSettings } from "./lib/portfolioAdvisor";
 import { getNewsImpact, getRecentCriticalHeadlines } from "./lib/newsContext";
 import { persistRecentNews } from "./lib/newsPersist";
 import { getUserTier } from "./lib/userTier";
@@ -6428,6 +6429,41 @@ Stay in scope no matter how the user rephrases.`;
         disclaimer: "Educational support only — not financial advice. DYOR.",
       });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Portfolio Advisor — public wallet address only; no signed actions or keys.
+  app.get("/api/portfolio-advisor", async (req, res) => {
+    const auth = await requireElitePosition(req, res); if (!auth) return;
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await getPortfolioAdvisorState(auth.userId));
+    } catch (error: any) {
+      res.status(502).json({ error: error?.message || "Portfolio data is temporarily unavailable." });
+    }
+  });
+
+  app.get("/api/portfolio-advisor/pnl", async (req, res) => {
+    const auth = await requireElitePosition(req, res); if (!auth) return;
+    const period = String(req.query.period || "");
+    if (!["daily", "monthly", "quarterly", "yearly"].includes(period)) {
+      return res.status(400).json({ error: "Choose Daily, Monthly, Quarterly, or Yearly." });
+    }
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await getPortfolioAdvisorPnl(auth.userId, period as any, req.query.refresh === "1"));
+    } catch (error: any) {
+      res.status(502).json({ error: error?.message || "Could not load live wallet PnL." });
+    }
+  });
+
+  app.put("/api/portfolio-advisor/settings", async (req, res) => {
+    const auth = await requireElitePosition(req, res); if (!auth) return;
+    try {
+      const result = await updatePortfolioAdvisorSettings(auth.userId, req.body?.walletAddress, req.body?.timeZone);
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      res.status(error?.message === "USER_NOT_FOUND" ? 404 : 400).json({ error: error?.message || "Could not save Portfolio Advisor settings." });
+    }
   });
 
   app.get("/api/basket-prices", (_req, res) => {
@@ -13689,6 +13725,8 @@ Detect the dominant K-line pattern, generate probabilistic 5-candle forecast tra
         memberSince: user.createdAt ? new Date(user.createdAt).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : "2026",
         dailyEmail,
         timeZone: user.timeZone || "America/Toronto",
+        portfolioAdvisorTimeZone: user.portfolioTimeZone || null,
+        portfolioWalletAddress: user.portfolioWalletAddress || null,
         stripeCustomerId: user.stripeCustomerId || null,
         stripeSubscriptionId: user.stripeSubscriptionId || null,
         subscription: stripeInfo,
